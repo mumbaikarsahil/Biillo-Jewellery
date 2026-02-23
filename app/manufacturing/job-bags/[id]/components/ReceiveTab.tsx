@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -30,6 +30,22 @@ export default function ReceiveTab({
   const [stoneWeight, setStoneWeight] = useState('0')
   const [costMaking, setCostMaking] = useState('0')
 
+  // --- THE MAGIC HAPPENS HERE ---
+  // Auto-calculate Net Weight whenever Gross Weight or Stone Weight changes
+  useEffect(() => {
+    const gw = parseFloat(grossWeight) || 0
+    const sw = parseFloat(stoneWeight) || 0
+
+    if (gw > 0) {
+      // Formula: Gross Weight - (Stone Carats * 0.2)
+      const calculatedNet = gw - (sw * 0.2)
+      // Ensure it doesn't go below 0 and round to 3 decimal places
+      setNetWeight(Math.max(0, calculatedNet).toFixed(3))
+    } else {
+      setNetWeight('')
+    }
+  }, [grossWeight, stoneWeight])
+
   async function receiveItem() {
     const { error } = await supabase
       .from('inventory_items')
@@ -52,6 +68,11 @@ export default function ReceiveTab({
     else {
       toast.success('Finished item created')
       refresh()
+      // Optional: Clear form after successful submit
+      setBarcode('')
+      setGrossWeight('')
+      setStoneWeight('0')
+      setCostMaking('0')
     }
   }
 
@@ -61,41 +82,61 @@ export default function ReceiveTab({
 
         <h3 className="font-semibold">Receive Finished Item</h3>
 
-        <Input
-          placeholder="Barcode"
-          value={barcode}
-          onChange={(e) => setBarcode(e.target.value)}
-        />
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">Barcode</label>
+          <Input
+            placeholder="Scan or type barcode"
+            value={barcode}
+            onChange={(e) => setBarcode(e.target.value)}
+          />
+        </div>
 
-        <Input
-          placeholder="Gross Weight (g)"
-          type="number"
-          value={grossWeight}
-          onChange={(e) => setGrossWeight(e.target.value)}
-        />
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Gross Weight (g)</label>
+            <Input
+              placeholder="0.000"
+              type="number"
+              step="0.001"
+              value={grossWeight}
+              onChange={(e) => setGrossWeight(e.target.value)}
+            />
+          </div>
 
-        <Input
-          placeholder="Net Weight (g)"
-          type="number"
-          value={netWeight}
-          onChange={(e) => setNetWeight(e.target.value)}
-        />
+          <div>
+            <label className="text-xs text-muted-foreground mb-1 block">Stone Weight (cts)</label>
+            <Input
+              placeholder="0.00"
+              type="number"
+              step="0.01"
+              value={stoneWeight}
+              onChange={(e) => setStoneWeight(e.target.value)}
+            />
+          </div>
+        </div>
 
-        <Input
-          placeholder="Stone Weight (cts)"
-          type="number"
-          value={stoneWeight}
-          onChange={(e) => setStoneWeight(e.target.value)}
-        />
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">Auto-Calculated Net Weight (g)</label>
+          <Input
+            placeholder="0.000"
+            type="number"
+            value={netWeight}
+            readOnly // Prevents the user from manually messing up the math
+            className="bg-gray-50 text-gray-500 cursor-not-allowed font-medium"
+          />
+        </div>
 
-        <Input
-          placeholder="Making Cost"
-          type="number"
-          value={costMaking}
-          onChange={(e) => setCostMaking(e.target.value)}
-        />
+        <div>
+          <label className="text-xs text-muted-foreground mb-1 block">Making Cost (₹)</label>
+          <Input
+            placeholder="0"
+            type="number"
+            value={costMaking}
+            onChange={(e) => setCostMaking(e.target.value)}
+          />
+        </div>
 
-        <Button onClick={receiveItem}>
+        <Button className="w-full mt-2" onClick={receiveItem}>
           Create Inventory Item
         </Button>
 
