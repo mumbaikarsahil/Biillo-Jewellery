@@ -35,24 +35,27 @@ const karigarSchema = z.object({
   is_active: z.boolean().default(true)
 })
 
+const defaultFormValues = { 
+  karigar_code: '', 
+  full_name: '',
+  phone: '',
+  specialization: '',
+  labor_type: 'PER_GRAM' as const, 
+  default_labor_rate: 0,
+  is_active: true 
+}
+
 export default function KarigarPage() {
   const { appUser } = useAuth()
   const [karigars, setKarigars] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [isSheetOpen, setIsSheetOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null) // NEW: Track if we are editing
 
   const form = useForm<z.infer<typeof karigarSchema>>({
     resolver: zodResolver(karigarSchema),
-    defaultValues: { 
-      karigar_code: '', 
-      full_name: '',
-      phone: '',
-      specialization: '',
-      labor_type: 'PER_GRAM', 
-      default_labor_rate: 0,
-      is_active: true 
-    }
+    defaultValues: defaultFormValues
   })
 
   async function fetchKarigars() {
@@ -70,6 +73,50 @@ export default function KarigarPage() {
 
   useEffect(() => { fetchKarigars() }, [appUser])
 
+  // --- AUTO CODE GENERATOR ---
+  useEffect(() => {
+    // Only auto-generate if we are opening the sheet to CREATE a new karigar
+    if (isSheetOpen && !editingId && karigars) {
+      let maxNum = 0
+      karigars.forEach(k => {
+        if (k.karigar_code && k.karigar_code.startsWith('K-')) {
+          const num = parseInt(k.karigar_code.replace('K-', ''), 10)
+          if (!isNaN(num) && num > maxNum) {
+            maxNum = num
+          }
+        }
+      })
+      // Generate next code, padded to 3 digits (e.g. K-004)
+      const nextCode = `K-${String(maxNum + 1).padStart(3, '0')}`
+      form.setValue('karigar_code', nextCode)
+    }
+  }, [isSheetOpen, editingId, karigars, form])
+
+  // --- HANDLE SHEET CLOSE/OPEN ---
+  const handleSheetOpenChange = (open: boolean) => {
+    setIsSheetOpen(open)
+    if (!open) {
+      // Reset form and editing state when closed
+      setEditingId(null)
+      form.reset(defaultFormValues)
+    }
+  }
+
+  // --- HANDLE EDIT CLICK ---
+  const handleEditClick = (karigar: any) => {
+    setEditingId(karigar.id)
+    form.reset({
+      karigar_code: karigar.karigar_code,
+      full_name: karigar.full_name,
+      phone: karigar.phone || '',
+      specialization: karigar.specialization || '',
+      labor_type: karigar.labor_type,
+      default_labor_rate: karigar.default_labor_rate,
+      is_active: karigar.is_active
+    })
+    setIsSheetOpen(true)
+  }
+
   async function onSubmit(values: z.infer<typeof karigarSchema>) {
     if (!appUser) return
   
@@ -81,27 +128,40 @@ export default function KarigarPage() {
         specialization: values.specialization,
         labor_type: values.labor_type,
         default_labor_rate: values.default_labor_rate,
-        is_active: values.is_active
+        is_active: values.is_active,
+        company_id: appUser.company_id // Make sure company is attached
       }
   
-      const { data, error } = await supabase.rpc(
-        'create_karigar',
-        {
-          _payload: payload,
-          _user_id: appUser.user_id
-        }
-      )
-  
-      if (error) throw error
-  
-      toast.success('Karigar Added Successfully')
+      if (editingId) {
+        // --- UPDATE EXISTING KARIGAR ---
+        const { error } = await supabase
+          .from('karigars')
+          .update(payload)
+          .eq('id', editingId)
+          .eq('company_id', appUser.company_id) // Security check
+
+        if (error) throw error
+        toast.success('Karigar Updated Successfully')
+      } else {
+        // --- CREATE NEW KARIGAR ---
+        const { error } = await supabase.rpc(
+          'create_karigar',
+          {
+            _payload: payload,
+            _user_id: appUser.user_id
+          }
+        )
+        if (error) throw error
+        toast.success('Karigar Added Successfully')
+      }
   
       setIsSheetOpen(false)
-      form.reset()
+      setEditingId(null)
+      form.reset(defaultFormValues)
       fetchKarigars()
   
     } catch (err: any) {
-      if (err.message?.includes('karigar_unique_code')) {
+      if (err.message?.includes('karigar_unique_code') || err.message?.includes('duplicate key value')) {
         toast.error('Karigar Code already exists for this company')
       } else {
         toast.error(err.message)
@@ -150,7 +210,7 @@ export default function KarigarPage() {
             />
           </div>
           
-          <Sheet open={isSheetOpen} onOpenChange={setIsSheetOpen}>
+          <Sheet open={isSheetOpen} onOpenChange={handleSheetOpenChange}>
             <SheetTrigger asChild>
               <Button className="bg-primary w-full sm:w-auto shadow-sm">
                 <Plus className="mr-2 h-4 w-4" /> Add Karigar
@@ -159,9 +219,9 @@ export default function KarigarPage() {
             
             <SheetContent side="right" className="w-[100%] sm:w-[500px] overflow-y-auto">
               <SheetHeader>
-                <SheetTitle>Add New Karigar</SheetTitle>
+                <SheetTitle>{editingId ? 'Edit Karigar' : 'Add New Karigar'}</SheetTitle>
                 <SheetDescription>
-                  Register a new artisan. Set default labor rates for job cards.
+                  {editingId ? 'Update details for this artisan.' : 'Register a new artisan. Code is auto-generated.'}
                 </SheetDescription>
               </SheetHeader>
               
@@ -171,8 +231,15 @@ export default function KarigarPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <FormField control={form.control} name="karigar_code" render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Karigar Code <span className="text-red-500">*</span></FormLabel>
-                        <FormControl><Input placeholder="K-001" className="uppercase" {...field} /></FormControl>
+                        <FormLabel>Karigar Code</FormLabel>
+                        {/* Auto-generated, so we make it read-only to prevent tampering */}
+                        <FormControl>
+                          <Input 
+                            {...field} 
+                            readOnly 
+                            className="bg-slate-50 font-mono font-bold text-slate-600 focus-visible:ring-0 cursor-not-allowed" 
+                          />
+                        </FormControl>
                         <FormMessage />
                       </FormItem>
                     )} />
@@ -206,7 +273,7 @@ export default function KarigarPage() {
                       <FormField control={form.control} name="labor_type" render={({ field }) => (
                         <FormItem>
                           <FormLabel>Charge Type</FormLabel>
-                          <Select onValueChange={field.onChange} defaultValue={field.value}>
+                          <Select onValueChange={field.onChange} value={field.value}>
                             <FormControl>
                               <SelectTrigger className="bg-white">
                                 <SelectValue placeholder="Select Type" />
@@ -223,7 +290,7 @@ export default function KarigarPage() {
                       
                       <FormField control={form.control} name="default_labor_rate" render={({ field }) => (
                         <FormItem>
-                          <FormLabel>Default Rate</FormLabel>
+                          <FormLabel>Default Rate (₹)</FormLabel>
                           <FormControl><Input type="number" step="0.01" className="bg-white" {...field} /></FormControl>
                         </FormItem>
                       )} />
@@ -231,7 +298,10 @@ export default function KarigarPage() {
                   </div>
 
                   <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
-                    {form.formState.isSubmitting ? "Saving..." : "Save Karigar"}
+                    {form.formState.isSubmitting 
+                      ? "Saving..." 
+                      : (editingId ? "Update Karigar" : "Save Karigar")
+                    }
                   </Button>
                 </form>
               </Form>
@@ -285,7 +355,12 @@ export default function KarigarPage() {
                      </Badge>
                   </TableCell>
                   <TableCell className="text-right">
-                    <KarigarActions id={k.id} isActive={k.is_active} onToggle={() => toggleStatus(k.id, k.is_active)} />
+                    <KarigarActions 
+                      id={k.id} 
+                      isActive={k.is_active} 
+                      onToggle={() => toggleStatus(k.id, k.is_active)} 
+                      onEdit={() => handleEditClick(k)} 
+                    />
                   </TableCell>
                 </TableRow>
               ))
@@ -313,7 +388,12 @@ export default function KarigarPage() {
                     </div>
                   </div>
                 </div>
-                <KarigarActions id={k.id} isActive={k.is_active} onToggle={() => toggleStatus(k.id, k.is_active)} />
+                <KarigarActions 
+                  id={k.id} 
+                  isActive={k.is_active} 
+                  onToggle={() => toggleStatus(k.id, k.is_active)}
+                  onEdit={() => handleEditClick(k)}
+                />
               </div>
               
               <div className="grid grid-cols-2 gap-2 mt-4 pt-3 border-t text-sm">
@@ -335,7 +415,17 @@ export default function KarigarPage() {
 }
 
 // Subcomponent for cleaner JSX
-function KarigarActions({ id, isActive, onToggle }: { id: string, isActive: boolean, onToggle: () => void }) {
+function KarigarActions({ 
+  id, 
+  isActive, 
+  onToggle,
+  onEdit
+}: { 
+  id: string, 
+  isActive: boolean, 
+  onToggle: () => void,
+  onEdit: () => void
+}) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -344,7 +434,7 @@ function KarigarActions({ id, isActive, onToggle }: { id: string, isActive: bool
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem>
+        <DropdownMenuItem onClick={onEdit}>
           <Edit className="mr-2 h-4 w-4" /> Edit Details
         </DropdownMenuItem>
         <DropdownMenuItem>

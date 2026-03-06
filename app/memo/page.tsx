@@ -1,7 +1,6 @@
 'use client'
 
 import React, { useEffect, useState } from 'react'
-import { Navbar } from '@/components/AppSidebar'
 import { useAuth } from '@/hooks/useAuth'
 import { DataTable, Column } from '@/components/DataTable'
 import { Card } from '@/components/ui/card'
@@ -170,7 +169,6 @@ export default function MemoPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Navbar appUser={appUser} companyName="Memo Transactions" />
 
       <div className="lg:ml-64 p-4 md:p-8">
         <div className="flex justify-between items-center mb-8">

@@ -4,6 +4,7 @@ import React, { useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
+import { Toaster } from "@/components/ui/sonner"
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,7 +22,9 @@ import {
   Menu,
   X,
   ChevronRight,
-  Settings
+  Settings,
+  Gem,
+  Ticket
 } from 'lucide-react'
 
 // --- Configuration ---
@@ -32,6 +35,7 @@ const primaryNav = [
   { href: '/pos', label: 'POS', icon: ShoppingCart },
   { href: '/sales', label: 'Sales', icon: Banknote },
   { href: '/reports', label: 'Reports', icon: BarChart3 },
+  { href: '/discovery', label: 'Discovery', icon: Gem },
   
 ]
 
@@ -42,6 +46,8 @@ const secondaryNav = [
   { href: '/manufacturing/job-bags', label: 'Manufacturing', icon: Briefcase },
   { href: '/inventory', label: 'Inventory', icon: Package },
   { href: '/transfer', label: 'Transfers', icon: ArrowRightLeft },
+  { href: '/crm', label: 'CRM', icon: UserCircle },
+  { href: '/vouchers', label: 'Vouchers', icon: Ticket },
   { href: '/memo', label: 'Memo', icon: FileText },
   
 ]

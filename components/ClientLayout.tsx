@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { usePathname } from 'next/navigation'
-import { Toaster } from 'react-hot-toast'
+import { Toaster } from '@/components/ui/sonner'
 import { AuthProvider, useAuth } from '@/hooks/useAuth' // Adjust path if needed
 import { AppLayout } from '@/components/AppLayout'
 
@@ -38,7 +38,7 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   return (
     <AuthProvider>
        <InnerLayout>{children}</InnerLayout>
-       <Toaster position="top-right" />
+       <Toaster position="top-right" richColors />
     </AuthProvider>
   )
 }
