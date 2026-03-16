@@ -6,14 +6,11 @@ import Link from 'next/link'
 import { 
   ArrowLeft, 
   ChevronRight, 
-  LayoutDashboard, 
   RefreshCw, 
   Database,
   User,
-  Clock,
   Briefcase,
   Activity,
-  CheckCircle2,
   AlertCircle,
   Info
 } from 'lucide-react'
@@ -34,7 +31,6 @@ import {
 /* COMPONENT IMPORTS */
 import OverviewTab from './components/OverviewTab'
 import IssueTab from './components/IssueTab'
-import ConsumptionTab from './components/ConsumptionTab'
 import ReceiveTab from './components/ReceiveTab'
 import ReconciliationTab from './components/ReconciliationTab'
 
@@ -176,10 +172,7 @@ export default function JobBagDetailPage() {
                 Overview
               </TabsTrigger>
               <TabsTrigger value="issue" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold transition-all whitespace-nowrap">
-                Issue Stock
-              </TabsTrigger>
-              <TabsTrigger value="consume" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold transition-all whitespace-nowrap">
-                Consumption
+                Issue Materials
               </TabsTrigger>
               <TabsTrigger value="receive" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold transition-all whitespace-nowrap">
                 Receive Finished
@@ -198,10 +191,6 @@ export default function JobBagDetailPage() {
 
             <TabsContent value="issue" className="m-0 animate-in fade-in slide-in-from-bottom-2 duration-300">
               <IssueTab jobId={job.id} refresh={fetchData} />
-            </TabsContent>
-
-            <TabsContent value="consume" className="m-0 animate-in fade-in slide-in-from-bottom-2 duration-300">
-              <ConsumptionTab jobId={job.id} refresh={fetchData} />
             </TabsContent>
 
             <TabsContent value="receive" className="m-0 animate-in fade-in slide-in-from-bottom-2 duration-300">

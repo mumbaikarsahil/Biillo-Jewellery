@@ -1,18 +1,14 @@
 "use client"
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Separator } from '@/components/ui/separator'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
-import { Save, Layers, Printer, Settings2, Wand2, Plus, X } from 'lucide-react'
-import Barcode from 'react-barcode'
-import { useReactToPrint } from 'react-to-print' // <-- Swapped html2canvas for native printing
-import QRCode from 'react-qr-code'
+import { Save, Layers, Settings2, RefreshCw, CheckCircle2, ArrowUpCircle, ArrowDownCircle, CheckSquare } from 'lucide-react'
 
 interface Props {
   jobId: string 
@@ -21,17 +17,28 @@ interface Props {
   refresh: () => void
 }
 
-type BatchItem = {
-  index: number
-  barcode: string
+type ReceiveItem = {
+  job_bag_item_id: string
   sku_reference: string
-  stonePieces: string 
+  ornament_type: string
+  category: string
+  issuedGold: number
+  issuedDiamondCts: number
+  issuedDiamondPcs: number
+  barcode: string
   grossWeight: string
+  stonePieces: string
   stoneWeight: string
+  breakageWeight: string
   netWeight: string
-  wastageWeight: string
+  lossWeight: string
   costMaking: string
   mrp: string
+  item_size: string
+  hsn_code: string
+  huid_code: string
+  item_remarks: string
+  isSelected: boolean // <-- NEW: Tracks if item is staged for receiving
 }
 
 export default function ReceiveTab({
@@ -40,54 +47,19 @@ export default function ReceiveTab({
   warehouseId,
   refresh
 }: Props) {
-  const labelRef = useRef<HTMLDivElement>(null)
-
   // --- BATCH SETTINGS STATE ---
-  const [batchQuantity, setBatchQuantity] = useState('1')
-  const [itemCategory, setItemCategory] = useState('')
-  const [itemSize, setItemSize] = useState('')
-  const [styleCode, setStyleCode] = useState('') 
-  
   const [metalType, setMetalType] = useState('Gold')
   const [purityKarat, setPurityKarat] = useState('22K')
   const [purityPercent, setPurityPercent] = useState('91.6')
-  
-  // Shared Costing & Metadata
   const [laborRate, setLaborRate] = useState('')
-  const [wastagePercent, setWastagePercent] = useState('')
-  const [remarks, setRemarks] = useState('')
+  const [globalRemarks, setGlobalRemarks] = useState('')
 
-  // --- WAREHOUSE STATE ---
   const [warehouses, setWarehouses] = useState<{id: string, name: string}[]>([])
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>('')
 
-  // --- CATEGORY STATE ---
-  const [categories, setCategories] = useState<string[]>([])
-  const [isNewCategoryMode, setIsNewCategoryMode] = useState(false)
-
-  // --- GRID STATE ---
-  const [batchItems, setBatchItems] = useState<BatchItem[]>([])
-  const [previewIndex, setPreviewIndex] = useState(0)
-
-  // Fetch unique categories
-  useEffect(() => {
-    async function fetchCategories() {
-      const { data, error } = await supabase
-        .from('inventory_items')
-        .select('item_category')
-        .eq('company_id', companyId)
-        .not('item_category', 'is', null)
-      
-      if (!error && data) {
-        const uniqueCats = Array.from(new Set(data.map(d => d.item_category))).filter(Boolean) as string[]
-        setCategories(uniqueCats)
-        if (uniqueCats.length > 0 && !itemCategory) {
-          setItemCategory(uniqueCats[0])
-        }
-      }
-    }
-    fetchCategories()
-  }, [companyId, itemCategory])
+  const [receiveItems, setReceiveItems] = useState<ReceiveItem[]>([])
+  const [isLoading, setIsLoading] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
 
   useEffect(() => {
     async function fetchWarehouses() {
@@ -122,465 +94,415 @@ export default function ReceiveTab({
     fetchKarigarRate()
   }, [jobId])
 
-  const generateSmartStyleCode = (category: string, purity: string) => {
-    const catPrefix = category ? category.replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase() : 'ITM'
-    const karatPrefix = purity ? purity.toUpperCase() : 'XX'
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    let randomSuffix = ""
-    for (let i = 0; i < 4; i++) {
-      randomSuffix += chars.charAt(Math.floor(Math.random() * chars.length))
-    }
-    return `${catPrefix}-${karatPrefix}-${randomSuffix}`
-  }
+  const loadJobBagItems = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      const jobPrefix = jobId.split('-')[0].substring(0, 4).toUpperCase()
 
-  const generateBatchGrid = async () => {
-    const qty = parseInt(batchQuantity) || 1
-    const categoryPrefix = itemCategory ? itemCategory.substring(0, 3).toUpperCase() : 'ITM'
-    const jobPrefix = jobId.split('-')[0].substring(0, 4).toUpperCase()
-    
-    const baseBarcodePrefix = `JB${jobPrefix}-${categoryPrefix}-`
+      const { data: items, error } = await supabase
+        .from('job_bag_items')
+        .select(`
+          id, sku_reference, ornament_type, status,
+          job_bags ( product_category ),
+          job_bag_gold_issues ( issued_weight_g ),
+          job_bag_diamond_issues ( issued_weight_cts, issued_pieces )
+        `)
+        .eq('job_bag_id', jobId)
+        .neq('status', 'received')
+        .order('created_at', { ascending: true })
 
-    const { data, error } = await supabase
-      .from('inventory_items')
-      .select('barcode')
-      .eq('created_from_job_bag_id', jobId)
-      .ilike('barcode', `${baseBarcodePrefix}%`) 
+      if (error) throw error
 
-    if (error) {
-      toast.error(`Could not verify sequence: ${error.message}`)
-      return 
-    }
-
-    let startingSequence = 1
-    if (data && data.length > 0) {
-      const existingNumbers = data.map(item => {
-        const parts = item.barcode.split('-')
-        return parseInt(parts[parts.length - 1]) || 0
-      })
-      startingSequence = Math.max(...existingNumbers) + 1
-    }
-
-    const newItems: BatchItem[] = []
-    
-    for (let i = 0; i < qty; i++) {
-      const currentSeq = (startingSequence + i).toString().padStart(2, '0') 
-      newItems.push({
-        index: i,
-        barcode: `${baseBarcodePrefix}${currentSeq}`,
-        sku_reference: styleCode,
-        stonePieces: '0',
-        grossWeight: '',
-        stoneWeight: '0',
-        netWeight: '0',
-        wastageWeight: '0',
-        costMaking: '0',
-        mrp: ''
-      })
-    }
-    
-    setBatchItems(newItems)
-    setPreviewIndex(0)
-  }
-
-  const updateBatchItem = (index: number, field: keyof BatchItem, value: string) => {
-    setBatchItems(prev => {
-      const updated = [...prev]
-      const item = { ...updated[index], [field]: value }
-
-      if (field === 'grossWeight' || field === 'stoneWeight') {
-        const gw = parseFloat(field === 'grossWeight' ? value : item.grossWeight) || 0
-        const sw = parseFloat(field === 'stoneWeight' ? value : item.stoneWeight) || 0
-        const lr = parseFloat(laborRate) || 0
-        const wp = parseFloat(wastagePercent) || 0
-
-        const calculatedNet = Math.max(0, gw - (sw * 0.2))
-        item.netWeight = calculatedNet.toFixed(3)
-        item.wastageWeight = (calculatedNet * (wp / 100)).toFixed(3)
-        item.costMaking = (calculatedNet * lr).toFixed(2)
+      if (!items || items.length === 0) {
+        setReceiveItems([])
+        return
       }
 
-      updated[index] = item
-      return updated
-    })
-    setPreviewIndex(index) 
+      const mappedItems: ReceiveItem[] = items.map((item: any, index: number) => {
+        const issuedGold = item.job_bag_gold_issues.reduce((sum: number, issue: any) => sum + Number(issue.issued_weight_g), 0)
+        const issuedDiamondCts = item.job_bag_diamond_issues.reduce((sum: number, issue: any) => sum + Number(issue.issued_weight_cts), 0)
+        const issuedDiamondPcs = item.job_bag_diamond_issues.reduce((sum: number, issue: any) => sum + Number(issue.issued_pieces), 0)
+
+        const category = item.job_bags?.product_category || item.ornament_type || 'Jewelry'
+        const categoryPrefix = category.substring(0, 3).toUpperCase()
+        const currentSeq = (index + 1).toString().padStart(2, '0')
+
+        return {
+          job_bag_item_id: item.id,
+          sku_reference: item.sku_reference,
+          ornament_type: item.ornament_type || 'N/A', 
+          category: category,
+          issuedGold,
+          issuedDiamondCts,
+          issuedDiamondPcs,
+          barcode: `JB${jobPrefix}-${categoryPrefix}-${item.sku_reference}-${currentSeq}`,
+          grossWeight: '',
+          stonePieces: '',
+          stoneWeight: '',
+          breakageWeight: '',
+          netWeight: '0',
+          lossWeight: '0',
+          costMaking: '0',
+          mrp: '',
+          item_size: '',
+          hsn_code: '',
+          huid_code: '',
+          item_remarks: '',
+          isSelected: false // Default to unselected
+        }
+      })
+
+      setReceiveItems(mappedItems)
+    } catch (err: any) {
+      toast.error(`Error loading items: ${err.message}`)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [jobId])
+
+  useEffect(() => { loadJobBagItems() }, [loadJobBagItems])
+
+  // Changed to update by ID instead of index so sorting/filtering doesn't break inputs
+  const updateBatchItem = (id: string, field: keyof ReceiveItem, value: string) => {
+    setReceiveItems(prev => prev.map(item => {
+      if (item.job_bag_item_id !== id) return item;
+
+      const updated = { ...item, [field]: value }
+
+      if (field === 'grossWeight' || field === 'stoneWeight') {
+        const gw = parseFloat(field === 'grossWeight' ? value : updated.grossWeight) || 0
+        const sw = parseFloat(field === 'stoneWeight' ? value : updated.stoneWeight) || 0
+        const lr = parseFloat(laborRate) || 0
+        
+        const calculatedNet = Math.max(0, gw - (sw * 0.2))
+        const loss = Math.max(0, updated.issuedGold - calculatedNet)
+
+        updated.netWeight = calculatedNet.toFixed(3)
+        updated.lossWeight = loss.toFixed(3)
+        updated.costMaking = (calculatedNet * lr).toFixed(2)
+      }
+      return updated;
+    }))
+  }
+
+  const toggleSelection = (id: string) => {
+    setReceiveItems(prev => prev.map(item => 
+      item.job_bag_item_id === id ? { ...item, isSelected: !item.isSelected } : item
+    ))
+  }
+
+  const selectAll = (select: boolean) => {
+    setReceiveItems(prev => prev.map(item => ({ ...item, isSelected: select })))
   }
 
   useEffect(() => {
-    if (batchItems.length === 0) return
+    if (receiveItems.length === 0) return
     const lr = parseFloat(laborRate) || 0
-    const wp = parseFloat(wastagePercent) || 0
 
-    setBatchItems(prev => prev.map(item => {
+    setReceiveItems(prev => prev.map(item => {
       const gw = parseFloat(item.grossWeight) || 0
       const sw = parseFloat(item.stoneWeight) || 0
       const calculatedNet = Math.max(0, gw - (sw * 0.2))
+      const loss = Math.max(0, item.issuedGold - calculatedNet)
       return {
         ...item,
         netWeight: calculatedNet.toFixed(3),
-        wastageWeight: (calculatedNet * (wp / 100)).toFixed(3),
+        lossWeight: loss.toFixed(3),
         costMaking: (calculatedNet * lr).toFixed(2)
       }
     }))
-  }, [laborRate, wastagePercent])
+  }, [laborRate])
 
-  async function receiveBatch() {
-    if (batchItems.length === 0) return toast.error("Generate batch grid first.")
+  const handleKaratChange = (val: string) => {
+    setPurityKarat(val)
+    if (val === '24K') setPurityPercent('99.9')
+    if (val === '22K') setPurityPercent('91.6')
+    if (val === '18K') setPurityPercent('75.0')
+    if (val === '14K') setPurityPercent('58.3')
+  }
 
-    const incomplete = batchItems.some(item => !item.grossWeight || parseFloat(item.grossWeight) <= 0)
-    if (incomplete) return toast.error("All items must have a valid Gross Weight.")
-
-    const { data: authData, error: authError } = await supabase.auth.getUser()
-    if (authError || !authData.user) return toast.error("Authentication error.")
+  // --- BULK RECEIVE LOGIC ---
+  async function receiveSelectedBatch() {
+    const selectedItems = receiveItems.filter(i => i.isSelected)
     
-    const userId = authData.user.id
+    if (selectedItems.length === 0) return toast.error("No items selected to receive.")
+    
+    const invalidItem = selectedItems.find(i => parseFloat(i.grossWeight) <= 0 || !i.grossWeight)
+    if (invalidItem) return toast.error(`Enter a valid Gross Weight for ${invalidItem.sku_reference}.`)
 
-    const insertData = batchItems.map(item => ({
-      company_id: companyId,
-      warehouse_id: selectedWarehouseId,
-      created_from_job_bag_id: jobId,
-      status: 'in_stock',
-      metal_type: metalType,
-      purity_karat: purityKarat,
-      purity_percent: Number(purityPercent),
-      item_category: itemCategory,
-      item_size: itemSize,
-      sku_reference: item.sku_reference,
-      labor_rate: Number(laborRate),
-      remarks: remarks,
-      barcode: item.barcode,
-      gross_weight_g: Number(item.grossWeight),
-      net_weight_g: Number(item.netWeight),
-      total_stone_weight_cts: Number(item.stoneWeight),
-      total_stone_pieces: Number(item.stonePieces) || 0,
-      wastage_weight_g: Number(item.wastageWeight),
-      cost_making: Number(item.costMaking),
-      mrp: item.mrp ? Number(item.mrp) : null,
-      created_by: userId,
-      updated_by: userId
-    }))
+    setIsProcessing(true)
+    const { data: authData } = await supabase.auth.getUser()
+    const userId = authData?.user?.id
 
-    const { error } = await supabase.from('inventory_items').insert(insertData)
+    try {
+      for (const item of selectedItems) {
+        let combinedRemarks = globalRemarks ? `[Batch] ${globalRemarks}` : '';
+        if (item.item_remarks) combinedRemarks += ` | [Item] ${item.item_remarks}`;
+        if (item.breakageWeight && Number(item.breakageWeight) > 0) {
+          combinedRemarks += ` | Broken Stone: ${item.breakageWeight}ct`;
+        }
 
-    if (error) {
-      toast.error(`Batch insert failed: ${error.message}`)
-    } else {
-      toast.success(`Successfully added ${batchItems.length} items to inventory!`)
+        const { error: invError } = await supabase.from('inventory_items').insert({
+          company_id: companyId,
+          warehouse_id: selectedWarehouseId,
+          created_from_job_bag_id: jobId,
+          created_from_job_bag_item_id: item.job_bag_item_id,
+          status: 'in_stock',
+          metal_type: metalType,
+          purity_karat: purityKarat,
+          purity_percent: Number(purityPercent),
+          item_category: item.category, 
+          sku_reference: item.sku_reference,
+          labor_rate: Number(laborRate),
+          remarks: combinedRemarks.trim() || null,
+          barcode: item.barcode,
+          gross_weight_g: Number(item.grossWeight),
+          net_weight_g: Number(item.netWeight),
+          total_stone_weight_cts: Number(item.stoneWeight),
+          total_stone_pieces: Number(item.stonePieces) || 0,
+          wastage_weight_g: Number(item.lossWeight),
+          cost_making: Number(item.costMaking),
+          mrp: item.mrp ? Number(item.mrp) : null,
+          created_by: userId,
+          updated_by: userId,
+          item_size: item.item_size || null,
+          hsn_code: item.hsn_code || null,
+          huid_code: item.huid_code ? item.huid_code.toUpperCase() : null 
+        })
+
+        if (invError) {
+          if (invError.code === '23505' && invError.message.includes('huid')) {
+             throw new Error(`HUID Code ${item.huid_code} is already registered.`);
+          }
+          throw new Error(`Inventory Insert Error (${item.sku_reference}): ${invError.message}`)
+        }
+
+        const { error: jobItemError } = await supabase.from('job_bag_items').update({
+          status: 'received',
+          actual_gross_weight_g: Number(item.grossWeight),
+          calculated_loss_g: Number(item.lossWeight),
+          updated_at: new Date().toISOString()
+        }).eq('id', item.job_bag_item_id)
+
+        if (jobItemError) throw new Error(`Update Status Error: ${jobItemError.message}`)
+      }
+
+      toast.success(`Successfully received ${selectedItems.length} items to the vault!`)
       refresh()
-      setBatchItems([])
+      await loadJobBagItems() 
+    } catch (err: any) {
+      toast.error(err.message)
+    } finally {
+      setIsProcessing(false)
     }
   }
 
-  // --- TSC PRINTER LOGIC ---
-  const activeItem = batchItems[previewIndex]
-  
-  const handlePrint = useReactToPrint({
-    contentRef: labelRef,
-    documentTitle: `Tag_${activeItem?.barcode || 'Preview'}`,
-    onAfterPrint: () => toast.success('Sent to Thermal Printer'),
-  })
+  const selectedItems = receiveItems.filter(i => i.isSelected)
+  const unselectedItems = receiveItems.filter(i => !i.isSelected)
+
+  if (!isLoading && receiveItems.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed border-border rounded-xl bg-secondary/10">
+        <CheckCircle2 className="w-8 h-8 text-emerald-500 mb-3" />
+        <h3 className="text-sm font-bold text-foreground">All Items Received</h3>
+        <p className="text-muted-foreground text-xs mt-1 text-center">There are no pending SKUs to receive in this Job Bag.</p>
+      </div>
+    )
+  }
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 items-start">
+    <div className="space-y-6">
       
-      {/* MAIN CONTENT AREA */}
-      <div className="xl:col-span-3 space-y-6">
+      {/* ========================================================
+          STEP 1: CONFIGURATION & STAGING AREA (SELECTED ITEMS)
+          ======================================================== */}
+      <Card className="shadow-md border-primary/20 bg-card overflow-hidden">
+        <CardHeader className="bg-primary/5 py-3 px-4 border-b border-primary/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Settings2 className="w-4 h-4 text-primary" />
+            <h3 className="text-xs font-black uppercase tracking-widest text-primary">1. Active Receiving Batch</h3>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" size="sm" onClick={loadJobBagItems} disabled={isLoading} className="h-8 text-xs bg-white">
+              <RefreshCw className={`w-3 h-3 mr-2 ${isLoading ? 'animate-spin' : ''}`} /> Refresh
+            </Button>
+            <Button 
+              size="sm" 
+              onClick={receiveSelectedBatch} 
+              disabled={isProcessing || selectedItems.length === 0}
+              className="h-8 px-4 text-xs font-bold uppercase shadow-md bg-foreground text-background hover:bg-foreground/90 transition-all active:scale-[0.98]"
+            >
+              {isProcessing ? <RefreshCw className="w-3 h-3 mr-2 animate-spin" /> : <Save className="w-3 h-3 mr-2" />}
+              Receive Selected ({selectedItems.length})
+            </Button>
+          </div>
+        </CardHeader>
         
-        {/* STEP 1: BATCH SETTINGS */}
-        <Card className="shadow-none border-border/60 bg-card overflow-hidden">
-          <CardHeader className="bg-secondary/30 py-3 px-4 border-b">
-            <div className="flex items-center gap-2">
-              <Settings2 className="w-4 h-4 text-muted-foreground" />
-              <h3 className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Step 1: Batch Configuration</h3>
-            </div>
-          </CardHeader>
-          <CardContent className="p-6">
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-              
-              <div className="sm:col-span-2 space-y-1.5">
-                <Label className="text-[10px] font-bold uppercase text-muted-foreground">Item Category</Label>
-                {isNewCategoryMode ? (
-                  <div className="relative flex items-center group">
-                    <Input 
-                      placeholder="Type new category..." 
-                      className="h-9 text-xs border-border bg-background pr-8 focus-visible:ring-1 focus-visible:ring-primary shadow-inner" 
-                      value={itemCategory} 
-                      onChange={(e) => setItemCategory(e.target.value)} 
-                      autoFocus
-                    />
-                    <Button 
-                      type="button" variant="ghost" size="icon" 
-                      className="absolute right-0 h-9 w-9 text-muted-foreground hover:text-red-500 transition-colors"
-                      onClick={() => {
-                        setIsNewCategoryMode(false)
-                        setItemCategory(categories.length > 0 ? categories[0] : '')
-                      }}
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                ) : (
-                  <Select value={itemCategory} onValueChange={(val) => {
-                    if (val === 'ADD_NEW') { setIsNewCategoryMode(true); setItemCategory(''); } 
-                    else { setItemCategory(val) }
-                  }}>
-                    <SelectTrigger className="h-9 text-xs border-border bg-muted/20 focus:ring-1 focus:ring-primary">
-                      <SelectValue placeholder="Select Category..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {categories.map(c => (
-                        <SelectItem key={c} value={c} className="text-xs font-medium">{c}</SelectItem>
-                      ))}
-                      {categories.length > 0 && <Separator className="my-1" />}
-                      <SelectItem value="ADD_NEW" className="text-xs font-bold text-primary focus:bg-primary/10">
-                        <div className="flex items-center gap-2"><Plus className="h-3.5 w-3.5" /> Add New Category...</div>
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                )}
-              </div>
-
-              <div className="sm:col-span-2 space-y-1.5">
-                <Label className="text-[10px] font-bold uppercase text-muted-foreground">Style / SKU</Label>
-                <div className="relative flex items-center group">
-                  <Input 
-                    placeholder="e.g. RNG-22K-A1B2" 
-                    className="h-9 text-xs border-border bg-muted/20 uppercase pr-8 focus-visible:ring-1 focus-visible:ring-primary" 
-                    value={styleCode} 
-                    onChange={(e) => setStyleCode(e.target.value)} 
-                  />
-                  <Button 
-                    type="button" variant="ghost" size="icon" 
-                    className="absolute right-0 h-9 w-9 text-muted-foreground hover:text-primary transition-colors"
-                    onClick={() => setStyleCode(generateSmartStyleCode(itemCategory, purityKarat))}
-                    title="Auto-generate Style Code"
-                  >
-                    <Wand2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-
-              <div className="sm:col-span-2 space-y-1.5">
+        <CardContent className="p-0">
+          {/* Top Settings Form */}
+          <div className="p-4 sm:p-6 bg-white border-b border-zinc-100">
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
+              <div className="space-y-1.5">
                 <Label className="text-[10px] font-bold uppercase text-muted-foreground">Receiving Vault</Label>
                 <Select value={selectedWarehouseId} onValueChange={setSelectedWarehouseId}>
-                  <SelectTrigger className="h-9 text-xs border-border bg-muted/20 focus:ring-1 focus:ring-primary">
-                    <SelectValue placeholder="Select Vault..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {warehouses.map(w => (
-                      <SelectItem key={w.id} value={w.id} className="text-xs font-medium">{w.name}</SelectItem>
-                    ))}
-                  </SelectContent>
+                  <SelectTrigger className="h-9 text-xs border-border bg-muted/20 focus:ring-1 focus:ring-primary"><SelectValue /></SelectTrigger>
+                  <SelectContent>{warehouses.map(w => <SelectItem key={w.id} value={w.id} className="text-xs">{w.name}</SelectItem>)}</SelectContent>
                 </Select>
               </div>
-              
               <div className="space-y-1.5">
-                <Label className="text-[10px] font-bold uppercase text-muted-foreground">Quantity</Label>
-                <Input type="number" min="1" className="h-9 text-xs border-border bg-muted/20 font-bold" value={batchQuantity} onChange={(e) => setBatchQuantity(e.target.value)} />
+                <Label className="text-[10px] font-bold uppercase text-muted-foreground">Metal Type</Label>
+                <Select value={metalType} onValueChange={setMetalType}>
+                  <SelectTrigger className="h-9 text-xs border-border bg-muted/20"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="Gold" className="text-xs">Gold</SelectItem><SelectItem value="Platinum" className="text-xs">Platinum</SelectItem></SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase text-muted-foreground">Received Purity</Label>
+                <Select value={purityKarat} onValueChange={handleKaratChange}>
+                  <SelectTrigger className="h-9 text-xs border-border bg-muted/20"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="24K" className="text-xs">24K (99.9%)</SelectItem>
+                    <SelectItem value="22K" className="text-xs">22K (91.6%)</SelectItem>
+                    <SelectItem value="18K" className="text-xs">18K (75.0%)</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1.5">
                 <Label className="text-[10px] font-bold uppercase text-muted-foreground">Labor /g (₹)</Label>
                 <Input type="number" className="h-9 text-xs border-border bg-muted/20" value={laborRate} onChange={(e) => setLaborRate(e.target.value)} />
               </div>
               <div className="space-y-1.5">
-                <Label className="text-[10px] font-bold uppercase text-muted-foreground">Wastage (%)</Label>
-                <Input type="number" className="h-9 text-xs border-border bg-muted/20" value={wastagePercent} onChange={(e) => setWastagePercent(e.target.value)} />
+                <Label className="text-[10px] font-bold uppercase text-muted-foreground">Batch Remarks</Label>
+                <Input placeholder="Global notes..." className="h-9 text-xs border-border bg-muted/20" value={globalRemarks} onChange={(e) => setGlobalRemarks(e.target.value)} />
               </div>
             </div>
+          </div>
 
-            <Button onClick={generateBatchGrid} variant="secondary" className="w-full h-10 font-bold text-xs uppercase tracking-widest border border-border">
-              Generate Sequence for {batchQuantity || 0} Units
-            </Button>
-          </CardContent>
-        </Card>
-
-        {/* STEP 2: FAST ENTRY GRID */}
-        {batchItems.length > 0 && (
-          <Card className="shadow-none border-border/60 bg-card overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-300">
-            <CardHeader className="bg-primary/5 py-3 px-4 border-b border-primary/10 flex flex-row items-center justify-between">
-               <div className="flex items-center gap-2">
-                 <Layers className="w-4 h-4 text-primary" />
-                 <h3 className="text-[11px] font-bold uppercase tracking-widest text-primary">Step 2: Fast Entry Grid</h3>
-               </div>
-               <span className="text-[9px] font-bold uppercase tracking-tighter text-muted-foreground">Tap row to view label</span>
-            </CardHeader>
-            <CardContent className="p-0">
+          {/* Staged Items Grid */}
+          <div className="bg-zinc-50/50 min-h-[150px]">
+            {selectedItems.length === 0 ? (
+              <div className="flex flex-col items-center justify-center p-8 text-center text-muted-foreground">
+                <ArrowUpCircle className="w-8 h-8 text-zinc-300 mb-2" />
+                <p className="text-xs font-medium">No items selected.</p>
+                <p className="text-[10px]">Select items from the pending list below to stage them for receiving.</p>
+              </div>
+            ) : (
               <div className="overflow-x-auto max-h-[500px] custom-scrollbar">
                 <table className="w-full text-sm">
-                  <thead className="bg-secondary/30 sticky top-0 z-10 border-b shadow-sm">
+                  <thead className="bg-white sticky top-0 z-10 border-b shadow-sm">
                     <tr>
-                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground whitespace-nowrap">Identifier</th>
-                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Style / SKU</th>
-                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Gross (g)</th>
-                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Stone Pcs</th>
-                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Stone (ct)</th>
-                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Net (g)</th>
-                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Retail (₹)</th>
+                      <th className="p-3 text-center w-10"><CheckSquare className="w-4 h-4 text-primary mx-auto" /></th>
+                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground min-w-[140px]">Style Details</th>
+                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground bg-amber-50">Issued (Material)</th>
+                      <th className="p-3 text-left text-[10px] font-black uppercase text-foreground bg-primary/10">Final Gross</th>
+                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Stones (Pcs/Ct)</th>
+                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground bg-green-50">Net & Loss</th>
+                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground border-l">Compliance</th>
+                      <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Specs / Notes</th>
+                      <th className="p-3 text-left text-[10px] font-black uppercase text-amber-700 bg-amber-50/50">Financials (₹)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {batchItems.map((item, idx) => (
-                      <tr 
-                        key={item.barcode} 
-                        className={`border-b border-border/40 transition-colors hover:bg-secondary/30 cursor-pointer ${previewIndex === idx ? 'bg-primary/5' : ''}`}
-                        onClick={() => setPreviewIndex(idx)}
-                      >
-                        <td className="p-3 font-mono font-bold text-xs text-foreground whitespace-nowrap">{item.barcode}</td>
-                        <td className="p-3">
-                          <Input 
-                            className="h-8 w-24 text-xs font-bold border-border/60 focus-visible:ring-1 focus-visible:ring-primary/50 uppercase" 
-                            value={item.sku_reference} 
-                            onChange={(e) => updateBatchItem(idx, 'sku_reference', e.target.value)} 
-                          />
+                    {selectedItems.map((item) => (
+                      <tr key={item.job_bag_item_id} className="border-b border-border/40 hover:bg-white transition-colors bg-white">
+                        <td className="p-3 text-center align-top">
+                          <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full hover:bg-rose-100 hover:text-rose-600 text-zinc-400" onClick={() => toggleSelection(item.job_bag_item_id)}>
+                            <ArrowDownCircle className="w-4 h-4" />
+                          </Button>
                         </td>
-                        <td className="p-3">
-                          <Input 
-                            type="number" step="0.001" 
-                            className="h-8 w-24 text-xs font-bold border-border/60 focus-visible:ring-1 focus-visible:ring-primary/50" 
-                            value={item.grossWeight} 
-                            onChange={(e) => updateBatchItem(idx, 'grossWeight', e.target.value)} 
-                          />
+                        <td className="p-3 font-medium text-xs text-foreground align-top">
+                          <div className="font-bold">{item.sku_reference}</div>
+                          <div className="text-[10px] text-muted-foreground">{item.ornament_type}</div>
                         </td>
-                        <td className="p-3">
-                          <Input 
-                            type="number"
-                            className="h-8 w-16 text-xs border-border/60 focus-visible:ring-1 focus-visible:ring-primary/50" 
-                            value={item.stonePieces} 
-                            onChange={(e) => updateBatchItem(idx, 'stonePieces', e.target.value)} 
-                          />
+                        <td className="p-3 font-bold text-xs bg-amber-50/50 align-top">
+                          <div className="text-amber-700">{item.issuedGold.toFixed(3)}g <span className="text-[9px] font-normal text-zinc-500">Au</span></div>
+                          {item.issuedDiamondCts > 0 && <div className="text-blue-600 mt-1">{item.issuedDiamondCts.toFixed(2)}ct</div>}
                         </td>
-                        <td className="p-3">
-                          <Input 
-                            type="number" step="0.01" 
-                            className="h-8 w-20 text-xs border-border/60 focus-visible:ring-1 focus-visible:ring-primary/50" 
-                            value={item.stoneWeight} 
-                            onChange={(e) => updateBatchItem(idx, 'stoneWeight', e.target.value)} 
-                          />
+                        <td className="p-3 bg-primary/5 align-top">
+                          <Input type="number" step="0.001" placeholder="0.000" className="h-8 w-24 text-xs font-bold border-primary/30 bg-white" value={item.grossWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'grossWeight', e.target.value)} />
                         </td>
-                        <td className="p-3 font-bold text-foreground text-xs">{item.netWeight}</td>
-                        <td className="p-3">
-                          <Input 
-                            type="number" 
-                            className="h-8 w-24 text-xs border-border/60 focus-visible:ring-1 focus-visible:ring-primary/50" 
-                            placeholder="Auto"
-                            value={item.mrp || ''} 
-                            onChange={(e) => updateBatchItem(idx, 'mrp', e.target.value)} 
-                          />
+                        <td className="p-3 align-top">
+                          <div className="flex gap-1 mb-1">
+                            <Input type="number" className="h-7 w-12 text-[11px] px-1 text-center" placeholder="Pcs" value={item.stonePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stonePieces', e.target.value)} title="Pieces"/>
+                            <Input type="number" step="0.01" className="h-7 w-16 text-[11px] px-1 text-center" placeholder="Cts" value={item.stoneWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stoneWeight', e.target.value)} title="Carats"/>
+                          </div>
+                          <Input type="number" step="0.01" className="h-7 w-full max-w-[120px] text-[11px] border-red-200 text-red-600 bg-red-50/50" placeholder="Breakage (Ct)" value={item.breakageWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'breakageWeight', e.target.value)} title="Broken Carats"/>
+                        </td>
+                        <td className="p-3 align-top bg-green-50/30">
+                          <div className="font-bold text-green-700 text-xs mb-1">{item.netWeight}g <span className="text-[9px] font-normal text-muted-foreground">NET</span></div>
+                          <div className="font-bold text-red-600 text-xs">{item.lossWeight}g <span className="text-[9px] font-normal text-muted-foreground">LOSS</span></div>
+                        </td>
+                        <td className="p-3 border-l align-top">
+                           <Input className="h-7 w-24 text-[10px] uppercase font-mono mb-1" placeholder="HUID CODE" value={item.huid_code} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'huid_code', e.target.value)} maxLength={6} />
+                           <Input className="h-7 w-24 text-[10px]" placeholder="HSN CODE" value={item.hsn_code} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'hsn_code', e.target.value)} />
+                        </td>
+                        <td className="p-3 align-top">
+                           <Input className="h-7 w-24 text-[11px] mb-1" placeholder="Size (e.g. 18)" value={item.item_size} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'item_size', e.target.value)} />
+                           <Input className="h-7 w-28 text-[10px]" placeholder="Item notes..." value={item.item_remarks} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'item_remarks', e.target.value)} />
+                        </td>
+                        <td className="p-3 align-top bg-amber-50/30 border-l border-amber-100">
+                          <div className="text-[10px] font-bold text-zinc-500 mb-1">Making: <span className="text-amber-700">₹{item.costMaking}</span></div>
+                          <Input type="number" step="0.01" className="h-7 w-24 text-[11px] font-bold text-zinc-900 bg-white" placeholder="MRP (₹)" value={item.mrp} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'mrp', e.target.value)} />
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-              
-              <div className="p-6 bg-secondary/10 border-t">
-                <Button onClick={receiveBatch} className="w-full md:w-auto h-10 px-8 font-bold text-xs uppercase tracking-widest shadow-md bg-foreground text-background hover:bg-foreground/90 transition-transform active:scale-[0.98]">
-                  <Save className="w-4 h-4 mr-2" /> Commit Batch to Vault
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-      </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
 
-      {/* RIGHT COLUMN: DIRECT TSC THERMAL PRINT PREVIEW */}
-      <div className="xl:col-span-1">
-        <Card className="sticky top-[100px] shadow-none border-border/60 bg-card overflow-hidden">
-          <CardHeader className="bg-secondary/30 py-3 px-4 border-b">
-             <h3 className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground text-center">Thermal Label Layout</h3>
-          </CardHeader>
-          <CardContent className="p-6 flex flex-col items-center justify-center min-h-[400px]">
-            
-            <div className="overflow-x-auto w-full pb-4 flex justify-center">
-              
-              {/* EXACT 100x20mm CSS LAYOUT */}
-              <div 
-                ref={labelRef} 
-                className="bg-white text-black flex border border-gray-300 shadow-sm print:border-none print:shadow-none overflow-hidden"
-                style={{ 
-                  width: '100mm', 
-                  height: '20mm', 
-                  fontFamily: 'Arial, sans-serif',
-                  boxSizing: 'border-box'
-                }}
-              >
-                {/* Global Print CSS Injection */}
-                <style type="text/css" media="print">
-                  {`@page { size: 100mm 20mm; margin: 0; } body { margin: 0; padding: 0; background: white; }`}
-                </style>
 
-                {/* PRINTABLE AREA (70mm total) */}
-                <div className="flex w-[70mm] h-full">
-                  
-                  {/* LEFT FLAP (All Text & Branding - 34mm) */}
-                  <div className="flex flex-col justify-center h-full w-[34mm] pl-[2mm]" style={{ fontSize: '5.8px', lineHeight: '1.15', fontWeight: 'bold' }}>
-                    
-                    {/* Branding Header */}
-                    <h2 className="font-extrabold uppercase tracking-tight text-[8px] leading-none mb-[1px]">
-                      PAVITRAM
-                    </h2>
-                    <div className="uppercase tracking-widest text-[5px] text-gray-600 mb-[2px] border-b border-gray-200 pb-[1px]">
-                      {itemCategory || 'CATEGORY'}
-                    </div>
-
-                    {/* Technical Specs */}
-                    <div className="flex"><span className="w-[9mm]">TAG</span><span>: {activeItem?.barcode?.slice(-6) || '---'}</span></div>
-                    <div className="flex"><span className="w-[9mm]">STYLE</span><span>: {activeItem?.sku_reference || '---'}</span></div>
-                    <div className="flex"><span className="w-[9mm]">KT/GW</span><span>: {purityKarat} / {Number(activeItem?.grossWeight||0).toFixed(3)}</span></div>
-                    <div className="flex">
-                      <span className="w-[9mm]">{Number(activeItem?.stonePieces) === 1 ? 'CS' : 'RD'}</span>
-                      <span>: {activeItem?.stonePieces || 0} / {Number(activeItem?.stoneWeight||0).toFixed(3)}</span>
-                    </div>
-                    <div className="flex"><span className="w-[9mm]">NET</span><span>: {Number(activeItem?.netWeight||0).toFixed(3)}</span></div>
-                  </div>
-
-                  {/* CENTER GAP (Fold Line - 2mm) */}
-                  <div className="w-[2mm] h-full flex items-center justify-center">
-                    <div className="h-full w-[1px] border-l border-dashed border-gray-300 print:border-none opacity-50" />
-                  </div>
-
-                  {/* RIGHT FLAP (Dedicated QR Code - 34mm) */}
-                  <div className="flex flex-col justify-center items-center h-full w-[34mm] pr-[2mm]">
-                    {activeItem?.barcode ? (
-                      <div className="bg-white p-0.5">
-                        <QRCode 
-                          value={activeItem.barcode} 
-                          size={64} 
-                          level="M" 
-                          style={{ height: "16mm", width: "16mm" }} 
-                        />
-                      </div>
-                    ) : (
-                      <div className="h-[16mm] w-[16mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">
-                        N/A
-                      </div>
-                    )}
-                  </div>
-
-                </div>
-
-                {/* RAT-TAIL / STRING TIE AREA (30mm Blank) */}
-                <div className="w-[30mm] h-full bg-gray-50 print:bg-white border-l border-gray-200 print:border-none flex items-center justify-center">
-                   <span className="text-[5px] text-gray-300 print:hidden rotate-90 tracking-widest">TAIL AREA</span>
-                </div>
-
-              </div>
+      {/* ========================================================
+          STEP 2: AVAILABLE ITEMS (UNSELECTED)
+          ======================================================== */}
+      {unselectedItems.length > 0 && (
+        <Card className="shadow-sm border-border/60 bg-card overflow-hidden">
+          <CardHeader className="bg-secondary/30 py-3 px-4 border-b flex flex-row items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-muted-foreground" />
+              <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">2. Available SKUs in Job Bag ({unselectedItems.length})</h3>
             </div>
-
-            <Button 
-              className="w-full h-10 font-bold text-xs uppercase tracking-widest shadow-md" 
-              onClick={handlePrint}
-              disabled={batchItems.length === 0}
-            >
-              <Printer className="w-3.5 h-3.5 mr-2" /> Direct Print (TSC)
+            <Button variant="secondary" size="sm" onClick={() => selectAll(true)} className="h-7 text-xs font-bold">
+              Select All Below
             </Button>
-
-            <p className="text-[9px] text-muted-foreground text-center mt-3 uppercase tracking-widest">
-              Set printer bounds to 100mm x 20mm
-            </p>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto max-h-[400px] custom-scrollbar">
+              <table className="w-full text-sm">
+                <thead className="bg-zinc-50 sticky top-0 z-10 border-b">
+                  <tr>
+                    <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Action</th>
+                    <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Style Details</th>
+                    <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Issued Au</th>
+                    <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Issued Dia</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unselectedItems.map((item) => (
+                    <tr key={item.job_bag_item_id} className="border-b border-border/40 hover:bg-secondary/20 transition-colors">
+                      <td className="p-3">
+                        <Button variant="outline" size="sm" className="h-8 px-3 text-[10px] font-bold text-primary hover:bg-primary/10 hover:text-primary" onClick={() => toggleSelection(item.job_bag_item_id)}>
+                          <ArrowUpCircle className="w-3.5 h-3.5 mr-1.5" /> Stage Item
+                        </Button>
+                      </td>
+                      <td className="p-3 font-medium text-xs text-foreground">
+                        <div className="font-bold">{item.sku_reference}</div>
+                        <div className="text-[10px] text-muted-foreground">{item.ornament_type}</div>
+                      </td>
+                      <td className="p-3 font-bold text-xs text-amber-700">{item.issuedGold.toFixed(3)}g</td>
+                      <td className="p-3 font-bold text-xs text-blue-600">{item.issuedDiamondCts > 0 ? `${item.issuedDiamondCts.toFixed(2)}ct` : '--'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </CardContent>
         </Card>
-      </div>
-
+      )}
+      
     </div>
   )
 }

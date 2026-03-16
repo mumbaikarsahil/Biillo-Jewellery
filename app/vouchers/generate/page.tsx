@@ -1,55 +1,82 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
+import QRCode from "react-qr-code";
+import { useReactToPrint } from "react-to-print";
 import { 
-  Loader2, 
-  Download, 
-  CheckCircle2, 
-  PlusCircle, 
-  ArrowLeft, 
-  ChevronRight, 
-  RefreshCw, 
-  Database,
-  Printer,
-  Ticket,
-  FileSpreadsheet,
-  Info
+  Loader2, CheckCircle2, PlusCircle, ArrowLeft, ChevronRight, 
+  RefreshCw, Database, Printer, Ticket, FileSpreadsheet, Info, Share2
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/hooks/useAuth";
 import { Separator } from "@/components/ui/separator";
 
-// Helper function to generate a secure-looking alphanumeric string
-const generateSecureCode = (prefix: string) => {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let randomPart = "";
-  for (let i = 0; i < 6; i++) {
-    randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return prefix ? `${prefix.toUpperCase()}-${randomPart}` : randomPart;
-};
-
 export default function GenerateVouchersPage() {
   const { toast } = useToast();
   const { appUser } = useAuth();
   
+  const [companyName, setCompanyName] = useState("GIFT VOUCHER");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [successBatch, setSuccessBatch] = useState<{ batchNo: string; codes: string[]; discount: number } | null>(null);
+  const [successBatch, setSuccessBatch] = useState<{ 
+    batchNo: string; codes: string[]; discount: number; handlingFee: number; expiry: string 
+  } | null>(null);
 
   const [formData, setFormData] = useState({
-    prefix: "FESTIVAL",
+    prefix: "A",
+    startingNumber: 1,
     quantity: 100,
     discountValue: 500,
+    handlingFee: 0,
     printerName: "",
   });
+
+  const printRef = useRef<HTMLDivElement>(null);
+  const handlePrint = useReactToPrint({ contentRef: printRef });
+
+  // Fetch domain from Environment Variables (fallback to localhost if missing)
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+
+  useEffect(() => {
+    async function fetchInitialContext() {
+      if (!appUser?.company_id) return;
+      const { data: compData } = await supabase.from('companies').select('trade_name, legal_name').eq('id', appUser.company_id).single();
+      if (compData) setCompanyName(compData.trade_name || compData.legal_name || "GIFT VOUCHER");
+
+      const { data: lastBatch } = await supabase.from('voucher_batches').select('prefix').eq('company_id', appUser.company_id).order('created_at', { ascending: false }).limit(1).maybeSingle();
+      if (lastBatch && lastBatch.prefix) setFormData(prev => ({ ...prev, prefix: lastBatch.prefix }));
+    }
+    fetchInitialContext();
+  }, [appUser]);
+
+  useEffect(() => {
+    async function fetchNextSequence() {
+      if (!appUser?.company_id || !formData.prefix.trim()) return;
+      const prefix = formData.prefix.trim().toUpperCase();
+      const { data: vData, error } = await supabase.from('vouchers').select('code').ilike('code', `${prefix}%`).limit(1000); 
+
+      if (!error && vData && vData.length > 0) {
+        let maxVal = 0;
+        vData.forEach(v => {
+          const numStr = v.code.substring(prefix.length);
+          const parsed = parseInt(numStr, 10);
+          if (!isNaN(parsed) && parsed > maxVal) maxVal = parsed;
+        });
+        setFormData(prev => ({ ...prev, startingNumber: maxVal + 1 }));
+      } else {
+        setFormData(prev => ({ ...prev, startingNumber: 1 }));
+      }
+    }
+    const timeoutId = setTimeout(() => fetchNextSequence(), 500);
+    return () => clearTimeout(timeoutId);
+  }, [formData.prefix, appUser]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -61,60 +88,46 @@ export default function GenerateVouchersPage() {
     setIsGenerating(true);
 
     try {
-      if (!appUser || !appUser.company_id) {
-        throw new Error("Authentication error: Could not verify your company profile.");
-      }
+      if (!appUser || !appUser.company_id) throw new Error("Authentication error.");
 
       const companyId = appUser.company_id;
-      const batchNo = `PO-${Date.now().toString().slice(-6)}`;
+      const batchNo = `BCH-${Date.now().toString().slice(-6)}`;
       const quantity = Number(formData.quantity);
+      const startNum = Number(formData.startingNumber) || 1;
       const discount = Number(formData.discountValue);
+      const handlingFee = Number(formData.handlingFee);
 
-      const generatedCodes = Array.from({ length: quantity }, () => generateSecureCode(formData.prefix));
+      const initialExpiryDate = new Date();
+      initialExpiryDate.setMonth(initialExpiryDate.getMonth() + 6);
+      const expiryIsoStr = initialExpiryDate.toISOString().split('T')[0];
 
-      const { data: batchData, error: batchError } = await supabase
-        .from("voucher_batches")
-        .insert({
-          company_id: companyId,
-          batch_no: batchNo,
-          prefix: formData.prefix.toUpperCase(),
-          quantity: quantity,
-          discount_value: discount,
-          printer_name: formData.printerName,
-          status: "generated",
-        })
-        .select()
-        .single();
+      const prefix = formData.prefix.trim().toUpperCase();
+      const generatedCodes = Array.from({ length: quantity }, (_, i) => {
+        const numSequence = (startNum + i).toString().padStart(4, '0');
+        return `${prefix}${numSequence}`;
+      });
+
+      const { data: batchData, error: batchError } = await supabase.from("voucher_batches").insert({
+          company_id: companyId, batch_no: batchNo, prefix: prefix, quantity: quantity,
+          discount_value: discount, handling_fee: handlingFee, printer_name: formData.printerName, status: "generated",
+        }).select().single();
 
       if (batchError) throw new Error(batchError.message);
 
       const vouchersToInsert = generatedCodes.map((code) => ({
-        batch_id: batchData.id,
-        code: code,
-        discount_value: discount,
-        status: "pending_print",
+        batch_id: batchData.id, code: code, discount_value: discount, handling_fee: handlingFee,
+        status: "pending_print", expiry_date: expiryIsoStr,
       }));
 
-      const { error: vouchersError } = await supabase
-        .from("vouchers")
-        .insert(vouchersToInsert);
-
+      const { error: vouchersError } = await supabase.from("vouchers").insert(vouchersToInsert);
       if (vouchersError) throw new Error(vouchersError.message);
 
-      setSuccessBatch({ batchNo, codes: generatedCodes, discount });
-      
-      toast({
-        title: "Batch Generated",
-        description: `${quantity} vouchers successfully committed to database.`,
-      });
+      setSuccessBatch({ batchNo, codes: generatedCodes, discount, handlingFee, expiry: expiryIsoStr });
+      toast({ title: "Batch Generated", description: `${quantity} sequential vouchers committed.` });
+      setFormData(prev => ({ ...prev, startingNumber: startNum + quantity }));
 
     } catch (error: any) {
-      console.error("Error generating vouchers:", error);
-      toast({
-        title: "Process Failed",
-        description: error.message || "An error occurred during batch creation.",
-        variant: "destructive",
-      });
+      toast({ title: "Process Failed", description: error.message, variant: "destructive" });
     } finally {
       setIsGenerating(false);
     }
@@ -122,24 +135,65 @@ export default function GenerateVouchersPage() {
 
   const downloadExcel = () => {
     if (!successBatch) return;
-
     const exportData = successBatch.codes.map((code, index) => ({
-      "Sr No": index + 1,
-      "Voucher Code": code,
-      "Discount Value": successBatch.discount,
-      "Batch Reference": successBatch.batchNo,
+      "Sr No": index + 1, "Voucher Code": code, "Credit Value (₹)": successBatch.discount,
+      "Handling Fee (₹)": successBatch.handlingFee, "Initial Expiry": successBatch.expiry,
+      "Batch Ref": successBatch.batchNo, "Claim URL": `${baseUrl}/claim?code=${code}`
     }));
-
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Vouchers");
-    worksheet["!cols"] = [{ wch: 8 }, { wch: 25 }, { wch: 15 }, { wch: 20 }];
     XLSX.writeFile(workbook, `Vouchers_${successBatch.batchNo}.xlsx`);
   };
 
+  const shareExcel = async () => {
+    if (!successBatch) return;
+    
+    // 1. Prepare the data (same as download)
+    const exportData = successBatch.codes.map((code, index) => ({
+      "Sr No": index + 1, "Voucher Code": code, "Credit Value (₹)": successBatch.discount,
+      "Handling Fee (₹)": successBatch.handlingFee, "Initial Expiry": successBatch.expiry,
+      "Batch Ref": successBatch.batchNo, "Claim URL": `${baseUrl}/claim?code=${code}`
+    }));
+    
+    const worksheet = XLSX.utils.json_to_sheet(exportData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Vouchers");
+
+    // 2. Convert to a File Object instead of triggering a download
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    const file = new File([excelBuffer], `Vouchers_${successBatch.batchNo}.xlsx`, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+
+    // 3. Trigger Native Share Menu
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({
+          files: [file],
+          title: `Voucher Manifest - ${successBatch.batchNo}`,
+          text: `Here is the Excel manifest for voucher batch ${successBatch.batchNo}.`,
+        });
+      } catch (error: any) {
+        // If the user simply closes the share menu, it throws an AbortError. We ignore that.
+        if (error.name !== 'AbortError') {
+          toast({ title: "Sharing Failed", description: "Could not share the file.", variant: "destructive" });
+        }
+      }
+    } else {
+      // Fallback for older browsers (like older desktop Chrome)
+      toast({ 
+        title: "Not Supported", 
+        description: "Your device/browser does not support direct file sharing. Please use the Download button instead.", 
+        variant: "destructive" 
+      });
+    }
+  };
+
   return (
-    <div className="flex flex-col min-h-screen bg-[#fafafa]">
-      {/* --- COMPACT IDE-STYLE TOOLBAR HEADER --- */}
+    <div className="flex flex-col min-h-screen bg-[#fafafa] font-sans">
+      
+      {/* --- COMPACT IDE-STYLE TOOLBAR HEADER (Matches Batches Page) --- */}
       <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-md border-b border-gray-200 px-4 h-12 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 overflow-hidden">
           <Link href="/vouchers">
@@ -153,113 +207,95 @@ export default function GenerateVouchersPage() {
           <nav className="flex items-center gap-1.5 text-[13px] whitespace-nowrap overflow-hidden">
             <Link href="/vouchers" className="text-gray-500 hover:text-gray-900 transition-colors font-medium">Vouchers</Link>
             <ChevronRight className="h-3.5 w-3.5 text-gray-400" />
-            <span className="font-bold text-gray-900 select-none">Generate Vouchers</span>
+            <span className="font-bold text-gray-900 select-none">Generate Sequential Batch</span>
             
             <div className="ml-3 hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-gray-100 border border-gray-200">
-              <div className="h-1.5 w-1.5 rounded-full bg-blue-500" />
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
               <span className="text-[10px] font-bold text-gray-500 uppercase tracking-tighter">Write Mode</span>
             </div>
           </nav>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-medium text-gray-500 hover:text-gray-900">
-            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-            Reset Form
+          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-medium text-gray-500 hover:text-gray-900" 
+            onClick={() => setFormData({ prefix: "A", startingNumber: 1, quantity: 100, discountValue: 500, handlingFee: 0, printerName: "" })}>
+            <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Reset Form
           </Button>
           <Separator orientation="vertical" className="h-4 mx-1" />
-          <Button variant="outline" size="sm" className="h-8 text-xs font-bold px-3 shadow-sm border-gray-200">
-            <Database className="h-3.5 w-3.5 mr-1.5 text-gray-400" />
-            Voucher DB
+          <Button variant="outline" size="sm" className="h-8 text-xs font-bold px-3 shadow-sm border-gray-200 bg-white text-gray-700">
+            <Database className="h-3.5 w-3.5 mr-1.5 text-gray-400" /> Voucher DB
           </Button>
         </div>
       </header>
 
-      <main className="p-4 md:p-8 max-w-[1000px] w-full mx-auto space-y-6 animate-in fade-in duration-500">
+      <main className="p-4 md:p-8 max-w-[1100px] w-full mx-auto space-y-6 animate-in fade-in duration-500">
         <div className="grid gap-6 md:grid-cols-5">
           
-          {/* Main Form Section */}
+          {/* MAIN FORM SECTION */}
           <Card className="md:col-span-3 shadow-sm border-gray-200/60 overflow-hidden bg-white">
             <CardHeader className="bg-gray-50/50 py-3 px-4 border-b">
               <div className="flex items-center gap-2">
                 <PlusCircle className="h-4 w-4 text-gray-400" />
-                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-tight">Batch Configuration</h3>
+                <h3 className="text-xs font-bold text-gray-500 uppercase tracking-tight">Batch Configuration Engine</h3>
               </div>
             </CardHeader>
             <CardContent className="pt-6 pb-6">
-              <form onSubmit={handleGenerate} className="space-y-5">
-                <div className="space-y-1.5">
-                  <Label htmlFor="prefix" className="text-[11px] font-bold text-gray-400 uppercase">Code Prefix</Label>
-                  <Input
-                    id="prefix"
-                    name="prefix"
-                    placeholder="e.g., FESTIVAL"
-                    className="h-9 text-sm font-mono bg-muted/20 border-gray-200 focus-visible:ring-gray-300 uppercase"
-                    value={formData.prefix}
-                    onChange={handleInputChange}
-                    required
-                  />
+              <form onSubmit={handleGenerate} className="space-y-6">
+                
+                <div className="grid grid-cols-2 gap-5">
+                  <div className="space-y-2">
+                    <Label htmlFor="prefix" className="text-xs font-bold text-gray-500 uppercase tracking-tight">Code Prefix</Label>
+                    <Input id="prefix" name="prefix" placeholder="e.g., A" className="h-10 text-sm font-mono border-gray-200 focus-visible:ring-primary uppercase rounded-md font-bold bg-gray-50 shadow-inner" value={formData.prefix} onChange={handleInputChange} required />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="startingNumber" className="text-xs font-bold text-gray-500 uppercase tracking-tight flex justify-between">
+                      <span>Start Sequence</span>
+                      <span className="text-[9px] text-primary lowercase tracking-normal bg-primary/10 px-2 py-0.5 rounded-full">Auto-detected</span>
+                    </Label>
+                    <Input id="startingNumber" name="startingNumber" type="number" min="1" className="h-10 text-sm border-gray-200 focus-visible:ring-primary rounded-md font-mono bg-gray-50 shadow-inner" value={formData.startingNumber} onChange={handleInputChange} required />
+                  </div>
+                </div>
+
+                <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2 shadow-sm">
+                   <span className="text-[11px] font-bold uppercase text-gray-500 tracking-tight">Preview Output:</span>
+                   <span className="text-sm font-mono font-black tracking-widest text-gray-900 bg-white px-3 py-1 rounded-md border border-gray-200">
+                     {formData.prefix.trim().toUpperCase()}{(Number(formData.startingNumber) || 1).toString().padStart(4, '0')} 
+                     <span className="text-gray-400 mx-2">→</span> 
+                     {formData.prefix.trim().toUpperCase()}{((Number(formData.startingNumber) || 1) + (Number(formData.quantity) || 1) - 1).toString().padStart(4, '0')}
+                   </span>
                 </div>
                 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="quantity" className="text-[11px] font-bold text-gray-400 uppercase">Quantity</Label>
-                    <Input
-                      id="quantity"
-                      name="quantity"
-                      type="number"
-                      className="h-9 text-sm bg-muted/20 border-gray-200 focus-visible:ring-gray-300"
-                      value={formData.quantity}
-                      onChange={handleInputChange}
-                      required
-                    />
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                  <div className="space-y-2">
+                    <Label htmlFor="quantity" className="text-xs font-bold text-gray-500 uppercase tracking-tight">Total Qty</Label>
+                    <Input id="quantity" name="quantity" type="number" min="1" className="h-10 text-sm border-gray-200 focus-visible:ring-primary rounded-md font-bold bg-gray-50" value={formData.quantity} onChange={handleInputChange} required />
                   </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="discountValue" className="text-[11px] font-bold text-gray-400 uppercase">Discount (₹)</Label>
-                    <Input
-                      id="discountValue"
-                      name="discountValue"
-                      type="number"
-                      className="h-9 text-sm bg-muted/20 border-gray-200 font-bold focus-visible:ring-gray-300"
-                      value={formData.discountValue}
-                      onChange={handleInputChange}
-                      required
-                    />
+                  <div className="space-y-2">
+                    <Label htmlFor="discountValue" className="text-xs font-bold text-emerald-600 uppercase tracking-tight">Credit Val (₹)</Label>
+                    <Input id="discountValue" name="discountValue" type="number" className="h-10 text-sm border-emerald-200 font-bold focus-visible:ring-emerald-500 rounded-md text-emerald-700 bg-emerald-50/50 shadow-inner" value={formData.discountValue} onChange={handleInputChange} required />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="handlingFee" className="text-xs font-bold text-gray-500 uppercase tracking-tight">Handling (₹)</Label>
+                    <Input id="handlingFee" name="handlingFee" type="number" className="h-10 text-sm border-gray-200 focus-visible:ring-primary rounded-md text-gray-900 bg-gray-50 shadow-inner" value={formData.handlingFee} onChange={handleInputChange} required />
                   </div>
                 </div>
 
-                <div className="space-y-1.5">
-                  <Label htmlFor="printerName" className="text-[11px] font-bold text-gray-400 uppercase">Printer / Vendor</Label>
-                  <Input
-                    id="printerName"
-                    name="printerName"
-                    placeholder="Optional vendor name..."
-                    className="h-9 text-sm bg-muted/20 border-gray-200 focus-visible:ring-gray-300"
-                    value={formData.printerName}
-                    onChange={handleInputChange}
-                  />
+                <div className="space-y-2">
+                  <Label htmlFor="printerName" className="text-xs font-bold text-gray-500 uppercase tracking-tight">Printer / Vendor ID (Optional)</Label>
+                  <Input id="printerName" name="printerName" placeholder="Identify the printing press..." className="h-10 text-sm border-gray-200 focus-visible:ring-primary rounded-md bg-gray-50" value={formData.printerName} onChange={handleInputChange} />
                 </div>
 
-                <Button type="submit" className="w-full h-10 font-bold text-xs uppercase tracking-widest shadow-md" disabled={isGenerating}>
-                  {isGenerating ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Commiting to Ledger...
-                    </>
-                  ) : (
-                    "Generate Batch"
-                  )}
+                <Button type="submit" className="w-full h-12 font-bold text-sm uppercase tracking-widest rounded-lg mt-6 shadow-md hover:shadow-lg transition-all" disabled={isGenerating}>
+                  {isGenerating ? <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Commiting to Ledger...</> : "Generate Sequential Batch"}
                 </Button>
               </form>
             </CardContent>
           </Card>
 
-          {/* Sidebar / Status Section */}
-          <div className="md:col-span-2 space-y-4">
-            
-            {/* Status Info Card */}
-            <Card className={`shadow-sm border-gray-200/60 overflow-hidden transition-all duration-500 ${successBatch ? 'bg-white' : 'bg-gray-50/50 opacity-60'}`}>
-              <CardHeader className="bg-gray-50/50 py-3 px-4 border-b">
+          {/* SIDEBAR / STATUS SECTION */}
+          <div className="md:col-span-2 space-y-6">
+            <Card className={`shadow-sm border-gray-200/60 overflow-hidden rounded-lg transition-all duration-500 ${successBatch ? 'bg-white' : 'bg-gray-50/50 opacity-80'}`}>
+              <CardHeader className="bg-gray-50/50 py-3 px-4 border-b border-gray-200/60">
                 <div className="flex items-center gap-2">
                   <Printer className="h-4 w-4 text-gray-400" />
                   <h3 className="text-xs font-bold text-gray-500 uppercase tracking-tight">Print Assets</h3>
@@ -272,45 +308,101 @@ export default function GenerateVouchersPage() {
                        <CheckCircle2 className="h-6 w-6" />
                     </div>
                     <div>
-                      <p className="text-2xl font-black text-gray-900 leading-none">{successBatch.codes.length}</p>
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">Unique Identifiers Ready</p>
+                      <p className="text-3xl font-black text-gray-900 leading-none">{successBatch.codes.length}</p>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">Identifiers Ready</p>
                     </div>
                     
-                    <div className="p-3 rounded-md bg-muted/30 border border-gray-100 text-left">
+                    <div className="p-3 rounded-md bg-gray-50 border border-gray-100 text-left">
                        <p className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">Batch Pointer</p>
-                       <p className="text-xs font-mono font-bold text-gray-700">{successBatch.batchNo}</p>
+                       <p className="text-xs font-mono font-bold text-gray-700 mt-1">{successBatch.batchNo}</p>
                     </div>
 
-                    <Button onClick={downloadExcel} variant="outline" className="w-full h-9 text-xs font-bold bg-white hover:bg-gray-50 border-gray-200 shadow-sm transition-all hover:scale-[1.02]">
-                      <FileSpreadsheet className="mr-2 h-4 w-4 text-emerald-600" />
-                      Download Manifest (.xlsx)
-                    </Button>
+                    <div className="flex flex-col gap-3 pt-2">
+                      <div className="flex gap-2">
+                        <Button onClick={downloadExcel} variant="outline" className="flex-1 h-11 text-[11px] font-semibold bg-background border-border rounded-lg shadow-sm transition-all text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/5">
+                          <FileSpreadsheet className="mr-1.5 h-4 w-4" />
+                          Download
+                        </Button>
+                        <Button onClick={shareExcel} variant="outline" className="flex-1 h-11 text-[11px] font-semibold bg-background border-border rounded-lg shadow-sm transition-all text-blue-600 hover:text-blue-700 hover:bg-blue-500/5">
+                          <Share2 className="mr-1.5 h-4 w-4" />
+                          Share App
+                        </Button>
+                      </div>
+                      <Button onClick={handlePrint} className="w-full h-11 text-xs font-semibold rounded-lg shadow-sm transition-all">
+                        <Printer className="mr-2 h-4 w-4" />
+                        Print Quick Strips
+                      </Button>
+                    </div>
                   </div>
                 ) : (
                   <div className="py-8 space-y-3">
                     <div className="h-10 w-10 rounded-lg bg-gray-100 border border-gray-200 mx-auto flex items-center justify-center">
                        <Ticket className="h-5 w-5 text-gray-300" />
                     </div>
-                    <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter italic">Pending Batch Creation</p>
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter">Pending Batch Creation</p>
                   </div>
                 )}
               </CardContent>
             </Card>
 
-            {/* Hint Box */}
             <div className="p-4 rounded-xl border border-blue-100 bg-blue-50/30 space-y-2">
               <div className="flex items-center gap-2 text-blue-900">
                 <Info className="h-3.5 w-3.5" />
-                <span className="text-[11px] font-bold uppercase tracking-tight">System Notice</span>
+                <span className="text-[11px] font-bold uppercase tracking-tight">Voucher Lifecycle</span>
               </div>
               <p className="text-[11px] leading-relaxed text-blue-700 font-medium">
-                Vouchers are initialized with <span className="font-bold underline italic">pending_print</span> status. They will transition to inventory upon physical card ingestion.
+                Vouchers are initially valid for <span className="font-bold">6 months</span>. Upon customer scan & registration, validity automatically shrinks to <span className="font-bold">2 months</span>.
               </p>
             </div>
-
           </div>
         </div>
       </main>
+
+      {/* --- HIDDEN PRINT AREA (13cm x 3.5cm Strips) --- */}
+      <div className="hidden">
+        <div ref={printRef}>
+          <style type="text/css" media="print">
+            {`
+              @page { size: 130mm 35mm; margin: 0; }
+              body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact; }
+              .ticket-strip { 
+                width: 130mm; height: 35mm; display: flex; 
+                border: 1px solid #ccc; box-sizing: border-box;
+                page-break-after: always;
+                font-family: Arial, sans-serif;
+              }
+              .ticket-left { flex: 1; padding: 3mm 4mm; display: flex; flex-direction: column; justify-content: center; }
+              .ticket-right { width: 35mm; display: flex; align-items: center; justify-content: center; border-left: 1px dashed #ccc; padding: 2mm; }
+            `}
+          </style>
+          {successBatch?.codes.map((code) => (
+            <div key={code} className="ticket-strip">
+              <div className="ticket-left">
+                <h1 style={{ fontSize: '14px', fontWeight: '900', margin: 0, color: '#000', textTransform: 'uppercase' }}>
+                  {companyName}
+                </h1>
+                <p style={{ fontSize: '7px', textTransform: 'uppercase', color: '#666', marginTop: '1px', marginBottom: '4px' }}>
+                  Exclusive Gift Voucher · Value: ₹{successBatch.discount}
+                </p>
+                <p style={{ fontSize: '16px', fontWeight: 'bold', fontFamily: 'monospace', letterSpacing: '2px', margin: '4px 0' }}>
+                  {code}
+                </p>
+                <div style={{ backgroundColor: '#f0f0f0', padding: '2px 4px', borderRadius: '2px', marginTop: 'auto' }}>
+                  <p style={{ fontSize: '6px', fontWeight: 'bold', margin: 0, textTransform: 'uppercase' }}>
+                    ⚠️ Valid ONLY after claiming online. Scan QR to register.
+                  </p>
+                  <p style={{ fontSize: '5px', margin: '1px 0 0 0', color: '#666' }}>
+                    Valid for 6 months. Post-registration validity is 2 months. T&C Apply.
+                  </p>
+                </div>
+              </div>
+              <div className="ticket-right">
+                <QRCode value={`${baseUrl}/claim?code=${code}`} size={90} level="M" style={{ height: "26mm", width: "26mm" }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

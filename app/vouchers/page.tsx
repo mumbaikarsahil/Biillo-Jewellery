@@ -7,10 +7,8 @@ import {
   Store, 
   Send, 
   Search, 
-  ArrowRight,
   PlusCircle,
   Loader2,
-  TrendingUp,
   ChevronRight,
   RefreshCw,
   LayoutDashboard,
@@ -218,9 +216,9 @@ export default function VouchersDashboard() {
 
         {/* System Info - Subtler Vercel style footer note */}
         <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-secondary/50 border border-border">
-          <Info className="h-4 w-4 text-muted-foreground" />
+          <Info className="h-4 w-4 text-muted-foreground shrink-0" />
           <p className="text-[11px] text-muted-foreground font-medium">
-            <span className="text-foreground font-semibold">Automatic Expiry Control:</span> Vouchers transition to 'Expired' status exactly 90 days post-distribution.
+            <span className="text-foreground font-semibold">Smart Expiry Control:</span> Vouchers are initially valid for 6 months. Upon customer registration, validity automatically shrinks to exactly 2 months.
           </p>
         </div>
 

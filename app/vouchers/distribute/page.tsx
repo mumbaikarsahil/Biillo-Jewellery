@@ -7,13 +7,12 @@ import {
   Loader2, 
   Store, 
   Package, 
-  AlertCircle, 
   ArrowLeft, 
   ChevronRight, 
   RefreshCw, 
   Database,
   Info,
-  CheckCircle2
+  ListOrdered
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -32,8 +31,6 @@ import {
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 
 interface Distributor {
@@ -59,7 +56,10 @@ export default function DistributePage() {
 
   const [selectedDistributor, setSelectedDistributor] = useState<string>("");
   const [selectedBatch, setSelectedBatch] = useState<string>("");
-  const [quantity, setQuantity] = useState<string>("");
+  
+  // Range Mode State
+  const [startCode, setStartCode] = useState<string>("");
+  const [endCode, setEndCode] = useState<string>("");
 
   useEffect(() => {
     fetchInitialData();
@@ -113,16 +113,14 @@ export default function DistributePage() {
 
   const handleDistribute = async (e: React.FormEvent) => {
     e.preventDefault();
-    const qty = parseInt(quantity);
-    const activeBatch = batches.find(b => b.id === selectedBatch);
-
-    if (!selectedDistributor || !selectedBatch || !qty || qty <= 0) {
-      toast({ title: "Validation Required", description: "All fields are mandatory.", variant: "destructive" });
+    
+    if (!selectedDistributor || !selectedBatch) {
+      toast({ title: "Validation Required", description: "Select a Partner and a Batch.", variant: "destructive" });
       return;
     }
 
-    if (activeBatch && qty > activeBatch.available_stock) {
-      toast({ title: "Stock Conflict", description: `Requested ${qty} but only ${activeBatch.available_stock} remain in batch.`, variant: "destructive" });
+    if (!startCode.trim() || !endCode.trim()) {
+      toast({ title: "Validation Required", description: "Please enter both Start and End codes.", variant: "destructive" });
       return;
     }
 
@@ -130,14 +128,16 @@ export default function DistributePage() {
     try {
       const { data: vouchersToUpdate, error: fetchError } = await supabase
         .from("vouchers")
-        .select("id")
+        .select("id, code")
         .eq("batch_id", selectedBatch)
         .eq("status", "in_stock")
-        .limit(qty);
+        .gte("code", startCode.trim().toUpperCase())
+        .lte("code", endCode.trim().toUpperCase());
 
       if (fetchError) throw fetchError;
-      if (!vouchersToUpdate || vouchersToUpdate.length < qty) {
-        throw new Error("Inventory availability changed. Please refresh.");
+      
+      if (!vouchersToUpdate || vouchersToUpdate.length === 0) {
+        throw new Error("No available vouchers found in this sequence range. They might be invalid or already distributed.");
       }
 
       const voucherIds = vouchersToUpdate.map(v => v.id);
@@ -156,12 +156,14 @@ export default function DistributePage() {
 
       toast({
         title: "Transfer Complete",
-        description: `${qty} units issued to ${distName}.`,
+        description: `Successfully issued ${vouchersToUpdate.length} vouchers to ${distName}.`,
       });
 
-      setQuantity("");
+      setStartCode("");
+      setEndCode("");
       setSelectedBatch("");
       fetchInitialData();
+
     } catch (error: any) {
       console.error("Distribution error:", error);
       toast({
@@ -174,84 +176,85 @@ export default function DistributePage() {
     }
   };
 
-  const activeBatch = batches.find(b => b.id === selectedBatch);
-
   return (
-    <div className="flex flex-col min-h-screen bg-[#fafafa]">
-      {/* --- COMPACT IDE-STYLE TOOLBAR HEADER --- */}
-      <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-md border-b border-gray-200 px-4 h-12 flex items-center justify-between shadow-sm">
+    <div className="flex flex-col min-h-screen bg-background font-sans">
+      
+      {/* --- CLEAN VERCEL-STYLE HEADER --- */}
+      <header className="sticky top-0 z-40 w-full bg-background border-b border-border px-4 h-12 flex items-center justify-between">
         <div className="flex items-center gap-3 overflow-hidden">
           <Link href="/vouchers">
-            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-gray-100 transition-colors">
-              <ArrowLeft className="h-4 w-4 text-gray-500" />
+            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md">
+              <ArrowLeft className="h-4 w-4 text-muted-foreground" />
             </Button>
           </Link>
           
           <Separator orientation="vertical" className="h-4" />
           
-          <nav className="flex items-center gap-1.5 text-[13px] whitespace-nowrap overflow-hidden">
-            <Link href="/vouchers" className="text-gray-500 hover:text-gray-900 transition-colors font-medium">Vouchers</Link>
-            <ChevronRight className="h-3.5 w-3.5 text-gray-400" />
-            <span className="font-bold text-gray-900 select-none">Issue Vouchers</span>
+          <nav className="flex items-center gap-1.5 text-sm whitespace-nowrap overflow-hidden">
+            <Link href="/vouchers" className="text-muted-foreground font-medium hover:text-foreground transition-colors">Vouchers</Link>
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+            <span className="font-semibold text-foreground select-none">Issue to Partner</span>
             
-            <div className="ml-3 hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-gray-100 border border-gray-200">
+            <div className="ml-3 hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-secondary border border-border">
               <div className="h-1.5 w-1.5 rounded-full bg-orange-500" />
-              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-tighter">Transaction Mode</span>
+              <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Transaction</span>
             </div>
           </nav>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-medium text-gray-500 hover:text-gray-900" onClick={fetchInitialData}>
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            className="h-8 px-2 text-xs font-medium text-muted-foreground" 
+            onClick={fetchInitialData}
+          >
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isLoading ? 'animate-spin' : ''}`} />
             Sync Stock
           </Button>
           <Separator orientation="vertical" className="h-4 mx-1" />
-          <Button variant="outline" size="sm" className="h-8 text-xs font-bold px-3 shadow-sm border-gray-200">
-            <Database className="h-3.5 w-3.5 mr-1.5 text-gray-400" />
+          <Button variant="outline" size="sm" className="h-8 text-xs font-semibold px-3 border-border hidden sm:flex">
+            <Database className="h-3.5 w-3.5 mr-1.5" /> 
             Transfer Ledger
           </Button>
         </div>
       </header>
 
-      <main className="p-4 md:p-8 max-w-[800px] w-full mx-auto space-y-6 animate-in fade-in duration-500">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-bold uppercase tracking-widest text-gray-500">Distribution Request</h2>
-            <p className="text-xs text-gray-400 mt-1 uppercase tracking-tight font-medium">Assign warehouse stock to authorized B2B partners</p>
-          </div>
+      <main className="p-6 md:p-10 max-w-[800px] w-full mx-auto space-y-6">
+        
+        {/* Page Title */}
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Distribution Request</h1>
+          <p className="text-sm text-muted-foreground mt-1">Assign specific physical voucher booklets to authorized B2B partners.</p>
         </div>
 
-        <Card className="shadow-sm border-gray-200/60 overflow-hidden bg-white">
-          <CardHeader className="bg-gray-50/50 py-3 px-4 border-b">
-            <div className="flex items-center gap-2">
-              <Send className="h-4 w-4 text-gray-400" />
-              <h3 className="text-xs font-bold text-gray-500 uppercase tracking-tight">Transfer Manifest</h3>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-8 pb-8 px-6">
+        {/* Main Form Card */}
+        <Card className="shadow-none border-border bg-card">
+          <CardContent className="p-6 sm:p-8">
             {isLoading ? (
-              <div className="flex flex-col items-center py-12 space-y-4">
-                <Loader2 className="h-8 w-8 animate-spin text-gray-200" />
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Validating Inventory...</p>
+              <div className="flex flex-col items-center justify-center py-12 space-y-4">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <p className="text-sm font-medium text-muted-foreground">Validating Inventory...</p>
               </div>
             ) : (
-              <form id="distribute-form" onSubmit={handleDistribute} className="space-y-8">
+              <form onSubmit={handleDistribute} className="space-y-8">
                 
                 {/* 1. Distributor Selection */}
-                <div className="space-y-1.5">
-                  <Label htmlFor="distributor" className="text-[11px] font-bold text-gray-400 uppercase">Target Partner</Label>
+                <div className="space-y-2">
+                  <Label htmlFor="distributor" className="text-sm font-medium text-foreground">Target Partner</Label>
                   <Select value={selectedDistributor} onValueChange={setSelectedDistributor} required>
-                    <SelectTrigger id="distributor" className="h-9 text-sm border-gray-200 bg-muted/20 focus:ring-gray-300">
+                    <SelectTrigger id="distributor" className="h-10 text-sm bg-background border-border">
                       <SelectValue placeholder="Select business partner..." />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="border-border">
                       {distributors.map(dist => (
-                        <SelectItem key={dist.id} value={dist.id} className="text-xs font-medium">
+                        <SelectItem key={dist.id} value={dist.id} className="text-sm font-medium py-2">
                           <div className="flex items-center gap-2">
-                            <Store className="w-3.5 h-3.5 text-muted-foreground" />
+                            <Store className="w-4 h-4 text-muted-foreground" />
                             {dist.distributor_name} 
-                            <span className="text-[10px] text-gray-400 ml-1 uppercase">({dist.distributor_type})</span>
+                            <span className="text-[10px] text-muted-foreground bg-secondary px-1.5 py-0.5 rounded-md ml-1">
+                              {dist.distributor_type}
+                            </span>
                           </div>
                         </SelectItem>
                       ))}
@@ -260,22 +263,22 @@ export default function DistributePage() {
                 </div>
 
                 {/* 2. Batch Selection */}
-                <div className="space-y-1.5">
-                  <Label htmlFor="batch" className="text-[11px] font-bold text-gray-400 uppercase">Source Batch</Label>
+                <div className="space-y-2">
+                  <Label htmlFor="batch" className="text-sm font-medium text-foreground">Source Batch</Label>
                   <Select value={selectedBatch} onValueChange={setSelectedBatch} required>
-                    <SelectTrigger id="batch" className="h-9 text-sm border-gray-200 bg-muted/20 focus:ring-gray-300">
+                    <SelectTrigger id="batch" className="h-10 text-sm bg-background border-border">
                       <SelectValue placeholder="Choose batch from stock..." />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="border-border">
                       {batches.length === 0 && <SelectItem value="none" disabled>Insufficient inventory across all batches</SelectItem>}
                       {batches.map(batch => (
-                        <SelectItem key={batch.id} value={batch.id} className="text-xs font-medium">
-                          <div className="flex items-center justify-between w-full gap-8">
+                        <SelectItem key={batch.id} value={batch.id} className="text-sm font-medium py-2">
+                          <div className="flex items-center justify-between w-full min-w-[250px]">
                             <span className="flex items-center gap-2">
-                              <Package className="w-3.5 h-3.5 text-muted-foreground" />
-                              {batch.batch_no} (₹{batch.discount_value})
+                              <Package className="w-4 h-4 text-muted-foreground" />
+                              {batch.batch_no} <span className="text-muted-foreground font-normal">(₹{batch.discount_value})</span>
                             </span>
-                            <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded uppercase">
+                            <span className="text-[11px] font-semibold text-emerald-600 bg-emerald-500/10 px-2 py-0.5 rounded-md ml-4">
                               {batch.available_stock} Avail.
                             </span>
                           </div>
@@ -285,48 +288,55 @@ export default function DistributePage() {
                   </Select>
                 </div>
 
-                {/* 3. Quantity */}
-                <div className="space-y-1.5">
-                  <Label htmlFor="quantity" className="text-[11px] font-bold text-gray-400 uppercase">Transfer Quantity</Label>
-                  <div className="flex items-center gap-4">
-                    <div className="relative flex-1 max-w-[240px]">
-                       <Input
-                        id="quantity"
-                        type="number"
-                        min="1"
-                        max={activeBatch?.available_stock || 1}
-                        value={quantity}
-                        onChange={(e) => setQuantity(e.target.value)}
-                        placeholder="0"
-                        className="h-9 text-sm border-gray-200 bg-muted/20 font-bold focus-visible:ring-gray-300"
+                <Separator className="bg-border my-6" />
+
+                {/* 3. Sequence Range Selection */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <ListOrdered className="h-4 w-4 text-foreground" />
+                    <Label className="text-base font-semibold text-foreground">Physical Code Sequence Range</Label>
+                  </div>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium text-foreground">Start Code</Label>
+                      <Input
+                        type="text"
+                        placeholder="e.g. A0001"
+                        value={startCode}
+                        onChange={(e) => setStartCode(e.target.value)}
+                        className="h-10 text-sm font-mono uppercase bg-background border-border"
                         required
                         disabled={!selectedBatch}
                       />
                     </div>
-                    {activeBatch && (
-                      <div className="flex items-center gap-1.5 px-3 h-9 rounded-md border border-emerald-100 bg-emerald-50/50">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
-                        <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-tight">Limit: {activeBatch.available_stock} Units</span>
-                      </div>
-                    )}
+                    <div className="space-y-2">
+                      <Label className="text-sm font-medium text-foreground">End Code</Label>
+                      <Input
+                        type="text"
+                        placeholder="e.g. A0025"
+                        value={endCode}
+                        onChange={(e) => setEndCode(e.target.value)}
+                        className="h-10 text-sm font-mono uppercase bg-background border-border"
+                        required
+                        disabled={!selectedBatch}
+                      />
+                    </div>
                   </div>
                 </div>
 
                 {/* Notification Area */}
-                <div className="p-4 rounded-xl border border-blue-100 bg-blue-50/30 space-y-2">
-                  <div className="flex items-center gap-2 text-blue-900">
-                    <Info className="h-3.5 w-3.5" />
-                    <span className="text-[11px] font-bold uppercase tracking-tight">Auto-Expiry Notice</span>
-                  </div>
-                  <p className="text-[11px] leading-relaxed text-blue-700 font-medium">
-                    This transfer will initialize a strict <span className="font-bold underline italic">90-day lifecycle</span> for these assets. Redemption will be systematically denied upon crossing the threshold.
+                <div className="flex items-start gap-3 p-4 rounded-lg bg-secondary/50 border border-border">
+                  <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                  <p className="text-sm text-muted-foreground leading-relaxed">
+                    <span className="text-foreground font-semibold">Sequence Matching Notice:</span> This will transfer the exact physical sequence. Ensure the physical booklets you are handing over perfectly match the Start and End codes typed above.
                   </p>
                 </div>
 
                 <Button 
                   type="submit" 
                   disabled={isSubmitting || isLoading || batches.length === 0}
-                  className="w-full h-10 font-bold text-xs uppercase tracking-widest shadow-md"
+                  className="w-full h-10 font-semibold"
                 >
                   {isSubmitting ? (
                     <>
@@ -334,7 +344,10 @@ export default function DistributePage() {
                       Processing Transfer...
                     </>
                   ) : (
-                    "Authorize Distribution"
+                    <>
+                      <Send className="mr-2 h-4 w-4" />
+                      Authorize Distribution
+                    </>
                   )}
                 </Button>
               </form>
