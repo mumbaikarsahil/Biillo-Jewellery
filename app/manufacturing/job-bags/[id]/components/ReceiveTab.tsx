@@ -7,8 +7,21 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { 
+  Dialog, DialogContent, DialogHeader, 
+  DialogTitle, DialogDescription, DialogFooter
+} from '@/components/ui/dialog'
+import { 
+  Table, TableBody, TableCell, TableHead, 
+  TableHeader, TableRow 
+} from "@/components/ui/table"
 import { toast } from 'sonner'
-import { Save, Layers, Settings2, RefreshCw, CheckCircle2, ArrowUpCircle, ArrowDownCircle, CheckSquare } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { 
+  Save, Layers, Settings2, RefreshCw, CheckCircle2, 
+  ArrowUpCircle, ArrowDownCircle, CheckSquare,
+  Calculator, Database, Gem, Hammer, ArrowRight, ArrowLeft, Check
+} from 'lucide-react'
 
 interface Props {
   jobId: string 
@@ -38,7 +51,7 @@ type ReceiveItem = {
   hsn_code: string
   huid_code: string
   item_remarks: string
-  isSelected: boolean // <-- NEW: Tracks if item is staged for receiving
+  isSelected: boolean
 }
 
 export default function ReceiveTab({
@@ -60,6 +73,34 @@ export default function ReceiveTab({
   const [receiveItems, setReceiveItems] = useState<ReceiveItem[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
+
+  // --- MRP WIZARD STATE ---
+  const [isCalcModalOpen, setCalcModalOpen] = useState(false)
+  const [calcStep, setCalcStep] = useState<'params' | 'preview'>('params')
+  const [base24kRate, setBase24kRate] = useState<number>(7250) 
+  const [goldRates, setGoldRates] = useState<Record<string, number>>({}) 
+  const [previewData, setPreviewData] = useState<any[]>([])
+  const [calcParams, setCalcParams] = useState({
+    diamondRatePerCt: 25000, 
+    markupPercent: 80,
+    flatCharge: 8000
+  })
+
+  // Fetch initial base rates for the calculator
+  useEffect(() => {
+    async function fetchCompanyRates() {
+      const { data } = await supabase
+        .from('companies')
+        .select('current_rate_24k, current_rate_diamond')
+        .eq('id', companyId)
+        .maybeSingle()
+      if (data) {
+        if (data.current_rate_24k) setBase24kRate(data.current_rate_24k)
+        if (data.current_rate_diamond) setCalcParams(prev => ({ ...prev, diamondRatePerCt: data.current_rate_diamond }))
+      }
+    }
+    fetchCompanyRates()
+  }, [companyId])
 
   useEffect(() => {
     async function fetchWarehouses() {
@@ -148,7 +189,7 @@ export default function ReceiveTab({
           hsn_code: '',
           huid_code: '',
           item_remarks: '',
-          isSelected: false // Default to unselected
+          isSelected: false 
         }
       })
 
@@ -162,7 +203,6 @@ export default function ReceiveTab({
 
   useEffect(() => { loadJobBagItems() }, [loadJobBagItems])
 
-  // Changed to update by ID instead of index so sorting/filtering doesn't break inputs
   const updateBatchItem = (id: string, field: keyof ReceiveItem, value: string) => {
     setReceiveItems(prev => prev.map(item => {
       if (item.job_bag_item_id !== id) return item;
@@ -219,6 +259,52 @@ export default function ReceiveTab({
     if (val === '22K') setPurityPercent('91.6')
     if (val === '18K') setPurityPercent('75.0')
     if (val === '14K') setPurityPercent('58.3')
+  }
+
+  // --- MRP WIZARD LOGIC FOR RECEIVE TAB ---
+  const handleOpenCalc = () => {
+    const selectedItems = receiveItems.filter(i => i.isSelected)
+    if (selectedItems.length === 0) {
+      return toast.error("No items staged.", { description: "Please select at least one item to calculate MRP." })
+    }
+    
+    const initialRates: Record<string, number> = {}
+    const kNum = parseInt(purityKarat.replace(/\D/g, '')) || 24
+    initialRates[purityKarat] = Math.round(base24kRate * (kNum / 24))
+    
+    setGoldRates(initialRates)
+    setCalcStep('params')
+    setCalcModalOpen(true)
+  }
+
+  const handleGeneratePreview = () => {
+    const selectedItems = receiveItems.filter(i => i.isSelected)
+    const previews = selectedItems.map(item => {
+      const k = purityKarat || '24K'
+      const gRate = goldRates[k] || 0
+      const goldCost = (parseFloat(item.netWeight) || 0) * gRate
+      const diamondCost = (parseFloat(item.stoneWeight) || 0) * calcParams.diamondRatePerCt
+      const baseCost = goldCost + diamondCost
+      const markupAmount = baseCost * (calcParams.markupPercent / 100)
+      const subtotal = baseCost + markupAmount
+      const finalMrp = Math.round(subtotal + calcParams.flatCharge)
+      
+      return { ...item, newMrp: finalMrp }
+    })
+    setPreviewData(previews)
+    setCalcStep('preview')
+  }
+
+  const handleApplyBulkMrp = () => {
+    setReceiveItems(prev => prev.map(item => {
+      const update = previewData.find(px => px.job_bag_item_id === item.job_bag_item_id)
+      if (update) {
+        return { ...item, mrp: update.newMrp.toString() }
+      }
+      return item
+    }))
+    toast.success(`Applied calculated MRP to ${previewData.length} items.`)
+    setCalcModalOpen(false)
   }
 
   // --- BULK RECEIVE LOGIC ---
@@ -364,6 +450,7 @@ export default function ReceiveTab({
                     <SelectItem value="24K" className="text-xs">24K (99.9%)</SelectItem>
                     <SelectItem value="22K" className="text-xs">22K (91.6%)</SelectItem>
                     <SelectItem value="18K" className="text-xs">18K (75.0%)</SelectItem>
+                    <SelectItem value="14K" className="text-xs">14K (58.3%)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -399,7 +486,14 @@ export default function ReceiveTab({
                       <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground bg-green-50">Net & Loss</th>
                       <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground border-l">Compliance</th>
                       <th className="p-3 text-left text-[10px] font-black uppercase text-muted-foreground">Specs / Notes</th>
-                      <th className="p-3 text-left text-[10px] font-black uppercase text-amber-700 bg-amber-50/50">Financials (₹)</th>
+                      <th className="p-3 text-left text-[10px] font-black uppercase text-amber-700 bg-amber-50/50">
+                        <div className="flex items-center justify-between">
+                          <span>Financials (₹)</span>
+                          <Button variant="ghost" size="icon" onClick={handleOpenCalc} className="h-6 w-6 text-amber-600 hover:bg-amber-100 rounded-md bg-white border border-amber-200" title="Auto Calc MRP">
+                            <Calculator className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -503,6 +597,169 @@ export default function ReceiveTab({
         </Card>
       )}
       
+      {/* ==============================================================
+          MRP CALCULATOR MODAL (MULTI-STEP WIZARD)
+          ============================================================== */}
+      <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
+        <DialogContent className={cn("p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white transition-all", calcStep === 'preview' ? 'sm:max-w-[650px]' : 'sm:max-w-[450px]')}>
+          <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200">
+            <DialogTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
+               <Calculator className="w-4 h-4 text-indigo-600" /> 
+               {calcStep === 'params' ? 'Dynamic MRP Parameters' : 'Verification & Preview'}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500 mt-1 leading-relaxed">
+              {calcStep === 'params' 
+                ? `System detected purity ${purityKarat} for the ${receiveItems.filter(i=>i.isSelected).length} staged items.`
+                : `Review the calculated retail prices before applying them.`
+              }
+            </DialogDescription>
+          </DialogHeader>
+
+          {calcStep === 'params' ? (
+            <div className="p-5 space-y-6">
+              <div>
+                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 border-b border-slate-100 pb-1">1. Variable Gold Rates</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  {Object.entries(goldRates).map(([karat, rate]) => (
+                    <div key={karat} className="space-y-1.5">
+                      <Label className="text-xs font-bold text-slate-600 uppercase flex items-center gap-1.5">
+                        <Database className="w-3 h-3 text-emerald-500" /> {karat} Rate/g
+                      </Label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">₹</span>
+                        <Input 
+                          type="number" 
+                          className="pl-7 h-9 text-sm font-semibold border-slate-200 focus-visible:ring-indigo-500" 
+                          value={rate} 
+                          onChange={e => setGoldRates(prev => ({...prev, [karat]: Number(e.target.value)}))}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 border-b border-slate-100 pb-1">2. Formulation Constants</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-600 uppercase flex items-center gap-1.5">
+                      <Gem className="w-3 h-3 text-blue-500" /> Diamond Rate / Ct
+                    </Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">₹</span>
+                      <Input 
+                        type="number" 
+                        className="pl-7 h-9 text-sm font-semibold border-slate-200 focus-visible:ring-indigo-500" 
+                        value={calcParams.diamondRatePerCt} 
+                        onChange={e => setCalcParams({...calcParams, diamondRatePerCt: Number(e.target.value)})}
+                      />
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-600 uppercase flex items-center gap-1.5">
+                      <Hammer className="w-3 h-3 text-amber-500" /> Markup Margin
+                    </Label>
+                    <div className="relative">
+                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">%</span>
+                      <Input 
+                        type="number" 
+                        className="pr-7 h-9 text-sm font-semibold border-slate-200 focus-visible:ring-indigo-500" 
+                        value={calcParams.markupPercent} 
+                        onChange={e => setCalcParams({...calcParams, markupPercent: Number(e.target.value)})}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs font-bold text-slate-600 uppercase">
+                       Flat Addition (Chg.)
+                    </Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">₹</span>
+                      <Input 
+                        type="number" 
+                        className="pl-7 h-9 text-sm font-semibold border-slate-200 focus-visible:ring-indigo-500" 
+                        value={calcParams.flatCharge} 
+                        onChange={e => setCalcParams({...calcParams, flatCharge: Number(e.target.value)})}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-[10px] text-slate-500 font-mono leading-relaxed">
+                <span className="font-bold text-slate-700">Formula Engine:</span><br/>
+                1. Base = (NetWt × KaratRate) + (DiaCt × DiaRate)<br/>
+                2. Subtotal = Base + (Base × {calcParams.markupPercent}%)<br/>
+                3. Final MRP = Math.round(Subtotal + ₹{calcParams.flatCharge})
+              </div>
+            </div>
+          ) : (
+            <div className="max-h-[60vh] overflow-y-auto border-b border-slate-200 custom-scrollbar">
+              <Table>
+                <TableHeader className="bg-slate-50 sticky top-0 z-10 shadow-sm">
+                  <TableRow className="border-none hover:bg-transparent">
+                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9">Asset Ref</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9">Purity</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 text-right">Net Wt</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 text-right">Current MRP</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase text-indigo-600 h-9 text-right pr-6">Calculated MRP</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {previewData.map((item) => {
+                    const isDiff = item.mrp !== item.newMrp.toString();
+                    return (
+                      <TableRow key={item.job_bag_item_id} className="border-b border-slate-100 last:border-none">
+                        <TableCell className="py-2.5 font-mono text-xs font-semibold text-slate-900">{item.barcode}</TableCell>
+                        <TableCell className="py-2.5 text-xs text-slate-600">{purityKarat}</TableCell>
+                        <TableCell className="py-2.5 text-xs text-right font-medium">{item.netWeight}g</TableCell>
+                        <TableCell className="py-2.5 text-xs text-right text-slate-400 line-through">
+                          {item.mrp ? `₹${Number(item.mrp).toLocaleString()}` : '---'}
+                        </TableCell>
+                        <TableCell className="py-2.5 text-sm font-bold text-right pr-6 text-slate-900">
+                          {isDiff && <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-2" />}
+                          ₹{item.newMrp.toLocaleString()}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 flex-row gap-3">
+             {calcStep === 'params' ? (
+               <>
+                 <Button variant="outline" className="flex-1 h-10 text-xs font-semibold rounded-lg border-slate-300 text-slate-700 bg-white hover:bg-slate-50" onClick={() => setCalcModalOpen(false)}>
+                   Cancel
+                 </Button>
+                 <Button 
+                    onClick={handleGeneratePreview}
+                    className="flex-[2] h-10 text-xs font-bold rounded-lg bg-slate-900 hover:bg-slate-800 text-white shadow-sm"
+                  >
+                   Generate Preview <ArrowRight className="w-3.5 h-3.5 ml-2" />
+                 </Button>
+               </>
+             ) : (
+               <>
+                 <Button variant="outline" className="flex-1 h-10 text-xs font-semibold rounded-lg border-slate-300 text-slate-700 bg-white hover:bg-slate-50" onClick={() => setCalcStep('params')}>
+                   <ArrowLeft className="w-3.5 h-3.5 mr-2" /> Adjust Rates
+                 </Button>
+                 <Button 
+                    onClick={handleApplyBulkMrp}
+                    className="flex-[2] h-10 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
+                  >
+                   <Check className="w-4 h-4 mr-2" /> Apply MRP to Forms
+                 </Button>
+               </>
+             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

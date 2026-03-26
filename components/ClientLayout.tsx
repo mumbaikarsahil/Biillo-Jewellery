@@ -7,7 +7,7 @@ import { AuthProvider, useAuth } from '@/hooks/useAuth' // Adjust path if needed
 import { AppLayout } from '@/components/AppLayout'
 
 // List of public routes where Sidebar should NOT appear
-const PUBLIC_ROUTES = ['/login', '/register', '/forgot-password']
+const PUBLIC_ROUTES = ['/login', '/register', '/forgot-password', '/claim']
 
 function InnerLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()

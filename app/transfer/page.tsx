@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useStoreLocation } from '@/hooks/useStoreLocation'
 import { format } from 'date-fns'
 import QRCode from 'react-qr-code'
 import { toast } from 'sonner'
@@ -66,7 +67,7 @@ export default function TransferPage() {
   
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [warehouses, setWarehouses] = useState<{id: string, name: string}[]>([])
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>('')
+  const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedQR, setSelectedQR] = useState<Transfer | null>(null)
@@ -83,7 +84,8 @@ export default function TransferPage() {
 
       if (whData && whData.length > 0) {
         setWarehouses(whData)
-        setSelectedWarehouseId(whData[0].id)
+        // ✅ REMOVED: setSelectedWarehouseId(whData[0].id) 
+        // The hook handles the initial selection logic now.
       }
     } catch (err) {
       toast.error("Error loading warehouses")
@@ -91,10 +93,11 @@ export default function TransferPage() {
   }
 
   const fetchTransfers = async () => {
-    if (!appUser || !selectedWarehouseId) return
+    // ✅ Use selectedLocation from hook
+    if (!appUser || !selectedLocation) return 
     setLoading(true)
     try {
-      const { data: trData } = await supabase
+      let query = supabase
         .from('stock_transfers')
         .select(`
           *,
@@ -102,8 +105,13 @@ export default function TransferPage() {
           to_warehouse:to_warehouse_id(name)
         `)
         .eq('company_id', appUser.company_id)
-        .or(`from_warehouse_id.eq.${selectedWarehouseId},to_warehouse_id.eq.${selectedWarehouseId}`)
-        .order('created_at', { ascending: false })
+      
+      // ✅ SECURITY: If not HQ/ALL, filter by the locked location
+      if (selectedLocation !== 'ALL') {
+        query = query.or(`from_warehouse_id.eq.${selectedLocation},to_warehouse_id.eq.${selectedLocation}`)
+      }
+
+      const { data: trData } = await query.order('created_at', { ascending: false })
 
       if (trData) setTransfers(trData as any)
     } catch (err) {
@@ -114,18 +122,30 @@ export default function TransferPage() {
   }
 
   useEffect(() => { fetchWarehouses() }, [appUser])
-  useEffect(() => { fetchTransfers() }, [appUser, selectedWarehouseId])
+  // ✅ Sync effect with the global location
+  useEffect(() => { fetchTransfers() }, [appUser, selectedLocation])
 
   const filteredBySearch = transfers.filter(t => 
     t.transfer_number.toLowerCase().includes(searchTerm.toLowerCase())
   )
-
-  const incomingTransfers = filteredBySearch.filter(t => t.to_warehouse_id === selectedWarehouseId && t.status !== 'completed')
-  const outgoingTransfers = filteredBySearch.filter(t => t.from_warehouse_id === selectedWarehouseId && t.status !== 'completed')
-  const historyTransfers = filteredBySearch.filter(t => 
-    (t.to_warehouse_id === selectedWarehouseId || t.from_warehouse_id === selectedWarehouseId) && 
-    t.status === 'completed'
+  
+  // Logic: If 'ALL' is selected, show everything. Otherwise, filter by the specific ID.
+  const incomingTransfers = filteredBySearch.filter(t => 
+    (selectedLocation === 'ALL' || t.to_warehouse_id === selectedLocation) && 
+    t.status !== 'completed'
   )
+  
+  const outgoingTransfers = filteredBySearch.filter(t => 
+    (selectedLocation === 'ALL' || t.from_warehouse_id === selectedLocation) && 
+    t.status !== 'completed'
+  )
+  
+  const historyTransfers = filteredBySearch.filter(t => {
+    const matchesLocation = selectedLocation === 'ALL' || 
+                            t.to_warehouse_id === selectedLocation || 
+                            t.from_warehouse_id === selectedLocation;
+    return matchesLocation && t.status === 'completed';
+  })
 
   if (!appUser) return null
 
@@ -191,16 +211,28 @@ export default function TransferPage() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            <Select value={selectedWarehouseId} onValueChange={setSelectedWarehouseId}>
-              <SelectTrigger className="w-[180px] h-9 text-xs font-bold border-gray-200 bg-white">
-                <SelectValue placeholder="Vault" />
-              </SelectTrigger>
-              <SelectContent>
-                {warehouses.map(w => (
-                  <SelectItem key={w.id} value={w.id} className="text-xs font-medium">{w.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Select 
+  value={selectedLocation || ''} 
+  onValueChange={setSelectedLocation}
+  disabled={isLocked} // ✅ Prevents branch users from switching vaults
+>
+  <SelectTrigger className="w-[180px] h-9 text-xs font-bold border-gray-200 bg-white">
+    <SelectValue placeholder="Select Vault" />
+  </SelectTrigger>
+  <SelectContent>
+    {/* ✅ Add ALL option for HQ users */}
+    {isHQ && (
+      <SelectItem value="ALL" className="text-xs font-bold text-indigo-600">
+        All Vaults (HQ)
+      </SelectItem>
+    )}
+    {warehouses.map(w => (
+      <SelectItem key={w.id} value={w.id} className="text-xs font-medium">
+        {w.name}
+      </SelectItem>
+    ))}
+  </SelectContent>
+</Select>
           </div>
         </div>
 

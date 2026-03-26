@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabaseClient'
@@ -26,34 +26,54 @@ import {
   Gem,
   Ticket,
   Command,
-  Activity
+  Server,
+  ScanLine,
+  PanelLeftClose,
+  PanelLeft
 } from 'lucide-react'
 
-// --- Configuration ---
-
-const coreModules = [
-  { href: '/dashboard', label: 'Telemetry', icon: LayoutDashboard },
-  { href: '/pos', label: 'Terminal', icon: ShoppingCart },
-  { href: '/sales', label: 'Revenue', icon: Banknote },
-  { href: '/reports', label: 'Analytics', icon: BarChart3 },
-  { href: '/discovery', label: 'Discovery', icon: Gem },
+// --- Configuration with Role-Based Access ---
+const allCoreModules = [
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['all'] }, 
+  { href: '/topology', label: 'Topology', icon: Server, roles: ['owner', 'manager'] },
+  { href: '/pos', label: 'Terminal', icon: ShoppingCart, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
+  { href: '/shadow-pos', label: 'SIS Terminal', icon: ScanLine, roles: ['owner', 'manager', 'shadow_manager', 'shadow_sales'] },
+  { href: '/sales', label: 'Revenue', icon: Banknote, roles: ['owner', 'manager', 'branch_manager'] },
+  { href: '/reports', label: 'Analytics', icon: BarChart3, roles: ['owner', 'manager'] },
+  { href: '/discovery', label: 'Discovery', icon: Gem, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
 ]
 
-const operationModules = [
-  { href: '/master', label: 'Master Config', icon: Database },
-  { href: '/purchases', label: 'Procurement', icon: ShoppingCart },
-  { href: '/manufacturing/job-bags', label: 'Fabrication', icon: Briefcase },
-  { href: '/inventory', label: 'Vault Stock', icon: Package },
-  { href: '/transfer', label: 'Logistics', icon: ArrowRightLeft },
-  { href: '/crm', label: 'CRM', icon: UserCircle },
-  { href: '/vouchers', label: 'Vouchers', icon: Ticket },
-  { href: '/memo', label: 'Memos', icon: FileText },
+const allOperationModules = [
+  { href: '/master', label: 'Master Config', icon: Database, roles: ['owner', 'manager'] },
+  { href: '/purchases', label: 'Procurement', icon: ShoppingCart, roles: ['owner', 'manager', 'operations_manager'] },
+  { href: '/manufacturing/job-bags', label: 'Fabrication', icon: Briefcase, roles: ['owner', 'manager', 'operations_manager'] },
+  { href: '/inventory', label: 'Vault Stock', icon: Package, roles: ['owner', 'manager', 'operations_manager', 'branch_manager'] },
+  { href: '/transfer', label: 'Logistics', icon: ArrowRightLeft, roles: ['owner', 'manager', 'operations_manager'] },
+  { href: '/crm', label: 'CRM', icon: UserCircle, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
+  { href: '/vouchers', label: 'Vouchers', icon: Ticket, roles: ['owner', 'manager', 'voucher_manager'] },
+  { href: '/memo', label: 'Memos', icon: FileText, roles: ['owner', 'manager'] },
 ]
 
 export function AppLayout({ children, appUser }: { children: React.ReactNode, appUser?: any }) {
   const pathname = usePathname()
   const router = useRouter()
+  
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const [isCollapsed, setIsCollapsed] = useState(true) 
+
+  if (pathname?.startsWith('/claim') || pathname?.startsWith('/login')) {
+    return <div className="min-h-screen bg-white">{children}</div>
+  }
+
+  const userRole = appUser?.role || 'sales_person'
+  
+  const coreModules = useMemo(() => {
+    return allCoreModules.filter(m => m.roles.includes('all') || m.roles.includes(userRole))
+  }, [userRole])
+
+  const operationModules = useMemo(() => {
+    return allOperationModules.filter(m => m.roles.includes('all') || m.roles.includes(userRole))
+  }, [userRole])
 
   const handleLogout = async () => {
     await supabase.auth.signOut()
@@ -68,154 +88,230 @@ export function AppLayout({ children, appUser }: { children: React.ReactNode, ap
       <Link
         href={item.href}
         onClick={onClick}
+        title={isCollapsed && !isMobile ? item.label : undefined}
         className={cn(
-          "flex items-center gap-3 px-3 py-2 rounded-md transition-all duration-200 group relative",
+          "flex items-center rounded-md transition-colors duration-200 group relative",
+          isCollapsed && !isMobile ? "justify-center h-10 w-10 mx-auto mb-1" : "gap-3 px-3 py-2 mb-0.5",
           active 
-            ? "bg-secondary text-foreground" 
-            : "text-muted-foreground hover:bg-secondary/50 hover:text-foreground",
+            ? "bg-slate-100 text-slate-900 font-semibold" 
+            : "text-slate-500 hover:bg-slate-50 hover:text-slate-900 font-medium",
           isMobile && "py-3"
         )}
       >
-        {active && !isMobile && (
-          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-4 bg-foreground rounded-r-full" />
+        <item.icon className={cn(
+          "shrink-0 transition-colors",
+          isCollapsed && !isMobile ? "h-5 w-5" : "h-4 w-4",
+          active ? "text-slate-900" : "text-slate-400 group-hover:text-slate-600"
+        )} />
+        
+        {(!isCollapsed || isMobile) && (
+          <span className="text-xs tracking-tight">
+            {item.label}
+          </span>
         )}
-        <item.icon className={cn("w-4 h-4 shrink-0", active ? "text-foreground" : "text-muted-foreground/70")} />
-        <span className={cn("text-xs font-semibold tracking-tight mt-0.5", active ? "font-bold" : "font-medium")}>
-          {item.label}
-        </span>
-        {isMobile && <ChevronRight className="w-4 h-4 ml-auto text-muted-foreground/30" />}
+        
+        {(!isCollapsed || isMobile) && active && !isMobile && (
+          <div className="absolute right-2 top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-slate-900" />
+        )}
+        {isMobile && <ChevronRight className="w-4 h-4 ml-auto text-slate-300" />}
       </Link>
     )
   }
 
   return (
-    <div className="min-h-screen bg-background flex flex-col md:flex-row">
+    <div className="min-h-screen bg-[#fafafa] flex flex-col md:flex-row font-sans selection:bg-indigo-100">
       
-      {/* ========================================================== */}
-      {/* 🖥️ DESKTOP SIDEBAR (Fixed Left - IDE Style)                */}
-      {/* ========================================================== */}
-      <aside className="hidden md:flex flex-col w-[240px] h-screen fixed left-0 top-0 border-r border-border bg-card z-50 shadow-sm overflow-hidden">
-        
-        {/* LOGO HEADER */}
-        <Link href="/dashboard" className="flex items-center gap-2.5 px-5 h-12 border-b border-border hover:bg-secondary/30 transition-colors shrink-0">
-          <div className="h-5 w-5 bg-foreground text-background flex items-center justify-center rounded-sm shrink-0">
-             <Command className="h-3.5 w-3.5" />
-          </div>
-          <span className="font-black text-xs uppercase tracking-[0.2em] text-foreground mt-0.5">
-            Biillo<span className="text-muted-foreground/40">_OS</span>
-          </span>
-        </Link>
+      {/* --- SLEEK SCROLLBAR OVERRIDE --- */}
+      <style dangerouslySetInnerHTML={{__html: `
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 4px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: transparent;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: transparent;
+          border-radius: 4px;
+        }
+        .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+          background: #cbd5e1; /* slate-300 */
+        }
+        .custom-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: transparent transparent;
+          transition: scrollbar-color 0.3s;
+        }
+        .custom-scrollbar:hover {
+          scrollbar-color: #cbd5e1 transparent;
+        }
+      `}} />
 
-        {/* NAVIGATION LIST */}
-        <div className="flex-1 overflow-y-auto px-3 py-5 space-y-6 custom-scrollbar">
-           
-           <div className="space-y-1">
-             <p className="px-3 text-[9px] font-black uppercase tracking-widest text-muted-foreground/50 mb-2">Core Core</p>
+      {/* ========================================================== */}
+      {/* 🖥️ DESKTOP SIDEBAR (Collapsible)                            */}
+      {/* ========================================================== */}
+      <aside className={cn(
+        "hidden md:flex flex-col h-screen fixed left-0 top-0 border-r border-slate-200 bg-white z-50 transition-all duration-300 ease-in-out",
+        isCollapsed ? "w-[72px]" : "w-[240px]"
+      )}>
+        
+        {/* Sidebar Header & Toggle */}
+        <div className={cn(
+          "flex items-center h-14 border-b border-slate-200 shrink-0 px-3 transition-all",
+          isCollapsed ? "justify-center" : "justify-between"
+        )}>
+          {!isCollapsed && (
+            <Link href="/dashboard" className="flex items-center gap-2 overflow-hidden w-full whitespace-nowrap">
+              <div className="h-6 w-6 bg-slate-900 text-white flex items-center justify-center rounded-md shrink-0">
+                 <Command className="h-3.5 w-3.5" />
+              </div>
+              <span className="font-bold text-sm tracking-tight text-slate-900">
+                Biillo_OS
+              </span>
+            </Link>
+          )}
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={() => setIsCollapsed(!isCollapsed)} 
+            className="shrink-0 h-8 w-8 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-none"
+          >
+            {isCollapsed ? <PanelLeft className="h-4.5 w-4.5" /> : <PanelLeftClose className="h-4.5 w-4.5" />}
+          </Button>
+        </div>
+
+        {/* Scrollable Nav Area */}
+        <div className="flex-1 overflow-y-auto py-5 space-y-6 custom-scrollbar overflow-x-hidden">
+           <div className="space-y-1 px-2">
+             {!isCollapsed && (
+               <p className="px-3 text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2 whitespace-nowrap">Workspace</p>
+             )}
              {coreModules.map((item) => <NavItem key={item.href} item={item} />)}
            </div>
 
-           <Separator className="bg-border/50 mx-2" />
-
-           <div className="space-y-1">
-             <p className="px-3 text-[9px] font-black uppercase tracking-widest text-muted-foreground/50 mb-2">Operations</p>
-             {operationModules.map((item) => <NavItem key={item.href} item={item} />)}
-           </div>
-
+           {operationModules.length > 0 && (
+             <div className="space-y-1 px-2">
+               {isCollapsed ? (
+                 <div className="w-6 h-px bg-slate-200 mx-auto my-4" />
+               ) : (
+                 <>
+                  <Separator className="bg-slate-100 mx-2 my-2 w-auto" />
+                  <p className="px-3 text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2 whitespace-nowrap">Management</p>
+                 </>
+               )}
+               {operationModules.map((item) => <NavItem key={item.href} item={item} />)}
+             </div>
+           )}
         </div>
 
-        {/* USER PROFILE FOOTER */}
-        <div className="p-3 border-t border-border bg-secondary/10 shrink-0">
-          <div className="flex items-center justify-between p-2 rounded-md border border-border/60 bg-card shadow-sm hover:border-border transition-colors">
-            <div className="flex items-center gap-2.5 overflow-hidden">
-               <div className="h-7 w-7 bg-secondary border border-border rounded flex items-center justify-center shrink-0">
-                  <UserCircle className="h-4 w-4 text-muted-foreground" />
-               </div>
-               <div className="flex flex-col truncate">
-                 <span className="text-[10px] font-bold text-foreground truncate">{appUser?.email || 'SYSTEM_USER'}</span>
-                 <div className="flex items-center gap-1.5 mt-0.5">
-                   <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]" />
-                   <span className="text-[8px] uppercase tracking-widest text-muted-foreground font-bold">Authorized</span>
-                 </div>
-               </div>
+        {/* User Profile Footer */}
+        <div className="p-3 border-t border-slate-200 shrink-0 bg-white">
+          {isCollapsed ? (
+            <div className="flex flex-col gap-2 items-center">
+              <div 
+                className="h-10 w-10 bg-slate-50 border border-slate-200 rounded-full flex items-center justify-center shrink-0 uppercase font-semibold text-xs text-slate-600 cursor-pointer hover:bg-slate-100 transition-colors" 
+                title={appUser?.full_name || appUser?.email} 
+                onClick={() => setIsCollapsed(false)}
+              >
+                {appUser?.full_name?.[0] || appUser?.email?.[0] || 'U'}
+              </div>
+              <Button variant="ghost" size="icon" className="h-10 w-10 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg" onClick={handleLogout} title="Sign Out">
+                <LogOut className="h-4.5 w-4.5 ml-1" />
+              </Button>
             </div>
-            <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 shrink-0 rounded" onClick={handleLogout} title="Terminate Session">
-              <LogOut className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+          ) : (
+            <div className="flex items-center justify-between p-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors cursor-default">
+              <div className="flex items-center gap-2.5 overflow-hidden">
+                 <div className="h-8 w-8 bg-white border border-slate-200 rounded-full flex items-center justify-center shrink-0 uppercase font-semibold text-xs text-slate-600 shadow-sm">
+                   {appUser?.full_name?.[0] || appUser?.email?.[0] || 'U'}
+                 </div>
+                 <div className="flex flex-col truncate">
+                   <span className="text-xs font-bold text-slate-900 truncate leading-tight">
+                     {appUser?.full_name || appUser?.email?.split('@')[0] || 'User'}
+                   </span>
+                   <span className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold truncate leading-tight mt-0.5">
+                     {appUser?.role?.replace('_', ' ') || 'Authorized'}
+                   </span>
+                 </div>
+              </div>
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-red-600 hover:bg-red-50 shrink-0 rounded-lg bg-white border border-slate-200 shadow-sm" onClick={handleLogout} title="Sign Out">
+                <LogOut className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
         </div>
       </aside>
 
       {/* ========================================================== */}
-      {/* 📱 MOBILE HEADER (Top Bar - High Density)                  */}
+      {/* 📱 MOBILE HEADER                                           */}
       {/* ========================================================== */}
-      <header className="md:hidden fixed top-0 left-0 right-0 h-12 bg-background border-b border-border z-50 px-4 flex items-center justify-between shadow-sm">
+      <header className="md:hidden fixed top-0 left-0 right-0 h-14 bg-white border-b border-slate-200 z-50 px-4 flex items-center justify-between shadow-sm">
          <div className="flex items-center gap-2">
-            <div className="h-5 w-5 bg-foreground text-background flex items-center justify-center rounded-sm shrink-0">
+            <div className="h-6 w-6 bg-slate-900 text-white flex items-center justify-center rounded-md shrink-0">
                <Command className="h-3.5 w-3.5" />
             </div>
-            <span className="font-black text-xs uppercase tracking-[0.2em] text-foreground mt-0.5">
-              Biillo<span className="text-muted-foreground/40">_OS</span>
+            <span className="font-bold text-sm tracking-tight text-slate-900">
+              Biillo_OS
             </span>
          </div>
          
          <button 
            onClick={() => setIsMobileMenuOpen(true)}
-           className="flex items-center gap-2 p-1 pr-2 rounded border border-border bg-secondary/50 hover:bg-secondary transition-colors"
+           className="flex items-center gap-2 p-1.5 pr-2.5 rounded-md border border-slate-200 bg-slate-50 hover:bg-slate-100 transition-colors shadow-sm"
          >
-            <div className="h-5 w-5 rounded bg-muted-foreground/20 text-foreground flex items-center justify-center text-[10px] font-black uppercase">
-              {appUser?.email?.[0] || 'U'}
+            <div className="h-5 w-5 rounded-full bg-white border border-slate-200 text-slate-600 flex items-center justify-center text-[10px] font-bold uppercase">
+              {appUser?.full_name?.[0] || appUser?.email?.[0] || 'U'}
             </div>
-            <Menu className="w-4 h-4 text-foreground" />
+            <Menu className="w-4 h-4 text-slate-600" />
          </button>
       </header>
 
       {/* ========================================================== */}
-      {/* 📱 MOBILE "MORE" MENU (Slide-over)                         */}
+      {/* 📱 MOBILE "MORE" MENU                                      */}
       {/* ========================================================== */}
       {isMobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 z-[60] bg-background flex flex-col animate-in slide-in-from-right-full duration-200">
+        <div className="md:hidden fixed inset-0 z-[60] bg-white flex flex-col animate-in slide-in-from-right-full duration-200">
           
-          <div className="h-14 border-b border-border flex items-center justify-between px-4 bg-secondary/30">
+          <div className="h-16 border-b border-slate-200 flex items-center justify-between px-5 bg-slate-50">
             <div className="flex items-center gap-3">
-               <div className="w-8 h-8 rounded border border-border bg-card flex items-center justify-center font-black text-sm uppercase shadow-sm">
-                 {appUser?.email?.[0] || 'U'}
+               <div className="w-10 h-10 rounded-full border border-slate-200 bg-white flex items-center justify-center font-bold text-sm text-slate-700 uppercase shadow-sm">
+                 {appUser?.full_name?.[0] || appUser?.email?.[0] || 'U'}
                </div>
                <div>
-                 <p className="font-bold text-xs text-foreground">{appUser?.email}</p>
-                 <div className="flex items-center gap-1 mt-0.5">
-                   <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                   <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">{appUser?.role || 'Authorized'}</p>
-                 </div>
+                 <p className="font-bold text-sm text-slate-900 leading-tight">
+                    {appUser?.full_name || appUser?.email}
+                 </p>
+                 <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-0.5">
+                   {appUser?.role?.replace('_', ' ') || 'Authorized'}
+                 </p>
                </div>
             </div>
-            <Button variant="ghost" size="icon" className="h-8 w-8 rounded" onClick={() => setIsMobileMenuOpen(false)}>
+            <Button variant="ghost" size="icon" className="h-9 w-9 rounded-full bg-white border border-slate-200 shadow-sm text-slate-500 hover:text-slate-900" onClick={() => setIsMobileMenuOpen(false)}>
               <X className="w-4 h-4" />
             </Button>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
-            <div>
-               <h4 className="text-[10px] font-black text-muted-foreground/60 uppercase tracking-widest mb-3 px-1">Operations Matrix</h4>
-               <div className="space-y-1">
-                 {operationModules.map((item) => (
-                   <NavItem key={item.href} item={item} isMobile onClick={() => setIsMobileMenuOpen(false)} />
-                 ))}
-               </div>
-            </div>
+          <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6 bg-white custom-scrollbar">
+            {operationModules.length > 0 && (
+              <div>
+                 <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 px-1">Management</h4>
+                 <div className="space-y-1">
+                   {operationModules.map((item) => (
+                     <NavItem key={item.href} item={item} isMobile onClick={() => setIsMobileMenuOpen(false)} />
+                   ))}
+                 </div>
+              </div>
+            )}
 
-            <Separator className="bg-border/50" />
+            <Separator className="bg-slate-100" />
 
             <div>
-               <h4 className="text-[10px] font-black text-muted-foreground/60 uppercase tracking-widest mb-3 px-1">System Controls</h4>
-               <Button variant="outline" className="w-full justify-start mb-3 h-10 border-border text-xs font-bold" onClick={() => { setIsMobileMenuOpen(false); router.push('/settings'); }}>
-                 <Settings className="w-4 h-4 mr-2 text-muted-foreground" /> Configuration
-               </Button>
+               <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 px-1">System Control</h4>
                <Button 
                  variant="destructive" 
-                 className="w-full justify-start h-10 bg-red-500/10 text-red-600 hover:bg-red-500/20 border border-red-500/20 text-xs font-bold" 
+                 className="w-full justify-start h-11 bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 text-xs font-bold rounded-lg shadow-sm" 
                  onClick={handleLogout}
                >
-                 <LogOut className="w-4 h-4 mr-2" /> Terminate Session
+                 <LogOut className="w-4 h-4 mr-2" /> Sign Out of Biillo
                </Button>
             </div>
           </div>
@@ -223,40 +319,45 @@ export function AppLayout({ children, appUser }: { children: React.ReactNode, ap
       )}
 
       {/* ========================================================== */}
-      {/* 📱 MOBILE BOTTOM NAV (Fixed Bottom)                        */}
+      {/* 📱 MOBILE BOTTOM NAV                                       */}
       {/* ========================================================== */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-card border-t border-border z-40 h-14 pb-safe safe-area-bottom">
-        <div className="grid grid-cols-5 h-full">
-            {coreModules.map((item) => {
-              const active = isActive(item.href)
-              return (
-                <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(
-                        "flex flex-col items-center justify-center gap-1 active:scale-95 transition-all relative",
-                        active ? "text-foreground" : "text-muted-foreground"
-                    )}
-                >
-                    {active && <div className="absolute top-0 w-8 h-[2px] bg-foreground rounded-b-full" />}
-                    <item.icon className={cn("w-4 h-4", active && "fill-foreground/10")} />
-                    <span className={cn("text-[8px] uppercase tracking-wider", active ? "font-black" : "font-semibold")}>
-                        {item.label}
-                    </span>
-                </Link>
-              )
-            })}
-        </div>
-      </nav>
+      {coreModules.length > 0 && (
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-40 h-16 pb-safe safe-area-bottom shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.02)]">
+          <div 
+            className="grid h-full" 
+            style={{ gridTemplateColumns: `repeat(${coreModules.length}, minmax(0, 1fr))` }}
+          >
+              {coreModules.map((item) => {
+                const active = isActive(item.href)
+                return (
+                  <Link
+                      key={item.href}
+                      href={item.href}
+                      className={cn(
+                          "flex flex-col items-center justify-center gap-1 active:scale-95 transition-colors relative",
+                          active ? "text-slate-900" : "text-slate-400 hover:text-slate-600"
+                      )}
+                  >
+                      {active && <div className="absolute top-0 w-8 h-1 bg-slate-900 rounded-b-full" />}
+                      <item.icon className={cn("w-5 h-5 mt-1", active && "fill-slate-900/5")} />
+                      <span className={cn("text-[9px] tracking-tight text-center px-1 truncate w-full", active ? "font-bold" : "font-medium")}>
+                          {item.label}
+                      </span>
+                  </Link>
+                )
+              })}
+          </div>
+        </nav>
+      )}
 
       {/* ========================================================== */}
       {/* MAIN CONTENT AREA                                          */}
       {/* ========================================================== */}
-      <main className="flex-1 flex flex-col min-h-screen 
-        pt-12 pb-14        /* Mobile Padding */
-        md:pt-0 md:pb-0    /* Desktop Padding reset */
-        md:ml-[240px]      /* Content starts after sidebar */
-      ">
+      <main className={cn(
+        "flex-1 flex flex-col min-h-screen transition-all duration-300 ease-in-out",
+        "pt-14 pb-16 md:pt-0 md:pb-0", // Mobile top/bottom padding 
+        isCollapsed ? "md:ml-[72px]" : "md:ml-[240px]" // Dynamic desktop left margin
+      )}>
         {children}
       </main>
 

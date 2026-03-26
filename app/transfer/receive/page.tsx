@@ -3,12 +3,12 @@
 import React, { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+
 import { 
   PackageCheck, 
   Search, 
   ArrowLeft, 
   CheckCircle2, 
-  ArrowRight, 
   ChevronRight, 
   RefreshCw, 
   Database,
@@ -16,9 +16,13 @@ import {
   Lock,
   Warehouse,
   Boxes,
-  Info
+  Info,
+  Camera,
+  X,
+  QrCode
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { Scanner } from '@yudiel/react-qr-scanner'
 
 import { supabase } from '@/lib/supabaseClient'
 import { Button } from '@/components/ui/button'
@@ -26,6 +30,7 @@ import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 
 // Helper to prevent Postgres UUID crashes
 const isUUID = (str: string) => {
@@ -39,6 +44,7 @@ export default function ReceiveStockPage() {
   const [transferData, setTransferData] = useState<any>(null)
   const [loading, setLoading] = useState(false)
   const [isCommitting, setIsCommitting] = useState(false)
+  const [showScanner, setShowScanner] = useState(false)
 
   const fetchTransferDetails = async (inputStr: string) => {
     const cleanInput = inputStr.trim()
@@ -57,19 +63,28 @@ export default function ReceiveStockPage() {
       query = query.eq('transfer_number', cleanInput.toUpperCase())
     }
 
-    const { data, error } = await query.single()
+    const { data, error } = await query.maybeSingle()
 
     if (error || !data) {
       toast.error("Invalid Voucher, or stock is not in transit.")
       setTransferData(null)
     } else {
       setTransferData(data)
+      setSearchInput(data.transfer_number) // Sync input with the actual number
       toast.success("Voucher Authenticated!")
     }
     setLoading(false)
   }
 
+  const onScanSuccess = (detectedCodes: any[]) => {
+    if (detectedCodes && detectedCodes.length > 0) {
+      setShowScanner(false)
+      fetchTransferDetails(detectedCodes[0].rawValue)
+    }
+  }
+
   const handleConfirmReceive = async () => {
+    if (!transferData) return
     setIsCommitting(true)
     try {
       const itemIds = transferData.items.map((i: any) => i.item_id)
@@ -91,176 +106,190 @@ export default function ReceiveStockPage() {
           received_at: new Date().toISOString() 
         })
         .eq('id', transferData.id)
-        .select()
-        .single() 
         
       if (trfErr) throw trfErr
 
-      toast.success("Stock added to vault!")
+      toast.success("Stock ingested into vault successfully!")
       setTransferData(null)
       setSearchInput('')
       
-      setTimeout(() => {
-        window.location.href = '/transfer'
-      }, 1500)
-
+      router.push('/transfer')
     } catch (err: any) {
-      console.error(err)
-      toast.error(err.message || "Failed to update database") 
+      toast.error(err.message || "Failed to update ledger") 
     } finally {
       setIsCommitting(false)
     }
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#fafafa]">
-      {/* --- COMPACT IDE-STYLE TOOLBAR HEADER --- */}
-      <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-md border-b border-gray-200 px-4 h-12 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3 overflow-hidden">
-          <Link href="/transfer">
-            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-gray-100 transition-colors">
-              <ArrowLeft className="h-4 w-4 text-gray-500" />
+    <div className="flex flex-col min-h-screen bg-[#fafafa] font-sans selection:bg-indigo-100">
+      
+      {/* CAMERA OVERLAY */}
+      {showScanner && (
+        <div className="fixed inset-0 z-[100] bg-black flex flex-col">
+          <div className="flex justify-between items-center p-4 bg-slate-900 text-white">
+            <h2 className="text-sm font-bold uppercase tracking-widest flex items-center gap-2">
+              <QrCode className="w-4 h-4 text-indigo-400" /> Transfer Key Scanner
+            </h2>
+            <Button variant="ghost" size="icon" onClick={() => setShowScanner(false)} className="text-white hover:bg-white/20 rounded-full">
+              <X className="w-6 h-6" />
             </Button>
-          </Link>
-          
-          <Separator orientation="vertical" className="h-4" />
-          
-          <nav className="flex items-center gap-1.5 text-[13px] whitespace-nowrap overflow-hidden">
-            <Link href="/transfer" className="text-gray-500 hover:text-gray-900 transition-colors font-medium">Transfers</Link>
-            <ChevronRight className="h-3.5 w-3.5 text-gray-400" />
-            <span className="font-bold text-gray-900 select-none">Secure Receive</span>
-            
-            <div className="ml-3 hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-100">
-              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-tighter">Auth Mode</span>
-            </div>
-          </nav>
+          </div>
+          <div className="flex-1 relative bg-black flex items-center justify-center">
+            <Scanner onScan={onScanSuccess} components={{ finder: true }} />
+          </div>
+          <div className="p-6 bg-slate-900 text-center text-xs text-slate-400 uppercase tracking-widest">
+            Center the Transfer Voucher QR code in the frame
+          </div>
         </div>
+      )}
 
-        <div className="flex items-center gap-2">
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            className="h-8 px-2 text-xs font-medium text-gray-500 hover:text-gray-900"
-            onClick={() => { setTransferData(null); setSearchInput(''); }}
-          >
-            <RefreshCw className="h-3.5 w-3.5 mr-1.5" />
-            Reset
-          </Button>
-          <Separator orientation="vertical" className="h-4 mx-1" />
-          <Button variant="outline" size="sm" className="h-8 text-xs font-bold px-3 shadow-sm border-gray-200 hidden sm:flex">
-            <Database className="h-3.5 w-3.5 mr-1.5 text-gray-400" />
-            Vault Sync
-          </Button>
+      {/* --- MODERN h-14 HEADER --- */}
+      <header className="h-14 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center sticky top-0 z-40 shadow-sm box-border">
+        <div className="w-full max-w-5xl mx-auto flex justify-between items-center gap-4">
+          <div className="flex items-center gap-2.5">
+            <Link href="/transfer">
+              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-slate-100 text-slate-500">
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+            </Link>
+            <Separator orientation="vertical" className="h-4 bg-slate-200" />
+            <h1 className="text-sm font-semibold text-slate-900 tracking-tight leading-none">Receive Parcel</h1>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="ghost" 
+              size="sm" 
+              className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900"
+              onClick={() => { setTransferData(null); setSearchInput(''); }}
+            >
+              <RefreshCw className="h-3.5 w-3.5 sm:mr-1.5" />
+              <span className="hidden sm:inline">Reset</span>
+            </Button>
+            <div className="h-4 w-px bg-slate-200 mx-1" />
+            <Button variant="outline" size="sm" className="h-8 text-xs font-bold px-3 border-slate-200 bg-white text-slate-700 shadow-sm rounded-md pointer-events-none hidden sm:flex">
+              <Database className="h-3.5 w-3.5 mr-1.5 text-emerald-500" />
+              Vault Sync
+            </Button>
+          </div>
         </div>
       </header>
 
-      <main className="p-4 md:p-8 max-w-[600px] w-full mx-auto space-y-6 animate-in fade-in duration-500">
+      <main className="p-4 md:p-8 max-w-xl w-full mx-auto space-y-6 animate-in fade-in duration-500">
         
-        {/* SCAN / SEARCH INPUT SECTION */}
-        <Card className="shadow-sm border-gray-200/60 overflow-hidden bg-white">
-          <CardHeader className="bg-gray-50/50 py-3 px-4 border-b">
-            <h3 className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Package Authentication</h3>
-          </CardHeader>
-          <CardContent className="pt-6 pb-6 px-4">
+        {/* PACKAGE SEARCH & SCAN */}
+        <div className={cn(
+          "bg-white border rounded-xl overflow-hidden shadow-sm transition-all duration-300",
+          transferData ? "border-emerald-200" : "border-slate-200"
+        )}>
+          <div className="bg-slate-50/50 py-3 px-5 border-b border-inherit">
+            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Package Authentication</h3>
+          </div>
+          <div className="p-5">
             <div className="flex gap-2">
               <div className="relative flex-1 group">
-                <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400 group-focus-within:text-primary transition-colors" />
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
                 <Input 
-                  autoFocus
-                  placeholder="Scan QR or enter TRF #..." 
-                  className="pl-9 h-9 text-sm font-mono bg-white border-gray-200 focus-visible:ring-gray-300 uppercase"
+                  placeholder="Transfer ID or Scan..." 
+                  className="pl-9 h-10 text-sm font-mono bg-white border-slate-200 focus-visible:ring-indigo-500 focus-visible:border-indigo-500 uppercase rounded-lg"
                   value={searchInput} 
                   onChange={(e) => setSearchInput(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && fetchTransferDetails(searchInput)}
                 />
               </div>
-              <Button onClick={() => fetchTransferDetails(searchInput)} disabled={loading} className="h-9 px-6 font-bold text-xs uppercase tracking-tight shadow-md">
-                {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Verify"}
+              <Button onClick={() => setShowScanner(true)} variant="outline" className="h-10 w-10 p-0 border-slate-200 hover:bg-slate-50 shadow-sm rounded-lg shrink-0">
+                <Camera className="h-4 w-4 text-slate-600" />
+              </Button>
+              <Button onClick={() => fetchTransferDetails(searchInput)} disabled={loading} className="h-10 px-5 font-bold text-xs uppercase bg-slate-900 hover:bg-slate-800 text-white rounded-lg shadow-sm">
+                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify"}
               </Button>
             </div>
-          </CardContent>
-        </Card>
+          </div>
+        </div>
 
-        {/* AUTHENTICATED RESULTS SECTION */}
+        {/* VERIFIED PARCEL CARD */}
         {transferData && (
-          <div className="space-y-6 animate-in slide-in-from-bottom-2 duration-300">
-            <Card className="shadow-sm border-emerald-200/60 overflow-hidden bg-white">
-              <CardHeader className="bg-emerald-50/30 py-3 px-4 border-b border-emerald-100 flex flex-row items-center justify-between">
+          <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
+            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
+              <div className="bg-emerald-50/50 py-3 px-5 border-b border-emerald-100 flex items-center justify-between">
                 <div className="flex items-center gap-2">
                    <Lock className="h-3.5 w-3.5 text-emerald-600" />
-                   <h3 className="text-[11px] font-black uppercase tracking-widest text-emerald-700">Parcel Verified</h3>
+                   <h3 className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Parcel Authenticated</h3>
                 </div>
-                <Badge variant="outline" className="text-[9px] font-black uppercase bg-white border-emerald-200 text-emerald-600 h-5 px-1.5">Authenticated</Badge>
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="p-6 border-b flex flex-col items-center justify-center text-center">
-                   <p className="text-[10px] font-bold text-gray-400 uppercase tracking-tighter mb-1">Stock Transfer Number</p>
-                   <p className="text-3xl font-mono font-black text-gray-900 tracking-tighter">{transferData.transfer_number}</p>
-                </div>
-
-                <div className="grid grid-cols-2 bg-gray-50/50">
-                  <div className="p-4 border-r border-b border-gray-100">
-                    <label className="text-[10px] font-bold text-gray-400 uppercase leading-none block mb-2">From Origin</label>
-                    <div className="flex items-center gap-2">
-                       <Warehouse className="h-3.5 w-3.5 text-gray-400" />
-                       <span className="text-sm font-bold text-gray-700">{transferData.from.name}</span>
-                    </div>
-                  </div>
-                  <div className="p-4 border-b border-gray-100 bg-blue-50/20">
-                    <label className="text-[10px] font-bold text-blue-400 uppercase leading-none block mb-2">Into Destination</label>
-                    <div className="flex items-center gap-2">
-                       <Warehouse className="h-3.5 w-3.5 text-blue-500" />
-                       <span className="text-sm font-bold text-blue-700">{transferData.to.name}</span>
-                    </div>
-                  </div>
+                <Badge variant="outline" className="text-[9px] font-bold uppercase bg-white border-emerald-200 text-emerald-600 rounded-md">Verified</Badge>
+              </div>
+              
+              <div className="p-0">
+                <div className="p-8 border-b border-slate-100 text-center">
+                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Stock Transfer Number</p>
+                   <p className="text-4xl font-mono font-black text-slate-900 tracking-tighter">{transferData.transfer_number}</p>
                 </div>
 
-                {/* Items List - High Density */}
-                <div className="p-4 space-y-3">
+                <div className="grid grid-cols-2">
+                  <div className="p-5 border-r border-b border-slate-100">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase leading-none block mb-2">Origin</label>
+                    <div className="flex items-center gap-2">
+                       <Warehouse className="h-4 w-4 text-slate-300" />
+                       <span className="text-sm font-semibold text-slate-700">{transferData.from.name}</span>
+                    </div>
+                  </div>
+                  <div className="p-5 border-b border-slate-100 bg-indigo-50/20">
+                    <label className="text-[10px] font-bold text-indigo-400 uppercase leading-none block mb-2">Destination</label>
+                    <div className="flex items-center gap-2">
+                       <Warehouse className="h-4 w-4 text-indigo-500" />
+                       <span className="text-sm font-semibold text-indigo-900">{transferData.to.name}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-5 space-y-4">
                    <div className="flex items-center gap-2">
-                      <Boxes className="h-3.5 w-3.5 text-gray-400" />
-                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Inventory Manifest ({transferData.items.length})</span>
+                      <Boxes className="h-4 w-4 text-slate-400" />
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Inventory Manifest ({transferData.items.length})</span>
                    </div>
-                   <div className="max-h-[180px] overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                   
+                   <div className="max-h-[220px] overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
                       {transferData.items.map((line: any) => (
-                        <div key={line.item_id} className="flex items-center justify-between p-2.5 rounded border border-gray-100 bg-[#fafafa]">
+                        <div key={line.item_id} className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50/50">
                           <div className="flex flex-col">
-                            <span className="text-xs font-mono font-bold text-gray-800">{line.inventory_items.barcode}</span>
-                            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-tight">{line.inventory_items.item_category}</span>
+                            <span className="text-xs font-mono font-bold text-slate-800">{line.inventory_items.barcode}</span>
+                            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-tight">{line.inventory_items.item_category}</span>
                           </div>
-                          <span className="text-sm font-black text-gray-900">{line.inventory_items.net_weight_g}g</span>
+                          <div className="text-right">
+                            <span className="text-xs font-bold text-slate-900">{line.inventory_items.net_weight_g}g</span>
+                            <span className="block text-[9px] text-slate-400 font-medium">Net Weight</span>
+                          </div>
                         </div>
                       ))}
                    </div>
                 </div>
 
-                {/* Action Footer */}
-                <div className="p-6 bg-gray-50/50 border-t">
+                <div className="p-6 bg-slate-50 border-t border-slate-200">
                   <Button 
                     onClick={handleConfirmReceive} 
-                    className="w-full h-12 bg-gray-900 hover:bg-black text-white font-bold text-xs uppercase tracking-widest shadow-lg transition-all"
+                    className="w-full h-12 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs uppercase tracking-widest shadow-md rounded-xl transition-all"
                     disabled={isCommitting}
                   >
                     {isCommitting ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Committing to Ledger...
+                        Updating Vault...
                       </>
                     ) : (
                       "Ingest Stock into Vault"
                     )}
                   </Button>
                   
-                  <div className="mt-4 flex items-start gap-2.5 text-blue-600 px-1">
-                    <Info className="h-3.5 w-3.5 mt-0.5" />
+                  <div className="mt-4 flex items-start gap-2.5 text-indigo-600 px-1 bg-white p-3 rounded-lg border border-indigo-100">
+                    <Info className="h-4 w-4 mt-0.5 shrink-0" />
                     <p className="text-[10px] font-bold uppercase leading-tight tracking-tight">
-                      By committing, items will be moved to <span className="underline italic">in_stock</span> and ownership is updated in the database.
+                      System Action: By confirming, items will be moved to <span className="underline italic">in_stock</span> and the branch ID will be updated.
                     </p>
                   </div>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           </div>
         )}
 
