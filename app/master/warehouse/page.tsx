@@ -9,6 +9,7 @@ import * as z from 'zod'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea' // <--- ADDED TEXTAREA FOR ADDRESS
 import { Card, CardContent } from '@/components/ui/card'
 import {
   Sheet,
@@ -44,10 +45,14 @@ import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 import { Plus, Warehouse, Search } from 'lucide-react'
 
+// 1. UPDATE ZOD SCHEMA TO INCLUDE NEW FIELDS
 const warehouseSchema = z.object({
   warehouse_code: z.string().min(2, 'Code required'),
   name: z.string().min(2, 'Name required'),
   warehouse_type: z.enum(['main_safe', 'factory', 'branch', 'transit']),
+  address: z.string().optional(),
+  contact_number: z.string().optional(),
+  gstin: z.string().optional(),
 })
 
 export default function WarehousePage() {
@@ -57,12 +62,16 @@ export default function WarehousePage() {
   const [search, setSearch] = useState('')
   const [isSheetOpen, setIsSheetOpen] = useState(false)
 
+  // 2. SET DEFAULT VALUES FOR NEW FIELDS
   const form = useForm<z.infer<typeof warehouseSchema>>({
     resolver: zodResolver(warehouseSchema),
     defaultValues: {
       warehouse_code: '',
       name: '',
       warehouse_type: 'branch',
+      address: '',
+      contact_number: '',
+      gstin: '',
     },
   })
 
@@ -88,11 +97,16 @@ export default function WarehousePage() {
     if (!appUser) return
 
     try {
+      // 3. PASS NEW FIELDS TO RPC OR DIRECT INSERT
+      // Note: Ensure your 'create_warehouse' RPC is updated in Supabase to accept these new args!
       const { error } = await supabase.rpc('create_warehouse', {
         _user_id: appUser.user_id,
         _warehouse_code: values.warehouse_code,
         _name: values.name,
         _warehouse_type: values.warehouse_type,
+        _address: values.address,            // <--- NEW
+        _contact_number: values.contact_number, // <--- NEW
+        _gstin: values.gstin                 // <--- NEW
       })
 
       if (error) throw error
@@ -146,38 +160,81 @@ export default function WarehousePage() {
               </Button>
             </SheetTrigger>
 
-            <SheetContent side="right" className="w-full sm:w-[450px]">
+            <SheetContent side="right" className="w-full sm:w-[450px] overflow-y-auto">
               <SheetHeader>
-                <SheetTitle>Create Warehouse</SheetTitle>
+                <SheetTitle>Create Warehouse / Branch</SheetTitle>
               </SheetHeader>
 
               <Form {...form}>
                 <form
                   onSubmit={form.handleSubmit(onSubmit)}
-                  className="space-y-6 mt-6"
+                  className="space-y-4 mt-6"
                 >
-                  <FormField
-                    control={form.control}
-                    name="warehouse_code"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Warehouse Code</FormLabel>
-                        <FormControl>
-                          <Input {...field} className="uppercase" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                  <div className="grid grid-cols-2 gap-4">
+                    <FormField
+                      control={form.control}
+                      name="warehouse_code"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Warehouse Code *</FormLabel>
+                          <FormControl>
+                            <Input {...field} className="uppercase" placeholder="e.g. BR-01" />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="warehouse_type"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Type *</FormLabel>
+                          <Select
+                            onValueChange={field.onChange}
+                            defaultValue={field.value}
+                          >
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="main_safe">Main Safe</SelectItem>
+                              <SelectItem value="factory">Factory</SelectItem>
+                              <SelectItem value="branch">Branch</SelectItem>
+                              <SelectItem value="transit">Transit</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </FormItem>
+                      )}
+                    />
+                  </div>
 
                   <FormField
                     control={form.control}
                     name="name"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Warehouse Name</FormLabel>
+                        <FormLabel>Warehouse Name *</FormLabel>
                         <FormControl>
-                          <Input {...field} />
+                          <Input {...field} placeholder="e.g. Andheri Main Branch" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  {/* 4. NEW UI FIELDS FOR ADDRESS, CONTACT, AND GSTIN */}
+                  <FormField
+                    control={form.control}
+                    name="contact_number"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Contact Number (For Invoices)</FormLabel>
+                        <FormControl>
+                          <Input {...field} placeholder="e.g. +91 9876543210" />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -186,39 +243,37 @@ export default function WarehousePage() {
 
                   <FormField
                     control={form.control}
-                    name="warehouse_type"
+                    name="gstin"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Type</FormLabel>
-                        <Select
-                          onValueChange={field.onChange}
-                          defaultValue={field.value}
-                        >
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            <SelectItem value="main_safe">
-                              Main Safe
-                            </SelectItem>
-                            <SelectItem value="factory">
-                              Factory
-                            </SelectItem>
-                            <SelectItem value="branch">
-                              Branch
-                            </SelectItem>
-                            <SelectItem value="transit">
-                              Transit
-                            </SelectItem>
-                          </SelectContent>
-                        </Select>
+                        <FormLabel>Branch GSTIN</FormLabel>
+                        <FormControl>
+                          <Input {...field} className="uppercase" placeholder="e.g. 27AAOPM1004A1ZB" />
+                        </FormControl>
+                        <FormMessage />
                       </FormItem>
                     )}
                   />
 
-                  <Button type="submit" className="w-full">
+                  <FormField
+                    control={form.control}
+                    name="address"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Full Address (Printed on Invoices)</FormLabel>
+                        <FormControl>
+                          <Textarea 
+                            {...field} 
+                            placeholder="Viral Apartment, S.V. Road, Andheri West, Mumbai - 400058" 
+                            className="resize-none h-24" 
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <Button type="submit" className="w-full mt-4">
                     Create Warehouse
                   </Button>
                 </form>
@@ -229,41 +284,48 @@ export default function WarehousePage() {
       </div>
 
       {/* Desktop Table */}
-      <div className="hidden md:block border rounded bg-white">
+      <div className="hidden md:block border rounded bg-white overflow-hidden shadow-sm">
         <Table>
-          <TableHeader>
+          <TableHeader className="bg-slate-50">
             <TableRow>
-              <TableHead>Code</TableHead>
-              <TableHead>Name</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Status</TableHead>
+              <TableHead className="font-semibold text-slate-700">Code</TableHead>
+              <TableHead className="font-semibold text-slate-700">Name</TableHead>
+              <TableHead className="font-semibold text-slate-700">Type</TableHead>
+              <TableHead className="font-semibold text-slate-700">Contact</TableHead>
+              <TableHead className="font-semibold text-slate-700">Status</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={4}>Loading...</TableCell>
+                <TableCell colSpan={5} className="text-center py-8 text-slate-500">Loading warehouses...</TableCell>
               </TableRow>
             ) : filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4}>No warehouses found</TableCell>
+                <TableCell colSpan={5} className="text-center py-8 text-slate-500">No warehouses found</TableCell>
               </TableRow>
             ) : (
               filtered.map((w) => (
                 <TableRow key={w.id}>
-                  <TableCell className="font-mono">
+                  <TableCell className="font-mono font-medium text-slate-600">
                     {w.warehouse_code}
                   </TableCell>
-                  <TableCell>{w.name}</TableCell>
                   <TableCell>
-                    <Badge variant="outline">{w.warehouse_type}</Badge>
+                    <p className="font-semibold text-slate-800">{w.name}</p>
+                    {w.address && <p className="text-xs text-slate-500 truncate max-w-xs">{w.address}</p>}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="secondary" className="uppercase text-[10px] tracking-wider">{w.warehouse_type}</Badge>
+                  </TableCell>
+                  <TableCell className="text-sm text-slate-600">
+                    {w.contact_number || '-'}
                   </TableCell>
                   <TableCell>
                     <Badge
                       className={
                         w.is_active
-                          ? 'bg-green-100 text-green-700'
-                          : 'bg-gray-100 text-gray-500'
+                          ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100'
+                          : 'bg-slate-100 text-slate-500 hover:bg-slate-100'
                       }
                     >
                       {w.is_active ? 'Active' : 'Inactive'}
@@ -283,20 +345,28 @@ export default function WarehousePage() {
             <CardContent className="p-4">
               <div className="flex justify-between">
                 <div>
-                  <h3 className="font-bold">{w.name}</h3>
-                  <p className="text-sm text-muted-foreground">
+                  <h3 className="font-bold text-slate-800">{w.name}</h3>
+                  <p className="text-sm font-mono text-slate-500">
                     {w.warehouse_code}
                   </p>
                 </div>
-                <Warehouse className="h-5 w-5 text-muted-foreground" />
+                <Warehouse className="h-5 w-5 text-slate-400" />
               </div>
-              <div className="mt-3 flex justify-between text-sm">
-                <Badge variant="outline">{w.warehouse_type}</Badge>
+              
+              {(w.contact_number || w.gstin) && (
+                <div className="mt-2 text-xs text-slate-600 space-y-1">
+                  {w.contact_number && <p>📞 {w.contact_number}</p>}
+                  {w.gstin && <p>🏢 {w.gstin}</p>}
+                </div>
+              )}
+
+              <div className="mt-4 flex justify-between items-center text-sm border-t border-slate-100 pt-3">
+                <Badge variant="secondary" className="uppercase text-[10px] tracking-wider">{w.warehouse_type}</Badge>
                 <Badge
                   className={
                     w.is_active
-                      ? 'bg-green-100 text-green-700'
-                      : 'bg-gray-100 text-gray-500'
+                      ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100'
+                      : 'bg-slate-100 text-slate-500 hover:bg-slate-100'
                   }
                 >
                   {w.is_active ? 'Active' : 'Inactive'}

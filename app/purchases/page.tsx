@@ -21,7 +21,8 @@ import {
   Database,
   Info,
   FilePlus,
-  Trash
+  Trash,
+  Wand2 // <-- NEW ICON
 } from 'lucide-react'
 
 import { supabase } from '@/lib/supabaseClient'
@@ -62,7 +63,7 @@ const invoiceHeaderSchema = z.object({
   warehouse_id: z.string().uuid('Select destination warehouse'),
   invoice_number: z.string().min(1, 'Invoice number is required'),
   invoice_date: z.string().min(1, 'Date is required'),
-  supplier_gstin: z.string().optional(), // <-- NEW: Added GSTIN to Schema
+  supplier_gstin: z.string().optional(),
   currency: z.string().default('INR'), 
   exchange_rate: z.coerce.number().min(0.01).default(1),
   notes: z.string().optional(),
@@ -161,7 +162,6 @@ export default function PurchaseInvoicePage() {
     async function init() {
       if (!appUser) return
       const [supRes, warRes] = await Promise.all([
-        // <-- NEW: Added `gstin` to the select query (Change 'gstin' if your column is named 'gst_number')
         supabase.from('suppliers').select('id, supplier_name, gstin').eq('company_id', appUser.company_id),
         supabase.from('warehouses').select('id, name').eq('company_id', appUser.company_id)
       ])
@@ -171,6 +171,19 @@ export default function PurchaseInvoicePage() {
     }
     init()
   }, [appUser])
+
+  // --- Auto Generate IDs ---
+  const generateGoldBatchId = () => {
+    const dateStr = format(new Date(), 'yyyyMMdd')
+    const random = Math.floor(100 + Math.random() * 900)
+    goldForm.setValue('batch_number', `GB-${dateStr}-${random}`)
+  }
+
+  const generateDiamondLotId = () => {
+    const dateStr = format(new Date(), 'yyyyMMdd')
+    const random = Math.floor(100 + Math.random() * 900)
+    diamondForm.setValue('lot_number', `DL-${dateStr}-${random}`)
+  }
 
   // --- Auto Calculations ---
   const gWeight = useWatch({ control: goldForm.control, name: 'weight_g' })
@@ -186,6 +199,7 @@ export default function PurchaseInvoicePage() {
   useEffect(() => {
     const total = (Number(dWeight) || 0) * (Number(dRate) || 0)
     diamondForm.setValue('total_amount', parseFloat(total.toFixed(2)))
+    // Automatically set pieces to 1 if it's a single solitaire
     if (dLotType === 'single_piece') diamondForm.setValue('pieces', 1)
   }, [dWeight, dRate, dLotType, diamondForm])
 
@@ -253,7 +267,6 @@ export default function PurchaseInvoicePage() {
       }
       const headerValues = headerForm.getValues()
       
-      // Update supplier's GSTIN if they typed a new one in
       if (headerValues.supplier_gstin && headerValues.supplier_gstin.trim() !== '') {
         await supabase
           .from('suppliers')
@@ -386,7 +399,6 @@ export default function PurchaseInvoicePage() {
                     <Select 
                       onValueChange={(val) => {
                         field.onChange(val);
-                        // <-- NEW: Auto-fill GSTIN when supplier is selected
                         const selectedSup = suppliers.find(s => s.id === val);
                         if (selectedSup) {
                           headerForm.setValue('supplier_gstin', selectedSup.gstin || '');
@@ -401,7 +413,6 @@ export default function PurchaseInvoicePage() {
                 />
               </div>
 
-              {/* <-- NEW: Supplier GSTIN Input Field --> */}
               <div className="space-y-1.5">
                 <Label className="text-[10px] font-bold text-muted-foreground uppercase">Supplier GSTIN</Label>
                 <Input 
@@ -435,7 +446,10 @@ export default function PurchaseInvoicePage() {
            <div className="grid grid-cols-2 sm:flex sm:flex-row items-center gap-2 w-full sm:w-auto">
               
               {/* --- GOLD INGESTION MODAL --- */}
-              <Dialog open={isGoldModalOpen} onOpenChange={setIsGoldModalOpen}>
+              <Dialog open={isGoldModalOpen} onOpenChange={(open) => {
+                setIsGoldModalOpen(open);
+                if (open && !goldForm.getValues('batch_number')) generateGoldBatchId();
+              }}>
                 <DialogTrigger asChild>
                   <Button variant="outline" size="sm" className="h-9 px-4 text-[10px] sm:text-xs font-bold uppercase border-border hover:bg-secondary w-full sm:w-auto">
                     <Coins className="mr-1.5 sm:mr-2 h-3.5 w-3.5 text-amber-500" /> Ingest Metal
@@ -449,7 +463,15 @@ export default function PurchaseInvoicePage() {
                   <div className="p-4 sm:p-6 space-y-6 bg-background max-h-[70vh] overflow-y-auto">
                     
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="space-y-1.5"><Label className="text-[10px] font-bold uppercase text-muted-foreground">Ref / Batch ID</Label><Input className="h-9 text-xs bg-muted/20" placeholder="e.g. GB-2026-001" {...goldForm.register('batch_number')} /></div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold uppercase text-muted-foreground flex justify-between">
+                          <span>Ref / Batch ID *</span>
+                          <button type="button" onClick={generateGoldBatchId} className="text-primary hover:underline flex items-center">
+                            <Wand2 className="w-3 h-3 mr-1" /> Auto
+                          </button>
+                        </Label>
+                        <Input className="h-9 text-xs bg-muted/20 font-mono font-bold" placeholder="e.g. GB-2026-001" {...goldForm.register('batch_number')} />
+                      </div>
                       <div className="space-y-1.5"><Label className="text-[10px] font-bold uppercase text-muted-foreground">Karatage / Purity</Label>
                         <Select onValueChange={(v) => { goldForm.setValue('purity_karat', v); const p = v==='24K'?99.9:v==='22K'?91.6:v==='18K'?75.0:58.3; goldForm.setValue('purity_percent', p); }} defaultValue="22K">
                           <SelectTrigger className="h-9 text-xs bg-muted/20"><SelectValue /></SelectTrigger>
@@ -465,7 +487,6 @@ export default function PurchaseInvoicePage() {
                       <div className="space-y-1.5"><Label className="text-[10px] font-bold uppercase text-muted-foreground">Rate (₹/g)</Label><Input type="number" className="h-9 text-xs bg-muted/20" {...goldForm.register('rate_per_g')} /></div>
                       <div className="space-y-1.5"><Label className="text-[10px] font-bold uppercase text-muted-foreground">Tax (%)</Label><Input type="number" className="h-9 text-xs bg-muted/20" {...goldForm.register('tax_percent')} /></div>
                       
-                      {/* Subtotal Display */}
                       <div className="col-span-2 sm:col-span-1 p-2.5 bg-secondary/50 rounded border border-border flex flex-col items-end justify-center h-14 sm:h-16">
                          <span className="text-[9px] font-bold uppercase text-muted-foreground mb-0.5">Value (Excl. Tax)</span>
                          <span className="text-sm font-black">₹{goldForm.getValues('total_amount').toLocaleString()}</span>
@@ -481,7 +502,10 @@ export default function PurchaseInvoicePage() {
               </Dialog>
 
               {/* --- DIAMOND INGESTION MODAL --- */}
-              <Dialog open={isDiamondModalOpen} onOpenChange={setIsDiamondModalOpen}>
+              <Dialog open={isDiamondModalOpen} onOpenChange={(open) => {
+                setIsDiamondModalOpen(open);
+                if (open && !diamondForm.getValues('lot_number')) generateDiamondLotId();
+              }}>
                 <DialogTrigger asChild>
                   <Button variant="outline" size="sm" className="h-9 px-4 text-[10px] sm:text-xs font-bold uppercase border-border hover:bg-secondary w-full sm:w-auto">
                     <Diamond className="mr-1.5 sm:mr-2 h-3.5 w-3.5 text-blue-500" /> Ingest Stone
@@ -496,13 +520,23 @@ export default function PurchaseInvoicePage() {
                     
                     {/* Identification Section */}
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                      <div className="space-y-1.5"><Label className="text-[10px] font-bold uppercase text-muted-foreground">Lot / Internal ID *</Label><Input className="h-9 text-xs bg-muted/20 font-mono uppercase" placeholder="e.g. DL-202" {...diamondForm.register('lot_number')} /></div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold uppercase text-muted-foreground flex justify-between">
+                          <span>Lot / Internal ID *</span>
+                          <button type="button" onClick={generateDiamondLotId} className="text-primary hover:underline flex items-center">
+                            <Wand2 className="w-3 h-3 mr-1" /> Auto
+                          </button>
+                        </Label>
+                        <Input className="h-9 text-xs bg-muted/20 font-mono font-bold uppercase" placeholder="e.g. DL-202" {...diamondForm.register('lot_number')} />
+                      </div>
                       <div className="space-y-1.5">
                         <Label className="text-[10px] font-bold uppercase text-muted-foreground">Classification</Label>
-                        <Select onValueChange={(v:any) => diamondForm.setValue('lot_type', v)} defaultValue="packet">
-                          <SelectTrigger className="h-9 text-xs bg-muted/20"><SelectValue /></SelectTrigger>
-                          <SelectContent><SelectItem value="packet" className="text-xs">Parcel / Packet</SelectItem><SelectItem value="single_piece" className="text-xs">Single Solitaire</SelectItem></SelectContent>
-                        </Select>
+                        <Controller control={diamondForm.control} name="lot_type" render={({ field }) => (
+                           <Select onValueChange={field.onChange} value={field.value}>
+                             <SelectTrigger className="h-9 text-xs bg-muted/20"><SelectValue /></SelectTrigger>
+                             <SelectContent><SelectItem value="packet" className="text-xs">Parcel / Packet</SelectItem><SelectItem value="single_piece" className="text-xs">Single Solitaire</SelectItem></SelectContent>
+                           </Select>
+                        )} />
                       </div>
                       <div>
                         <HybridSelect name="stone_type" label="Stone Type" options={STONE_TYPES} />
@@ -527,14 +561,28 @@ export default function PurchaseInvoicePage() {
                     {/* Financials Section */}
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 items-end">
                       <div className="space-y-1.5">
-                        <Label className="text-[10px] font-bold uppercase text-muted-foreground">Total Pieces</Label>
+                        <Label className="text-[10px] font-bold uppercase text-muted-foreground flex justify-between">
+                          <span>Total Pieces</span>
+                        </Label>
                         <Input type="number" min="1" className="h-9 text-xs bg-muted/20" disabled={dLotType === 'single_piece'} {...diamondForm.register('pieces')} />
+                        <p className="text-[9px] text-muted-foreground leading-tight">
+                          {dLotType === 'single_piece' ? 'Locked to 1 for Solitaires' : 'Total stone count in parcel'}
+                        </p>
                       </div>
-                      <div className="space-y-1.5"><Label className="text-[10px] font-bold uppercase text-muted-foreground">Total Carats (ct)</Label><Input type="number" step="0.001" className="h-9 text-xs font-bold bg-muted/20" {...diamondForm.register('weight_cts')} /></div>
-                      <div className="space-y-1.5"><Label className="text-[10px] font-bold uppercase text-muted-foreground">Rate (₹/ct)</Label><Input type="number" className="h-9 text-xs bg-muted/20" {...diamondForm.register('rate_per_ct')} /></div>
-                      <div className="space-y-1.5"><Label className="text-[10px] font-bold uppercase text-muted-foreground">Tax (%)</Label><Input type="number" className="h-9 text-xs bg-muted/20" {...diamondForm.register('tax_percent')} /></div>
+                      <div className="space-y-1.5 pb-[14px]">
+                        <Label className="text-[10px] font-bold uppercase text-muted-foreground">Total Carats (ct)</Label>
+                        <Input type="number" step="0.001" className="h-9 text-xs font-bold bg-muted/20" {...diamondForm.register('weight_cts')} />
+                      </div>
+                      <div className="space-y-1.5 pb-[14px]">
+                        <Label className="text-[10px] font-bold uppercase text-muted-foreground">Rate (₹/ct)</Label>
+                        <Input type="number" className="h-9 text-xs bg-muted/20" {...diamondForm.register('rate_per_ct')} />
+                      </div>
+                      <div className="space-y-1.5 pb-[14px]">
+                        <Label className="text-[10px] font-bold uppercase text-muted-foreground">Tax (%)</Label>
+                        <Input type="number" className="h-9 text-xs bg-muted/20" {...diamondForm.register('tax_percent')} />
+                      </div>
                       
-                      <div className="col-span-2 sm:col-span-1 p-2.5 bg-secondary/50 rounded border border-border flex flex-col items-end justify-center h-14 sm:h-16">
+                      <div className="col-span-2 sm:col-span-1 p-2.5 bg-secondary/50 rounded border border-border flex flex-col items-end justify-center h-14 sm:h-16 mb-[14px]">
                          <span className="text-[9px] font-bold uppercase text-muted-foreground mb-0.5">Value (Excl. Tax)</span>
                          <span className="text-sm font-black">₹{diamondForm.getValues('total_amount').toLocaleString()}</span>
                       </div>

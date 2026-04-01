@@ -26,7 +26,7 @@ import { useToast } from '@/hooks/use-toast'
 import { 
   MessageCircle, Users, Calendar, Phone, 
   UserPlus, Search, AlertCircle, Store, Gem, Sparkles, FilterX, RefreshCw,
-  Database
+  Database, IndianRupee, Star
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Separator } from '@radix-ui/react-separator'
@@ -44,6 +44,12 @@ interface CRMCustomer {
   birth_date?: string
   anniversary_date?: string
   warehouse_id?: string
+  // --- NEW FINANCIAL & LOYALTY FIELDS ---
+  store_credit_balance?: number
+  pavitram_points?: number
+  kitty_plan_name?: string
+  kitty_plan_status?: string
+  kitty_installment_amount?: number
 }
 
 interface Warehouse {
@@ -71,6 +77,7 @@ const WA_TEMPLATES = {
     { id: 'service', label: 'Free Polishing Reminder', text: "Hi {name}, it's been a while! Just a reminder that OSSAM JEWELS offers complimentary cleaning and polishing for your purchased items. Drop by anytime! 💎" },
     { id: 'birthday', label: 'Birthday Wish & Offer', text: "Happy Birthday Month, {name}! 🎉 Wishing you a sparkling year ahead. Visit OSSAM JEWELS this month for a special birthday discount on your next purchase!" },
     { id: 'anniversary', label: 'Anniversary Wish & Offer', text: "Happy Anniversary Month, {name}! 💖 Wishing you endless love and joy. Visit OSSAM JEWELS this month for a special anniversary discount!" },
+    { id: 'store_credit', label: 'Store Credit Reminder', text: "Hi {name}! Just a quick reminder from OSSAM JEWELS that you currently have Store Credit available in your account! Visit us to redeem it on our beautiful new collections! ✨" },
     { id: 'blank', label: 'Blank Message', text: "Hi {name}, " }
   ],
   Kitty: [
@@ -210,6 +217,12 @@ export default function CRMPage() {
         phone: newKittyForm.phone,
         city: newKittyForm.city,
         customer_status: 'Kitty Member',
+        // --- NEW: POPULATING THE KITTY PLAN COLUMNS DIRECTLY ---
+        kitty_plan_name: `Pavitram Diamond Kitty (₹${newKittyForm.monthly_amount})`,
+        kitty_plan_status: 'Active',
+        kitty_installment_amount: Number(newKittyForm.monthly_amount),
+        kitty_months_paid: 0,
+        // -------------------------------------------------------
         next_followup_date: nextInstallment.toISOString().split('T')[0],
         followup_reason: `Installment due (₹${newKittyForm.monthly_amount})`,
         last_interaction: `Joined Diamond Kitty Scheme on ${new Date(newKittyForm.start_date).toLocaleDateString()}`
@@ -258,6 +271,7 @@ export default function CRMPage() {
     if (activeAiFilter === 'cold' && statusKey === 'Lead') defaultTemplateId = 'cold_lead'
     if (activeAiFilter === 'birthday') defaultTemplateId = 'birthday'
     if (activeAiFilter === 'anniversary') defaultTemplateId = 'anniversary'
+    if (customer.store_credit_balance && customer.store_credit_balance > 0 && statusKey === 'Purchased') defaultTemplateId = 'store_credit'
 
     const tpl = WA_TEMPLATES[statusKey].find(t => t.id === defaultTemplateId) || WA_TEMPLATES[statusKey][0]
     
@@ -825,7 +839,7 @@ function CustomerListView({ data, loading, emptyMessage, onMessage, onSchedule, 
       {/* --- DESKTOP VIEW (Standard Table) --- */}
       <div className="hidden md:block overflow-x-auto flex-1 custom-scrollbar">
         <Table>
-          <TableHeader className="bg-slate-50 border-b border-slate-200 sticky top-0">
+          <TableHeader className="bg-slate-50 border-b border-slate-200 sticky top-0 z-10">
             <TableRow className="hover:bg-transparent border-none">
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 px-6">Client Profile</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Follow-up Details</TableHead>
@@ -838,7 +852,21 @@ function CustomerListView({ data, loading, emptyMessage, onMessage, onSchedule, 
               <TableRow key={row.id} className={cn("transition-colors border-b border-slate-100 hover:bg-slate-50/50", isKitty && "hover:bg-purple-50/50")}>
                 <TableCell className="px-6 py-3">
                   <div className="flex flex-col">
-                    <span className="font-semibold text-slate-900 text-sm leading-tight">{row.full_name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-900 text-sm leading-tight">{row.full_name}</span>
+                      {/* --- NEW FINANCIAL BADGES --- */}
+                      {Number(row.store_credit_balance) > 0 && (
+                        <Badge className="bg-emerald-50 text-emerald-600 border-emerald-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">
+                          <IndianRupee className="w-2.5 h-2.5" /> Credit
+                        </Badge>
+                      )}
+                      {Number(row.pavitram_points) > 0 && (
+                        <Badge className="bg-amber-50 text-amber-600 border-amber-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">
+                          <Star className="w-2.5 h-2.5" /> Points
+                        </Badge>
+                      )}
+                      {/* ---------------------------- */}
+                    </div>
                     <span className="text-[10px] text-slate-500 font-mono mt-0.5 flex items-center gap-1"><Phone className="w-2.5 h-2.5"/> {row.phone}</span>
                   </div>
                 </TableCell>
@@ -870,8 +898,22 @@ function CustomerListView({ data, loading, emptyMessage, onMessage, onSchedule, 
           <div key={row.id} className={cn("bg-white border rounded-xl p-4 shadow-sm flex flex-col gap-3", isKitty ? "border-purple-100" : "border-slate-200")}>
             <div className="flex justify-between items-start">
               <div>
-                <p className="font-bold text-slate-900 text-sm">{row.full_name}</p>
-                <p className="text-[11px] font-mono text-slate-500 mt-0.5 flex items-center gap-1"><Phone className="w-3 h-3"/> {row.phone}</p>
+                <p className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                  {row.full_name}
+                </p>
+                <div className="flex gap-1 mt-1">
+                  {Number(row.store_credit_balance) > 0 && (
+                    <Badge className="bg-emerald-50 text-emerald-600 border-emerald-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">
+                      <IndianRupee className="w-2.5 h-2.5" /> Credit
+                    </Badge>
+                  )}
+                  {Number(row.pavitram_points) > 0 && (
+                    <Badge className="bg-amber-50 text-amber-600 border-amber-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">
+                      <Star className="w-2.5 h-2.5" /> Points
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-[11px] font-mono text-slate-500 mt-1 flex items-center gap-1"><Phone className="w-3 h-3"/> {row.phone}</p>
               </div>
               <Button size="icon" variant="outline" className="h-8 w-8 text-[#1DA851] border-slate-200 rounded-lg hover:bg-[#25D366]/10 shrink-0" onClick={() => onMessage(row)}>
                 <MessageCircle className="h-4 w-4" />

@@ -78,7 +78,10 @@ export async function middleware(request: NextRequest) {
     const isMasterRoute = path.startsWith('/master')
     const isVoucherRoute = path.startsWith('/vouchers')
     const isOpsRoute = path.startsWith('/purchases') || path.startsWith('/manufacturing') || path.startsWith('/inventory') || path.startsWith('/transfer')
-    const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/crm')
+    
+    // ADDED: /transfer to the allowed routes for Branch/Shadow Managers
+    const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/crm') || path.startsWith('/transfer')
+    
     const isSalesRoute = path.startsWith('/discovery') || path.startsWith('/pos') || path.startsWith('/crm')
     
     // Everyone is allowed on the dashboard
@@ -101,13 +104,13 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
-    // Rule: Branch Manager
-    if (role === 'branch_manager' && !isBranchManagerRoute) {
+    // Rule: Branch Manager & Shadow Manager
+    if ((role === 'branch_manager' || role === 'shadow_manager') && !isBranchManagerRoute) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
-    // Rule: Sales Person
-    if (role === 'sales_person' && !isSalesRoute) {
+    // Rule: Sales Person & Shadow Sales
+    if ((role === 'sales_person' || role === 'shadow_sales') && !isSalesRoute) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
   }

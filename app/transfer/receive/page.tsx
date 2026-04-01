@@ -3,23 +3,9 @@
 import React, { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-
 import { 
-  PackageCheck, 
-  Search, 
-  ArrowLeft, 
-  CheckCircle2, 
-  ChevronRight, 
-  RefreshCw, 
-  Database,
-  Loader2,
-  Lock,
-  Warehouse,
-  Boxes,
-  Info,
-  Camera,
-  X,
-  QrCode
+  Search, ArrowLeft, RefreshCw, Loader2, Warehouse, 
+  Boxes, Info, Camera, X, QrCode, ShieldAlert, CheckSquare, Square, Wrench
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Scanner } from '@yudiel/react-qr-scanner'
@@ -27,268 +13,389 @@ import { Scanner } from '@yudiel/react-qr-scanner'
 import { supabase } from '@/lib/supabaseClient'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
-import { Separator } from '@/components/ui/separator'
 import { Badge } from '@/components/ui/badge'
-import { cn } from '@/lib/utils'
-
-// Helper to prevent Postgres UUID crashes
-const isUUID = (str: string) => {
-  const regexExp = /^[0-9a-fA-F]{8}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{4}\b-[0-9a-fA-F]{12}$/gi;
-  return regexExp.test(str);
-}
 
 export default function ReceiveStockPage() {
   const router = useRouter()
   const [searchInput, setSearchInput] = useState('')
   const [transferData, setTransferData] = useState<any>(null)
+  
+  // State Machine: 'search' -> 'verify_seal' -> 'manifest'
+  const [activeStep, setActiveStep] = useState<'search' | 'verify_seal' | 'manifest'>('search')
+  const [sealInput, setSealInput] = useState('')
+  const [tickedItems, setTickedItems] = useState<Set<string>>(new Set())
+  
   const [loading, setLoading] = useState(false)
-  const [isCommitting, setIsCommitting] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
   const [showScanner, setShowScanner] = useState(false)
 
-  const fetchTransferDetails = async (inputStr: string) => {
-    const cleanInput = inputStr.trim()
-    if (!cleanInput) return toast.error("Enter Transfer # or scan QR")
-    
+  const handleScanInput = async (inputStr: string) => {
+    const cleanInput = inputStr.trim().toUpperCase()
+    if (!cleanInput) return toast.error("Enter Hash or Scan QR")
+
+    // --- ANTI-LOOP FAST PATH ---
+    if (transferData) {
+      if (cleanInput === transferData.inner_qr_hash) {
+        if (transferData.status === 'in_transit') {
+          return toast.error("SECURITY HALT: You must break the seal first.")
+        }
+        if (transferData.status === 'seal_verified') {
+          setActiveStep('manifest')
+          setSearchInput('')
+          return toast.success("Inner Manifest Authenticated")
+        }
+      }
+      if (cleanInput === transferData.outer_qr_hash) {
+        if (transferData.status === 'completed' || transferData.status === 'disputed') {
+          return toast.error("This transfer is already closed.")
+        }
+        setActiveStep('verify_seal')
+        setSearchInput('')
+        return toast.success("Outer Label Authenticated")
+      }
+    }
+    // ---------------------------
+
     setLoading(true)
     
-    let query = supabase
+    const { data, error } = await supabase
       .from('stock_transfers')
-      .select('*, from:from_warehouse_id(name), to:to_warehouse_id(name), items:stock_transfer_item_lines(item_id, inventory_items(*))')
-      .eq('status', 'in_transit')
+      .select(`
+        *, 
+        from:from_warehouse_id(name), 
+        to:to_warehouse_id(name), 
+        item_lines:stock_transfer_item_lines(item_id, inventory_items(*)),
+        repair_lines:stock_transfer_repair_lines(repair_ticket_id, repair_tickets(*))
+      `)
+      .or(`outer_qr_hash.eq.${cleanInput},inner_qr_hash.eq.${cleanInput},transfer_number.eq.${cleanInput}`)
+      .maybeSingle()
 
-    if (isUUID(cleanInput)) {
-      query = query.eq('id', cleanInput)
-    } else {
-      query = query.eq('transfer_number', cleanInput.toUpperCase())
-    }
-
-    const { data, error } = await query.maybeSingle()
+    setLoading(false)
 
     if (error || !data) {
-      toast.error("Invalid Voucher, or stock is not in transit.")
-      setTransferData(null)
-    } else {
-      setTransferData(data)
-      setSearchInput(data.transfer_number) // Sync input with the actual number
-      toast.success("Voucher Authenticated!")
+      return toast.error("Invalid QR Code or Hash.")
     }
-    setLoading(false)
+
+    // Normalize items so the UI doesn't have to care if it's a repair or inventory
+    const isRepair = data.transfer_category === 'repair'
+    let normalizedItems: any[] = []
+    
+    if (isRepair && data.repair_lines) {
+      normalizedItems = data.repair_lines.map((line: any) => ({
+        id: line.repair_ticket_id,
+        barcode: line.repair_tickets.ticket_number,
+        category: line.repair_tickets.item_description,
+        weight: line.repair_tickets.gross_weight_g,
+        weightLabel: 'g Gross',
+        originalData: line.repair_tickets
+      }))
+    } else if (data.item_lines) {
+      normalizedItems = data.item_lines.map((line: any) => ({
+        id: line.item_id,
+        barcode: line.inventory_items.barcode,
+        category: line.inventory_items.item_category,
+        weight: line.inventory_items.net_weight_g,
+        weightLabel: 'g Net',
+        originalData: line.inventory_items
+      }))
+    }
+
+    data.normalizedItems = normalizedItems
+    setTransferData(data)
+
+    // LOGIC: Determine what was scanned
+    if (cleanInput === data.outer_qr_hash) {
+      if (data.status === 'completed' || data.status === 'disputed') {
+        return toast.error("This transfer is already closed.")
+      }
+      setActiveStep('verify_seal')
+      setSearchInput('')
+      toast.success("Outer Label Authenticated")
+    } 
+    else if (cleanInput === data.inner_qr_hash) {
+      if (data.status === 'in_transit') {
+        setTransferData(null)
+        return toast.error("SECURITY HALT: You must scan the Outer Label and break the seal first.")
+      }
+      if (data.status === 'seal_verified') {
+        setActiveStep('manifest')
+        setSearchInput('')
+        toast.success("Inner Manifest Authenticated")
+      }
+    } 
+    else {
+      toast.info(`Transfer ${data.transfer_number} Found. Scan physical labels to proceed.`)
+      setActiveStep('search') 
+      setSearchInput('')
+    }
   }
 
-  const onScanSuccess = (detectedCodes: any[]) => {
-    if (detectedCodes && detectedCodes.length > 0) {
-      setShowScanner(false)
-      fetchTransferDetails(detectedCodes[0].rawValue)
+  const verifyPhysicalSeal = async () => {
+    if (sealInput.trim() !== transferData.seal_number) {
+      return toast.error("SEAL MISMATCH. Contact Head Office immediately.")
     }
-  }
 
-  const handleConfirmReceive = async () => {
-    if (!transferData) return
-    setIsCommitting(true)
+    setIsProcessing(true)
     try {
-      const itemIds = transferData.items.map((i: any) => i.item_id)
+      const { error } = await supabase
+        .from('stock_transfers')
+        .update({ status: 'seal_verified' })
+        .eq('id', transferData.id)
+        
+      if (error) throw error
       
-      const { error: itemErr } = await supabase
-        .from('inventory_items')
-        .update({ 
-          warehouse_id: transferData.to_warehouse_id,
-          status: 'in_stock'
-        })
-        .in('id', itemIds)
+      setTransferData({...transferData, status: 'seal_verified'})
+      toast.success("Seal Broken Digitally. Open box and scan Inner QR.")
+      setActiveStep('search') 
+      setSearchInput('')
+    } catch (err: any) {
+      toast.error("Database Error: " + err.message)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
 
-      if (itemErr) throw itemErr
+  const toggleItem = (itemId: string) => {
+    const newSet = new Set(tickedItems)
+    if (newSet.has(itemId)) newSet.delete(itemId)
+    else newSet.add(itemId)
+    setTickedItems(newSet)
+  }
 
+  const toggleAllItems = () => {
+    if (tickedItems.size === transferData.normalizedItems.length) {
+      setTickedItems(new Set()) // Deselect all
+    } else {
+      setTickedItems(new Set(transferData.normalizedItems.map((i: any) => i.id))) // Select all
+    }
+  }
+
+  const handleFinalIngest = async () => {
+    setIsProcessing(true)
+    try {
+      const isDisputed = tickedItems.size < transferData.normalizedItems.length
+      const tickedArr = Array.from(tickedItems)
+      const isRepair = transferData.transfer_category === 'repair'
+
+      // 1. Ingest only ticked items into their respective tables
+      if (tickedArr.length > 0) {
+        if (isRepair) {
+           const sampleItem = transferData.normalizedItems.find((i: any) => i.id === tickedArr[0]);
+           const isReturningToOrigin = sampleItem?.originalData?.origin_warehouse_id === transferData.to_warehouse_id;
+           const newRepairStatus = isReturningToOrigin ? 'received_at_store' : 'received_at_ho';
+
+           // STRICT ERROR CHECKING ADDED HERE
+           const { error: repErr } = await supabase
+             .from('repair_tickets')
+             .update({ 
+                status: newRepairStatus, 
+                current_warehouse_id: transferData.to_warehouse_id,
+                updated_at: new Date().toISOString()
+             })
+             .in('id', tickedArr)
+             
+           if (repErr) throw new Error("Repair Update Failed: " + repErr.message)
+
+        } else {
+           // STRICT ERROR CHECKING ADDED HERE
+           const { error: invErr } = await supabase
+             .from('inventory_items')
+             .update({ warehouse_id: transferData.to_warehouse_id, status: 'in_stock' })
+             .in('id', tickedArr)
+             
+           if (invErr) throw new Error("Inventory Update Failed: " + invErr.message)
+        }
+      }
+
+      // 2. Update Transfer Status
       const { error: trfErr } = await supabase
         .from('stock_transfers')
         .update({ 
-          status: 'completed',
+          status: isDisputed ? 'disputed' : 'completed',
           received_at: new Date().toISOString() 
         })
         .eq('id', transferData.id)
-        
-      if (trfErr) throw trfErr
 
-      toast.success("Stock ingested into vault successfully!")
-      setTransferData(null)
-      setSearchInput('')
-      
+      if (trfErr) throw new Error("Transfer Update Failed: " + trfErr.message)
+
+      if (isDisputed) {
+        toast.error(`DISPUTE LOGGED: ${transferData.normalizedItems.length - tickedItems.size} items missing. Head Office alerted.`, { duration: 8000 })
+      } else {
+        toast.success(isRepair ? "Repairs successfully checked in!" : "Stock ingested perfectly into vault!")
+      }
+
       router.push('/transfer')
     } catch (err: any) {
-      toast.error(err.message || "Failed to update ledger") 
+      toast.error(err.message) 
     } finally {
-      setIsCommitting(false)
+      setIsProcessing(false)
     }
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#fafafa] font-sans selection:bg-indigo-100">
+    <div className="flex flex-col min-h-screen bg-[#fafafa]">
       
       {/* CAMERA OVERLAY */}
       {showScanner && (
         <div className="fixed inset-0 z-[100] bg-black flex flex-col">
           <div className="flex justify-between items-center p-4 bg-slate-900 text-white">
             <h2 className="text-sm font-bold uppercase tracking-widest flex items-center gap-2">
-              <QrCode className="w-4 h-4 text-indigo-400" /> Transfer Key Scanner
+              <QrCode className="w-4 h-4 text-indigo-400" /> Vault Scanner
             </h2>
-            <Button variant="ghost" size="icon" onClick={() => setShowScanner(false)} className="text-white hover:bg-white/20 rounded-full">
+            <Button variant="ghost" size="icon" onClick={() => setShowScanner(false)} className="text-white hover:bg-white/20">
               <X className="w-6 h-6" />
             </Button>
           </div>
-          <div className="flex-1 relative bg-black flex items-center justify-center">
-            <Scanner onScan={onScanSuccess} components={{ finder: true }} />
-          </div>
-          <div className="p-6 bg-slate-900 text-center text-xs text-slate-400 uppercase tracking-widest">
-            Center the Transfer Voucher QR code in the frame
+          <div className="flex-1 relative flex items-center justify-center">
+            <Scanner onScan={(codes) => {
+              if (codes.length > 0) {
+                setShowScanner(false);
+                handleScanInput(codes[0].rawValue);
+              }
+            }} components={{ finder: true }} />
           </div>
         </div>
       )}
 
-      {/* --- MODERN h-14 HEADER --- */}
-      <header className="h-14 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center sticky top-0 z-40 shadow-sm box-border">
-        <div className="w-full max-w-5xl mx-auto flex justify-between items-center gap-4">
+      {/* HEADER */}
+      <header className="h-14 bg-white border-b border-slate-200 px-4 flex items-center sticky top-0 z-40 shadow-sm">
+        <div className="w-full max-w-5xl mx-auto flex justify-between items-center">
           <div className="flex items-center gap-2.5">
             <Link href="/transfer">
-              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-slate-100 text-slate-500">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500">
                 <ArrowLeft className="h-4 w-4" />
               </Button>
             </Link>
-            <Separator orientation="vertical" className="h-4 bg-slate-200" />
-            <h1 className="text-sm font-semibold text-slate-900 tracking-tight leading-none">Receive Parcel</h1>
+            <h1 className="text-sm font-semibold text-slate-900 tracking-tight">Receive Parcel</h1>
           </div>
-
-          <div className="flex items-center gap-2">
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900"
-              onClick={() => { setTransferData(null); setSearchInput(''); }}
-            >
-              <RefreshCw className="h-3.5 w-3.5 sm:mr-1.5" />
-              <span className="hidden sm:inline">Reset</span>
-            </Button>
-            <div className="h-4 w-px bg-slate-200 mx-1" />
-            <Button variant="outline" size="sm" className="h-8 text-xs font-bold px-3 border-slate-200 bg-white text-slate-700 shadow-sm rounded-md pointer-events-none hidden sm:flex">
-              <Database className="h-3.5 w-3.5 mr-1.5 text-emerald-500" />
-              Vault Sync
-            </Button>
-          </div>
+          <Button 
+            variant="ghost" size="sm" className="text-xs font-semibold text-slate-500"
+            onClick={() => { setTransferData(null); setActiveStep('search'); setSearchInput(''); }}
+          >
+            <RefreshCw className="h-3.5 w-3.5 sm:mr-1.5" /> Reset
+          </Button>
         </div>
       </header>
 
-      <main className="p-4 md:p-8 max-w-xl w-full mx-auto space-y-6 animate-in fade-in duration-500">
+      <main className="p-4 md:p-8 max-w-xl w-full mx-auto space-y-6">
         
-        {/* PACKAGE SEARCH & SCAN */}
-        <div className={cn(
-          "bg-white border rounded-xl overflow-hidden shadow-sm transition-all duration-300",
-          transferData ? "border-emerald-200" : "border-slate-200"
-        )}>
-          <div className="bg-slate-50/50 py-3 px-5 border-b border-inherit">
-            <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Package Authentication</h3>
-          </div>
-          <div className="p-5">
-            <div className="flex gap-2">
-              <div className="relative flex-1 group">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 group-focus-within:text-indigo-600 transition-colors" />
+        {/* SCANNER INPUT */}
+        {activeStep === 'search' && (
+          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+            <div className="bg-slate-50/50 py-3 px-5 border-b">
+              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">QR Verification</h3>
+            </div>
+            <div className="p-5 flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                 <Input 
-                  placeholder="Transfer ID or Scan..." 
-                  className="pl-9 h-10 text-sm font-mono bg-white border-slate-200 focus-visible:ring-indigo-500 focus-visible:border-indigo-500 uppercase rounded-lg"
+                  placeholder="Scan QR or Enter Hash..." 
+                  className="pl-9 h-10 font-mono text-sm uppercase"
                   value={searchInput} 
                   onChange={(e) => setSearchInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && fetchTransferDetails(searchInput)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleScanInput(searchInput)}
                 />
               </div>
-              <Button onClick={() => setShowScanner(true)} variant="outline" className="h-10 w-10 p-0 border-slate-200 hover:bg-slate-50 shadow-sm rounded-lg shrink-0">
+              <Button onClick={() => setShowScanner(true)} variant="outline" className="h-10 w-10 p-0 shadow-sm">
                 <Camera className="h-4 w-4 text-slate-600" />
               </Button>
-              <Button onClick={() => fetchTransferDetails(searchInput)} disabled={loading} className="h-10 px-5 font-bold text-xs uppercase bg-slate-900 hover:bg-slate-800 text-white rounded-lg shadow-sm">
+              <Button onClick={() => handleScanInput(searchInput)} disabled={loading} className="h-10 px-5 font-bold text-xs uppercase bg-slate-900 text-white">
                 {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify"}
               </Button>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* VERIFIED PARCEL CARD */}
-        {transferData && (
-          <div className="space-y-6 animate-in slide-in-from-bottom-4 duration-300">
-            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-              <div className="bg-emerald-50/50 py-3 px-5 border-b border-emerald-100 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                   <Lock className="h-3.5 w-3.5 text-emerald-600" />
-                   <h3 className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Parcel Authenticated</h3>
-                </div>
-                <Badge variant="outline" className="text-[9px] font-bold uppercase bg-white border-emerald-200 text-emerald-600 rounded-md">Verified</Badge>
+        {/* STEP 1: SEAL VERIFICATION */}
+        {activeStep === 'verify_seal' && transferData && (
+          <div className="bg-white border-2 border-orange-200 rounded-xl shadow-sm overflow-hidden animate-in fade-in">
+             <div className="bg-orange-50 py-3 px-5 border-b border-orange-100 flex items-center justify-between">
+               <div className="flex items-center gap-2">
+                  <ShieldAlert className="h-4 w-4 text-orange-600" />
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-orange-700">Outer Seal Verification</h3>
+               </div>
+               <Badge className="bg-orange-600">Action Required</Badge>
+             </div>
+             <div className="p-6 text-center space-y-4">
+                <p className="text-sm text-slate-600">Enter the physical seal number printed on the box to break the digital lock.</p>
+                <Input 
+                  placeholder="e.g. SL-123456" 
+                  className="h-14 text-center text-xl font-mono uppercase font-bold tracking-widest"
+                  value={sealInput}
+                  onChange={(e) => setSealInput(e.target.value.toUpperCase())}
+                />
+                <Button 
+                  onClick={verifyPhysicalSeal} 
+                  disabled={isProcessing || !sealInput} 
+                  className="w-full h-12 bg-orange-600 hover:bg-orange-700 font-bold uppercase tracking-widest text-xs"
+                >
+                  {isProcessing ? <Loader2 className="h-4 w-4 animate-spin" /> : "Verify & Break Seal"}
+                </Button>
+             </div>
+          </div>
+        )}
+
+        {/* STEP 2: MANIFEST TICKING */}
+        {activeStep === 'manifest' && transferData && (
+          <div className={`bg-white border-2 rounded-xl shadow-sm overflow-hidden animate-in fade-in ${transferData.transfer_category === 'repair' ? 'border-purple-200' : 'border-indigo-200'}`}>
+            <div className={`py-3 px-5 border-b flex items-center justify-between ${transferData.transfer_category === 'repair' ? 'bg-purple-50 border-purple-100' : 'bg-indigo-50 border-indigo-100'}`}>
+              <div className="flex items-center gap-2">
+                {transferData.transfer_category === 'repair' ? <Wrench className="h-4 w-4 text-purple-600" /> : <Boxes className="h-4 w-4 text-indigo-600" />}
+                <h3 className={`text-[10px] font-black uppercase tracking-widest ${transferData.transfer_category === 'repair' ? 'text-purple-700' : 'text-indigo-700'}`}>
+                  {transferData.transfer_category === 'repair' ? 'Repair Verification' : 'Inventory Verification'}
+                </h3>
               </div>
-              
-              <div className="p-0">
-                <div className="p-8 border-b border-slate-100 text-center">
-                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Stock Transfer Number</p>
-                   <p className="text-4xl font-mono font-black text-slate-900 tracking-tighter">{transferData.transfer_number}</p>
-                </div>
-
-                <div className="grid grid-cols-2">
-                  <div className="p-5 border-r border-b border-slate-100">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase leading-none block mb-2">Origin</label>
-                    <div className="flex items-center gap-2">
-                       <Warehouse className="h-4 w-4 text-slate-300" />
-                       <span className="text-sm font-semibold text-slate-700">{transferData.from.name}</span>
-                    </div>
-                  </div>
-                  <div className="p-5 border-b border-slate-100 bg-indigo-50/20">
-                    <label className="text-[10px] font-bold text-indigo-400 uppercase leading-none block mb-2">Destination</label>
-                    <div className="flex items-center gap-2">
-                       <Warehouse className="h-4 w-4 text-indigo-500" />
-                       <span className="text-sm font-semibold text-indigo-900">{transferData.to.name}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="p-5 space-y-4">
-                   <div className="flex items-center gap-2">
-                      <Boxes className="h-4 w-4 text-slate-400" />
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Inventory Manifest ({transferData.items.length})</span>
-                   </div>
-                   
-                   <div className="max-h-[220px] overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
-                      {transferData.items.map((line: any) => (
-                        <div key={line.item_id} className="flex items-center justify-between p-3 rounded-lg border border-slate-100 bg-slate-50/50">
-                          <div className="flex flex-col">
-                            <span className="text-xs font-mono font-bold text-slate-800">{line.inventory_items.barcode}</span>
-                            <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-tight">{line.inventory_items.item_category}</span>
-                          </div>
-                          <div className="text-right">
-                            <span className="text-xs font-bold text-slate-900">{line.inventory_items.net_weight_g}g</span>
-                            <span className="block text-[9px] text-slate-400 font-medium">Net Weight</span>
-                          </div>
-                        </div>
-                      ))}
-                   </div>
-                </div>
-
-                <div className="p-6 bg-slate-50 border-t border-slate-200">
-                  <Button 
-                    onClick={handleConfirmReceive} 
-                    className="w-full h-12 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs uppercase tracking-widest shadow-md rounded-xl transition-all"
-                    disabled={isCommitting}
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className={`h-7 text-[10px] font-bold ${transferData.transfer_category === 'repair' ? 'border-purple-300 text-purple-700' : 'border-indigo-300 text-indigo-700'}`}
+                onClick={toggleAllItems}
+              >
+                {tickedItems.size === transferData.normalizedItems.length ? "Deselect All" : "Select All"}
+              </Button>
+            </div>
+            
+            <div className="p-4 space-y-2 max-h-[400px] overflow-y-auto custom-scrollbar">
+              {transferData.normalizedItems.map((item: any) => {
+                const isTicked = tickedItems.has(item.id)
+                return (
+                  <div 
+                    key={item.id} 
+                    onClick={() => toggleItem(item.id)}
+                    className={`flex items-center gap-4 p-4 rounded-lg border cursor-pointer transition-colors ${isTicked ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-200 hover:border-indigo-300'}`}
                   >
-                    {isCommitting ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Updating Vault...
-                      </>
-                    ) : (
-                      "Ingest Stock into Vault"
-                    )}
-                  </Button>
-                  
-                  <div className="mt-4 flex items-start gap-2.5 text-indigo-600 px-1 bg-white p-3 rounded-lg border border-indigo-100">
-                    <Info className="h-4 w-4 mt-0.5 shrink-0" />
-                    <p className="text-[10px] font-bold uppercase leading-tight tracking-tight">
-                      System Action: By confirming, items will be moved to <span className="underline italic">in_stock</span> and the branch ID will be updated.
-                    </p>
+                    {isTicked ? <CheckSquare className="h-6 w-6 text-emerald-600 shrink-0" /> : <Square className="h-6 w-6 text-slate-300 shrink-0" />}
+                    <div className="flex-1">
+                      <p className="text-sm font-mono font-bold text-slate-900">{item.barcode}</p>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{item.category}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-sm font-bold text-slate-900">{item.weight}</p>
+                      <p className="text-[9px] text-slate-400 font-bold uppercase tracking-widest">{item.weightLabel}</p>
+                    </div>
                   </div>
-                </div>
-              </div>
+                )
+              })}
+            </div>
+
+            <div className="p-6 bg-slate-50 border-t border-slate-200">
+              <Button 
+                onClick={handleFinalIngest} 
+                className={`w-full h-12 font-bold text-xs uppercase tracking-widest shadow-md rounded-xl transition-all ${
+                  tickedItems.size === transferData.normalizedItems.length 
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white' 
+                  : 'bg-red-600 hover:bg-red-700 text-white'
+                }`}
+                disabled={isProcessing || tickedItems.size === 0}
+              >
+                {isProcessing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {tickedItems.size === transferData.normalizedItems.length ? "Confirm Full Receipt" : "Submit WITH MISSING ITEMS"}
+              </Button>
+              {tickedItems.size > 0 && tickedItems.size < transferData.normalizedItems.length && (
+                 <p className="text-[10px] text-red-600 text-center font-bold mt-3 uppercase tracking-widest">
+                   Warning: Submitting now will flag a discrepancy to the Head Office.
+                 </p>
+              )}
             </div>
           </div>
         )}

@@ -1,1117 +1,274 @@
 'use client'
 
-import React, { useEffect, useState, useRef } from 'react'
-import { format } from 'date-fns' 
-
+import React, { useState, useEffect } from 'react'
 import { useAuth } from '@/hooks/useAuth'
-import { useStoreLocation } from '@/hooks/useStoreLocation' 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
-import { cn } from "@/lib/utils"
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-
-import { 
-  Select, SelectContent, SelectItem, 
-  SelectTrigger, SelectValue 
-} from '@/components/ui/select'
-import { 
-  Dialog, DialogContent, DialogHeader, 
-  DialogTitle, DialogFooter 
-} from '@/components/ui/dialog'
-import { supabase } from '@/lib/supabaseClient'
-import { fetchCustomers } from '@/lib/api'
+import { useStoreLocation } from '@/hooks/useStoreLocation'
 import { useRpc } from '@/hooks/useRpc'
-import { toast } from 'sonner'
-import { useReactToPrint } from 'react-to-print'
-import { 
-  Trash2, ScanLine, Camera, X, Receipt, Search, Plus, CheckCircle2, Printer,
-  Banknote, CreditCard, QrCode, Building, RefreshCw, ChevronDown, ChevronUp, 
-  Ticket, ShoppingCart, FileText, Hammer, Truck, AlertTriangle, ShieldAlert,
-  Loader2
-} from 'lucide-react'
+import { Loader2 } from 'lucide-react'
+import { fetchCustomers } from '@/lib/api'
+import { toast } from 'sonner' // Added for the toast notification
 
-// IMPORT THE SCANNER COMPONENT
-import { Scanner } from '@yudiel/react-qr-scanner'
+// Hooks
+import { useCart } from '@/hooks/useCart'
+import { useCheckout } from '@/hooks/useCheckout'
 
-// IMPORT THE SHARED PRINT COMPONENT
-import { InvoicePrintTemplate } from '@/components/InvoicePrintTemplate'
-import { Label } from '@/components/ui/label'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+// Components
+import { POSHeader } from '@/components/pos/POSHeader'
+import { ModeTabs } from '@/components/pos/ModeTabs'
+import { CartPanel } from '@/components/pos/CartPanel'
+import { CheckoutSidebar } from '@/components/pos/CheckoutSidebar'
+import { CustomOrderForm } from '@/components/pos/CustomOrderForm'
+import { PosModals } from '@/components/pos/PosModals'
+import { ReturnIntakeForm } from '@/components/pos/ReturnIntakeForm'
+import { RepairIntakeForm } from '@/components/pos/RepairIntakeForm'
 
-type BillingMode = 'normal' | 'estimate' | 'custom' | 'challan'
-
-interface CartItem {
-  id: string
-  barcode: string
-  sku_reference?: string
-  metal_type: string
-  mrp: number
-  purity_karat?: string
-  hsn_code?: string
-  gross_weight_g?: number
-  net_weight_g?: number
-  total_stone_weight_cts?: number
-  tax_percent?: number
-  status?: string
-  warehouse_id?: string
-}
-
-interface Customer {
-  id: string
-  full_name: string
-  phone: string
-  city?: string
-  address?: string
-  pan_no?: string
-  birth_date?: string
-}
+// Strict Types
+export type BillingMode = 'normal' | 'custom' | 'challan' | 'repair' | 'return'
 
 export default function POSPage() {
   const { appUser, loading } = useAuth()
   const { callRpc } = useRpc()
-  
-  // --- LOCATION HOOK ---
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
-  const hasAutoScanned = useRef(false)
-
-  // --- CORE SYSTEM STATE ---
+  
+  // Core UI State
   const [mode, setMode] = useState<BillingMode>('normal')
-  const [warehouses, setWarehouses] = useState<{id: string, name: string}[]>([])
-  const [cart, setCart] = useState<CartItem[]>([])
-  const [paymentMode, setPaymentMode] = useState('cash')
-  const [isProcessing, setIsProcessing] = useState(false)
-  
-  // --- SCANNER STATE ---
   const [showScanner, setShowScanner] = useState(false)
-
-  // --- CUSTOM ORDER STATE ---
-  const [customOrderDetails, setCustomOrderDetails] = useState({
-    designCode: '', category: '', expectedGoldWt: '', expectedDiamondCts: '', estimatedValue: '', advancePayment: ''
-  })
-
-  // --- CUSTOMER STATE ---
-  const [customers, setCustomers] = useState<Customer[]>([])
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
-  const [searchCustomer, setSearchCustomer] = useState('')
-  const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false)
-  const [newCustForm, setNewCustForm] = useState({ 
-    full_name: '', phone: '', city: '', address: '', pan_no: '', birth_date: '' 
-  })
-  
-  // --- INPUT STATE ---
-  const [itemSearchTerm, setItemSearchTerm] = useState('')
-  const [searchResults, setSearchResults] = useState<CartItem[]>([])
-  
-  // --- ADJUSTMENTS STATE ---
-  const [discountType, setDiscountType] = useState<'percent' | 'flat'>('percent')
-  const [discountValue, setDiscountValue] = useState<string>('')
-  
-  // Voucher State
-  const [voucherCode, setVoucherCode] = useState('')
-  const [activeVoucher, setActiveVoucher] = useState<{ id: string, code: string, amount: number } | null>(null)
-  const [handlingFee, setHandlingFee] = useState<string>('0')
-
-  // Exchange State (Now uses Invoice Number)
-  const [isExchangeOpen, setIsExchangeOpen] = useState(false)
-  const [exchangeMode, setExchangeMode] = useState<'buyback' | 'exchange'>('exchange')
-  const [exchangeHistoricalValue, setExchangeHistoricalValue] = useState<number>(0)
-  const [exchangeInvoiceNo, setExchangeInvoiceNo] = useState<string>('')
-  const [exchangeValue, setExchangeValue] = useState<string>('')
-  const [exchangeNotes, setExchangeNotes] = useState<string>('')
-  
-  // --- PRINT STATE ---
-  const printRef = useRef<HTMLDivElement>(null)
-  const [showPrintModal, setShowPrintModal] = useState(false)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
-  const [previewInvoiceData, setPreviewInvoiceData] = useState<any>(null) // Holds the draft view
+  const [showPrintModal, setShowPrintModal] = useState(false)
   const [lastInvoiceData, setLastInvoiceData] = useState<any>(null)
-
-  const handlePrint = useReactToPrint({ contentRef: printRef })
-
+  const [isEstimateCheckout, setIsEstimateCheckout] = useState(false)
   
+  // NEW: State to hold the rich warehouse data (for printing addresses)
+  const [allBranches, setAllBranches] = useState<any[]>([])
 
-  // UI Theme Config (Windows 10 / Modern Enterprise Style)
-  const modeConfig = {
-    normal: { bg: 'bg-[#0078D7]', border: 'border-[#0078D7]', hover: 'hover:bg-[#005A9E]', text: 'text-[#0078D7]', badge: 'Tax Invoice' },
-    estimate: { bg: 'bg-[#D83B01]', border: 'border-[#D83B01]', hover: 'hover:bg-[#A80000]', text: 'text-[#D83B01]', badge: 'Proforma Estimate' },
-    custom: { bg: 'bg-[#881798]', border: 'border-[#881798]', hover: 'hover:bg-[#5C005C]', text: 'text-[#881798]', badge: 'Advance Receipt' },
-    challan: { bg: 'bg-[#107C10]', border: 'border-[#107C10]', hover: 'hover:bg-[#0B5A0B]', text: 'text-[#107C10]', badge: 'Delivery Challan' },
-  }
-  const currentTheme = modeConfig[mode]
+  const [repairDetails, setRepairDetails] = useState<any>({
+    itemDescription: '',
+    grossWeight: '',
+    purity: '22K',
+    defectNotes: '',
+    estimatedCost: '',
+    advancePaid: '',
+    expectedDelivery: '',
+    conditionPhotoUrl: null
+  })
 
-  // --- INITIALIZATION ---
+  // Form & Customer State (Managed here to feed both Sidebar and Checkout Hook)
+  const [customers, setCustomers] = useState<any[]>([])
+  const [selectedCustomer, setSelectedCustomer] = useState<any>(null)
+  const [customOrderDetails, setCustomOrderDetails] = useState({ 
+    design_reference: '', 
+    item_category: '', 
+    expected_gold_g: '', 
+    expected_diamond_cts: '', 
+    estimated_value: '', 
+    advance_paid: '' 
+  })
+  
+  // State for the Buyback/Return form
+  const [returnDetails, setReturnDetails] = useState({
+    invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0
+  })
+
+  // Fetch Customers on Mount
   useEffect(() => {
-    const init = async () => {
-      if (!appUser) return
+    const initData = async () => {
+      if (!appUser?.company_id) return
       try {
-        const { data: whData } = await supabase.from('warehouses').select('id, name').eq('company_id', appUser.company_id).eq('is_active', true).order('name')
-        if (whData && whData.length > 0) {
-          setWarehouses(whData)
-          if (!selectedLocation && isHQ) {
-            setSelectedLocation(whData[0].id)
-          }
-        }
         const { data: custData } = await fetchCustomers(appUser.company_id)
         setCustomers(custData || [])
       } catch (err) {
-        toast.error('Failed to load initial data.')
+        console.error("Failed to load customers", err)
       }
     }
-    init()
+    initData()
   }, [appUser])
 
-  // --- URL PARAMETER AUTO-SCANNER ---
- // --- URL PARAMETER AUTO-SCANNER ---
- useEffect(() => {
-  // If we have already scanned, or if prerequisites aren't ready, exit immediately.
-  if (hasAutoScanned.current || !appUser || !selectedLocation || warehouses.length === 0) return;
+  // 1. Initialize Cart 
+  // IMPORTANT: Ensure `setCart` is exported from your `useCart` hook!
+  const {
+    cart, setCart, subtotal, itemSearchTerm, setItemSearchTerm, searchResults,
+    processScannedItem, handleScanResult, clearCart, removeFromCart
+  } = useCart(appUser?.company_id, selectedLocation, mode)
 
-  const urlParams = new URLSearchParams(window.location.search);
-  const barcodeFromUrl = urlParams.get('barcode');
+  // 2. Initialize Checkout 
+  const checkoutHook = useCheckout({
+    appUser, 
+    selectedLocation, 
+    mode, 
+    callRpc, 
+    cart, 
+    subtotal,
+    selectedCustomer, 
+    customOrderDetails,
+    repairDetails,     
+    returnDetails,    
+    allBranches       
+  })
 
-  if (barcodeFromUrl) {
-    hasAutoScanned.current = true; // <--- Mark as scanned IMMEDIATELY to prevent double-firing
-
-    // Small delay to ensure state (like selectedLocation) has settled
-    setTimeout(() => {
-      handleScanResult(barcodeFromUrl);
-      
-      // Clean up the URL so it doesn't re-scan on refresh
-      window.history.replaceState({}, '', window.location.pathname);
-    }, 500); 
-  }
-}, [appUser, selectedLocation, warehouses]);
-
-  // --- CUSTOMER LOGIC ---
-  const handleAddCustomer = async () => {
-    if (!newCustForm.full_name || !newCustForm.phone) return toast.error('Name and Phone are required.')
-    if (!selectedLocation || selectedLocation === 'ALL') return toast.error('Please select a specific branch first.')
-    
-    try {
-      const { data, error } = await supabase.from('customers').insert([{
-        company_id: appUser?.company_id,
-        warehouse_id: selectedLocation,
-        full_name: newCustForm.full_name,
-        phone: newCustForm.phone,
-        city: newCustForm.city || null,
-        address: newCustForm.address || null,
-        pan_no: newCustForm.pan_no?.toUpperCase() || null,
-        birth_date: newCustForm.birth_date || null
-      }]).select().single()
-
-      if (error) throw error
-
-      setCustomers(prev => [...prev, data])
-      setSelectedCustomer(data)
-      setIsAddCustomerOpen(false)
-      setSearchCustomer('')
-      setNewCustForm({ full_name: '', phone: '', city: '', address: '', pan_no: '', birth_date: '' })
-      toast.success('New client registered.')
-    } catch (err: any) {
-      toast.error(err.message)
-    }
+  // Global Session Wipe
+  const handleWipeSession = () => {
+    clearCart()
+    checkoutHook.resetCheckoutState()
+    setSelectedCustomer(null)
+    setCustomOrderDetails({ design_reference: '', item_category: '', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '' })
+    setReturnDetails({ invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0 })
+    setRepairDetails({ itemDescription: '', grossWeight: '', purity: '22K', defectNotes: '', estimatedCost: '', advancePaid: '', expectedDelivery: '', conditionPhotoUrl: null })
   }
 
-  // --- ITEM SCANNING & SEARCH ---
-  useEffect(() => {
-    const searchItems = async () => {
-      if (!itemSearchTerm.trim() || !appUser || !selectedLocation) return setSearchResults([])
-      
-      let query = supabase.from('inventory_items')
-        .select('id, barcode, sku_reference, metal_type, mrp, status, warehouse_id, purity_karat, hsn_code, gross_weight_g, net_weight_g, total_stone_weight_cts')
-        .eq('company_id', appUser.company_id)
-        .eq('status', 'in_stock') 
-        .or(`barcode.ilike.%${itemSearchTerm.trim()}%,sku_reference.ilike.%${itemSearchTerm.trim()}%`)
-        .limit(15)
-
-      // SECURITY: If not HQ "ALL" mode, restrict search exclusively to their branch
-      if (selectedLocation !== 'ALL') {
-        query = query.eq('warehouse_id', selectedLocation)
-      }
-
-      const { data, error } = await query
-      if (error) console.error("Search Error:", error)
-      setSearchResults(data || [])
-    }
-    const timeoutId = setTimeout(() => searchItems(), 300)
-    return () => clearTimeout(timeoutId)
-  }, [itemSearchTerm, appUser, selectedLocation])
-
-  const processScannedItem = (item: CartItem) => {
-    if (cart.find(c => c.barcode === item.barcode)) return toast.error(`Item ${item.barcode} is already in the cart.`)
-    
-    // SECURITY: Ensure item belongs to the selected terminal (Unless HO is in ALL mode)
-    if (selectedLocation !== 'ALL' && item.warehouse_id !== selectedLocation) {
-       return toast.error(`Cross-Branch Error: Item resides in a different location.`)
-    }
-    
-    if (mode !== 'challan' && item.status !== 'in_stock') return toast.error(`Cannot sell item. Current status is: ${item.status?.replace('_', ' ').toUpperCase()}`)
-
-    setCart(prev => [{...item, tax_percent: 3, mrp: item.mrp || 0}, ...prev])
-    toast.success(`${item.barcode} added to bill.`)
-    setItemSearchTerm('')
-    setSearchResults([]) 
+  // Pre-flight check before showing the preview modal
+  const handlePreviewRequest = (isEstimate: boolean = false) => {
+    setIsEstimateCheckout(isEstimate) 
+    setShowPreviewModal(true)
   }
 
-  const handleScanResult = async (barcode: string) => {
-    if (!barcode.trim()) return toast.error('No barcode detected.')
-    if (!selectedLocation || selectedLocation === 'ALL') return toast.error('Select a Vault Location first.')
-
-    try {
-      const { data: item, error } = await supabase.from('inventory_items')
-        .select('id, barcode, sku_reference, metal_type, mrp, status, warehouse_id, purity_karat, hsn_code, gross_weight_g, net_weight_g, total_stone_weight_cts')
-        .ilike('barcode', barcode.trim())
-        .eq('company_id', appUser?.company_id)
-        .maybeSingle()
-
-      if (error) throw error
-      if (!item) return toast.error(`Barcode doesn't exist in registry.`)
-
-      processScannedItem(item)
-    } catch (err) {
-      toast.error('Database query failed.')
-    }
+  if (loading || !appUser) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-[#0078D7]" />
+      </div>
+    )
   }
-
-  const onScanSuccess = (detectedCodes: any[]) => {
-    if (detectedCodes && detectedCodes.length > 0) {
-      setShowScanner(false)
-      handleScanResult(detectedCodes[0].rawValue)
-    }
-  }
-
-  // --- EXCHANGE & BUYBACK LOGIC (INVOICE BASED) ---
-  const handleFetchExchangeItem = async () => {
-    if (!exchangeInvoiceNo.trim() || !appUser) return toast.error('Enter an invoice number.')
-    try {
-      const { data: invoiceData, error: invErr } = await supabase.from('invoices') // <-- UPDATED TABLE
-        .select('id, invoice_number, final_total') // <-- UPDATED COLUMN
-        .ilike('invoice_number', exchangeInvoiceNo.trim())
-        .eq('company_id', appUser.company_id)
-        .maybeSingle()
-
-      if (invErr) throw invErr
-      if (!invoiceData) return toast.error('Invoice not found in registry.')
-
-      const historicalValue = invoiceData.final_total || 0 // <-- UPDATED COLUMN
-      setExchangeHistoricalValue(historicalValue) 
-
-      const multiplier = exchangeMode === 'buyback' ? 0.70 : 1.00
-      const finalVal = historicalValue * multiplier
-
-      setExchangeValue(finalVal.toString())
-      setExchangeNotes(`${exchangeMode.toUpperCase()} (${multiplier*100}%): INV [${invoiceData.invoice_number}]`)
-      toast.success(`Found Invoice Value: ₹${historicalValue.toLocaleString()}. Calculated ${multiplier*100}% = ₹${finalVal.toLocaleString()}`)
-    } catch (err) {
-      toast.error('Failed to fetch original invoice.')
-    }
-  }
-
-  useEffect(() => {
-    if (exchangeHistoricalValue > 0) {
-      const multiplier = exchangeMode === 'buyback' ? 0.70 : 1.00
-      const finalVal = exchangeHistoricalValue * multiplier
-      setExchangeValue(finalVal.toString())
-      setExchangeNotes(prev => prev.replace(/BUYBACK \(70%\)|EXCHANGE \(100%\)/, `${exchangeMode.toUpperCase()} (${multiplier*100}%)`))
-    }
-  }, [exchangeMode, exchangeHistoricalValue])
-
-  // --- VOUCHER LOGIC ---
-  const handleApplyVoucher = async () => {
-    if (!voucherCode.trim()) return;
-    
-    let codeToSearch = voucherCode.trim();
-    if (codeToSearch.includes('?code=')) {
-      codeToSearch = codeToSearch.split('?code=')[1].split('&')[0];
-    }
-    
-    try {
-      const { data: voucher, error } = await supabase
-        .from('vouchers')
-        .select(`
-          id, code, discount_value, handling_fee, status, customer_id,
-          customers ( id, full_name, phone )
-        `)
-        .ilike('code', codeToSearch) 
-        .maybeSingle()
-      
-      if (error) throw error
-      if (!voucher) return toast.error('Voucher code not found in system.')
-      
-      if (voucher.status !== 'registered') {
-        return toast.error(`Voucher is ${voucher.status.toUpperCase()}. It must be activated online first.`)
-      }
-
-      if (voucher.customer_id && voucher.customers) {
-        const rawCust = Array.isArray(voucher.customers) ? voucher.customers[0] : voucher.customers;
-        const vCustomer = rawCust as { id: string, full_name: string, phone: string };
-
-        if (!selectedCustomer) {
-          setSelectedCustomer({
-            id: vCustomer.id,
-            full_name: vCustomer.full_name,
-            phone: vCustomer.phone
-          })
-          toast.success(`Customer auto-loaded from voucher profile.`)
-        } else if (selectedCustomer.id !== voucher.customer_id) {
-          return toast.error(`Fraud Alert: Voucher registered to ${vCustomer.full_name}.`)
-        }
-      }
-
-      setActiveVoucher({ id: voucher.id, code: voucher.code, amount: voucher.discount_value })
-      setHandlingFee(voucher.handling_fee?.toString() || '0') 
-      setVoucherCode('')
-      toast.success(`Valid Voucher Applied! ₹${voucher.discount_value.toLocaleString()} Credit.`)
-    } catch (err) {
-      toast.error('Failed to validate voucher code.')
-    }
-  }
-
-  // --- MATH ENGINE CALCULATIONS ---
-  const subtotal = cart.reduce((sum, item) => sum + (item.mrp || 0), 0)
-  const discountNum = parseFloat(discountValue) || 0
-  const discountAmount = discountType === 'percent' ? (subtotal * discountNum) / 100 : discountNum
-  
-  let baseTaxable = Math.max(0, subtotal - discountAmount)
-  const exchangeNum = parseFloat(exchangeValue) || 0
-  baseTaxable = Math.max(0, baseTaxable - exchangeNum)
-
-  const voucherAmount = activeVoucher ? activeVoucher.amount : 0
-  const handlingAmt = parseFloat(handlingFee) || 0
-  
-  let finalTaxableValue = 0
-  let appliedVoucherAmount = 0
-
-  if (activeVoucher) {
-      if (voucherAmount > baseTaxable) {
-          finalTaxableValue = handlingAmt;
-          appliedVoucherAmount = baseTaxable; 
-      } else {
-          finalTaxableValue = (baseTaxable - voucherAmount) + handlingAmt;
-          appliedVoucherAmount = voucherAmount;
-      }
-  } else {
-      finalTaxableValue = baseTaxable;
-  }
-
-  const cgstAmount = finalTaxableValue * 0.015
-  const sgstAmount = finalTaxableValue * 0.015
-  const finalPayable = finalTaxableValue + cgstAmount + sgstAmount
-
-  // --- UNIFIED CHECKOUT LOGIC ---
- // --- 1. PRE-CHECKOUT VALIDATION ---
- // --- 1. DRAFT GENERATION & PREVIEW ---
- const validateAndPreview = () => {
-  if (!appUser) return toast.error('Unauthorized')
-  if (mode !== 'custom' && cart.length === 0) return toast.error('Cart is empty')
-  if (mode === 'custom' && !customOrderDetails.designCode) return toast.error('Design code required')
-  if (!selectedCustomer) return toast.error('Please select a customer or SIS Partner')
-  if (!selectedLocation || selectedLocation === 'ALL') return toast.error('Please select a specific branch terminal.')
-
-  // Generate a temporary "Draft" object to feed into the Print Template
-  const draftInvoiceNo = mode === 'normal' ? 'DRAFT-INV' : mode === 'estimate' ? 'DRAFT-EST' : mode === 'challan' ? 'DRAFT-CHL' : 'DRAFT-JB';
-  
-  const draftData = {
-    mode: mode,
-    invoice_number: draftInvoiceNo,
-    date: new Date(),
-    customer: selectedCustomer,
-    items: cart.map(i => ({
-      mrp: i.mrp, barcode: i.barcode, metal_type: i.metal_type, purity: i.purity_karat,
-      hsn_code: i.hsn_code || '7113', gross_wt: i.gross_weight_g || 0, net_wt: i.net_weight_g || 0,
-      dia_wt: i.total_stone_weight_cts || 0
-    })),
-    customOrder: mode === 'custom' ? customOrderDetails : null,
-    subtotal, discountAmount, voucherAmount: appliedVoucherAmount, handlingFee: handlingAmt, 
-    taxableValue: finalTaxableValue, cgstAmount, sgstAmount, 
-    exchangeValue: exchangeNum, finalTotal: mode === 'custom' ? (Number(customOrderDetails.advancePayment) || 0) : finalPayable
-  }
-
-  setPreviewInvoiceData(draftData)
-  setShowPreviewModal(true)
-}
-
-// --- 2. ACTUAL DATABASE EXECUTION ---
-const executeCheckout = async () => {
-  setIsProcessing(true)
-  try {
-    let finalInvoiceNo = ''
-
-    if (mode === 'normal') {
-      const invoiceData = {
-        customer_id: selectedCustomer?.id,
-        warehouse_id: selectedLocation,
-        items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
-        payment_mode: paymentMode,
-        subtotal: subtotal,
-        discount_amount: discountAmount,
-        voucher_code: activeVoucher?.code || null,
-        voucher_discount: appliedVoucherAmount,
-        taxable_value: finalTaxableValue,
-        cgst_amount: cgstAmount,
-        sgst_amount: sgstAmount,
-        exchange_value: exchangeNum, 
-        exchange_notes: exchangeNotes,
-        exchange_barcode: exchangeInvoiceNo.trim() || null, 
-        final_total: finalPayable
-      }
-      
-      const { data, error } = await callRpc('pos_confirm_sale', { p_invoice_json: invoiceData, p_user_id: appUser?.user_id })
-      if (error) throw error
-      finalInvoiceNo = data?.invoice_number || `INV-${Date.now().toString().slice(-6)}`
-      
-      if (activeVoucher) {
-        await supabase.from('vouchers').update({ status: 'redeemed', redeemed_at: new Date().toISOString() }).eq('id', activeVoucher.id)
-      }
-      toast.success("Tax Invoice Generated!")
-
-    } else if (mode === 'estimate') {
-      finalInvoiceNo = `EST-${Date.now().toString().slice(-6)}`
-      toast.success("Estimate generated (No inventory deducted).")
-
-    } else if (mode === 'challan') {
-      finalInvoiceNo = `CHL-${Date.now().toString().slice(-6)}`
-      const itemIds = cart.map(c => c.id)
-      const { error } = await supabase.from('inventory_items').update({ status: 'sold_unbilled' }).in('id', itemIds)
-      if (error) throw error
-      toast.success("Delivery Challan issued. Items unbilled.")
-
-    } else if (mode === 'custom') {
-      finalInvoiceNo = `JB-CUST-${Date.now().toString().slice(-6)}`
-      const { error } = await supabase.from('job_bags').insert({
-        company_id: appUser?.company_id,
-        job_bag_number: finalInvoiceNo,
-        product_category: customOrderDetails.category,
-        design_code: customOrderDetails.designCode,
-        gold_expected_weight_g: Number(customOrderDetails.expectedGoldWt),
-        diamond_expected_weight_cts: Number(customOrderDetails.expectedDiamondCts),
-        status: 'open',
-        karigar_id: null
-      })
-      if (error) throw error
-      toast.success("Advance Receipt created & Job Bag Initiated.")
-    }
-
-    setLastInvoiceData({
-      ...previewInvoiceData, // Inherit all the draft stuff we already built
-      invoice_number: finalInvoiceNo, // Inject the REAL database ID
-    })
-
-    // CLEAR TERMINAL
-    setCart([]); setSelectedCustomer(null); setSearchCustomer(''); setDiscountValue(''); 
-    setActiveVoucher(null); setHandlingFee('0'); setExchangeValue(''); setExchangeNotes(''); setExchangeInvoiceNo('');
-    setIsExchangeOpen(false); setExchangeHistoricalValue(0);
-    setCustomOrderDetails({ designCode: '', category: '', expectedGoldWt: '', expectedDiamondCts: '', estimatedValue: '', advancePayment: '' })
-    
-    setShowPreviewModal(false) // Close the preview
-    setShowPrintModal(true)    // Open the success/print modal
-  } catch (err: any) {
-    toast.error(err.message || 'Checkout failed.')
-  } finally {
-    setIsProcessing(false)
-  }
-}
-
-  if (loading || !appUser) return <div className="h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-[#0078D7]" /></div>
 
   return (
-    <div className="min-h-screen lg:h-screen flex flex-col bg-[#E6E6E6] text-slate-900 font-sans overflow-y-auto lg:overflow-hidden">
+    <div className="min-h-[100dvh] lg:h-[100dvh] flex flex-col bg-[#E6E6E6] text-slate-900 font-sans overflow-hidden">
       
-      {/* CAMERA OVERLAY (Full Screen, High Z-Index) */}
-      {showScanner && (
-        <div className="fixed inset-0 z-[100] bg-black flex flex-col">
-          <div className="flex justify-between items-center p-4 bg-slate-900 text-white shadow-md">
-            <h2 className="text-sm font-bold uppercase tracking-widest flex items-center gap-2">
-              <QrCode className="w-4 h-4 text-indigo-400" /> Camera Scanner
-            </h2>
-            <Button variant="ghost" size="icon" onClick={() => setShowScanner(false)} className="text-white hover:bg-white/20 rounded-full">
-              <X className="w-6 h-6" />
-            </Button>
-          </div>
-          <div className="flex-1 relative bg-black flex items-center justify-center">
-            <Scanner onScan={onScanSuccess} onError={(error) => console.log(error)} components={{ finder: true }} />
-          </div>
-          <div className="p-6 bg-slate-900 text-center text-xs text-slate-400 uppercase tracking-widest">
-            Center QR Code inside the frame to scan
-          </div>
-        </div>
-      )}
+      <POSHeader 
+        isHQ={isHQ} isLocked={isLocked} 
+        selectedLocation={selectedLocation} setSelectedLocation={setSelectedLocation} 
+        onWipeSession={handleWipeSession} 
+        onWarehousesLoaded={setAllBranches} 
+      />
 
-      <style dangerouslySetInnerHTML={{__html: `
-        .hide-scroll::-webkit-scrollbar { display: none; }
-        .hide-scroll { -ms-overflow-style: none; scrollbar-width: none; }
-      `}} />
+      <ModeTabs mode={mode} setMode={setMode} />
 
-      {/* WINDOWS APP HEADER */}
-      <header className="z-40 w-full bg-[#2B2B2B] text-white px-3 sm:px-4 h-14 sm:h-12 flex items-center justify-between shrink-0 shadow-md sticky top-0 lg:static">
-        <div className="flex items-center gap-2 sm:gap-4">
-          <div className="h-7 w-7 bg-[#0078D7] flex items-center justify-center rounded-sm shrink-0">
-            <Receipt className="h-4 w-4 text-white" />
-          </div>
-          <div className="hidden sm:block">
-             <h1 className="font-semibold text-sm tracking-wide leading-none">Biillo Unified POS Terminal</h1>
-          </div>
-          <Separator orientation="vertical" className="h-5 bg-slate-600 hidden sm:block mx-1" />
-          
-          <div className="flex items-center gap-2">
-            <Building className="w-4 h-4 text-slate-400 hidden sm:block" />
-            <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
-              <SelectTrigger className="h-8 border-none bg-transparent hover:bg-slate-700 focus:ring-0 text-xs uppercase px-1 sm:px-2 w-[160px] sm:w-[180px] rounded-none">
-                <SelectValue placeholder="Identify Node..." />
-              </SelectTrigger>
-              <SelectContent className="rounded-none border-slate-300">
-                {isHQ && <SelectItem value="ALL" className="text-xs font-bold text-indigo-600">All Branches (HQ)</SelectItem>}
-                {warehouses.map(w => <SelectItem key={w.id} value={w.id} className="text-xs uppercase">{w.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 sm:gap-4">
-           <span className="text-xs text-slate-400 hidden md:block">{format(new Date(), 'EEEE, dd MMM yyyy')}</span>
-           <Button variant="ghost" size="sm" className="h-8 rounded-sm text-xs font-semibold text-red-400 hover:text-white hover:bg-red-600 px-2 sm:px-3" 
-            onClick={() => { setCart([]); setDiscountValue(''); setActiveVoucher(null); setSelectedCustomer(null); setExchangeValue(''); setExchangeInvoiceNo(''); setExchangeHistoricalValue(0); }}>
-            <span className="hidden sm:inline">Wipe Session</span>
-            <Trash2 className="h-4 w-4 sm:hidden" />
-          </Button>
-        </div>
-      </header>
-
-      {/* MODE TABS */}
-      <div className="bg-white border-b border-slate-300 px-2 pt-2 shrink-0 overflow-x-auto hide-scroll">
-        <Tabs value={mode} onValueChange={(v) => setMode(v as BillingMode)} className="w-full min-w-max">
-          <TabsList className="flex h-auto bg-transparent p-0 gap-1 justify-start">
-            <TabsTrigger value="normal" className="rounded-t-sm rounded-b-none border border-b-0 border-transparent data-[state=active]:border-slate-300 data-[state=active]:bg-slate-100 data-[state=active]:text-[#0078D7] text-slate-600 px-3 sm:px-4 py-2 font-semibold text-xs transition-none hover:bg-slate-50">
-              <ShoppingCart className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 sm:mr-2" /> Tax Invoice
-            </TabsTrigger>
-            <TabsTrigger value="estimate" className="rounded-t-sm rounded-b-none border border-b-0 border-transparent data-[state=active]:border-slate-300 data-[state=active]:bg-slate-100 data-[state=active]:text-[#D83B01] text-slate-600 px-3 sm:px-4 py-2 font-semibold text-xs transition-none hover:bg-slate-50">
-              <FileText className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 sm:mr-2" /> Proforma Estimate
-            </TabsTrigger>
-            <TabsTrigger value="custom" className="rounded-t-sm rounded-b-none border border-b-0 border-transparent data-[state=active]:border-slate-300 data-[state=active]:bg-slate-100 data-[state=active]:text-[#881798] text-slate-600 px-3 sm:px-4 py-2 font-semibold text-xs transition-none hover:bg-slate-50">
-              <Hammer className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 sm:mr-2" /> Custom Order
-            </TabsTrigger>
-            <TabsTrigger value="challan" className="rounded-t-sm rounded-b-none border border-b-0 border-transparent data-[state=active]:border-slate-300 data-[state=active]:bg-slate-100 data-[state=active]:text-[#107C10] text-slate-600 px-3 sm:px-4 py-2 font-semibold text-xs transition-none hover:bg-slate-50">
-              <Truck className="w-3.5 h-3.5 sm:w-4 sm:h-4 mr-1.5 sm:mr-2" /> Delivery Challan
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </div>
-
-      {/* MAIN CONTENT AREA */}
       <div className="flex-1 flex flex-col lg:flex-row overflow-hidden p-2 gap-2">
         
-        {/* LEFT PANEL: CART OR FORM */}
+        {/* LEFT PANEL */}
         <div className="flex-1 flex flex-col bg-white border border-slate-300 shadow-sm overflow-hidden rounded-sm min-h-[400px] lg:min-h-0">
-          
-          {mode === 'custom' ? (
-            // CUSTOM ORDER FORM UI
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6 custom-scrollbar bg-slate-50">
-              <div className="max-w-2xl mx-auto space-y-6 bg-white border border-slate-300 shadow-sm rounded-sm p-4 sm:p-6">
-                <div className="border-b border-slate-200 pb-4 mb-4">
-                  <h2 className="text-lg font-semibold text-[#881798] flex items-center gap-2">
-                    <Hammer className="w-5 h-5" /> Initiate Custom Fabrication
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-1">Capture advance payment and forward specifications to manufacturing.</p>
-                </div>
-                
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <Label className="text-xs font-semibold text-slate-700">Design Ref / Name</Label>
-                    <Input placeholder="e.g. Vintage Solitaire Ring" className="h-9 rounded-sm border-slate-300 focus-visible:ring-[#881798]" value={customOrderDetails.designCode} onChange={e => setCustomOrderDetails({...customOrderDetails, designCode: e.target.value})} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs font-semibold text-slate-700">Ornament Type</Label>
-                    <Input placeholder="e.g. Ring, Necklace" className="h-9 rounded-sm border-slate-300 focus-visible:ring-[#881798]" value={customOrderDetails.category} onChange={e => setCustomOrderDetails({...customOrderDetails, category: e.target.value})} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs font-semibold text-slate-700">Expected Gold (g)</Label>
-                    <Input type="number" placeholder="0.000" className="h-9 rounded-sm border-slate-300 focus-visible:ring-[#881798]" value={customOrderDetails.expectedGoldWt} onChange={e => setCustomOrderDetails({...customOrderDetails, expectedGoldWt: e.target.value})} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs font-semibold text-slate-700">Expected Diamond (cts)</Label>
-                    <Input type="number" placeholder="0.00" className="h-9 rounded-sm border-slate-300 focus-visible:ring-[#881798]" value={customOrderDetails.expectedDiamondCts} onChange={e => setCustomOrderDetails({...customOrderDetails, expectedDiamondCts: e.target.value})} />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-100 p-4 border border-slate-200 mt-4 rounded-sm">
-                  <div className="space-y-1">
-                    <Label className="text-xs font-bold text-slate-800">Estimated Total Value (₹)</Label>
-                    <Input type="number" placeholder="0.00" className="h-10 text-base font-bold rounded-sm border-slate-300" value={customOrderDetails.estimatedValue} onChange={e => setCustomOrderDetails({...customOrderDetails, estimatedValue: e.target.value})} />
-                  </div>
-                  <div className="space-y-1">
-                    <Label className="text-xs font-bold text-[#881798]">Advance Received (₹)</Label>
-                    <Input type="number" placeholder="0.00" className="h-10 text-base font-bold rounded-sm border-[#881798] focus-visible:ring-[#881798]" value={customOrderDetails.advancePayment} onChange={e => setCustomOrderDetails({...customOrderDetails, advancePayment: e.target.value})} />
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            // STANDARD CART UI
-            <>
-              {/* SEARCH/SCAN INPUT AREA */}
-              <div className="p-3 bg-slate-100 border-b border-slate-300 space-y-2 shrink-0">
-                <div className="flex flex-col sm:flex-row gap-2 relative">
-                  
-                  {/* MANUAL SEARCH INPUT */}
-                  <div className="relative flex-1 group z-20">
-                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
-                     <Input 
-                       placeholder="Search by Barcode, Name, or SKU..." 
-                       className="h-9 pl-9 rounded-sm border-slate-300 focus-visible:ring-[#0078D7] text-sm bg-white"
-                       value={itemSearchTerm} onChange={(e) => setItemSearchTerm(e.target.value)}
-                     />
-                     {searchResults.length > 0 && itemSearchTerm && (
-                      <div className="absolute top-full left-0 mt-1 w-full bg-white border border-slate-300 shadow-lg max-h-[300px] overflow-y-auto rounded-sm">
-                        {searchResults.map(item => {
-                           const isAvailable = item.status === 'in_stock'
-                           const isHere = item.warehouse_id === selectedLocation
-                           return (
-                            <div key={item.id} className="p-2 border-b border-slate-100 hover:bg-slate-50 cursor-pointer flex items-center justify-between" onClick={() => processScannedItem(item)}>
-                              <div className="flex flex-col">
-                                <span className="font-mono text-sm font-bold text-slate-800">{item.barcode}</span>
-                                <span className="text-[10px] text-slate-500 uppercase">{item.sku_reference || item.metal_type} · {item.purity_karat}</span>
-                              </div>
-                              <div className="flex flex-col items-end">
-                                <div className="text-sm font-bold text-slate-800">₹{(item.mrp || 0).toLocaleString()}</div>
-                                {!isAvailable && <span className="text-[9px] text-red-600 font-bold uppercase">{item.status?.replace('_', ' ')}</span>}
-                                {isAvailable && !isHere && <span className="text-[9px] text-amber-600 font-bold uppercase">Other Branch</span>}
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* NEW: CAMERA SCANNER BUTTON */}
-                  <div className="w-full sm:w-[160px] shrink-0">
-                     <Button 
-                       onClick={() => setShowScanner(true)} 
-                       className="w-full h-9 bg-[#0078D7] hover:bg-[#005A9E] text-white rounded-sm flex items-center justify-center gap-2 transition-none shadow-sm"
-                     >
-                       <Camera className="h-4 w-4" />
-                       <span className="text-[11px] font-bold uppercase tracking-widest">Scan QR</span>
-                     </Button>
-                  </div>
-                </div>
-              </div>
-
-              {/* CART ITEMS LIST */}
-              <div className="flex-1 overflow-y-auto bg-white custom-scrollbar">
-                
-                {/* Desktop Table Header */}
-                <div className="hidden md:grid grid-cols-12 gap-2 bg-slate-100 sticky top-0 border-b border-slate-300 z-10 px-3 py-2 text-xs font-semibold text-slate-600 shadow-sm">
-                  <div className="col-span-1 text-center"></div>
-                  <div className="col-span-5">Item ID & Details</div>
-                  <div className="col-span-2 text-right">Net Wt</div>
-                  <div className="col-span-2 text-right">Tax</div>
-                  <div className="col-span-2 text-right pr-2">MRP (₹)</div>
-                </div>
-
-                {cart.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center h-[250px] lg:h-[400px] text-center p-6">
-                     <ShoppingCart className="h-12 w-12 text-slate-200 mx-auto mb-3" />
-                     <p className="text-sm font-semibold text-slate-400">Cart is empty</p>
-                     <p className="text-xs text-slate-400 mt-1">Search an SKU or scan a QR code to begin billing</p>
-                  </div>
-                ) : (
-                  <div className="flex flex-col">
-                    {cart.map((item, idx) => (
-                      <div key={idx} className="flex flex-col md:grid md:grid-cols-12 gap-2 md:items-center p-3 md:p-2 border-b border-slate-100 hover:bg-slate-50 transition-colors">
-                        
-                        <div className="flex justify-between items-start md:contents">
-                          
-                          <div className="flex items-start md:items-center gap-3 md:col-span-6">
-                            <Button variant="ghost" size="icon" className="h-8 w-8 md:h-7 md:w-7 text-slate-400 hover:text-red-600 rounded-sm shrink-0 bg-slate-100 md:bg-transparent" onClick={() => setCart(cart.filter((_, i) => i !== idx))}>
-                              <Trash2 className="h-4 w-4 md:h-3.5 md:w-3.5" />
-                            </Button>
-                            <div className="flex flex-col">
-                              <p className="font-mono text-sm font-bold text-slate-800 leading-tight">{item.barcode}</p>
-                              <p className="text-[10px] text-slate-500 uppercase mt-0.5 tracking-tight line-clamp-1">{item.sku_reference} | {item.metal_type} | {item.purity_karat}</p>
-                            </div>
-                          </div>
-
-                          {/* Mobile Price Display */}
-                          <div className="md:hidden flex flex-col items-end justify-start">
-                            <p className="font-bold text-sm text-slate-800 leading-tight">₹{mode === 'challan' ? '-' : (item.mrp || 0).toLocaleString()}</p>
-                            <p className="text-[10px] text-slate-500 mt-0.5">{item.net_weight_g}g {mode !== 'challan' && `| ${item.tax_percent}%`}</p>
-                          </div>
-
-                          {/* Desktop Strict Columns */}
-                          <div className="hidden md:block col-span-2 text-right">
-                             <p className="text-xs font-medium text-slate-700">{item.net_weight_g} g</p>
-                             <p className="text-[9px] text-slate-400">Gross: {item.gross_weight_g}g</p>
-                          </div>
-                          <div className="hidden md:block col-span-2 text-right text-xs text-slate-600">
-                             {mode === 'challan' ? '-' : `${item.tax_percent}%`}
-                          </div>
-                          <div className="hidden md:block col-span-2 text-right font-bold text-sm text-slate-800 pr-2">
-                             {mode === 'challan' ? '-' : (item.mrp || 0).toLocaleString()}
-                          </div>
-
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
+        {mode === 'custom' ? (
+             <CustomOrderForm 
+               details={customOrderDetails} 
+               setDetails={setCustomOrderDetails} 
+               currentLocationId={selectedLocation}
+               onAddToBill={(finalItemData: any) => {
+                 // 1. Switch back to normal mode
+                 setMode('normal');
+                 
+                 // 2. Clear current cart and add the finished custom item
+                 clearCart();
+                 if (setCart) {
+                   setCart([{
+                     id: finalItemData.inventory_id,
+                     barcode: finalItemData.barcode,
+                     mrp: finalItemData.mrp,
+                     quantity: 1,
+                     custom_order_id: finalItemData.custom_order_id,
+                     advance_paid: finalItemData.advance_paid,
+                     // --- INJECT THE SPECS INTO THE CART STATE ---
+                     net_weight_g: finalItemData.net_weight_g,
+                     gross_weight_g: finalItemData.gross_weight_g,
+                     total_stone_weight_cts: finalItemData.total_stone_weight_cts,
+                     item_category: finalItemData.item_category,
+                     metal_type: finalItemData.metal_type,
+                     purity_karat: finalItemData.purity_karat
+                   }]);
+                   toast.success("Added to cart! Advance payment applied.");
+                 } else {
+                   toast.error("Cart error: Please ensure setCart is exported from useCart.");
+                 }
+               }}
+             />
+          ) : mode === 'return' ? (
+             <ReturnIntakeForm 
+               details={returnDetails} 
+               setDetails={setReturnDetails}
+               appUser={appUser} 
+             />
+            ) : mode === 'repair' ? (
+              <RepairIntakeForm 
+                details={repairDetails} 
+                setDetails={setRepairDetails} 
+                currentLocationId={selectedLocation}
+                onAddToBill={(finalItemData: any) => {
+                  setMode('normal');
+                  clearCart();
+                  if (setCart) {
+                    setCart([{
+                      id: finalItemData.inventory_id, // Pseudo ID
+                      barcode: finalItemData.barcode,
+                      mrp: finalItemData.mrp,
+                      quantity: 1,
+                      repair_ticket_id: finalItemData.repair_ticket_id, // <--- Key identifier
+                      advance_paid: finalItemData.advance_paid,
+                      net_weight_g: finalItemData.net_weight_g,
+                      total_stone_weight_cts: finalItemData.total_stone_weight_cts,
+                      item_category: finalItemData.item_category
+                    }]);
+                    toast.success("Added to cart! Advance payment applied.");
+                  } else {
+                    toast.error("Cart error: Please ensure setCart is exported.");
+                  }
+                }}
+              />
+           ) : (
+             <CartPanel 
+               mode={mode} 
+               cart={cart}
+               itemSearchTerm={itemSearchTerm}
+               setItemSearchTerm={setItemSearchTerm}
+               searchResults={searchResults}
+               processScannedItem={processScannedItem}
+               removeFromCart={removeFromCart}
+               onOpenScanner={() => setShowScanner(true)} 
+             />
           )}
         </div>
 
-        {/* RIGHT PANEL: BILLING & CHECKOUT */}
-        <div className="w-full lg:w-[350px] xl:w-[400px] bg-slate-50 border border-slate-300 flex flex-col shrink-0 rounded-sm">
-          
-          <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-4 custom-scrollbar">
-            
-            {/* Warning Banners */}
-            {mode === 'estimate' && (
-              <div className="bg-[#FFF4CE] border border-[#F5D0A9] p-3 rounded-sm flex items-start gap-2">
-                <AlertTriangle className="h-4 w-4 text-[#D83B01] mt-0.5 shrink-0" />
-                <p className="text-xs text-[#D83B01] leading-tight">Proforma Estimate. No live inventory deducted. Not valid for ITC.</p>
-              </div>
-            )}
-            {mode === 'challan' && (
-              <div className="bg-[#DFF6DD] border border-[#C3E8C1] p-3 rounded-sm flex items-start gap-2">
-                <ShieldAlert className="h-4 w-4 text-[#107C10] mt-0.5 shrink-0" />
-                <p className="text-xs text-[#107C10] leading-tight">Stock Transfer logic. Items will be marked as "Sold (Unbilled)".</p>
-              </div>
-            )}
-
-            {/* CUSTOMER REGISTRY */}
-            <div className="space-y-1.5 relative">
-              <Label className="text-xs font-semibold text-slate-700">
-                {mode === 'challan' ? 'SIS Partner / Destination' : 'Customer Account'}
-              </Label>
-              {selectedCustomer ? (
-                <div className="flex items-center justify-between bg-white border border-[#0078D7] p-2 rounded-sm">
-                  <div className="flex items-center gap-2">
-                    <div className="h-8 w-8 rounded-sm bg-[#0078D7] text-white flex items-center justify-center font-bold text-xs uppercase">
-                      {selectedCustomer.full_name[0]}
-                    </div>
-                    <div>
-                      <p className="text-sm font-bold text-slate-800 leading-none">{selectedCustomer.full_name}</p>
-                      <p className="text-[10px] text-slate-500 mt-1">{selectedCustomer.phone}</p>
-                    </div>
-                  </div>
-                  <Button size="icon" variant="ghost" className="h-6 w-6 rounded-sm text-slate-500 hover:text-red-500" onClick={() => setSelectedCustomer(null)}><X className="h-4 w-4" /></Button>
-                </div>
-              ) : (
-                <div className="flex gap-2">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                    <Input placeholder="Search phone or name..." value={searchCustomer} onChange={(e) => setSearchCustomer(e.target.value)} className="h-9 pl-8 text-xs rounded-sm border-slate-300 bg-white" />
-                  </div>
-                  <Button variant="outline" className="h-9 px-3 rounded-sm border-slate-300 bg-white" onClick={() => setIsAddCustomerOpen(true)}><Plus className="h-4 w-4" /></Button>
-                </div>
-              )}
-              {searchCustomer && !selectedCustomer && (
-                <div className="absolute top-full left-0 w-full bg-white border border-slate-300 shadow-lg z-50 max-h-[200px] overflow-y-auto rounded-sm mt-1">
-                  {customers.filter(c => c.full_name.toLowerCase().includes(searchCustomer.toLowerCase()) || c.phone.includes(searchCustomer)).map(c => (
-                    <div key={c.id} className="p-2 border-b border-slate-100 hover:bg-slate-50 cursor-pointer flex justify-between items-center" onClick={() => { setSelectedCustomer(c); setSearchCustomer(''); }}>
-                      <span className="font-semibold text-xs text-slate-700">{c.full_name}</span>
-                      <span className="text-[10px] text-slate-500">{c.phone}</span>
-                    </div>
-                  ))}
-                  <div className="p-2 text-center text-xs font-semibold text-[#0078D7] cursor-pointer hover:bg-slate-50" onClick={() => setIsAddCustomerOpen(true)}>
-                    + Create New Customer
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <Separator className="bg-slate-200" />
-
-            {/* ADJUSTMENTS & EXCHANGE */}
-            {mode === 'normal' && (
-              <div className="space-y-4">
-                
-                {/* VOUCHER & DISCOUNT */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                     <Label className="text-[10px] font-semibold text-slate-600 uppercase">Discount</Label>
-                     <div className="flex overflow-hidden rounded-sm border border-slate-300 h-8 bg-white">
-                        <select className="bg-slate-100 border-r border-slate-300 text-xs font-medium px-2 outline-none" value={discountType} onChange={(e: any) => setDiscountType(e.target.value)}>
-                          <option value="percent">%</option>
-                          <option value="flat">₹</option>
-                        </select>
-                        <Input type="number" placeholder="0.00" className="border-none h-full text-xs focus-visible:ring-0" value={discountValue} onChange={(e) => setDiscountValue(e.target.value)} />
-                     </div>
-                  </div>
-                  <div className="space-y-1">
-                     <Label className="text-[10px] font-semibold text-slate-600 uppercase">Voucher Code</Label>
-                     {activeVoucher ? (
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-center justify-between bg-[#DFF6DD] border border-[#C3E8C1] h-8 px-2 rounded-sm">
-                          <span className="text-[10px] font-bold text-[#107C10] truncate mr-2">{activeVoucher.code} (-₹{activeVoucher.amount})</span>
-                          <X className="h-3.5 w-3.5 cursor-pointer text-[#107C10] shrink-0" onClick={() => {setActiveVoucher(null); setHandlingFee('0');}} />
-                        </div>
-                        <div className="flex items-center gap-2">
-                           <span className="text-[9px] font-bold text-slate-500 uppercase">Handling ₹</span>
-                           <Input type="number" readOnly className="h-6 text-xs bg-slate-100 text-slate-500 border-slate-300 rounded-sm cursor-not-allowed" value={handlingFee} />
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex gap-1 relative">
-                        <Ticket className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                        <Input placeholder="CODE..." className="h-8 pl-7 text-xs uppercase border-slate-300 rounded-sm bg-white" value={voucherCode} onChange={(e) => setVoucherCode(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleApplyVoucher()} />
-                        <Button variant="secondary" className="h-8 w-8 p-0 border border-slate-300 rounded-sm bg-white" onClick={handleApplyVoucher}><CheckCircle2 className="h-4 w-4"/></Button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* BUYBACK / EXCHANGE PROTOCOL (INVOICE BASED) */}
-                <div className={`rounded-sm border transition-all overflow-hidden ${isExchangeOpen ? 'border-[#0078D7] bg-blue-50/50' : 'border-slate-300 bg-white'}`}>
-                   <button 
-                     className="w-full flex items-center justify-between p-2 text-xs font-semibold text-slate-700 outline-none hover:bg-slate-50"
-                     onClick={() => setIsExchangeOpen(!isExchangeOpen)}
-                   >
-                     <div className="flex items-center gap-2">
-                       <RefreshCw className={`h-3.5 w-3.5 ${isExchangeOpen ? 'animate-spin text-[#0078D7]' : 'text-slate-400'}`} /> 
-                       Buyback / Exchange Protocol
-                       {exchangeNum > 0 && <span className="ml-2 text-[10px] bg-[#0078D7] text-white px-1.5 py-0.5 rounded-sm">₹{exchangeNum.toLocaleString()}</span>}
-                     </div>
-                     {isExchangeOpen ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-                   </button>
-                   
-                   {isExchangeOpen && (
-                     <div className="p-3 pt-2 space-y-3 border-t border-slate-200 bg-white">
-                        
-                        <div className="flex bg-slate-100 p-1 rounded-sm border border-slate-200">
-                          <button className={`flex-1 text-[10px] font-bold uppercase py-1.5 rounded-sm transition-colors ${exchangeMode === 'buyback' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`} onClick={() => setExchangeMode('buyback')}>
-                            Buyback (70%)
-                          </button>
-                          <button className={`flex-1 text-[10px] font-bold uppercase py-1.5 rounded-sm transition-colors ${exchangeMode === 'exchange' ? 'bg-white text-slate-800 shadow-sm border border-slate-200' : 'text-slate-500 hover:text-slate-700'}`} onClick={() => setExchangeMode('exchange')}>
-                            Exchange (100%)
-                          </button>
-                        </div>
-
-                        <div className="flex gap-2">
-                          <Input placeholder="Enter Invoice No" className="h-8 text-xs border-slate-300 rounded-sm uppercase" value={exchangeInvoiceNo} onChange={(e) => setExchangeInvoiceNo(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleFetchExchangeItem()} />
-                          <Button variant="secondary" size="sm" className="h-8 rounded-sm text-xs px-3 bg-slate-800 text-white hover:bg-slate-700 shrink-0" onClick={handleFetchExchangeItem}>Audit</Button>
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-2">
-                          <Input type="number" placeholder="Credit ₹" className="h-8 text-xs font-bold border-slate-300 rounded-sm" value={exchangeValue} onChange={(e) => setExchangeValue(e.target.value)} />
-                          <Input placeholder="Notes..." className="col-span-2 h-8 text-xs border-slate-300 rounded-sm" value={exchangeNotes} onChange={(e) => setExchangeNotes(e.target.value)} />
-                        </div>
-                     </div>
-                   )}
-                </div>
-              </div>
-            )}
-
-            {/* SETTLEMENT MODE */}
-            {(mode === 'normal' || mode === 'custom') && (
-              <div className="space-y-1.5 pt-2">
-                <Label className="text-xs font-semibold text-slate-700">Payment Method</Label>
-                <div className="grid grid-cols-4 gap-2">
-                  {[
-                    { id: 'cash', label: 'Cash', icon: Banknote },
-                    { id: 'card', label: 'Card', icon: CreditCard },
-                    { id: 'upi', label: 'UPI', icon: QrCode },
-                    { id: 'bank', label: 'Bank', icon: Building },
-                  ].map((method) => {
-                    const isActive = paymentMode === method.id;
-                    return (
-                      <button
-                        key={method.id} onClick={() => setPaymentMode(method.id)}
-                        className={`flex flex-col items-center justify-center gap-1 h-12 border rounded-sm transition-colors ${
-                          isActive ? `${currentTheme.bg} border-transparent text-white shadow-sm` : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'
-                        }`}
-                      >
-                        <method.icon className="h-4 w-4" />
-                        <span className="text-[9px] font-bold uppercase">{method.label}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* LEDGER & ACTIONS FOOTER */}
-          <div className="p-4 border-t border-slate-300 bg-white space-y-3 shrink-0 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
-             
-             {mode !== 'custom' && mode !== 'challan' && (
-               <div className="space-y-1 font-mono text-sm">
-                  <div className="flex justify-between items-center text-slate-600">
-                    <span>Subtotal</span>
-                    <span>₹{subtotal.toLocaleString()}</span>
-                  </div>
-                  {mode === 'normal' && discountAmount > 0 && (
-                    <div className="flex justify-between items-center text-red-600">
-                      <span>Discount</span>
-                      <span>- ₹{discountAmount.toLocaleString()}</span>
-                    </div>
-                  )}
-                  {mode === 'normal' && exchangeNum > 0 && (
-                    <div className="flex justify-between items-center text-blue-600 text-xs">
-                      <span>Exchange Credit</span>
-                      <span>- ₹{exchangeNum.toLocaleString()}</span>
-                    </div>
-                  )}
-                  
-                  {mode === 'normal' ? (
-                    <>
-                      {activeVoucher && (
-                        <div className="flex justify-between items-center text-emerald-600 text-xs">
-                          <span>Voucher Auth</span>
-                          <span>- ₹{activeVoucher.amount.toLocaleString()}</span>
-                        </div>
-                      )}
-                      
-                      <div className="flex justify-between items-center text-slate-800 font-semibold border-t border-slate-200 pt-1 mt-1">
-                        <span>Taxable Value {handlingAmt > 0 && <span className="text-[9px] font-normal text-slate-500">(inc. Handling ₹{handlingAmt})</span>}</span>
-                        <span>₹{finalTaxableValue.toLocaleString()}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-slate-500 text-xs">
-                        <span>CGST + SGST (3%)</span>
-                        <span>+ ₹{(cgstAmount + sgstAmount).toLocaleString()}</span>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="flex justify-between items-center text-slate-500 text-xs">
-                        <span>Est. GST (3%)</span>
-                        <span>+ ₹{(cgstAmount + sgstAmount).toLocaleString()}</span>
-                    </div>
-                  )}
-               </div>
-             )}
-
-             {mode === 'challan' && (
-               <div className="flex justify-between items-center text-sm font-semibold text-slate-700 pb-1 border-b border-slate-200">
-                 <span>Items Count</span>
-                 <span>{cart.length}</span>
-               </div>
-             )}
-
-             <div className="flex justify-between items-end pt-1">
-                <div>
-                   <p className="text-[10px] font-bold uppercase text-slate-500">
-                     {mode === 'custom' ? 'Advance Payment' : mode === 'challan' ? 'Memo Value' : 'Net Payable'}
-                   </p>
-                   <p className={`text-2xl sm:text-3xl font-black tracking-tight ${currentTheme.text}`}>
-                     ₹{mode === 'custom' ? (Number(customOrderDetails.advancePayment) || 0).toLocaleString() : mode === 'challan' ? subtotal.toLocaleString() : finalPayable.toLocaleString()}
-                   </p>
-                </div>
-             </div>
-
-             <Button 
-                onClick={validateAndPreview} // <-- CHANGED HERE
-                disabled={isProcessing || (mode !== 'custom' && cart.length === 0) || (mode === 'custom' && !customOrderDetails.designCode)} 
-                className={`w-full font-bold text-sm h-12 rounded-sm flex items-center justify-center gap-2 transition-all text-white ${currentTheme.bg} ${currentTheme.hover}`}
-              >
-                {isProcessing ? <Loader2 className="h-5 w-5 animate-spin" /> : 
-                  mode === 'normal' ? <><CheckCircle2 className="h-5 w-5"/> Finalize Invoice</> :
-                  mode === 'estimate' ? <><Printer className="h-5 w-5"/> Print Estimate</> :
-                  mode === 'custom' ? <><Hammer className="h-5 w-5"/> Record Advance</> :
-                  <><Truck className="h-5 w-5"/> Generate Challan</>
-                }
-              </Button>
-          </div>
-        </div>
+        {/* RIGHT PANEL */}
+        <CheckoutSidebar 
+          mode={mode}
+          cartLength={cart.length}
+          cart={cart} // <--- PASSED CART SO IT CAN READ ADVANCE PAYMENTS
+          subtotal={subtotal}
+          customers={customers}
+          setCustomers={setCustomers}
+          selectedCustomer={selectedCustomer}
+          setSelectedCustomer={setSelectedCustomer}
+          appUser={appUser}
+          selectedLocation={selectedLocation}
+          repairDetails={repairDetails}
+          customOrderDetails={customOrderDetails}
+          returnDetails={returnDetails} 
+          onPreviewRequest={handlePreviewRequest}
+          setMode={setMode}
+          {...checkoutHook}
+        />
       </div>
 
-      {/* --- MODALS --- */}
-      <Dialog open={isAddCustomerOpen} onOpenChange={setIsAddCustomerOpen}>
-        <DialogContent className="sm:max-w-[450px] border border-slate-300 shadow-xl p-0 rounded-sm overflow-hidden bg-white w-[95vw] sm:w-full">
-          <DialogHeader className="bg-slate-100 p-4 border-b border-slate-200">
-            <DialogTitle className="text-base font-semibold text-slate-800">Add New Customer</DialogTitle>
-          </DialogHeader>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 sm:p-5 max-h-[60vh] overflow-y-auto">
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label className="text-xs font-semibold text-slate-700">Full Name *</Label>
-              <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.full_name} onChange={(e) => setNewCustForm({...newCustForm, full_name: e.target.value})} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-slate-700">Phone *</Label>
-              <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.phone} onChange={(e) => setNewCustForm({...newCustForm, phone: e.target.value})} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-slate-700">Date of Birth</Label>
-              <Input type="date" className="h-9 rounded-sm border-slate-300" value={newCustForm.birth_date} onChange={(e) => setNewCustForm({...newCustForm, birth_date: e.target.value})} />
-            </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label className="text-xs font-semibold text-slate-700">Address</Label>
-              <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.address} onChange={(e) => setNewCustForm({...newCustForm, address: e.target.value})} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-slate-700">City</Label>
-              <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.city} onChange={(e) => setNewCustForm({...newCustForm, city: e.target.value})} />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-slate-700">PAN Number</Label>
-              <Input className="h-9 rounded-sm border-slate-300 uppercase" value={newCustForm.pan_no} onChange={(e) => setNewCustForm({...newCustForm, pan_no: e.target.value})} />
-            </div>
-          </div>
-          <DialogFooter className="p-4 bg-slate-50 border-t border-slate-200">
-            <Button variant="ghost" className="rounded-sm text-sm w-full sm:w-auto" onClick={() => setIsAddCustomerOpen(false)}>Cancel</Button>
-            <Button onClick={handleAddCustomer} className="rounded-sm text-sm bg-[#0078D7] hover:bg-[#005A9E] text-white px-6 w-full sm:w-auto mt-2 sm:mt-0">Save Customer</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* --- WYSIWYG DOCUMENT PREVIEW MODAL --- */}
-      <Dialog open={showPreviewModal} onOpenChange={(open) => !isProcessing && setShowPreviewModal(open)}>
-        <DialogContent className="sm:max-w-[850px] border border-slate-300 shadow-2xl p-0 rounded-sm bg-slate-100 flex flex-col max-h-[90vh]">
-          <DialogHeader className={`p-4 border-b border-slate-200 text-white ${currentTheme.bg} shrink-0`}>
-            <DialogTitle className="text-base font-bold flex items-center gap-2">
-              <ShieldAlert className="w-4 h-4" /> Review Document Before Issuing
-            </DialogTitle>
-          </DialogHeader>
-          
-          {/* Scrollable Document Area */}
-          <div className="flex-1 overflow-y-auto p-4 sm:p-8 flex justify-center bg-slate-200/50 custom-scrollbar shadow-inner">
-             {previewInvoiceData && (
-               // Using zoom/scaling to fit the A4 page nicely on desktop screens while keeping it readable
-               <div className="bg-white shadow-xl origin-top scale-[0.6] sm:scale-75 md:scale-[0.85] transition-transform h-max pb-10 border border-slate-300">
-                  <InvoicePrintTemplate data={previewInvoiceData} />
-               </div>
-             )}
-          </div>
-
-          <DialogFooter className="bg-white p-4 border-t border-slate-200 shrink-0 flex flex-row justify-end gap-3">
-            <Button variant="outline" disabled={isProcessing} className="rounded-sm text-sm" onClick={() => setShowPreviewModal(false)}>
-              Back to Edit
-            </Button>
-            <Button disabled={isProcessing} onClick={executeCheckout} className={`rounded-sm text-sm text-white ${currentTheme.bg} ${currentTheme.hover}`}>
-              {isProcessing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-              Confirm & Commit to Ledger
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={showPrintModal} onOpenChange={setShowPrintModal}>
-        <DialogContent className="sm:max-w-[400px] border border-slate-300 shadow-2xl p-0 rounded-sm overflow-hidden bg-white w-[90vw] sm:w-full">
-          <DialogTitle className="sr-only">Transaction Success and Print</DialogTitle>
-          <div className="flex flex-col items-center justify-center p-6 sm:p-8 text-center space-y-5">
-            <div className={`w-16 h-16 text-white rounded-full flex items-center justify-center ${currentTheme.bg}`}>
-              {mode === 'custom' ? <Hammer className="h-8 w-8" /> : mode === 'estimate' ? <FileText className="h-8 w-8" /> : mode === 'challan' ? <Truck className="h-8 w-8" /> : <CheckCircle2 className="h-8 w-8" />}
-            </div>
-            <div className="space-y-1">
-               <h2 className="text-xl font-bold text-slate-800">
-                 {mode === 'normal' ? 'Sale Completed' : mode === 'estimate' ? 'Estimate Generated' : mode === 'challan' ? 'Challan Issued' : 'Order Initiated'}
-               </h2>
-               <p className="text-sm font-mono text-slate-500">{lastInvoiceData?.invoice_number}</p>
-            </div>
-            <div className="w-full flex flex-col sm:flex-row gap-3 pt-2">
-              <Button onClick={() => setShowPrintModal(false)} variant="outline" className="w-full sm:flex-1 rounded-sm border-slate-300 text-slate-700">Close</Button>
-              <Button onClick={handlePrint} className={`w-full sm:flex-1 rounded-sm text-white ${currentTheme.bg} ${currentTheme.hover}`}><Printer className="h-4 w-4 mr-2"/> Print</Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* REUSABLE PRINT TEMPLATE INTEGRATION */}
-      <div className="hidden">
-        <InvoicePrintTemplate ref={printRef} data={lastInvoiceData} />
-      </div>
-
+      {/* MODALS */}
+      <PosModals 
+        mode={mode}
+        showScanner={showScanner} 
+        setShowScanner={setShowScanner} 
+        onScanSuccess={handleScanResult}
+        showPreviewModal={showPreviewModal} 
+        setShowPreviewModal={setShowPreviewModal}
+        showPrintModal={showPrintModal} 
+        setShowPrintModal={setShowPrintModal}
+        previewData={checkoutHook.generateDraftData(isEstimateCheckout)} 
+        lastInvoiceData={lastInvoiceData} 
+        setLastInvoiceData={setLastInvoiceData}
+        isProcessing={checkoutHook.isProcessing}
+        executeCheckout={async () => {
+          const result = await checkoutHook.executeCheckout(isEstimateCheckout) 
+          if (result.success) {
+            setLastInvoiceData(result.draftData)
+            setShowPreviewModal(false)
+            setShowPrintModal(true)
+            handleWipeSession()
+          }
+        }}
+      />
     </div>
   )
 }

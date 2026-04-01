@@ -1,19 +1,15 @@
 "use client"
 
-import React, { useEffect, useState, useRef } from "react"
+import React, { useEffect, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import html2canvas from "html2canvas"
-import QRCode from "react-qr-code"
-import { useReactToPrint } from "react-to-print"
 import { toast } from "sonner"
-import { Badge } from "@/components/ui/badge" //
+import { Badge } from "@/components/ui/badge"
 
 import { 
-  Search, Printer, Edit2, Check, X, Store, Truck, Download, 
+  Search, Printer, Edit2, Check, X, Store, Truck, 
   RefreshCw, Database, Package, Calculator, Gem, Hammer, 
-  ArrowRight, ArrowLeft, Upload, FileSpreadsheet, Loader2, AlertCircle, PlusCircle, UploadCloud,
-  
+  ArrowLeft, Upload, Eye, Image as ImageIcon, CheckCircle2, Box, Layers, Wrench
 } from "lucide-react"
 
 import { useAuth } from "@/hooks/useAuth"
@@ -39,14 +35,20 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
+// IMPORT YOUR NEW COMPONENT
+import { ItemTagPreview } from "@/components/ItemTagPreview" 
+
+// Unified Interface to handle both Inventory and Repairs
 interface InventoryItem {
   id: string
+  _type: 'inventory' | 'repair' 
   barcode: string
   sku_reference: string
   item_category: string
   item_size: string
   metal_type: string
   purity_karat: string
+  purity_percent: number
   gross_weight_g: number
   net_weight_g: number
   total_stone_weight_cts: number
@@ -55,6 +57,30 @@ interface InventoryItem {
   status: string
   warehouse_id: string
   is_exchanged: boolean
+  is_custom_order: boolean
+  is_repair_ticket: boolean
+  custom_order_id: string | null
+  origin_name?: string
+  custom_orders?: {
+    id: string
+    order_number: string
+    origin?: {
+      name: string
+    }
+  }
+  huid_code: string | null
+  hsn_code: string | null
+  image_url: string | null
+  remarks: string | null
+  metal_color: string | null
+  diamond_shape: string | null
+  diamond_color: string | null
+  diamond_clarity: string | null
+  cost_metal: number
+  cost_stone: number
+  cost_making: number
+  cost_total: number
+  wastage_weight_g: number
 }
 
 interface Warehouse {
@@ -79,7 +105,9 @@ export default function InventoryPage() {
   
   // Printing State
   const [tagItem, setTagItem] = useState<InventoryItem | null>(null)
-  const labelRef = useRef<HTMLDivElement>(null)
+
+  // Full Details Modal State
+  const [viewItem, setViewItem] = useState<InventoryItem | null>(null)
 
   // Dynamic MRP Calculator State
   const [isCalcModalOpen, setCalcModalOpen] = useState(false)
@@ -93,24 +121,6 @@ export default function InventoryPage() {
     diamondRatePerCt: 25000, 
     markupPercent: 80,
     flatCharge: 8000
-  })
-
-  // --- BULK / MANUAL IMPORT STATE ---
-  const [isImportModalOpen, setIsImportModalOpen] = useState(false)
-  const [stagedImportItems, setStagedImportItems] = useState<any[]>([])
-  const [importStep, setImportStep] = useState<'input' | 'verify'>('input')
-  const [isImporting, setIsImporting] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-
-  const [manualEntry, setManualEntry] = useState({
-    barcode: '', item_category: '', metal_type: 'Gold', purity_karat: '22K',
-    gross_weight_g: '', net_weight_g: '', total_stone_weight_cts: '', mrp: ''
-  })
-
-  const handlePrint = useReactToPrint({
-    contentRef: labelRef,
-    documentTitle: `Jewelry-Tag-${tagItem?.barcode || 'Item'}`,
-    onAfterPrint: () => toast.success('Sent to Thermal Printer'),
   })
 
   useEffect(() => {
@@ -150,13 +160,82 @@ export default function InventoryPage() {
     if (!appUser || !selectedLocation) return
     setLoading(true)
     try {
-      let query = supabase.from('inventory_items').select('*').eq('company_id', appUser.company_id).order('created_at', { ascending: false })
+      // 1. FETCH INVENTORY ITEMS
+      let invQuery = supabase
+        .from('inventory_items')
+        .select(`*, custom_orders (id, order_number, origin:origin_warehouse_id(name))`)
+        .eq('company_id', appUser.company_id)
+
       if (selectedLocation !== 'ALL') {
-        query = query.eq('warehouse_id', selectedLocation)
+        invQuery = invQuery.eq('warehouse_id', selectedLocation)
       }
-      const { data, error } = await query
-      if (error) throw error
-      setItems(data || [])
+
+      // 2. FETCH REPAIR TICKETS (that act like inventory)
+      let repQuery = supabase
+        .from('repair_tickets')
+        .select(`*, origin:warehouses!repair_tickets_origin_warehouse_id_fkey(name)`)
+        .eq('company_id', appUser.company_id)
+        
+      const [invRes, repRes] = await Promise.all([invQuery, repQuery])
+
+      if (invRes.error) throw invRes.error
+      if (repRes.error) throw repRes.error
+
+      // Tag real inventory items
+      const inventoryList = (invRes.data || []).map(item => ({ ...item, _type: 'inventory' as const, is_repair_ticket: false }))
+
+      // Map Repair Tickets to look exactly like Inventory Items
+      const repairList = (repRes.data || []).map(rep => ({
+        id: rep.id,
+        _type: 'repair' as const,
+        barcode: rep.ticket_number,
+        sku_reference: 'REPAIR TICKET',
+        item_category: rep.item_description || 'Repair Service',
+        item_size: 'N/A',
+        metal_type: 'Mixed',
+        purity_karat: rep.purity || 'N/A',
+        purity_percent: 0,
+        gross_weight_g: rep.gross_weight_g || 0, // Customer's total original item weight
+        net_weight_g: rep.issued_gold_g || 0, // The actual factory gold added
+        total_stone_weight_cts: rep.issued_diamond_cts || 0, // The actual factory diamonds added
+        total_stone_pieces: 0,
+        mrp: rep.actual_cost || 0, 
+        status: rep.status,
+        warehouse_id: rep.status === 'fixed_ready_for_dispatch' && warehouses.find(w => w.name.includes('HQ'))?.id 
+                        ? warehouses.find(w => w.name.includes('HQ'))?.id || rep.origin_warehouse_id 
+                        : rep.origin_warehouse_id, 
+        is_exchanged: false,
+        is_custom_order: false,
+        is_repair_ticket: true,
+        custom_order_id: null,
+        origin_name: rep.origin?.name || 'Unknown Branch',
+        huid_code: null,
+        hsn_code: '9987', 
+        image_url: null, 
+        remarks: rep.issue_description || '',
+        metal_color: 'N/A',
+        diamond_shape: null,
+        diamond_color: null,
+        diamond_clarity: null,
+        cost_metal: 0,
+        cost_stone: 0,
+        cost_making: rep.labor_charges || 0,
+        cost_total: rep.actual_cost || 0,
+        wastage_weight_g: 0,
+        created_at: rep.created_at 
+      }))
+
+      // Filter repairs based on the selected location dropdown
+      const filteredRepairs = selectedLocation === 'ALL' 
+        ? repairList 
+        : repairList.filter(r => r.warehouse_id === selectedLocation || (r.status === 'fixed_ready_for_dispatch' && isHQ));
+
+      // Combine and sort by newest first
+      const combined = [...inventoryList, ...filteredRepairs].sort((a, b) => 
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+
+      setItems(combined)
     } catch (error) { toast.error('Failed to load inventory') } 
     finally { setLoading(false) }
   }
@@ -164,16 +243,32 @@ export default function InventoryPage() {
   useEffect(() => { fetchItems() }, [appUser, selectedLocation])
 
   const handleSaveMrp = async (id: string) => {
-    const newMrp = editingMrpVal ? Number(editingMrpVal) : null
-    const { error } = await supabase.from('inventory_items').update({ mrp: newMrp }).eq('id', id)
-    if (error) return toast.error('Failed to update price')
-    setItems(items.map(item => item.id === id ? { ...item, mrp: newMrp } : item))
+    const item = items.find(i => i.id === id);
+    if (!item) return;
+
+    const newMrp = editingMrpVal ? Number(editingMrpVal) : null;
+
+    if (item._type === 'repair') {
+      const { error } = await supabase.from('repair_tickets').update({ actual_cost: newMrp }).eq('id', id);
+      if (error) return toast.error('Failed to update repair cost');
+    } else {
+      const { error } = await supabase.from('inventory_items').update({ mrp: newMrp }).eq('id', id);
+      if (error) return toast.error('Failed to update price');
+    }
+    
+    setItems(items.map(i => i.id === id ? { ...i, mrp: newMrp } : i))
     setEditingId(null)
     toast.success('Price updated')
   }
 
   const handleOpenCalc = () => {
-    const selectedItems = items.filter(i => selectedIds.includes(i.id))
+    // Only allow MRP calculation on real inventory items, not repairs
+    const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
+    
+    if (selectedItems.length === 0) {
+      return toast.error("No valid items selected.", { description: "Repairs cannot be bulk-calculated. Select standard inventory." })
+    }
+
     const uniqueKarats = Array.from(new Set(selectedItems.map(i => i.purity_karat || '24K')))
     const initialRates: Record<string, number> = {}
     uniqueKarats.forEach(k => {
@@ -186,7 +281,7 @@ export default function InventoryPage() {
   }
 
   const handleGeneratePreview = () => {
-    const selectedItems = items.filter(i => selectedIds.includes(i.id))
+    const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
     const previews = selectedItems.map(item => {
       const k = item.purity_karat || '24K'
       const gRate = goldRates[k] || 0
@@ -222,113 +317,14 @@ export default function InventoryPage() {
     }
   }
 
-  // --- IMPORT LOGIC: CSV Upload ---
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!selectedLocation || selectedLocation === 'ALL') return toast.error("Please select a specific destination Vault/Location first.")
-    
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const text = event.target?.result as string
-      // Basic CSV/TSV parser (handles both commas and tabs)
-      const rows = text.split('\n').map(row => row.split(/,|\t/))
-      
-      let startIndex = 0;
-      if (rows[0].some(col => col.toLowerCase().includes('barcode') || col.toLowerCase().includes('metal'))) {
-        startIndex = 1;
-      }
-
-      const parsedItems: any[] = [] // <--- ADD : any[] HERE
-      
-      for (let i = startIndex; i < rows.length; i++) {
-        const cols = rows[i].map(c => c.trim())
-        if (cols.length < 5 || !cols[0]) continue; 
-
-        parsedItems.push({
-          barcode: cols[0],
-          item_category: cols[1] || 'Jewellery',
-          metal_type: cols[2] || 'Gold',
-          purity_karat: cols[3] || '24K',
-          purity_percent: parseInt((cols[3] || '24').replace(/\D/g, '')) / 24 * 100,
-          gross_weight_g: parseFloat(cols[4]) || 0,
-          net_weight_g: parseFloat(cols[5]) || parseFloat(cols[4]) || 0, 
-          total_stone_weight_cts: parseFloat(cols[6]) || 0,
-          mrp: cols[7] ? parseFloat(cols[7]) : null,
-          status: 'in_stock',
-          warehouse_id: selectedLocation,
-          company_id: appUser?.company_id,
-          created_from_job_bag_id: '00000000-0000-0000-0000-000000000000' 
-        })
-      }
-
-      if (parsedItems.length === 0) return toast.error("No valid rows found in CSV.")
-      setStagedImportItems(prev => [...prev, ...parsedItems])
-      toast.success(`Successfully loaded ${parsedItems.length} items from file.`)
-    }
-    reader.readAsText(file)
-    // Reset file input
-    if (fileInputRef.current) fileInputRef.current.value = ''
-  }
-
-  // --- IMPORT LOGIC: Manual Single Entry ---
-  const handleManualAdd = () => {
-    if (!selectedLocation || selectedLocation === 'ALL') return toast.error("Please select a specific destination Vault/Location first.")
-    if (!manualEntry.barcode || !manualEntry.gross_weight_g) return toast.error("Barcode and Gross Weight are required.")
-
-    const newItem = {
-      barcode: manualEntry.barcode,
-      item_category: manualEntry.item_category || 'Jewellery',
-      metal_type: manualEntry.metal_type,
-      purity_karat: manualEntry.purity_karat,
-      purity_percent: parseInt((manualEntry.purity_karat || '24').replace(/\D/g, '')) / 24 * 100,
-      gross_weight_g: parseFloat(manualEntry.gross_weight_g) || 0,
-      net_weight_g: parseFloat(manualEntry.net_weight_g) || parseFloat(manualEntry.gross_weight_g) || 0,
-      total_stone_weight_cts: parseFloat(manualEntry.total_stone_weight_cts) || 0,
-      mrp: manualEntry.mrp ? parseFloat(manualEntry.mrp) : null,
-      status: 'in_stock',
-      warehouse_id: selectedLocation,
-      company_id: appUser?.company_id,
-      created_from_job_bag_id: '00000000-0000-0000-0000-000000000000'
-    }
-
-    setStagedImportItems(prev => [newItem, ...prev])
-    setManualEntry({ barcode: '', item_category: '', metal_type: 'Gold', purity_karat: '22K', gross_weight_g: '', net_weight_g: '', total_stone_weight_cts: '', mrp: '' })
-    toast.success("Item staged for import.")
-  }
-
-  // --- IMPORT LOGIC: Commit to Database ---
-  const handleCommitImport = async () => {
-    if (stagedImportItems.length === 0) return toast.error("No items staged.")
-    setIsImporting(true)
-    try {
-      // Use upsert to handle duplicates safely
-      const { error } = await supabase
-        .from('inventory_items')
-        .upsert(stagedImportItems, { onConflict: 'barcode' })
-
-      if (error) throw error
-
-      toast.success(`Successfully committed ${stagedImportItems.length} items to database.`)
-      setIsImportModalOpen(false)
-      setStagedImportItems([])
-      setImportStep('input')
-      fetchItems() // Refresh table
-    } catch (err: any) {
-      toast.error(err.message || "Failed to commit items to database.")
-    } finally {
-      setIsImporting(false)
-    }
-  }
-
-
   const filteredActiveItems = items.filter(item => {
-    if (item.status === 'sold') return false; 
+    if (item.status === 'sold' || item.status === 'delivered') return false; 
     const matchesSearch = item.barcode?.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           item.sku_reference?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           item.item_category?.toLowerCase().includes(searchTerm.toLowerCase());
+    
     if (filterStatus === 'all') return matchesSearch;
+    if (filterStatus === 'repairs') return matchesSearch && item._type === 'repair';
     if (filterStatus === 'exchanged') return matchesSearch && item.is_exchanged === true;
     return matchesSearch && item.status === filterStatus;
   });
@@ -336,7 +332,7 @@ export default function InventoryPage() {
   const soldItems = items.filter(item => {
     const matchesSearch = item.barcode?.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           item.item_category?.toLowerCase().includes(searchTerm.toLowerCase())
-    return item.status === 'sold' && matchesSearch
+    return (item.status === 'sold' || item.status === 'delivered') && matchesSearch
   })
 
   const handleSingleTransfer = (item: InventoryItem) => {
@@ -349,18 +345,6 @@ export default function InventoryPage() {
     const whIds = new Set(selectedItems.map(i => i.warehouse_id))
     if (whIds.size > 1) return toast.error("Items must be from the same warehouse.")
     router.push(`/transfer/new?ids=${selectedIds.join(',')}&from=${Array.from(whIds)[0]}`)
-  }
-
-  const downloadTagImage = async () => {
-    if (!labelRef.current || !tagItem) return
-    try {
-      const canvas = await html2canvas(labelRef.current, { scale: 4 })
-      const link = document.createElement("a")
-      link.href = canvas.toDataURL("image/png")
-      link.download = `Tag-${tagItem.barcode}.png`
-      link.click()
-      toast.success("Tag image saved")
-    } catch (err) { toast.error("Failed to generate tag image") }
   }
 
   const TableSkeleton = () => (
@@ -400,9 +384,11 @@ export default function InventoryPage() {
           </div>
           
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" className="h-8 px-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-none border border-transparent hover:border-indigo-200 hidden sm:flex" onClick={() => setIsImportModalOpen(true)}>
-              <Upload className="h-3.5 w-3.5 mr-1.5" />
-              <span className="hidden sm:inline">Add / Import Stock</span>
+            <Button asChild variant="ghost" size="sm" className="h-8 px-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-none border border-transparent hover:border-indigo-200 hidden sm:flex">
+              <Link href="/inventory/import">
+                <Upload className="h-3.5 w-3.5 mr-1.5" />
+                <span className="hidden sm:inline">Add / Import Stock</span>
+              </Link>
             </Button>
             <div className="h-4 w-px bg-slate-200 mx-1 hidden sm:block" />
 
@@ -459,6 +445,7 @@ export default function InventoryPage() {
                   <SelectItem value="all" className="text-xs font-medium">All Items</SelectItem>
                   <SelectItem value="in_stock" className="text-xs font-medium">Available</SelectItem>
                   <SelectItem value="transit" className="text-xs font-medium">In Transit</SelectItem>
+                  <SelectItem value="repairs" className="text-xs font-medium text-amber-600">Repairs</SelectItem>
                   <SelectItem value="exchanged" className="text-xs font-medium">Buybacks</SelectItem>
                 </SelectContent>
               </Select>
@@ -478,13 +465,13 @@ export default function InventoryPage() {
 
           <TabsContent value="active">
              <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                {loading ? <TableSkeleton /> : <InventoryTable data={filteredActiveItems} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} />}
+                {loading ? <TableSkeleton /> : <InventoryTable data={filteredActiveItems} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} />}
              </div>
           </TabsContent>
 
           <TabsContent value="sold">
              <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                {loading ? <TableSkeleton /> : <InventoryTable data={soldItems} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} />}
+                {loading ? <TableSkeleton /> : <InventoryTable data={soldItems} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} />}
              </div>
           </TabsContent>
         </Tabs>
@@ -513,164 +500,156 @@ export default function InventoryPage() {
         )}
       </main>
 
-      {/* ==============================================================
-          BULK IMPORT & MANUAL ENTRY MODAL
-          ============================================================== */}
-      <Dialog open={isImportModalOpen} onOpenChange={(open) => {
-         setIsImportModalOpen(open); 
-         if(!open) { setImportStep('input'); setStagedImportItems([]); }
-      }}>
-        <DialogContent className={cn("p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white transition-all", importStep === 'verify' ? 'sm:max-w-[850px]' : 'sm:max-w-[600px]')}>
-          <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200 shrink-0">
-            <DialogTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
-               <FileSpreadsheet className="w-4 h-4 text-indigo-600" /> 
-               {importStep === 'input' ? 'Add Inventory' : 'Verify & Commit Ledger'}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500 mt-1 leading-relaxed">
-              {importStep === 'input' 
-                ? `Upload a CSV file or manually stage single items. Destination: ${warehouses.find(w=>w.id === selectedLocation)?.name || 'HQ'}`
-                : `Review the ${stagedImportItems.length} parsed items before committing them to the database.`
-              }
-            </DialogDescription>
-          </DialogHeader>
-
-          {importStep === 'input' ? (
-            <div className="p-5 flex flex-col h-[50vh] max-h-[500px]">
-              <Tabs defaultValue="csv" className="flex flex-col h-full">
-                <TabsList className="grid w-full grid-cols-2 shrink-0 bg-slate-100 p-1 rounded-lg">
-                   <TabsTrigger value="csv" className="rounded-md text-xs font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">Upload CSV File</TabsTrigger>
-                   <TabsTrigger value="manual" className="rounded-md text-xs font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">Single Entry Form</TabsTrigger>
-                </TabsList>
-                
-                <div className="flex-1 overflow-y-auto mt-4 custom-scrollbar pr-2">
-                  <TabsContent value="csv" className="m-0 space-y-4">
-                     <div className="bg-indigo-50/50 border border-indigo-100 p-4 rounded-lg flex gap-3 items-start">
-                       <AlertCircle className="w-5 h-5 text-indigo-500 shrink-0 mt-0.5" />
-                       <div className="text-[11px] text-indigo-700 leading-relaxed font-medium">
-                         <p className="font-bold mb-1">Required CSV Column Format:</p>
-                         <code className="bg-white px-2 py-1 rounded border border-indigo-200 block text-[9px] shadow-sm">
-                           Barcode, Category, Metal, Purity, Gross Wt, Net Wt, Stone Cts, MRP
-                         </code>
-                       </div>
-                     </div>
-                     
-                     <div 
-                       className="border-2 border-dashed border-slate-300 rounded-xl p-8 flex flex-col items-center justify-center bg-slate-50 hover:bg-slate-100 transition-colors cursor-pointer group"
-                       onClick={() => fileInputRef.current?.click()}
-                     >
-                        <input type="file" accept=".csv, .tsv, .txt" className="hidden" ref={fileInputRef} onChange={handleFileUpload} />
-                        <div className="h-12 w-12 bg-white border border-slate-200 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform shadow-sm">
-                          <UploadCloud className="w-6 h-6 text-slate-400" />
-                        </div>
-                        <p className="text-sm font-bold text-slate-700 mb-1">Click to browse files</p>
-                        <p className="text-xs text-slate-500">Supports .csv (comma separated)</p>
-                     </div>
-                  </TabsContent>
-
-                  <TabsContent value="manual" className="m-0">
-                     <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                        <div className="space-y-1.5">
-                          <Label className="text-[10px] font-bold text-slate-500 uppercase">Barcode *</Label>
-                          <Input className="h-9 text-xs rounded-md border-slate-300" value={manualEntry.barcode} onChange={e => setManualEntry({...manualEntry, barcode: e.target.value})} placeholder="e.g. RING001" />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label className="text-[10px] font-bold text-slate-500 uppercase">Category</Label>
-                          <Input className="h-9 text-xs rounded-md border-slate-300" value={manualEntry.item_category} onChange={e => setManualEntry({...manualEntry, item_category: e.target.value})} placeholder="e.g. Solitaire Ring" />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label className="text-[10px] font-bold text-slate-500 uppercase">Metal Type</Label>
-                          <Input className="h-9 text-xs rounded-md border-slate-300" value={manualEntry.metal_type} onChange={e => setManualEntry({...manualEntry, metal_type: e.target.value})} placeholder="Gold" />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label className="text-[10px] font-bold text-slate-500 uppercase">Purity</Label>
-                          <Input className="h-9 text-xs rounded-md border-slate-300" value={manualEntry.purity_karat} onChange={e => setManualEntry({...manualEntry, purity_karat: e.target.value})} placeholder="22K" />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label className="text-[10px] font-bold text-slate-500 uppercase">Gross Weight (g) *</Label>
-                          <Input type="number" className="h-9 text-xs rounded-md border-slate-300" value={manualEntry.gross_weight_g} onChange={e => setManualEntry({...manualEntry, gross_weight_g: e.target.value})} placeholder="0.000" />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label className="text-[10px] font-bold text-slate-500 uppercase">Net Weight (g)</Label>
-                          <Input type="number" className="h-9 text-xs rounded-md border-slate-300" value={manualEntry.net_weight_g} onChange={e => setManualEntry({...manualEntry, net_weight_g: e.target.value})} placeholder="0.000" />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label className="text-[10px] font-bold text-slate-500 uppercase">Stone Weight (ct)</Label>
-                          <Input type="number" className="h-9 text-xs rounded-md border-slate-300" value={manualEntry.total_stone_weight_cts} onChange={e => setManualEntry({...manualEntry, total_stone_weight_cts: e.target.value})} placeholder="0.00" />
-                        </div>
-                        <div className="space-y-1.5">
-                          <Label className="text-[10px] font-bold text-slate-500 uppercase">MRP (₹)</Label>
-                          <Input type="number" className="h-9 text-xs rounded-md border-slate-300" value={manualEntry.mrp} onChange={e => setManualEntry({...manualEntry, mrp: e.target.value})} placeholder="Optional" />
-                        </div>
-                        <div className="col-span-2 pt-2">
-                           <Button onClick={handleManualAdd} className="w-full h-9 bg-slate-900 hover:bg-slate-800 text-xs font-bold shadow-sm rounded-lg">
-                             <PlusCircle className="w-4 h-4 mr-2" /> Add to Staging Queue
-                           </Button>
-                        </div>
-                     </div>
-                  </TabsContent>
+      {/* VIEW DETAILS MODAL */}
+      <Dialog open={!!viewItem} onOpenChange={(val) => !val && setViewItem(null)}>
+        <DialogContent className="sm:max-w-[700px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-slate-50">
+          {viewItem && (
+            <>
+              <DialogHeader className="bg-white p-5 border-b border-slate-200 flex flex-row items-center justify-between">
+                <div>
+                  <DialogTitle className="text-lg font-bold text-slate-900 font-mono flex items-center gap-2">
+                    {viewItem._type === 'repair' ? <Wrench className="w-5 h-5 text-amber-500" /> : <Package className="w-5 h-5 text-indigo-500" />}
+                    {viewItem.barcode}
+                  </DialogTitle>
+                  <DialogDescription className="text-xs font-medium text-slate-500 mt-1 uppercase tracking-widest">
+                    {viewItem.item_category} • {viewItem.sku_reference}
+                  </DialogDescription>
                 </div>
-              </Tabs>
-            </div>
-          ) : (
-            <div className="max-h-[60vh] overflow-y-auto border-b border-slate-200 custom-scrollbar bg-slate-50">
-              <Table>
-                <TableHeader className="bg-white sticky top-0 shadow-sm z-10">
-                  <TableRow className="border-none hover:bg-transparent">
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 px-4">Barcode</TableHead>
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9">Category</TableHead>
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 text-right">Net Wt</TableHead>
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 text-right">Stn Cts</TableHead>
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 text-right pr-4">MRP</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {stagedImportItems.map((item, idx) => (
-                    <TableRow key={idx} className="border-b border-slate-200 last:border-none hover:bg-white">
-                      <TableCell className="py-2 px-4 text-xs font-mono font-bold text-slate-900">{item.barcode}</TableCell>
-                      <TableCell className="py-2 text-xs text-slate-600">
-                        {item.item_category} <span className="text-[9px] text-slate-400">({item.metal_type} {item.purity_karat})</span>
-                      </TableCell>
-                      <TableCell className="py-2 text-xs text-right font-medium">{item.net_weight_g.toFixed(3)}g</TableCell>
-                      <TableCell className="py-2 text-xs text-right text-blue-600">{item.total_stone_weight_cts.toFixed(2)}ct</TableCell>
-                      <TableCell className="py-2 text-xs font-bold text-right text-slate-900 pr-4">
-                        {item.mrp ? `₹${item.mrp.toLocaleString()}` : '---'}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+                <div className="flex flex-col items-end gap-1">
+                   <Badge className={cn("text-[10px] uppercase tracking-widest border", 
+                      viewItem._type === 'repair' ? "bg-amber-50 text-amber-700 border-amber-200" :
+                      viewItem.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600 border-slate-200")}>
+                     {viewItem.status.replace(/_/g, ' ')}
+                   </Badge>
+                   {viewItem.is_custom_order && <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[9px] uppercase tracking-widest">Custom: {viewItem.custom_orders?.origin?.name || 'Branch'}</Badge>}
+                   {viewItem.is_repair_ticket && <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest">Repair: {viewItem.origin_name}</Badge>}
+                </div>
+              </DialogHeader>
+              
+              <div className="p-6 overflow-y-auto max-h-[70vh] custom-scrollbar space-y-6">
+                
+                {/* Visual Header */}
+                <div className="flex flex-col md:flex-row gap-6">
+                  <div className="w-full md:w-48 h-48 bg-white border border-slate-200 rounded-xl flex items-center justify-center shrink-0 overflow-hidden shadow-sm">
+                    {viewItem.image_url ? (
+                      <img src={viewItem.image_url} alt="Item" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="text-center text-slate-400">
+                        <ImageIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                        <span className="text-[10px] font-bold uppercase tracking-widest">No Image</span>
+                      </div>
+                    )}
+                  </div>
 
-          <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 flex flex-row items-center justify-between gap-3 shrink-0">
-             {importStep === 'input' ? (
-               <>
-                 <div className="flex items-center text-xs font-bold text-slate-600">
-                    Staged Items: <Badge variant="secondary" className="ml-2 px-2 h-5 bg-white border border-slate-200">{stagedImportItems.length}</Badge>
-                 </div>
-                 <div className="flex gap-2">
-                   <Button variant="ghost" className="h-9 text-xs font-semibold rounded-lg text-slate-600 hover:bg-slate-100" onClick={() => setIsImportModalOpen(false)}>Cancel</Button>
-                   <Button onClick={() => setImportStep('verify')} disabled={stagedImportItems.length === 0} className="h-9 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm">
-                     Proceed to Verify <ArrowRight className="w-3.5 h-3.5 ml-2" />
-                   </Button>
-                 </div>
-               </>
-             ) : (
-               <>
-                 <Button variant="outline" className="h-10 text-xs font-semibold rounded-lg border-slate-300 text-slate-700 bg-white hover:bg-slate-50" onClick={() => setImportStep('input')}>
-                   <ArrowLeft className="w-3.5 h-3.5 mr-2" /> Back
-                 </Button>
-                 <Button onClick={handleCommitImport} disabled={isImporting} className="h-10 px-6 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm">
-                   {isImporting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Database className="w-4 h-4 mr-2" />}
-                   Commit {stagedImportItems.length} Items to Ledger
-                 </Button>
-               </>
-             )}
-          </DialogFooter>
+                  <div className="flex-1 grid grid-cols-2 gap-4">
+                    <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-1">
+                      <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><Database className="w-3 h-3 text-amber-500"/> Metal Info</Label>
+                      <p className="text-sm font-bold text-slate-900">{viewItem.metal_type} {viewItem.purity_karat !== 'N/A' ? `(${viewItem.purity_karat})` : ''}</p>
+                      <p className="text-xs text-slate-500">{viewItem.purity_percent}% Purity • {viewItem.metal_color || 'Std Color'}</p>
+                    </div>
+                    <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-1">
+                      <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><Gem className="w-3 h-3 text-blue-500"/> Stone Info</Label>
+                      <p className="text-sm font-bold text-slate-900">{viewItem.total_stone_weight_cts} cts</p>
+                      <p className="text-xs text-slate-500">{viewItem.total_stone_pieces} Pieces</p>
+                    </div>
+                    <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-1 col-span-2">
+                      <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                        <Box className="w-3 h-3 text-emerald-500"/> 
+                        {viewItem._type === 'repair' ? 'Added Materials (Consumed)' : 'Physical Weights'}
+                      </Label>
+                      <div className="flex justify-between items-end mt-1">
+                        <div>
+                           <p className="text-[10px] text-slate-400 font-medium">{viewItem._type === 'repair' ? 'Customer Gross' : 'Gross'}</p>
+                           <p className="text-sm font-semibold">{viewItem.gross_weight_g}g</p>
+                        </div>
+                        <div>
+                           <p className="text-[10px] text-slate-400 font-medium text-center">{viewItem._type === 'repair' ? 'Gold Added' : 'Net'}</p>
+                           <p className="text-sm font-bold text-emerald-700">{viewItem.net_weight_g}g</p>
+                        </div>
+                        <div className="text-right">
+                           <p className="text-[10px] text-slate-400 font-medium">Wastage</p>
+                           <p className="text-sm font-semibold text-red-600">{viewItem.wastage_weight_g || 0}g</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Identification & Compliance */}
+                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                  <div className="bg-slate-50 border-b border-slate-200 px-4 py-2">
+                    <h3 className="text-xs font-bold text-slate-600 uppercase tracking-widest">Compliance & Specs</h3>
+                  </div>
+                  <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">HUID Code</p>
+                      <p className="text-xs font-mono font-bold text-slate-900 mt-0.5">{viewItem.huid_code || '---'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">HSN Code</p>
+                      <p className="text-xs font-mono font-bold text-slate-900 mt-0.5">{viewItem.hsn_code || '---'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Item Size</p>
+                      <p className="text-xs font-semibold text-slate-900 mt-0.5">{viewItem.item_size || 'Standard'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Diamond Quality</p>
+                      <p className="text-xs font-semibold text-slate-900 mt-0.5">
+                        {viewItem.diamond_shape ? `${viewItem.diamond_shape} ` : ''}
+                        {viewItem.diamond_color ? `${viewItem.diamond_color}/` : ''}
+                        {viewItem.diamond_clarity || '---'}
+                      </p>
+                    </div>
+                  </div>
+                  {viewItem.remarks && (
+                    <div className="p-4 pt-0">
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Remarks / Internal Notes</p>
+                      <p className="text-xs text-slate-700 mt-1 bg-slate-50 p-2 rounded border border-slate-100">{viewItem.remarks}</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Financials Ledger */}
+                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                  <div className="bg-slate-50 border-b border-slate-200 px-4 py-2">
+                    <h3 className="text-xs font-bold text-slate-600 uppercase tracking-widest">Costing Ledger</h3>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    {viewItem._type !== 'repair' && (
+                      <>
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-500 font-medium">Metal Base Cost</span>
+                          <span className="font-mono font-semibold">₹{(viewItem.cost_metal || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-500 font-medium">Stone Cost</span>
+                          <span className="font-mono font-semibold">₹{(viewItem.cost_stone || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-500 font-medium">Making / Labor</span>
+                          <span className="font-mono font-semibold">₹{(viewItem.cost_making || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="border-t border-slate-100 pt-3 flex justify-between items-center">
+                          <span className="text-[10px] font-bold text-slate-800 uppercase tracking-widest">Total Sourcing Cost</span>
+                          <span className="font-mono font-bold text-sm">₹{(viewItem.cost_total || 0).toLocaleString()}</span>
+                        </div>
+                      </>
+                    )}
+                    <div className="border-t border-slate-200 pt-3 flex justify-between items-center bg-indigo-50/50 -mx-4 px-4 pb-1">
+                      <span className="text-[10px] font-black text-indigo-800 uppercase tracking-widest">{viewItem._type === 'repair' ? 'Service Billable' : 'Retail MRP'}</span>
+                      <span className="font-mono font-black text-lg text-indigo-700">₹{(viewItem.mrp || 0).toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
-      {/* MRP CALCULATOR MODAL (MULTI-STEP WIZARD) */}
+      {/* MRP CALCULATOR MODAL */}
       <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
         <DialogContent className={cn("p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white transition-all", calcStep === 'preview' ? 'sm:max-w-[650px]' : 'sm:max-w-[450px]')}>
           <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200">
@@ -772,10 +751,10 @@ export default function InventoryPage() {
               <Table>
                 <TableHeader className="bg-slate-50 sticky top-0 z-10 shadow-sm">
                   <TableRow className="border-none hover:bg-transparent">
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9">Asset ID</TableHead>
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9">Profile</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9">Asset Ref</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9">Purity</TableHead>
                     <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 text-right">Net Wt</TableHead>
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 text-right">Old MRP</TableHead>
+                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 text-right">Current MRP</TableHead>
                     <TableHead className="text-[10px] font-bold uppercase text-indigo-600 h-9 text-right pr-6">Calculated MRP</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -812,7 +791,7 @@ export default function InventoryPage() {
                     onClick={handleGeneratePreview}
                     className="flex-[2] h-10 text-xs font-bold rounded-lg bg-slate-900 hover:bg-slate-800 text-white shadow-sm"
                   >
-                   Generate Preview <ArrowRight className="w-3.5 h-3.5 ml-2" />
+                   Generate Preview
                  </Button>
                </>
              ) : (
@@ -833,50 +812,14 @@ export default function InventoryPage() {
         </DialogContent>
       </Dialog>
 
-      {/* TAG PREVIEW DIALOG (Unchanged) */}
-      <Dialog open={!!tagItem} onOpenChange={() => setTagItem(null)}>
-        <DialogContent className="sm:max-w-[550px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white">
-          <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200">
-            <DialogTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
-               <Printer className="w-4 h-4 text-slate-500" /> Thermal Label Layout
-            </DialogTitle>
-          </DialogHeader>
-          
-          <div className="flex flex-col items-center justify-center py-10 bg-slate-100/50 min-h-[250px] overflow-x-auto">
-            <div ref={labelRef} className="bg-white text-black flex border border-gray-300 shadow-sm print:border-none print:shadow-none overflow-hidden shrink-0" style={{ width: '100mm', height: '20mm', fontFamily: 'Arial, sans-serif', boxSizing: 'border-box' }}>
-              <style type="text/css" media="print">{`@page { size: 100mm 20mm; margin: 0; } body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }`}</style>
-              <div className="flex w-[70mm] h-full">
-                <div className="flex flex-col justify-center h-full w-[34mm] pl-[2mm]" style={{ fontSize: '5.8px', lineHeight: '1.15', fontWeight: 'bold' }}>
-                  <h2 className="font-extrabold uppercase tracking-tight text-[8px] leading-none mb-[1px]">PAVITRAM</h2>
-                  <div className="uppercase tracking-widest text-[5px] text-gray-600 mb-[2px] border-b border-gray-200 pb-[1px]">{tagItem?.item_category || 'CATEGORY'}</div>
-                  <div className="flex"><span className="w-[9mm]">TAG</span><span>: {tagItem?.barcode?.slice(-6) || '---'}</span></div>
-                  <div className="flex"><span className="w-[9mm]">STYLE</span><span>: {tagItem?.sku_reference || '---'}</span></div>
-                  <div className="flex"><span className="w-[9mm]">KT/GW</span><span>: {tagItem?.purity_karat || 'N/A'} / {Number(tagItem?.gross_weight_g||0).toFixed(3)}</span></div>
-                  <div className="flex"><span className="w-[9mm]">{Number(tagItem?.total_stone_pieces) <= 1 ? 'CS' : 'RD'}</span><span>: {tagItem?.total_stone_pieces || 0} / {Number(tagItem?.total_stone_weight_cts||0).toFixed(3)}</span></div>
-                  <div className="flex"><span className="w-[9mm]">NET</span><span>: {Number(tagItem?.net_weight_g||0).toFixed(3)}</span></div>
-                </div>
-                <div className="w-[2mm] h-full flex items-center justify-center"><div className="h-full w-[1px] border-l border-dashed border-gray-300 print:border-none opacity-50" /></div>
-                <div className="flex flex-col justify-center items-center h-full w-[34mm] pr-[2mm]">
-                  {tagItem?.barcode ? <div className="bg-white p-0.5"><QRCode value={tagItem.barcode} size={64} level="M" style={{ height: "16mm", width: "16mm" }} /></div> : <div className="h-[16mm] w-[16mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">N/A</div>}
-                </div>
-              </div>
-              <div className="w-[30mm] h-full bg-gray-50 print:bg-white border-l border-gray-200 print:border-none flex items-center justify-center">
-                 <span className="text-[5px] text-gray-300 print:hidden rotate-90 tracking-widest">TAIL AREA</span>
-              </div>
-            </div>
-          </div>
-          <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 flex-row gap-3">
-             <Button variant="outline" className="flex-1 h-10 text-xs font-semibold rounded-lg border-slate-300 text-slate-700 bg-white hover:bg-slate-50" onClick={downloadTagImage}><Download className="w-4 h-4 mr-2 text-slate-400" /> Save PNG</Button>
-             <Button className="flex-[2] h-10 text-xs font-bold rounded-lg bg-slate-900 hover:bg-slate-800 text-white" onClick={() => handlePrint()}><Printer className="w-4 h-4 mr-2" /> Print (TSC)</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ItemTagPreview item={tagItem} onClose={() => setTagItem(null)} />
+
     </div>
   )
 }
 
 // --- HYBRID RENDER TABLE ---
-function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, setTagItem, handleSingleTransfer }: any) {
+function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, setTagItem, handleSingleTransfer, setViewItem }: any) {
   return (
     <div className="h-full flex flex-col">
       {/* DESKTOP VIEW */}
@@ -897,8 +840,8 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Specs</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 text-right px-4">Weights</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 text-center">Status</TableHead>
-              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 w-[180px]">Retail Price</TableHead>
-              <TableHead className="w-[100px] text-right px-6"></TableHead>
+              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 w-[180px]">Price/Value</TableHead>
+              <TableHead className="w-[120px] text-right px-6"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -909,31 +852,47 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                     <Checkbox 
                       checked={selectedIds.includes(item.id)} 
                       onCheckedChange={() => setSelectedIds((prev: any) => prev.includes(item.id) ? prev.filter((i: any) => i !== item.id) : [...prev, item.id])} 
-                      disabled={item.status !== 'in_stock'} 
+                      disabled={item.status === 'sold'} 
                       className="rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 disabled:opacity-30"
                     />
                   </TableCell>
                 )}
                 <TableCell className="py-3">
-                  <div className="flex flex-col">
+                  <div className="flex flex-col items-start">
                      <span className="font-mono font-semibold text-sm text-slate-900 tracking-tight leading-tight">{item.barcode}</span>
                      <span className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.sku_reference || 'NO SKU'}</span>
-                     {item.is_exchanged && <span className="text-[9px] font-bold text-purple-600 uppercase tracking-widest mt-1">Buyback Asset</span>}
+                     <div className="flex gap-1 mt-1 flex-wrap">
+                       {item.is_exchanged && <Badge className="bg-rose-100 text-rose-700 border-rose-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Buyback</Badge>}
+                       {item.is_custom_order && <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Custom: {item.custom_orders?.origin?.name || 'Branch'}</Badge>}
+                       {item.is_repair_ticket && <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Repair: {item.origin_name}</Badge>}
+                     </div>
                   </div>
                 </TableCell>
                 <TableCell className="py-3">
                    <div className="text-xs font-semibold text-slate-900">{item.item_category}</div>
-                   <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.metal_type} ({item.purity_karat}) · Size {item.item_size || 'N/A'}</div>
+                   <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</div>
                 </TableCell>
                 <TableCell className="text-right px-4 py-3">
                    <div className="flex flex-col items-end">
-                      <span className="text-xs font-semibold text-slate-900">{item.net_weight_g?.toFixed(3)}g <span className="text-[9px] font-medium text-slate-400 ml-0.5">NET</span></span>
-                      <span className="text-[10px] text-blue-600 font-semibold uppercase mt-0.5">{item.total_stone_weight_cts?.toFixed(2)}ct <span className="text-[9px] font-medium text-slate-400 ml-0.5">STN</span></span>
+                      <span className="text-xs font-semibold text-slate-900">
+                        {item.net_weight_g?.toFixed(3)}g 
+                        <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
+                          {item._type === 'repair' ? 'ADDED' : 'NET'}
+                        </span>
+                      </span>
+                      <span className="text-[10px] text-blue-600 font-semibold uppercase mt-0.5">
+                        {item.total_stone_weight_cts?.toFixed(2)}ct 
+                        <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
+                          {item._type === 'repair' ? 'ADDED' : 'STN'}
+                        </span>
+                      </span>
                    </div>
                 </TableCell>
                 <TableCell className="text-center py-3">
-                   <span className={cn("inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border", item.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-500 border-slate-200")}>
-                     {item.status.replace('_', ' ')}
+                   <span className={cn("inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border", 
+                      item._type === 'repair' ? "bg-amber-50 text-amber-700 border-amber-200" :
+                      item.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-500 border-slate-200")}>
+                     {item.status.replace(/_/g, ' ')}
                    </span>
                 </TableCell>
                 <TableCell className="py-3">
@@ -945,18 +904,25 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                        </Button>
                      </div>
                    ) : (
-                     <div className="group flex items-center gap-2 cursor-pointer w-max" onClick={() => { if(!isSoldTab) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
-                       <span className="text-xs font-semibold text-slate-900">{item.mrp ? `₹${item.mrp.toLocaleString()}` : 'Market Rate'}</span>
-                       {!isSoldTab && <Edit2 className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 transition-all" />}
+                     <div className="group flex items-center gap-2 cursor-pointer w-max" onClick={() => { if(!isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
+                       <span className="text-xs font-semibold text-slate-900">
+                          {item.mrp ? `₹${item.mrp.toLocaleString()}` : 'TBD'}
+                       </span>
+                       {!isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 transition-all" />}
                      </div>
                    )}
                 </TableCell>
                 <TableCell className="text-right px-6 py-3">
                    <div className="flex justify-end gap-1.5">
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors" onClick={() => setTagItem(item)} title="Print Label">
-                        <Printer className="h-4 w-4" />
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => setViewItem(item)} title="View Full Details">
+                        <Eye className="h-4 w-4" />
                       </Button>
-                      {!isSoldTab && item.status === 'in_stock' && (
+                      {!item.is_repair_ticket && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors" onClick={() => setTagItem(item)} title="Print Label">
+                          <Printer className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
                          <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => handleSingleTransfer(item)} title="Transfer">
                            <Truck className="h-4 w-4" />
                          </Button>
@@ -979,30 +945,46 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                    <Checkbox 
                      checked={selectedIds.includes(item.id)} 
                      onCheckedChange={() => setSelectedIds((prev: any) => prev.includes(item.id) ? prev.filter((i: any) => i !== item.id) : [...prev, item.id])} 
-                     disabled={item.status !== 'in_stock'}
+                     disabled={item.status === 'sold'}
                      className="rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 disabled:opacity-30"
                    />
                  )}
                  <div>
                    <span className="font-mono font-semibold text-sm text-slate-900 tracking-tight leading-tight">{item.barcode}</span>
                    <span className="block text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.sku_reference || 'NO SKU'}</span>
+                   {item.is_custom_order && <span className="block text-[9px] font-bold text-purple-600 uppercase tracking-widest mt-1">Custom: {item.custom_orders?.origin?.name || 'Branch'}</span>}
+                   {item.is_repair_ticket && <span className="block text-[9px] font-bold text-amber-600 uppercase tracking-widest mt-1">Repair: {item.origin_name}</span>}
                  </div>
                </div>
-               <span className={cn("inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[9px] font-bold uppercase tracking-wider border", item.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-500 border-slate-200")}>
-                 {item.status.replace('_', ' ')}
-               </span>
+               <div className="flex gap-2 items-center">
+                 <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-indigo-600 bg-slate-50" onClick={() => setViewItem(item)}>
+                    <Eye className="h-3.5 w-3.5" />
+                 </Button>
+               </div>
             </div>
             
             <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
                <div>
                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Specs</p>
                  <p className="text-xs font-semibold text-slate-900">{item.item_category}</p>
-                 <p className="text-[10px] text-slate-500">{item.metal_type} ({item.purity_karat})</p>
+                 <p className="text-[10px] text-slate-500">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</p>
                </div>
                <div className="text-right">
-                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Weights</p>
-                 <p className="text-xs font-semibold text-slate-900">{item.net_weight_g?.toFixed(3)}g <span className="text-[9px] text-slate-400">NET</span></p>
-                 <p className="text-[10px] text-blue-600 font-semibold">{item.total_stone_weight_cts?.toFixed(2)}ct <span className="text-[9px] text-slate-400">STN</span></p>
+                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">
+                   {item._type === 'repair' ? 'Materials Added' : 'Weights'}
+                 </p>
+                 <p className="text-xs font-semibold text-slate-900">
+                   {item.net_weight_g?.toFixed(3)}g 
+                   <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
+                     {item._type === 'repair' ? 'ADDED' : 'NET'}
+                   </span>
+                 </p>
+                 <p className="text-[10px] text-blue-600 font-semibold">
+                   {item.total_stone_weight_cts?.toFixed(2)}ct 
+                   <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
+                     {item._type === 'repair' ? 'ADDED' : 'STN'}
+                   </span>
+                 </p>
                </div>
             </div>
 
@@ -1017,17 +999,19 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                      </Button>
                    </div>
                  ) : (
-                   <div className="group flex items-center gap-2 cursor-pointer w-max" onClick={() => { if(!isSoldTab) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
-                     <span className="text-sm font-bold text-slate-900">{item.mrp ? `₹${item.mrp.toLocaleString()}` : 'Market Rate'}</span>
-                     {!isSoldTab && <Edit2 className="w-3.5 h-3.5 text-slate-400" />}
+                   <div className="group flex items-center gap-2 cursor-pointer w-max" onClick={() => { if(!isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
+                     <span className="text-sm font-bold text-slate-900">{item.mrp ? `₹${item.mrp.toLocaleString()}` : 'TBD'}</span>
+                     {!isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3.5 h-3.5 text-slate-400" />}
                    </div>
                  )}
                </div>
                <div className="flex gap-1.5">
-                 <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 border-slate-200 bg-white" onClick={() => setTagItem(item)}>
-                   <Printer className="h-3.5 w-3.5" />
-                 </Button>
-                 {!isSoldTab && item.status === 'in_stock' && (
+                 {!item.is_repair_ticket && (
+                   <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 border-slate-200 bg-white" onClick={() => setTagItem(item)}>
+                     <Printer className="h-3.5 w-3.5" />
+                   </Button>
+                 )}
+                 {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
                    <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
                      <Truck className="h-3.5 w-3.5" />
                    </Button>

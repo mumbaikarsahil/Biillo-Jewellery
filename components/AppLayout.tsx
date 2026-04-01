@@ -48,7 +48,7 @@ const allOperationModules = [
   { href: '/purchases', label: 'Procurement', icon: ShoppingCart, roles: ['owner', 'manager', 'operations_manager'] },
   { href: '/manufacturing/job-bags', label: 'Fabrication', icon: Briefcase, roles: ['owner', 'manager', 'operations_manager'] },
   { href: '/inventory', label: 'Vault Stock', icon: Package, roles: ['owner', 'manager', 'operations_manager', 'branch_manager'] },
-  { href: '/transfer', label: 'Logistics', icon: ArrowRightLeft, roles: ['owner', 'manager', 'operations_manager'] },
+  { href: '/transfer', label: 'Logistics', icon: ArrowRightLeft, roles: ['owner', 'manager', 'operations_manager', 'branch_manager', 'shadow_manager'] },
   { href: '/crm', label: 'CRM', icon: UserCircle, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
   { href: '/vouchers', label: 'Vouchers', icon: Ticket, roles: ['owner', 'manager', 'voucher_manager'] },
   { href: '/memo', label: 'Memos', icon: FileText, roles: ['owner', 'manager'] },

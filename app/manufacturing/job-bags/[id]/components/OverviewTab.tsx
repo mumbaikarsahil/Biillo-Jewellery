@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { JobBag, JobBagItem } from '../types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -17,7 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Trash2, Plus, Save, ListPlus, AlertCircle } from 'lucide-react'
+import { Trash2, Plus, Save, ListPlus, AlertCircle, Hammer, Wrench } from 'lucide-react'
 
 interface Props {
   job: JobBag
@@ -25,17 +26,28 @@ interface Props {
 
 // Temporary type for the staging grid
 type DraftItem = {
-  id: string // temporary internal id
+  id: string 
   sku_reference: string
   ornament_type: string
   expected_gold_weight_g: string
   expected_diamond_weight_cts: string
+  custom_order_id?: string // Tracks the origin custom order
+  repair_ticket_id?: string // Tracks the origin repair ticket
+  is_repair?: boolean
 }
 
 export default function OverviewTab({ job }: Props) {
-  const [items, setItems] = useState<JobBagItem[]>([])
+  const [items, setItems] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const { toast } = useToast()
+
+  // --- ROUTING STATE (CUSTOM ORDERS & REPAIRS) ---
+  const searchParams = useSearchParams()
+  const customOrderId = searchParams.get('custom_order')
+  const repairTicketId = searchParams.get('repair_ticket')
+  
+  const [activeCustomOrderId, setActiveCustomOrderId] = useState<string | null>(null)
+  const [activeRepairTicketId, setActiveRepairTicketId] = useState<string | null>(null)
 
   // Draft Grid State
   const [draftItems, setDraftItems] = useState<DraftItem[]>([])
@@ -51,6 +63,59 @@ export default function OverviewTab({ job }: Props) {
   useEffect(() => {
     fetchItems()
   }, [job.id])
+
+  // --- AUTOMATIC PRE-FILL FROM CUSTOM ORDER ---
+  useEffect(() => {
+    if (customOrderId) {
+      const fetchCustomOrderDetails = async () => {
+        const { data, error } = await supabase
+          .from('custom_orders')
+          .select('*')
+          .eq('id', customOrderId)
+          .single()
+
+        if (!error && data) {
+          setSkuReference(data.design_reference || '')
+          setOrnamentType(data.item_category || '')
+          setExpectedGold(data.expected_gold_g?.toString() || '')
+          setExpectedDiamond(data.expected_diamond_cts?.toString() || '')
+          setActiveCustomOrderId(data.id)
+          
+          toast({ 
+            title: "Store Request Loaded", 
+            description: "Custom order specifications have been populated in the grid." 
+          })
+        }
+      }
+      fetchCustomOrderDetails()
+    }
+  }, [customOrderId, toast])
+
+  // --- AUTOMATIC PRE-FILL FROM REPAIR TICKET ---
+  useEffect(() => {
+    if (repairTicketId) {
+      const fetchRepairDetails = async () => {
+        const { data, error } = await supabase
+          .from('repair_tickets')
+          .select('*')
+          .eq('id', repairTicketId)
+          .single()
+
+        if (!error && data) {
+          setSkuReference(data.ticket_number || '')
+          setOrnamentType(data.item_description || 'Repair')
+          setExpectedGold(data.gross_weight_g?.toString() || '') 
+          setActiveRepairTicketId(data.id)
+          
+          toast({ 
+            title: "Repair Ticket Loaded", 
+            description: "Repair specifications have been populated in the grid." 
+          })
+        }
+      }
+      fetchRepairDetails()
+    }
+  }, [repairTicketId, toast])
 
   const fetchItems = async () => {
     try {
@@ -82,21 +147,25 @@ export default function OverviewTab({ job }: Props) {
     const newDrafts: DraftItem[] = []
 
     for (let i = 0; i < qty; i++) {
-      // Auto-sequence the SKU if creating multiples (e.g., R-101-01, R-101-02)
       const suffix = qty > 1 ? `-${(i + 1).toString().padStart(2, '0')}` : ''
       
       newDrafts.push({
-        id: Math.random().toString(36).substring(7), // Random temp ID
+        id: Math.random().toString(36).substring(7), 
         sku_reference: `${skuReference}${suffix}`,
         ornament_type: ornamentType,
         expected_gold_weight_g: expectedGold,
-        expected_diamond_weight_cts: expectedDiamond
+        expected_diamond_weight_cts: expectedDiamond,
+        custom_order_id: activeCustomOrderId || undefined,
+        repair_ticket_id: activeRepairTicketId || undefined,
+        is_repair: !!activeRepairTicketId
       })
     }
 
     setDraftItems([...draftItems, ...newDrafts])
     
-    // Reset only the SKU and Quantity to allow fast repetitive entry for the same product type
+    // Clear active links so subsequent manual additions aren't linked to the same customer
+    setActiveCustomOrderId(null)
+    setActiveRepairTicketId(null)
     setSkuReference('')
     setQuantity('1')
   }
@@ -123,15 +192,40 @@ export default function OverviewTab({ job }: Props) {
         ornament_type: draft.ornament_type || null,
         expected_gold_weight_g: draft.expected_gold_weight_g ? parseFloat(draft.expected_gold_weight_g) : null,
         expected_diamond_weight_cts: draft.expected_diamond_weight_cts ? parseFloat(draft.expected_diamond_weight_cts) : null,
+        custom_order_id: draft.custom_order_id || null,
+        repair_ticket_id: draft.repair_ticket_id || null,
+        is_repair: draft.is_repair || false,
         status: 'pending'
       }))
 
       const { error } = await supabase.from('job_bag_items').insert(payload)
       if (error) throw error
 
+      // Update Custom Order Statuses to 'in_production' if any were linked
+      const linkedOrderIds = draftItems.filter(d => d.custom_order_id).map(d => d.custom_order_id)
+      if (linkedOrderIds.length > 0) {
+        await supabase
+          .from('custom_orders')
+          .update({ status: 'in_production' })
+          .in('id', linkedOrderIds)
+      }
+
+      // Update Repair Ticket Statuses to 'in_repair' if any were linked
+      const linkedRepairIds = draftItems.filter(d => d.repair_ticket_id).map(d => d.repair_ticket_id)
+      if (linkedRepairIds.length > 0) {
+        await supabase
+          .from('repair_tickets')
+          .update({ status: 'in_repair' })
+          .in('id', linkedRepairIds)
+      }
+
       toast({ title: "Success", description: `Added ${draftItems.length} items to job bag.` })
       setDraftItems([])
       fetchItems()
+      
+      // Clean up URL so a page refresh doesn't trigger the auto-fill again
+      window.history.replaceState(null, '', window.location.pathname)
+
     } catch (error: any) {
       toast({ title: "Database Error", description: error.message, variant: "destructive" })
     } finally {
@@ -139,7 +233,7 @@ export default function OverviewTab({ job }: Props) {
     }
   }
 
-  // --- 3. DELETE SAVED ITEM (If mistakes were made) ---
+  // --- 3. DELETE SAVED ITEM ---
   const deleteSavedItem = async (itemId: string, status: string) => {
     if (status !== 'pending') {
       return toast({ title: "Cannot Delete", description: "Only pending items can be deleted.", variant: "destructive" })
@@ -156,6 +250,15 @@ export default function OverviewTab({ job }: Props) {
       toast({ title: "Error", description: error.message, variant: "destructive" })
     }
   }
+
+  // Styling Helpers based on what is actively loaded
+  const isCustomLoaded = !!activeCustomOrderId;
+  const isRepairLoaded = !!activeRepairTicketId;
+  const cardBorderClass = isCustomLoaded ? 'border-purple-300 ring-2 ring-purple-100' : isRepairLoaded ? 'border-amber-300 ring-2 ring-amber-100' : 'border-primary/20';
+  const headerBgClass = isCustomLoaded ? 'bg-purple-50/80 border-purple-200' : isRepairLoaded ? 'bg-amber-50/80 border-amber-200' : 'bg-primary/5 border-primary/10';
+  const headerIconClass = isCustomLoaded ? 'text-purple-800' : isRepairLoaded ? 'text-amber-800' : 'text-primary';
+  const formBgClass = (isCustomLoaded || isRepairLoaded) ? 'bg-white/50' : 'bg-muted/10';
+  const buttonClass = isCustomLoaded ? 'bg-purple-600 hover:bg-purple-700' : isRepairLoaded ? 'bg-amber-600 hover:bg-amber-700 text-white' : '';
 
   return (
     <div className="space-y-6">
@@ -190,43 +293,53 @@ export default function OverviewTab({ job }: Props) {
       </Card>
 
       {/* 2. Fast Entry System (Drafting) */}
-      <Card className="border-primary/20 shadow-sm overflow-hidden">
-        <CardHeader className="bg-primary/5 py-4 border-b border-primary/10">
-          <CardTitle className="text-sm flex items-center gap-2">
-            <ListPlus className="w-4 h-4 text-primary" />
+      <Card className={`shadow-sm overflow-hidden ${cardBorderClass}`}>
+        <CardHeader className={`py-4 border-b flex flex-row items-center justify-between ${headerBgClass}`}>
+          <CardTitle className={`text-sm flex items-center gap-2 ${headerIconClass}`}>
+            <ListPlus className="w-4 h-4" />
             Fast SKU Entry Grid
           </CardTitle>
+          <div className="flex gap-2">
+            {isCustomLoaded && (
+              <Badge className="bg-purple-600 text-white font-bold tracking-widest uppercase text-[10px] flex items-center gap-1.5">
+                <Hammer className="w-3 h-3"/> Custom Order Loaded
+              </Badge>
+            )}
+            {isRepairLoaded && (
+              <Badge className="bg-amber-600 text-white font-bold tracking-widest uppercase text-[10px] flex items-center gap-1.5">
+                <Wrench className="w-3 h-3"/> Repair Ticket Loaded
+              </Badge>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           
-          {/* Quick Add Form Row */}
-          <form onSubmit={handleAddDrafts} className="flex flex-wrap md:flex-nowrap items-end gap-3 p-4 bg-muted/10 border-b">
+          <form onSubmit={handleAddDrafts} className={`flex flex-wrap md:flex-nowrap items-end gap-3 p-4 border-b ${formBgClass}`}>
             <div className="w-full md:w-20 space-y-1.5">
               <Label className="text-[10px] font-bold uppercase text-muted-foreground">Qty</Label>
-              <Input type="number" min="1" required className="h-9 text-xs font-bold" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+              <Input type="number" min="1" required className="h-9 text-xs font-bold bg-white" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
             </div>
             <div className="w-full md:flex-1 space-y-1.5">
               <Label className="text-[10px] font-bold uppercase text-muted-foreground">Base SKU / Style *</Label>
-              <Input required placeholder="e.g. RNG-101" className="h-9 text-xs" value={skuReference} onChange={(e) => setSkuReference(e.target.value)} />
+              <Input required placeholder="e.g. RNG-101" className="h-9 text-xs bg-white" value={skuReference} onChange={(e) => setSkuReference(e.target.value)} />
             </div>
             <div className="w-full md:flex-1 space-y-1.5">
               <Label className="text-[10px] font-bold uppercase text-muted-foreground">Type</Label>
-              <Input placeholder="e.g. Ring" className="h-9 text-xs" value={ornamentType} onChange={(e) => setOrnamentType(e.target.value)} />
+              <Input placeholder="e.g. Ring" className="h-9 text-xs bg-white" value={ornamentType} onChange={(e) => setOrnamentType(e.target.value)} />
             </div>
             <div className="w-full md:w-32 space-y-1.5">
               <Label className="text-[10px] font-bold uppercase text-muted-foreground">Exp. Gold (g)</Label>
-              <Input type="number" step="0.001" placeholder="0.000" className="h-9 text-xs" value={expectedGold} onChange={(e) => setExpectedGold(e.target.value)} />
+              <Input type="number" step="0.001" placeholder="0.000" className="h-9 text-xs bg-white" value={expectedGold} onChange={(e) => setExpectedGold(e.target.value)} />
             </div>
             <div className="w-full md:w-32 space-y-1.5">
               <Label className="text-[10px] font-bold uppercase text-muted-foreground">Exp. Dia (ct)</Label>
-              <Input type="number" step="0.001" placeholder="0.000" className="h-9 text-xs" value={expectedDiamond} onChange={(e) => setExpectedDiamond(e.target.value)} />
+              <Input type="number" step="0.001" placeholder="0.000" className="h-9 text-xs bg-white" value={expectedDiamond} onChange={(e) => setExpectedDiamond(e.target.value)} />
             </div>
-            <Button type="submit" className="w-full md:w-auto h-9 text-xs font-bold">
+            <Button type="submit" className={`w-full md:w-auto h-9 text-xs font-bold ${buttonClass}`}>
               <Plus className="w-4 h-4 mr-1" /> Add to Grid
             </Button>
           </form>
 
-          {/* Draft Items Grid */}
           {draftItems.length > 0 && (
             <div className="p-0 animate-in fade-in slide-in-from-top-2">
               <div className="max-h-[300px] overflow-y-auto">
@@ -238,11 +351,12 @@ export default function OverviewTab({ job }: Props) {
                       <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Ornament Type</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Exp. Gold (g)</TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Exp. Dia (ct)</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Tags</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {draftItems.map((draft) => (
-                      <TableRow key={draft.id} className="bg-amber-50/10">
+                      <TableRow key={draft.id} className={draft.is_repair ? "bg-amber-50/20" : draft.custom_order_id ? "bg-purple-50/20" : "bg-slate-50/50"}>
                         <TableCell className="p-2">
                           <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-500" onClick={() => removeDraftItem(draft.id)}>
                             <Trash2 className="w-3.5 h-3.5" />
@@ -259,6 +373,16 @@ export default function OverviewTab({ job }: Props) {
                         </TableCell>
                         <TableCell className="p-2">
                           <Input type="number" step="0.001" className="h-8 text-xs bg-white border-border/50" value={draft.expected_diamond_weight_cts} onChange={(e) => updateDraftItem(draft.id, 'expected_diamond_weight_cts', e.target.value)} />
+                        </TableCell>
+                        <TableCell className="p-2">
+                          <div className="flex gap-1">
+                            {draft.custom_order_id && (
+                              <Badge className="bg-purple-100 text-purple-700 text-[9px] uppercase tracking-widest border-purple-200">Custom</Badge>
+                            )}
+                            {draft.is_repair && (
+                              <Badge className="bg-amber-100 text-amber-700 text-[9px] uppercase tracking-widest border-amber-200">Repair</Badge>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -295,23 +419,39 @@ export default function OverviewTab({ job }: Props) {
                 <TableRow>
                   <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">SKU Reference</TableHead>
                   <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Type</TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground text-right">Expected Gold</TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground text-right">Expected Diamond</TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Status</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground text-right">Exp Gold</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground text-right">Exp Dia</TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Status / Tags</TableHead>
                   <TableHead className="w-[50px]"></TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {items.map((item) => (
+                {items.map((item: any) => (
                   <TableRow key={item.id}>
                     <TableCell className="font-bold text-xs">{item.sku_reference}</TableCell>
                     <TableCell className="text-xs">{item.ornament_type || '-'}</TableCell>
-                    <TableCell className="text-xs text-right text-amber-600 font-medium">{item.expected_gold_weight_g ? `${item.expected_gold_weight_g} g` : '-'}</TableCell>
-                    <TableCell className="text-xs text-right text-blue-600 font-medium">{item.expected_diamond_weight_cts ? `${item.expected_diamond_weight_cts} cts` : '-'}</TableCell>
+                    <TableCell className="text-xs text-right text-amber-600 font-medium">
+                      {item.expected_gold_weight_g ? `${item.expected_gold_weight_g} g` : '-'}
+                    </TableCell>
+                    <TableCell className="text-xs text-right text-blue-600 font-medium">
+                      {item.expected_diamond_weight_cts ? `${item.expected_diamond_weight_cts} cts` : '-'}
+                    </TableCell>
                     <TableCell>
-                      <Badge variant={item.status === 'pending' ? 'outline' : 'secondary'} className="text-[10px] uppercase">
-                        {item.status}
-                      </Badge>
+                      <div className="flex gap-1">
+                        <Badge variant={item.status === 'pending' ? 'outline' : 'secondary'} className="text-[10px] uppercase">
+                          {item.status}
+                        </Badge>
+                        {item.custom_order_id && (
+                          <Badge className="bg-purple-100 text-purple-700 text-[9px] uppercase tracking-widest border-purple-200">
+                            Custom
+                          </Badge>
+                        )}
+                        {item.is_repair && (
+                          <Badge className="bg-amber-100 text-amber-700 text-[9px] uppercase tracking-widest border-amber-200">
+                            Repair
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       {item.status === 'pending' && (
