@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { 
   Send, 
@@ -12,7 +12,8 @@ import {
   RefreshCw, 
   Database,
   Info,
-  ListOrdered
+  ListOrdered,
+  Hash
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -46,6 +47,11 @@ interface BatchStats {
   available_stock: number;
 }
 
+interface VoucherCode {
+  id: string;
+  code: string;
+}
+
 export default function DistributePage() {
   const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(true);
@@ -57,13 +63,46 @@ export default function DistributePage() {
   const [selectedDistributor, setSelectedDistributor] = useState<string>("");
   const [selectedBatch, setSelectedBatch] = useState<string>("");
   
-  // Range Mode State
-  const [startCode, setStartCode] = useState<string>("");
-  const [endCode, setEndCode] = useState<string>("");
+  // Sequence & Quantity States
+  const [availableVouchers, setAvailableVouchers] = useState<VoucherCode[]>([]);
+  const [isLoadingVouchers, setIsLoadingVouchers] = useState(false);
+  const [quantity, setQuantity] = useState<string>("");
 
   useEffect(() => {
     fetchInitialData();
   }, []);
+
+  // Fetch the exact sequence of available vouchers whenever the batch changes
+  useEffect(() => {
+    if (!selectedBatch) {
+      setAvailableVouchers([]);
+      setQuantity("");
+      return;
+    }
+
+    const fetchVoucherSequence = async () => {
+      setIsLoadingVouchers(true);
+      try {
+        const { data, error } = await supabase
+          .from("vouchers")
+          .select("id, code")
+          .eq("batch_id", selectedBatch)
+          .eq("status", "in_stock")
+          .order("code", { ascending: true }); // Guarantees chronological sequence
+
+        if (error) throw error;
+        setAvailableVouchers(data || []);
+        setQuantity(""); // Reset quantity on new batch
+      } catch (error: any) {
+        console.error("Error fetching sequence:", error);
+        toast({ title: "Sequence Error", description: error.message, variant: "destructive" });
+      } finally {
+        setIsLoadingVouchers(false);
+      }
+    };
+
+    fetchVoucherSequence();
+  }, [selectedBatch, toast]);
 
   const fetchInitialData = async () => {
     setIsLoading(true);
@@ -111,6 +150,21 @@ export default function DistributePage() {
     }
   };
 
+  // Compute Start and End Codes dynamically based on user quantity
+  const { numQuantity, isValidQuantity, startCode, endCode, vouchersToUpdate } = useMemo(() => {
+    const num = parseInt(quantity) || 0;
+    const isValid = num > 0 && num <= availableVouchers.length;
+    const toUpdate = isValid ? availableVouchers.slice(0, num) : [];
+    
+    return {
+      numQuantity: num,
+      isValidQuantity: isValid,
+      startCode: isValid ? toUpdate[0].code : "---",
+      endCode: isValid ? toUpdate[toUpdate.length - 1].code : "---",
+      vouchersToUpdate: toUpdate
+    };
+  }, [quantity, availableVouchers]);
+
   const handleDistribute = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -119,34 +173,21 @@ export default function DistributePage() {
       return;
     }
 
-    if (!startCode.trim() || !endCode.trim()) {
-      toast({ title: "Validation Required", description: "Please enter both Start and End codes.", variant: "destructive" });
+    if (!isValidQuantity) {
+      toast({ title: "Invalid Quantity", description: `Please enter a valid quantity between 1 and ${availableVouchers.length}.`, variant: "destructive" });
       return;
     }
 
     setIsSubmitting(true);
     try {
-      const { data: vouchersToUpdate, error: fetchError } = await supabase
-        .from("vouchers")
-        .select("id, code")
-        .eq("batch_id", selectedBatch)
-        .eq("status", "in_stock")
-        .gte("code", startCode.trim().toUpperCase())
-        .lte("code", endCode.trim().toUpperCase());
-
-      if (fetchError) throw fetchError;
-      
-      if (!vouchersToUpdate || vouchersToUpdate.length === 0) {
-        throw new Error("No available vouchers found in this sequence range. They might be invalid or already distributed.");
-      }
-
       const voucherIds = vouchersToUpdate.map(v => v.id);
 
       const { error: updateError } = await supabase
         .from("vouchers")
         .update({
           distributor_id: selectedDistributor,
-          status: "distributed"
+          status: "distributed",
+          distributed_at: new Date().toISOString()
         })
         .in("id", voucherIds);
 
@@ -156,11 +197,10 @@ export default function DistributePage() {
 
       toast({
         title: "Transfer Complete",
-        description: `Successfully issued ${vouchersToUpdate.length} vouchers to ${distName}.`,
+        description: `Successfully issued ${numQuantity} vouchers (${startCode} to ${endCode}) to ${distName}.`,
       });
 
-      setStartCode("");
-      setEndCode("");
+      setQuantity("");
       setSelectedBatch("");
       fetchInitialData();
 
@@ -290,53 +330,63 @@ export default function DistributePage() {
 
                 <Separator className="bg-border my-6" />
 
-                {/* 3. Sequence Range Selection */}
+                {/* 3. Quantity & Sequence Auto-Generation */}
                 <div className="space-y-4">
-                  <div className="flex items-center gap-2 mb-2">
-                    <ListOrdered className="h-4 w-4 text-foreground" />
-                    <Label className="text-base font-semibold text-foreground">Physical Code Sequence Range</Label>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <ListOrdered className="h-4 w-4 text-foreground" />
+                      <Label className="text-base font-semibold text-foreground">Issue Quantity</Label>
+                    </div>
+                    {isLoadingVouchers && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
                   </div>
                   
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                     <div className="space-y-2">
-                      <Label className="text-sm font-medium text-foreground">Start Code</Label>
-                      <Input
-                        type="text"
-                        placeholder="e.g. A0001"
-                        value={startCode}
-                        onChange={(e) => setStartCode(e.target.value)}
-                        className="h-10 text-sm font-mono uppercase bg-background border-border"
-                        required
-                        disabled={!selectedBatch}
-                      />
+                      <Label className="text-sm font-medium text-muted-foreground">Quantity to Distribute</Label>
+                      <div className="relative">
+                        <Hash className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          type="number"
+                          min="1"
+                          max={availableVouchers.length || 1}
+                          placeholder={selectedBatch ? `Max: ${availableVouchers.length}` : "Select batch first"}
+                          value={quantity}
+                          onChange={(e) => setQuantity(e.target.value)}
+                          className="h-10 pl-9 text-sm font-bold bg-background border-border focus-visible:ring-indigo-500"
+                          required
+                          disabled={!selectedBatch || isLoadingVouchers}
+                        />
+                      </div>
                     </div>
-                    <div className="space-y-2">
-                      <Label className="text-sm font-medium text-foreground">End Code</Label>
-                      <Input
-                        type="text"
-                        placeholder="e.g. A0025"
-                        value={endCode}
-                        onChange={(e) => setEndCode(e.target.value)}
-                        className="h-10 text-sm font-mono uppercase bg-background border-border"
-                        required
-                        disabled={!selectedBatch}
-                      />
+                    
+                    <div className="space-y-2 md:col-span-2">
+                      <Label className="text-sm font-medium text-muted-foreground">Generated Physical Sequence</Label>
+                      <div className="flex items-center gap-3">
+                        <div className="flex-1 h-10 px-3 bg-secondary border border-border rounded-md flex items-center justify-center font-mono text-sm font-bold text-foreground">
+                          {startCode}
+                        </div>
+                        <span className="text-muted-foreground font-medium text-sm">to</span>
+                        <div className="flex-1 h-10 px-3 bg-secondary border border-border rounded-md flex items-center justify-center font-mono text-sm font-bold text-foreground">
+                          {endCode}
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>
 
                 {/* Notification Area */}
-                <div className="flex items-start gap-3 p-4 rounded-lg bg-secondary/50 border border-border">
-                  <Info className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                  <p className="text-sm text-muted-foreground leading-relaxed">
-                    <span className="text-foreground font-semibold">Sequence Matching Notice:</span> This will transfer the exact physical sequence. Ensure the physical booklets you are handing over perfectly match the Start and End codes typed above.
+                <div className="flex items-start gap-3 p-4 rounded-lg bg-indigo-50/50 border border-indigo-100">
+                  <Info className="h-4 w-4 text-indigo-500 shrink-0 mt-0.5" />
+                  <p className="text-sm text-indigo-700 leading-relaxed">
+                    <span className="font-semibold block mb-0.5">Sequence Auto-Matched</span> 
+                    The system has automatically skipped any voided or previously distributed codes in this batch. Please ensure the physical booklets you hand over exactly match the <strong>{startCode} to {endCode}</strong> range shown above.
                   </p>
                 </div>
 
                 <Button 
                   type="submit" 
-                  disabled={isSubmitting || isLoading || batches.length === 0}
-                  className="w-full h-10 font-semibold"
+                  disabled={isSubmitting || isLoading || batches.length === 0 || !isValidQuantity}
+                  className="w-full h-10 font-semibold bg-indigo-600 hover:bg-indigo-700 text-white"
                 >
                   {isSubmitting ? (
                     <>
@@ -346,7 +396,7 @@ export default function DistributePage() {
                   ) : (
                     <>
                       <Send className="mr-2 h-4 w-4" />
-                      Authorize Distribution
+                      Authorize Distribution of {numQuantity > 0 && isValidQuantity ? numQuantity : ""} Vouchers
                     </>
                   )}
                 </Button>
