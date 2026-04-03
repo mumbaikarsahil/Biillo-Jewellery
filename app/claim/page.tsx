@@ -84,7 +84,6 @@ const NativeDatePicker = ({ value, onChange, label, icon: Icon, type = 'dob', re
     </div>
   )
 }
-// -------------------------------------------------------------
 
 export default function VoucherClaimPage() {
   const [step, setStep] = useState(0) 
@@ -114,21 +113,52 @@ export default function VoucherClaimPage() {
       )
     : QUICK_QUESTIONS;
 
-  const handleNextStep = () => {
-    if (!formData.code.trim()) {
+  // --- REAL DATABASE VALIDATION STEP ---
+  const handleNextStep = async () => {
+    const codeToVerify = formData.code.toUpperCase().trim();
+    if (!codeToVerify) {
       return toast.error("Please enter a voucher code first.")
     }
     
     setIsVerifying(true)
-    setTimeout(() => {
+    
+    try {
+      // 1. Minimum 1.2s delay for smooth UI animation, running parallel to the DB fetch
+      const minDelay = new Promise(resolve => setTimeout(resolve, 1200));
+      
+      // 2. Fetch the voucher status directly from the database
+      const dbFetch = supabase
+        .from('vouchers')
+        .select('status, expiry_date')
+        .eq('code', codeToVerify)
+        .maybeSingle();
+
+      const [_, { data, error }] = await Promise.all([minDelay, dbFetch]);
+
+      if (error) throw error;
+      if (!data) throw new Error("Voucher code not found. Please check your spelling.");
+      
+      // 3. Strict Status Validations
+      if (data.status === 'redeemed') throw new Error("This voucher has already been redeemed at the store.");
+      if (data.status === 'voided') throw new Error("This voucher code has been voided by management.");
+      if (data.status === 'registered') throw new Error("This voucher is already registered to a customer.");
+      if (data.status === 'expired' || (data.expiry_date && new Date(data.expiry_date) < new Date())) {
+        throw new Error("This voucher has expired.");
+      }
+      if (data.status !== 'distributed') {
+        throw new Error("Invalid voucher code, Please contact the support");
+      }
+
+      // If it passes all checks, proceed to the details form
+      setStep(1) 
+    } catch (err: any) {
+      toast.error(err.message || "Invalid voucher code.", { duration: 4000 });
       setIsVerifying(false)
-      setStep(1)
-    }, 1800) 
+    }
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    // Validation now requires DOB
     if (!formData.name || !formData.phone || !formData.nearestBranch || !formData.dob) {
       return toast.error("Please fill in your Name, Phone, Branch, and Date of Birth.")
     }
@@ -140,7 +170,7 @@ export default function VoucherClaimPage() {
         p_name: formData.name,
         p_phone: formData.phone,
         p_branch: formData.nearestBranch,
-        p_dob: formData.dob, // Now mandatory
+        p_dob: formData.dob, 
         p_anniversary: formData.anniversary || null
       })
 
@@ -169,13 +199,11 @@ export default function VoucherClaimPage() {
 
     const lowerInput = chatInput.toLowerCase();
     
-    // Check for specific questions
     const match = QUICK_QUESTIONS.find(q => 
       q.q.toLowerCase().includes(lowerInput) || 
       lowerInput.includes(q.short.toLowerCase().replace('?', ''))
     );
 
-    // Check for conversational pleasantries
     const isPleasantry = lowerInput.match(/\b(ok|okay|thank you|thanks|thx|great|awesome|perfect|good)\b/);
 
     setChatMessages(prev => [...prev, { sender: 'user', text: chatInput }]);
@@ -187,7 +215,6 @@ export default function VoucherClaimPage() {
       } else if (match) {
         setChatMessages(prev => [...prev, { sender: 'bot', text: BOT_ANSWERS[match.id] }]);
       } else {
-        // Fallback message with action buttons
         setChatMessages(prev => [...prev, { 
           sender: 'bot', 
           text: "I'm still learning! For this specific query, please connect with our human support team:",
@@ -336,9 +363,7 @@ export default function VoucherClaimPage() {
                   </div>
 
                   <div className="pt-2 pb-1 flex flex-col gap-4">
-                    {/* DOB is now mandatory */}
                     <NativeDatePicker required={true} value={formData.dob} onChange={(v: string) => setFormData({...formData, dob: v})} label="Date of Birth" icon={Calendar} type="dob" />
-                    {/* Anniversary remains optional */}
                     <NativeDatePicker value={formData.anniversary} onChange={(v: string) => setFormData({...formData, anniversary: v})} label="Anniversary" icon={Heart} type="anniversary" />
                   </div>
 
@@ -368,7 +393,7 @@ export default function VoucherClaimPage() {
                      <Sparkles className="w-3.5 h-3.5 text-emerald-500" /> How to redeem
                    </p>
                    <p className="text-sm text-slate-700 font-medium leading-snug">
-                     Visit our <b className="text-slate-900">{formData.nearestBranch}</b> branch and simply provide your mobile number <b className="text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded">({formData.phone})</b> and a valid ID proof at the billing counter.
+                     Visit our <b className="text-slate-900">{formData.nearestBranch}</b> branch and simply provide your mobile number <b className="text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded">({formData.phone})</b> at the billing counter.
                    </p>
                 </div>
               </div>
@@ -477,7 +502,6 @@ export default function VoucherClaimPage() {
 
           <div className="bg-white/80 backdrop-blur-md p-2 pt-0 shrink-0 flex flex-col">
             
-            {/* Predictive Search Display */}
             {chatInput.trim() && filteredQuestions.length > 0 && (
               <div className="flex flex-col gap-1 mb-2 max-h-[100px] overflow-y-auto custom-scrollbar px-1">
                 {filteredQuestions.map(qq => (
@@ -511,7 +535,6 @@ export default function VoucherClaimPage() {
           </div>
         </div>
 
-        {/* Floating Chat Button Wrapper (with Toast) */}
         <div className="relative flex items-center">
           {!isChatOpen && (
             <div className="absolute right-full mr-4 top-1/2 -translate-y-1/2 animate-bounce flex items-center z-50">
