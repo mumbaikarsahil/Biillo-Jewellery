@@ -15,16 +15,32 @@ import {
 
 // Flexible interface so it can accept items from Inventory OR Receiving
 export interface TagItemData {
+  _type?: 'inventory' | 'repair';
+  is_repair_ticket?: boolean;
   barcode?: string;
   item_category?: string;
   sku_reference?: string;
   purity_karat?: string;
   gross_weight_g?: number | string;
   net_weight_g?: number | string;
+  
+  // Standard Totals
   total_stone_pieces?: number | string;
   total_stone_weight_cts?: number | string;
+  
+  // Breakdown
+  solitaire_weight_cts?: number | string;
+  solitaire_pieces?: number | string;
+  melee_weight_cts?: number | string;
+  melee_pieces?: number | string;
+
   label_1?: string | null; // e.g., Gold Quality / Hallmark info
   label_2?: string | null; // e.g., Diamond Quality / Certification
+
+  // Repair Specific Fields
+  mrp?: number | null; // Used for Billable Amount
+  origin_name?: string; // Used for Branch
+  expected_delivery_date?: string; // Used for Due Date
 }
 
 interface Props {
@@ -55,12 +71,17 @@ export function ItemTagPreview({ item, onClose }: Props) {
     }
   }
 
+  // Safety checks for conditional rendering
+  const isRepair = item?._type === 'repair' || item?.is_repair_ticket;
+  const hasSolitaire = Number(item?.solitaire_weight_cts) > 0;
+  const hasMelee = Number(item?.melee_weight_cts) > 0;
+
   return (
     <Dialog open={!!item} onOpenChange={(val) => !val && onClose()}>
       <DialogContent className="sm:max-w-[550px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white">
         <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200">
           <DialogTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
-             <Printer className="w-4 h-4 text-slate-500" /> Thermal Label Layout
+             <Printer className="w-4 h-4 text-slate-500" /> Thermal Label Layout {isRepair && "(Repair Tag)"}
           </DialogTitle>
         </DialogHeader>
         
@@ -73,19 +94,51 @@ export function ItemTagPreview({ item, onClose }: Props) {
               
               {/* LEFT: TEXT DETAILS AREA */}
               <div className="flex flex-col justify-center h-full w-[41mm] pl-[2mm] pr-[1mm]" style={{ fontSize: '6px', lineHeight: '1.25', fontWeight: '700' }}>
-                <div className="font-extrabold uppercase tracking-tight text-[7px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate">
-                  {item?.item_category || 'CATEGORY'}
-                </div>
                 
-                <div className="flex items-center"><span className="w-[10mm] text-gray-700">STYLE</span><span className="truncate">: {item?.sku_reference || '---'}</span></div>
-                <div className="flex items-center"><span className="w-[10mm] text-gray-700">GW/NW</span><span>: {Number(item?.gross_weight_g||0).toFixed(3)}g / {Number(item?.net_weight_g||0).toFixed(3)}g</span></div>
-                <div className="flex items-center"><span className="w-[10mm] text-gray-700">KT/QLTY</span><span className="truncate">: {item?.purity_karat || '---'} {item?.label_1 ? `| ${item.label_1}` : ''}</span></div>
-                <div className="flex items-center"><span className="w-[10mm] text-gray-700">DP/DW</span><span>: {item?.total_stone_pieces || 0} / {Number(item?.total_stone_weight_cts||0).toFixed(2)}ct</span></div>
-                
-                {/* Only show Diamond Quality if it exists to save space */}
-                {(item?.label_2) && (
-                  <div className="flex items-center"><span className="w-[10mm] text-gray-700">DIA</span><span className="truncate">: {item?.label_2}</span></div>
+                {isRepair ? (
+                  /* ================= REPAIR TAG LAYOUT ================= */
+                  <>
+                    <div className="font-extrabold uppercase tracking-tight text-[7px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate text-black">
+                      REPAIR: {item?.item_category || 'SERVICE'}
+                    </div>
+                    <div className="flex items-center"><span className="w-[12mm] text-gray-700">TICKET</span><span className="truncate">: {item?.barcode || '---'}</span></div>
+                    <div className="flex items-center"><span className="w-[12mm] text-gray-700">BRANCH</span><span className="truncate">: {item?.origin_name || '---'}</span></div>
+                    <div className="flex items-center">
+                      <span className="w-[12mm] text-gray-700">DUE</span>
+                      <span className="truncate">: {item?.expected_delivery_date ? new Date(item.expected_delivery_date).toLocaleDateString('en-GB') : '---'}</span>
+                    </div>
+                    <div className="flex items-center"><span className="w-[12mm] text-gray-700">ADD GLD</span><span>: {Number(item?.net_weight_g||0).toFixed(3)}g</span></div>
+                    <div className="flex items-center"><span className="w-[12mm] text-gray-700">ADD DIA</span><span>: {Number(item?.total_stone_weight_cts||0).toFixed(2)}ct</span></div>
+                    <div className="flex items-center"><span className="w-[12mm] text-gray-700">BILL</span><span>: ₹{Number(item?.mrp||0).toLocaleString()}</span></div>
+                  </>
+                ) : (
+                  /* ================= STANDARD INVENTORY LAYOUT ================= */
+                  <>
+                    <div className="font-extrabold uppercase tracking-tight text-[7px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate">
+                      {item?.item_category || 'CATEGORY'}
+                    </div>
+                    
+                    <div className="flex items-center"><span className="w-[10mm] text-gray-700">STYLE</span><span className="truncate">: {item?.sku_reference || '---'}</span></div>
+                    <div className="flex items-center"><span className="w-[10mm] text-gray-700">GW/NW</span><span>: {Number(item?.gross_weight_g||0).toFixed(3)}g / {Number(item?.net_weight_g||0).toFixed(3)}g</span></div>
+                    <div className="flex items-center"><span className="w-[10mm] text-gray-700">KT/QLTY</span><span className="truncate">: {item?.purity_karat || '---'} {item?.label_1 ? `| ${item.label_1}` : ''}</span></div>
+                    
+                    <div className="flex items-center"><span className="w-[10mm] text-gray-700">STN(T)</span><span>: {item?.total_stone_pieces || 0}p / {Number(item?.total_stone_weight_cts||0).toFixed(2)}ct</span></div>
+                    
+                    {/* DYNAMIC STONE BREAKDOWN */}
+                    {hasSolitaire && (
+                      <div className="flex items-center"><span className="w-[10mm] text-gray-700">SOL</span><span>: {item?.solitaire_pieces || 0}p / {Number(item?.solitaire_weight_cts||0).toFixed(2)}ct</span></div>
+                    )}
+                    {hasMelee && (
+                      <div className="flex items-center"><span className="w-[10mm] text-gray-700">MEL</span><span>: {item?.melee_pieces || 0}p / {Number(item?.melee_weight_cts||0).toFixed(2)}ct</span></div>
+                    )}
+                    
+                    {/* Only show Diamond Quality if it exists to save space */}
+                    {(item?.label_2) && (
+                      <div className="flex items-center"><span className="w-[10mm] text-gray-700">DIA</span><span className="truncate">: {item?.label_2}</span></div>
+                    )}
+                  </>
                 )}
+
               </div>
 
               {/* MIDDLE FOLD GAP (5mm) */}

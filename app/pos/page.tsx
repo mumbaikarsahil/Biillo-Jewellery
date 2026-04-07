@@ -1,12 +1,14 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
+// NEW: Added useSearchParams
+import { useSearchParams } from 'next/navigation' 
 import { useAuth } from '@/hooks/useAuth'
 import { useStoreLocation } from '@/hooks/useStoreLocation'
 import { useRpc } from '@/hooks/useRpc'
 import { Loader2 } from 'lucide-react'
 import { fetchCustomers } from '@/lib/api'
-import { toast } from 'sonner' // Added for the toast notification
+import { toast } from 'sonner' 
 
 // Hooks
 import { useCart } from '@/hooks/useCart'
@@ -30,6 +32,10 @@ export default function POSPage() {
   const { callRpc } = useRpc()
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
   
+  // NEW: Read the URL parameters
+  const searchParams = useSearchParams()
+  const urlBarcode = searchParams.get('barcode')
+  
   // Core UI State
   const [mode, setMode] = useState<BillingMode>('normal')
   const [showScanner, setShowScanner] = useState(false)
@@ -38,7 +44,7 @@ export default function POSPage() {
   const [lastInvoiceData, setLastInvoiceData] = useState<any>(null)
   const [isEstimateCheckout, setIsEstimateCheckout] = useState(false)
   
-  // NEW: State to hold the rich warehouse data (for printing addresses)
+  // State to hold the rich warehouse data (for printing addresses)
   const [allBranches, setAllBranches] = useState<any[]>([])
 
   const [repairDetails, setRepairDetails] = useState<any>({
@@ -84,11 +90,24 @@ export default function POSPage() {
   }, [appUser])
 
   // 1. Initialize Cart 
-  // IMPORTANT: Ensure `setCart` is exported from your `useCart` hook!
   const {
     cart, setCart, subtotal, itemSearchTerm, setItemSearchTerm, searchResults,
     processScannedItem, handleScanResult, clearCart, removeFromCart
   } = useCart(appUser?.company_id, selectedLocation, mode)
+
+  // ======================================================================
+  // NEW: AUTO-ADD FROM DISCOVERY PAGE URL
+  // ======================================================================
+  useEffect(() => {
+    if (urlBarcode && selectedLocation && appUser?.company_id) {
+      // 1. Automatically fetch and add the item to the cart
+      processScannedItem(urlBarcode)
+      
+      // 2. Wipe the barcode from the URL so a simple page refresh doesn't add it again!
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+  }, [urlBarcode, selectedLocation, appUser?.company_id]) // Only run when these mount
+  // ======================================================================
 
   // 2. Initialize Checkout 
   const checkoutHook = useCheckout({

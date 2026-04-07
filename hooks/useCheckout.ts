@@ -22,14 +22,24 @@ export function useCheckout({
   
   // Payment States
   const [paymentMode, setPaymentMode] = useState('cash') 
-  const [splitPayments, setSplitPayments] = useState({ cash: '', card: '', upi: '', bank: '' })
+  const [splitPayments, setSplitPayments] = useState({ cash: '', card: '', upi: '', bank: '', cheque: '' })
   const [isProcessing, setIsProcessing] = useState(false)
+
+  // --- ESTIMATE ADD-ON STATE ---
+  const [estimateChargeType, setEstimateChargeType] = useState<'tax' | 'handling' | 'none'>('tax')
+  const [estimateHandlingPercent, setEstimateHandlingPercent] = useState<string>('3')
+
+  // --- CENTRALIZED WALLET STATE ---
+  const [appliedKittyAmount, setAppliedKittyAmount] = useState(0)
+  const [appliedPointsAmount, setAppliedPointsAmount] = useState(0)
+  const [appliedCreditAmount, setAppliedCreditAmount] = useState(0)
   
   const currentSplitTotal = 
     (parseFloat(splitPayments.cash) || 0) + 
     (parseFloat(splitPayments.card) || 0) + 
     (parseFloat(splitPayments.upi) || 0) + 
-    (parseFloat(splitPayments.bank) || 0)
+    (parseFloat(splitPayments.bank) || 0) +
+    (parseFloat(splitPayments.cheque) || 0)
   
   // Adjustments
   const [discountType, setDiscountType] = useState<'percent' | 'flat'>('percent')
@@ -46,11 +56,21 @@ export function useCheckout({
   const [exchangeValue, setExchangeValue] = useState<string>('')
   const [exchangeNotes, setExchangeNotes] = useState<string>('')
 
-  // --- Math Engine ---
-  const discountNum = parseFloat(discountValue) || 0
-  const discountAmount = discountType === 'percent' ? (subtotal * discountNum) / 100 : discountNum
+  // ==============================================================
+  // --- MATH ENGINE (PRE-TAX & ADVANCE ADJUSTMENTS) ---
+  // ==============================================================
   
-  let baseTaxable = Math.max(0, subtotal - discountAmount)
+  // 1. Calculate Advance Paid (If this is a custom order pickup)
+  const cartAdvance = cart?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
+
+  // 2. Calculate Deductions
+  const discountNum = parseFloat(discountValue) || 0
+  const standardDiscount = discountType === 'percent' ? (subtotal * discountNum) / 100 : discountNum
+  const totalWalletRedemptions = appliedKittyAmount + appliedPointsAmount + appliedCreditAmount;
+
+  // 3. Deduct all pre-tax discounts
+  let baseTaxable = Math.max(0, subtotal - standardDiscount - totalWalletRedemptions)
+  
   const exchangeNum = parseFloat(exchangeValue) || 0
   baseTaxable = Math.max(0, baseTaxable - exchangeNum)
   const handlingAmt = parseFloat(handlingFee) || 0; 
@@ -70,13 +90,20 @@ export function useCheckout({
       }
   }
 
+  // 4. Calculate GST on Taxable Value
   const cgstAmount = parseFloat((finalTaxableValue * 0.015).toFixed(2))
   const sgstAmount = parseFloat((finalTaxableValue * 0.015).toFixed(2))
+  
+  // 5. Finalize Totals (Gross vs Net)
   const exactFinalPayable = finalTaxableValue + cgstAmount + sgstAmount
-  const finalPayable = Math.round(exactFinalPayable)
-  const roundOffAmount = parseFloat((finalPayable - exactFinalPayable).toFixed(2))
+  const finalPayableGross = Math.round(exactFinalPayable)
+  const roundOffAmount = parseFloat((finalPayableGross - exactFinalPayable).toFixed(2))
 
-  // --- Actions ---
+  // Net payable is the Invoice Total MINUS the Advance they already paid
+  const finalPayableNet = Math.max(0, finalPayableGross - cartAdvance);
+
+  // ==============================================================
+
   const handleApplyVoucher = async () => {
     if (!voucherCode.trim()) return;
     let codeToSearch = voucherCode.trim();
@@ -116,18 +143,29 @@ export function useCheckout({
     }
   }
 
-  const handleFetchExchangeItem = async () => {
-    if (!exchangeInvoiceNo.trim() || !appUser) return toast.error('Enter an invoice number.')
+  const handleFetchExchangeItem = async (): Promise<boolean> => {
+    if (!exchangeInvoiceNo.trim() || !appUser) {
+      toast.error('Enter an invoice number.')
+      return false
+    }
     try {
-      const { data: invoiceData, error: invErr } = await supabase.from('invoices')
-        .select('id, invoice_number, subtotal').ilike('invoice_number', exchangeInvoiceNo.trim()).eq('company_id', appUser.company_id).maybeSingle()
+      const { data: invoiceData, error: invErr } = await supabase
+        .from('invoices')
+        .select('id, invoice_number, subtotal')
+        .ilike('invoice_number', exchangeInvoiceNo.trim())
+        .eq('company_id', appUser.company_id)
+        .maybeSingle()
+        
       if (invErr) throw invErr
-      if (!invoiceData) return toast.error('Invoice not found.')
+      if (!invoiceData) return false 
+      
       setExchangeValue((invoiceData.subtotal || 0).toString())
       setExchangeNotes(`EXCHANGE (100% MRP): INV [${invoiceData.invoice_number}]`)
       toast.success(`100% Credit Applied.`)
+      return true 
     } catch (err) {
-      toast.error('Failed to fetch original invoice.')
+      console.error(err)
+      return false
     }
   }
 
@@ -152,6 +190,30 @@ export function useCheckout({
       expectedDiamondCts: customOrderDetails.expected_diamond_cts,
     } : null;
 
+    // Estimate Overrides
+    let printCgst = cgstAmount;
+    let printSgst = sgstAmount;
+    let printRoundOff = roundOffAmount;
+    let printFinalTotal = finalPayableGross; // Print the gross before advance
+    let printEstimateHandlingAmt = 0;
+
+    if (isEstimate && mode === 'normal') {
+        if (estimateChargeType === 'handling') {
+            printCgst = 0;
+            printSgst = 0;
+            const hPct = parseFloat(estimateHandlingPercent) || 0;
+            printEstimateHandlingAmt = parseFloat((finalTaxableValue * (hPct / 100)).toFixed(2));
+            const exact = finalTaxableValue + printEstimateHandlingAmt;
+            printFinalTotal = Math.round(exact);
+            printRoundOff = parseFloat((printFinalTotal - exact).toFixed(2));
+        } else if (estimateChargeType === 'none') {
+            printCgst = 0;
+            printSgst = 0;
+            printFinalTotal = Math.round(finalTaxableValue);
+            printRoundOff = parseFloat((printFinalTotal - finalTaxableValue).toFixed(2));
+        }
+    }
+
     return {
       mode: isEstimate ? 'estimate' : mode, 
       invoice_number: draftInvoiceNo,
@@ -162,30 +224,53 @@ export function useCheckout({
       customOrder: mappedCustomOrder, 
       repair: mode === 'repair' ? repairDetails : null, 
       returnDetails: mode === 'return' ? returnDetails : null, 
-      subtotal, discountAmount, voucherAmount: appliedVoucherAmount, handlingFee: handlingAmt, 
-      taxableValue: finalTaxableValue, cgstAmount, sgstAmount, 
-      exactFinalPayable, roundOffAmount, 
+      
+      subtotal, 
+      discountAmount: standardDiscount, 
+      voucherAmount: appliedVoucherAmount, 
+      handlingFee: handlingAmt, 
+      taxableValue: finalTaxableValue, 
+      cgstAmount: printCgst, 
+      sgstAmount: printSgst, 
+      exactFinalPayable, 
+      roundOffAmount: printRoundOff, 
       exchangeValue: exchangeNum, 
+      
+      appliedKitty: appliedKittyAmount,
+      appliedPoints: appliedPointsAmount,
+      appliedCredit: appliedCreditAmount,
+      
+      estimateChargeType, 
+      estimateHandlingPct: estimateHandlingPercent,
+      estimateHandlingAmt: printEstimateHandlingAmt,
       
       finalTotal: mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
                 : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                 : mode === 'return' ? (Number(returnDetails?.refundAmount) || 0) 
-                : finalPayable,
+                : isEstimate && mode === 'normal' ? printFinalTotal 
+                : finalPayableGross, // ALWAYS PASS GROSS TO THE PRINTER
       paymentMode: formattedPaymentMode
     }
   }
 
-  const executeCheckout = async (isEstimate = false) => {
+  const executeCheckout = async (isEstimate = false, customTransactionContext?: any) => {
     setIsProcessing(true)
     let finalNo = ''
     try {
+      if (customTransactionContext) {
+         if (customTransactionContext.applied_kitty) setAppliedKittyAmount(customTransactionContext.applied_kitty);
+         if (customTransactionContext.applied_points) setAppliedPointsAmount(customTransactionContext.applied_points);
+         if (customTransactionContext.applied_credit) setAppliedCreditAmount(customTransactionContext.applied_credit);
+      }
+
+      // Ensure split validation checks against the NET amount, not the gross!
       const requiredTotal = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
                           : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                           : mode === 'return' ? (Number(returnDetails?.refundAmount) || 0) 
-                          : finalPayable;
+                          : finalPayableNet; 
 
       if (paymentMode === 'split' && Math.abs(currentSplitTotal - requiredTotal) > 0.1) {
-        toast.error(`Split total must match ₹${requiredTotal}`);
+        toast.error(`Split total must match ₹${requiredTotal.toLocaleString()}`);
         setIsProcessing(false); return { success: false };
       }
 
@@ -194,34 +279,79 @@ export function useCheckout({
         toast.success("Estimate generated.")
       } 
       else if (mode === 'normal') {
+        const totalDeductions = standardDiscount + appliedKittyAmount + appliedPointsAmount + appliedCreditAmount;
+
+        // PERFECT SCHEMA MATCH: Every field mapped explicitly
         const invoiceData = {
-            customer_id: selectedCustomer?.id, warehouse_id: selectedLocation,
+            customer_id: selectedCustomer?.id, 
+            warehouse_id: selectedLocation,
             items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
-            payment_mode: paymentMode === 'split' ? JSON.stringify(splitPayments) : paymentMode,
-            subtotal, discount_amount: discountAmount, voucher_code: activeVoucher?.code || null,
-            voucher_discount: appliedVoucherAmount, taxable_value: finalTaxableValue,
-            cgst_amount: cgstAmount, sgst_amount: sgstAmount, round_off_amount: roundOffAmount,
-            exchange_value: exchangeNum, exchange_notes: exchangeNotes, exchange_barcode: exchangeInvoiceNo.trim() || null, 
-            final_total: finalPayable
-          }
+            
+            // Financials
+            subtotal: subtotal, 
+            discount_amount: totalDeductions, 
+            discounted_total: Math.max(0, subtotal - totalDeductions),
+            taxable_value: finalTaxableValue,
+            cgst_amount: cgstAmount, 
+            sgst_amount: sgstAmount, 
+            round_off_amount: roundOffAmount,
+            final_total: finalPayableGross, // DB stores the FULL INVOICE VALUE
+            advance_adjusted: cartAdvance,  // DB stores the ADVANCE DEDUCTION
+            
+            // Vouchers & Exchanges
+            voucher_code: activeVoucher?.code || null,
+            voucher_discount: appliedVoucherAmount, 
+            Voucher_handling_fee: handlingAmt,
+            exchange_value: exchangeNum, 
+            exchange_notes: exchangeNotes, 
+            
+            // Payment Data
+            payment_mode: paymentMode,
+            split_payments: paymentMode === 'split' ? splitPayments : null,
+            transaction_reference: customTransactionContext?.transaction_reference || null,
+            payment_remarks: customTransactionContext?.payment_remarks || null,
+            target_bank_account_id: customTransactionContext?.target_bank_account_id || null,
+            transfer_type: customTransactionContext?.transfer_type || null
+        }
+        
         const { data, error } = await callRpc('pos_confirm_sale', { p_invoice_json: invoiceData, p_user_id: appUser?.user_id })
         if (error) throw error
         
         finalNo = data?.invoice_number || `INV-${Date.now().toString().slice(-6)}`
         if (activeVoucher) await supabase.from('vouchers').update({ status: 'redeemed', redeemed_at: new Date().toISOString() }).eq('id', activeVoucher.id)
         
-        // --- CUSTOM ORDERS FULFILLMENT ---
         const customOrderIds = cart.filter(item => item.custom_order_id).map(item => item.custom_order_id);
         if (customOrderIds.length > 0) {
            await supabase.from('custom_orders').update({ status: 'delivered' }).in('id', customOrderIds);
         }
 
-        // --- REPAIR TICKETS FULFILLMENT ---
         const repairTicketIds = cart.filter(item => item.repair_ticket_id).map(item => item.repair_ticket_id);
         if (repairTicketIds.length > 0) {
            await supabase.from('repair_tickets').update({ status: 'delivered' }).in('id', repairTicketIds);
         }
-        // ----------------------------------
+
+        if (selectedCustomer) {
+            let updatePayload: any = {};
+            let shouldUpdateCustomer = false;
+
+            if (customTransactionContext?.applied_points > 0) {
+                updatePayload.pavitram_points = Math.max(0, (selectedCustomer.pavitram_points || 0) - customTransactionContext.applied_points);
+                shouldUpdateCustomer = true;
+            }
+            if (customTransactionContext?.applied_credit > 0) {
+                updatePayload.store_credit_balance = Math.max(0, (selectedCustomer.store_credit_balance || 0) - customTransactionContext.applied_credit);
+                shouldUpdateCustomer = true;
+            }
+            if (customTransactionContext?.applied_kitty > 0) {
+                updatePayload.kitty_plan_status = 'Redeemed';
+                updatePayload.kitty_months_paid = 0; 
+                shouldUpdateCustomer = true;
+            }
+
+            if (shouldUpdateCustomer) {
+                await supabase.from('customers').update(updatePayload).eq('id', selectedCustomer.id);
+            }
+        }
 
         toast.success("Tax Invoice Generated!")
       } 
@@ -274,7 +404,6 @@ export function useCheckout({
         if (!selectedCustomer) throw new Error("Please select a customer for this Custom Order.")
         
         finalNo = `ORD-${Date.now().toString().slice(-6)}`
-        
         const payload = {
           company_id: appUser?.company_id,
           origin_warehouse_id: selectedLocation, 
@@ -291,11 +420,17 @@ export function useCheckout({
 
         const { error } = await supabase.from('custom_orders').insert(payload)
         if (error) throw error
-
         toast.success(`Custom Order ${finalNo} submitted to manufacturing!`)
       }
 
-      return { success: true, invoiceNo: finalNo, draftData: generateDraftData(isEstimate) }
+      const finalDraftData = generateDraftData(isEstimate);
+      if (customTransactionContext) {
+          finalDraftData.appliedKitty = customTransactionContext.applied_kitty || 0;
+          finalDraftData.appliedPoints = customTransactionContext.applied_points || 0;
+          finalDraftData.appliedCredit = customTransactionContext.applied_credit || 0;
+      }
+
+      return { success: true, invoiceNo: finalNo, draftData: finalDraftData }
     } catch (err: any) {
       toast.error(err.message || 'Checkout failed.'); return { success: false }
     } finally { setIsProcessing(false) }
@@ -305,7 +440,8 @@ export function useCheckout({
     setDiscountValue(''); setActiveVoucher(null); setHandlingFee('0'); 
     setExchangeValue(''); setExchangeNotes(''); setExchangeInvoiceNo('');
     setIsExchangeOpen(false); setPaymentMode('cash');
-    setSplitPayments({ cash: '', card: '', upi: '', bank: '' });
+    setAppliedKittyAmount(0); setAppliedPointsAmount(0); setAppliedCreditAmount(0); 
+    setSplitPayments({ cash: '', card: '', upi: '', bank: '', cheque: '' });
   }
 
   return {
@@ -313,7 +449,15 @@ export function useCheckout({
     discountType, setDiscountType, discountValue, setDiscountValue,
     voucherCode, setVoucherCode, activeVoucher, setActiveVoucher, handlingFee,
     isExchangeOpen, setIsExchangeOpen, exchangeInvoiceNo, setExchangeInvoiceNo, exchangeValue, setExchangeValue, exchangeNotes, setExchangeNotes,
-    discountAmount, appliedVoucherAmount, handlingAmt, finalTaxableValue, cgstAmount, sgstAmount, exactFinalPayable, roundOffAmount, finalPayable, exchangeNum,
+    discountAmount: standardDiscount, appliedVoucherAmount, handlingAmt, finalTaxableValue, cgstAmount, sgstAmount, exactFinalPayable, roundOffAmount, 
+    
+    // We export the Net Payable (Amount Due) so the Sidebar knows what to charge!
+    finalPayable: finalPayableNet, 
+    exchangeNum,
+    
+    appliedKittyAmount, setAppliedKittyAmount, appliedPointsAmount, setAppliedPointsAmount, appliedCreditAmount, setAppliedCreditAmount,
+    estimateChargeType, setEstimateChargeType, estimateHandlingPercent, setEstimateHandlingPercent, 
+
     handleApplyVoucher, handleFetchExchangeItem, generateDraftData, executeCheckout, resetCheckoutState
   }
 }

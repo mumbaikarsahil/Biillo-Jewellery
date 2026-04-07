@@ -6,7 +6,6 @@ import { useAuth } from '@/hooks/useAuth'
 import { useStoreLocation } from '@/hooks/useStoreLocation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { 
   Select, SelectContent, SelectItem, 
   SelectTrigger, SelectValue 
@@ -14,10 +13,9 @@ import {
 import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
 import { 
-  Search, Info, ShoppingCart, ArrowRight, Loader2, QrCode, Store, Camera, X, Hammer, Gem
+  Search, ArrowRight, Loader2, QrCode, Store, Camera, X, Gem, Image as ImageIcon
 } from 'lucide-react'
 import { Scanner } from '@yudiel/react-qr-scanner'
-import { cn } from '@/lib/utils'
 
 interface ProductDiscovery {
   id: string
@@ -33,6 +31,24 @@ interface ProductDiscovery {
   status: string
   is_exchanged: boolean
   warehouse_id?: string
+  sku_reference: string | null
+  total_stone_pieces: number
+  
+  // NEW ASSET FIELDS
+  image_url?: string | null
+  metal_color?: string | null
+  diamond_shape?: string | null
+  diamond_color?: string | null
+  diamond_clarity?: string | null
+  is_custom_order?: boolean
+  solitaire_weight_cts?: number
+  solitaire_pieces?: number
+  melee_weight_cts?: number
+  melee_pieces?: number
+  item_size?: string | null
+  remarks?: string | null
+  huid_code?: string | null
+  hsn_code?: string | null
 }
 
 export default function DiscoveryPage() {
@@ -47,8 +63,6 @@ export default function DiscoveryPage() {
   const [fetching, setFetching] = useState(false)
   const [showScanner, setShowScanner] = useState(false)
 
-  const [todayBoardRate24K, setTodayBoardRate24K] = useState<number>(7250)
-
   useEffect(() => {
     const init = async () => {
       if (!appUser) return
@@ -61,17 +75,6 @@ export default function DiscoveryPage() {
           .order('name')
 
         if (whData) setWarehouses(whData)
-
-        // Fetch the live gold rate from the company profile
-        const { data: companyData } = await supabase
-          .from('companies')
-          .select('current_rate_24k')
-          .eq('id', appUser.company_id)
-          .maybeSingle()
-          
-        if (companyData) {
-          setTodayBoardRate24K(companyData.current_rate_24k)
-        }
 
       } catch (err) {
         toast.error('Failed to load initial data')
@@ -114,6 +117,7 @@ export default function DiscoveryPage() {
   }
 
   const handleCheckout = () => {
+    // The main POS is now located at /sales. Shadow users still go to /shadow-pos.
     const isShadowUser = appUser?.role === 'shadow_manager' || appUser?.role === 'shadow_sales'
     const targetRoute = isShadowUser ? '/shadow-pos' : '/pos'
 
@@ -133,28 +137,15 @@ export default function DiscoveryPage() {
 
   if (authLoading || !appUser) return null
 
-  // --- Advanced Exact Quotation Math ---
-  let calculatedGoldValue = 0
-  let calculatedStoneValue = 0
-  let exactMakingCharge = 0
+  // --- Simplified Exact Quotation Math ---
+  let basePrice = 0
   let gstAmount = 0
   let finalPrice = 0
-  let karatNumber = 24
 
   if (product) {
-    karatNumber = parseInt(product.purity_karat.replace(/\D/g, '')) || 24
-    const ratePerGramForThisKarat = todayBoardRate24K * (karatNumber / 24)
-    calculatedGoldValue = product.net_weight_g * ratePerGramForThisKarat
-    exactMakingCharge = Number(product.cost_making) || 0
-
-    if (product.total_stone_weight_cts > 0) {
-      calculatedStoneValue = Math.max(0, product.mrp - (calculatedGoldValue + exactMakingCharge))
-    } else {
-      calculatedStoneValue = 0 
-    }
-
-    gstAmount = product.mrp * 0.03
-    finalPrice = product.mrp + gstAmount
+    basePrice = product.mrp || 0
+    gstAmount = basePrice * 0.03
+    finalPrice = Math.round(basePrice + gstAmount)
   }
 
   return (
@@ -246,44 +237,102 @@ export default function DiscoveryPage() {
             {/* ========================================= */}
             <div className="bg-[#FAFAF9] border-t-4 border-b-4 border-dashed border-slate-300 shadow-md p-6 font-mono text-slate-900 relative">
               
-              {/* Receipt Header */}
-              <div className="text-center border-b-2 border-dashed border-slate-300 pb-4 mb-4">
-                <h2 className="text-lg font-black uppercase tracking-widest text-slate-900">*** Asset Specs ***</h2>
-                <div className="mt-2 inline-block px-3 py-1 border border-slate-900 uppercase text-[10px] font-bold tracking-widest">
-                  STATUS: {product.status.replace('_', ' ')}
+              {/* Receipt Header w/ Image Preview */}
+              <div className="flex items-center gap-4 border-b-2 border-dashed border-slate-300 pb-4 mb-4">
+                {product.image_url ? (
+                  <img src={product.image_url} alt="Item" className="w-16 h-16 rounded-md object-cover border border-slate-200 shadow-sm shrink-0 bg-white" />
+                ) : (
+                  <div className="w-16 h-16 rounded-md bg-slate-100 border border-slate-200 flex flex-col items-center justify-center shrink-0">
+                    <ImageIcon className="w-6 h-6 text-slate-300 mb-1" />
+                    <span className="text-[7px] uppercase tracking-widest text-slate-400 font-bold">No Image</span>
+                  </div>
+                )}
+                
+                <div className="flex-1 text-left">
+                  <h2 className="text-lg font-black uppercase tracking-widest text-slate-900 leading-none">Asset Specs</h2>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    <span className="inline-block px-1.5 py-0.5 border border-slate-900 uppercase text-[9px] font-bold tracking-widest">
+                      {product.status.replace('_', ' ')}
+                    </span>
+                    {product.is_custom_order && (
+                      <span className="inline-block px-1.5 py-0.5 bg-purple-100 text-purple-800 border border-purple-200 uppercase text-[9px] font-bold tracking-widest">
+                        CUSTOM ORDER
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
               
               {/* Data Rows */}
-              <div className="flex flex-col gap-2 text-sm">
-                <div className="flex justify-between py-1.5 border-b border-dotted border-slate-300">
-                  <span className="text-slate-500 uppercase tracking-wider">Asset ID</span>
-                  <span className="font-bold">{product.barcode}</span>
+              <div className="flex flex-col gap-1.5 text-xs">
+                
+                {/* Identification */}
+                <div className="flex justify-between py-1 border-b border-dotted border-slate-300">
+                  <span className="text-slate-500 uppercase tracking-wider">Item Code / SKU</span>
+                  <span className="font-bold">{product.barcode} <span className="text-slate-400">|</span> {product.sku_reference || 'N/A'}</span>
                 </div>
-                <div className="flex justify-between py-1.5 border-b border-dotted border-slate-300">
-                  <span className="text-slate-500 uppercase tracking-wider">Category</span>
-                  <span className="font-bold">{product.item_category}</span>
+                <div className="flex justify-between py-1 border-b border-dotted border-slate-300">
+                  <span className="text-slate-500 uppercase tracking-wider">Category / Size</span>
+                  <span className="font-bold">{product.item_category} <span className="text-slate-400">|</span> {product.item_size || 'Std'}</span>
                 </div>
-                <div className="flex justify-between py-1.5 border-b border-dotted border-slate-300">
-                  <span className="text-slate-500 uppercase tracking-wider">Profile</span>
-                  <span className="font-bold">{product.metal_type} ({product.purity_karat})</span>
+
+                {/* Metal */}
+                <div className="flex justify-between py-1 border-b border-dotted border-slate-300">
+                  <span className="text-slate-500 uppercase tracking-wider">Metal Profile</span>
+                  <span className="font-bold">{product.metal_type} {product.purity_karat} ({product.metal_color || 'Std'})</span>
                 </div>
-                <div className="flex justify-between py-1.5 border-b border-dotted border-slate-300">
-                  <span className="text-slate-500 uppercase tracking-wider">Gross Wt.</span>
-                  <span className="font-bold">{product.gross_weight_g.toFixed(3)} g</span>
+                <div className="flex justify-between py-1 border-b border-dotted border-slate-300">
+                  <span className="text-slate-500 uppercase tracking-wider">GW / NW</span>
+                  <span className="font-bold">{product.gross_weight_g.toFixed(3)}g / {product.net_weight_g.toFixed(3)}g</span>
                 </div>
-                <div className="flex justify-between py-1.5 border-b border-dotted border-slate-300">
-                  <span className="text-slate-500 uppercase tracking-wider">Net Wt.</span>
-                  <span className="font-bold">{product.net_weight_g.toFixed(3)} g</span>
+
+                {/* Stones Breakdowns */}
+                {(product.total_stone_pieces > 0 || product.total_stone_weight_cts > 0) && (
+                  <>
+                    {Number(product.solitaire_weight_cts) > 0 && (
+                      <div className="flex justify-between py-1 border-b border-dotted border-slate-300">
+                        <span className="text-slate-500 uppercase tracking-wider">Solitaire (Pcs/Cts)</span>
+                        <span className="font-bold">{product.solitaire_pieces || 0} / {Number(product.solitaire_weight_cts).toFixed(2)}ct</span>
+                      </div>
+                    )}
+                    {Number(product.melee_weight_cts) > 0 && (
+                      <div className="flex justify-between py-1 border-b border-dotted border-slate-300">
+                        <span className="text-slate-500 uppercase tracking-wider">Melee (Pcs/Cts)</span>
+                        <span className="font-bold">{product.melee_pieces || 0} / {Number(product.melee_weight_cts).toFixed(2)}ct</span>
+                      </div>
+                    )}
+                    
+                    {/* Only show Diamond Quality if any of the fields exist */}
+                    {(product.diamond_shape || product.diamond_color || product.diamond_clarity) && (
+                      <div className="flex justify-between py-1 border-b border-dotted border-slate-300">
+                        <span className="text-slate-500 uppercase tracking-wider">Diamond Quality</span>
+                        <span className="font-bold">
+                          {product.diamond_shape ? `${product.diamond_shape} ` : ''}
+                          {product.diamond_color ? `${product.diamond_color}/` : ''}
+                          {product.diamond_clarity || ''}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* Compliance & Remarks */}
+                <div className="flex justify-between py-1 border-b border-dotted border-slate-300">
+                  <span className="text-slate-500 uppercase tracking-wider">HUID / HSN</span>
+                  <span className="font-bold">{product.huid_code || '---'} <span className="text-slate-400">|</span> {product.hsn_code || '---'}</span>
                 </div>
-                <div className="flex justify-between py-1.5 border-b border-dotted border-slate-300">
-                  <span className="text-slate-500 uppercase tracking-wider">Stone Wt.</span>
-                  <span className="font-bold">{product.total_stone_weight_cts.toFixed(2)} ct</span>
-                </div>
+
+                {product.remarks && (
+                  <div className="flex flex-col py-1">
+                    <span className="text-slate-500 uppercase tracking-wider mb-0.5">Remarks</span>
+                    <span className="font-medium text-[11px] leading-tight text-slate-700 bg-slate-100 p-1.5 rounded">{product.remarks}</span>
+                  </div>
+                )}
+
               </div>
               
               {/* Receipt Footer */}
-              <div className="mt-6 text-center text-[10px] text-slate-500 uppercase tracking-widest border-t-2 border-dashed border-slate-300 pt-4">
+              <div className="mt-4 text-center text-[10px] text-slate-500 uppercase tracking-widest border-t-2 border-dashed border-slate-300 pt-3">
                 --- END OF SPECIFICATIONS ---
               </div>
             </div>
@@ -297,46 +346,19 @@ export default function DiscoveryPage() {
                 {/* Receipt Header */}
                 <div className="text-center border-b-2 border-dashed border-slate-300 pb-4 mb-4">
                   <h2 className="text-lg font-black uppercase tracking-widest text-slate-900">*** Quotation ***</h2>
-                  <p className="text-[10px] uppercase mt-2 tracking-widest text-slate-500">Board Rate: ₹{todayBoardRate24K.toLocaleString()}/g (24K)</p>
                 </div>
                 
                 {/* Data Rows */}
                 <div className="flex flex-col gap-2 text-sm">
                   
-                  <div className="flex justify-between items-start py-1.5 border-b border-dotted border-slate-300">
-                    <div>
-                      <span className="block uppercase tracking-wider text-slate-500">Gold Value</span>
-                      <span className="block text-[9px] text-slate-400 mt-0.5 tracking-tight">({product.net_weight_g.toFixed(2)}g @ {karatNumber}K)</span>
-                    </div>
-                    <span className="font-bold">
-                      Rs. {calculatedGoldValue.toLocaleString(undefined, {maximumFractionDigits: 0})}
-                    </span>
-                  </div>
-
-                  {product.total_stone_weight_cts > 0 && (
-                    <div className="flex justify-between py-1.5 border-b border-dotted border-slate-300">
-                      <span className="uppercase tracking-wider text-slate-500">Stone Value</span>
-                      <span className="font-bold">
-                        Rs. {calculatedStoneValue.toLocaleString(undefined, {maximumFractionDigits: 0})}
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="flex justify-between py-1.5 border-b border-dashed border-slate-300 mb-2">
-                    <span className="uppercase tracking-wider text-slate-500">Making (Lbr)</span>
-                    <span className="font-bold">
-                      Rs. {exactMakingCharge.toLocaleString(undefined, {maximumFractionDigits: 0})}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between py-2 text-base">
-                    <span className="font-bold uppercase tracking-wider">Base Price</span>
+                  <div className="flex justify-between items-center py-2 text-base">
+                    <span className="font-bold uppercase tracking-wider text-slate-500">Base Price</span>
                     <span className="font-black">
-                      Rs. {product.mrp.toLocaleString(undefined, {maximumFractionDigits: 0})}
+                      Rs. {basePrice.toLocaleString(undefined, {maximumFractionDigits: 0})}
                     </span>
                   </div>
 
-                  <div className="flex justify-between py-1.5 border-b-2 border-slate-900 pb-3">
+                  <div className="flex justify-between py-2 border-b-2 border-slate-900 pb-3">
                     <span className="uppercase tracking-wider text-slate-500">GST (3%)</span>
                     <span className="font-bold">
                       + Rs. {gstAmount.toLocaleString(undefined, {maximumFractionDigits: 0})}
@@ -345,8 +367,8 @@ export default function DiscoveryPage() {
 
                   {/* Final Total */}
                   <div className="flex justify-between items-end pt-3 pb-1">
-                    <span className="text-sm font-black uppercase tracking-widest">Net Qty</span>
-                    <span className="text-3xl font-black tracking-tighter">
+                    <span className="text-sm font-black uppercase tracking-widest text-slate-500">Net Total</span>
+                    <span className="text-3xl font-black tracking-tighter text-indigo-700">
                       ₹{finalPrice.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                     </span>
                   </div>
@@ -354,7 +376,7 @@ export default function DiscoveryPage() {
                 </div>
               </div>
 
-              {/* Action Buttons (Kept as standard UI buttons, not part of the receipt) */}
+              {/* Action Buttons */}
               <div className="flex gap-3 w-full">
                 <Button 
                   onClick={() => setProduct(null)} 

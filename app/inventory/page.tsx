@@ -9,7 +9,8 @@ import { Badge } from "@/components/ui/badge"
 import { 
   Search, Printer, Edit2, Check, X, Store, Truck, 
   RefreshCw, Database, Package, Calculator, Gem, Hammer, 
-  ArrowLeft, Upload, Eye, Image as ImageIcon, CheckCircle2, Box, Layers, Wrench
+  ArrowLeft, Upload, Eye, Image as ImageIcon, CheckCircle2, Box, Layers, Wrench, Clock, CalendarDays,
+  Loader2
 } from "lucide-react"
 
 import { useAuth } from "@/hooks/useAuth"
@@ -35,10 +36,24 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
-// IMPORT YOUR NEW COMPONENT
 import { ItemTagPreview } from "@/components/ItemTagPreview" 
 
-// Unified Interface to handle both Inventory and Repairs
+// Helper to format dates cleanly
+const formatDateTime = (isoString: string) => {
+  if (!isoString) return "Unknown"
+  return new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  }).format(new Date(isoString))
+}
+
+const formatDateShort = (isoString: string) => {
+  if (!isoString) return "Unknown"
+  return new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit', month: 'short', year: '2-digit'
+  }).format(new Date(isoString))
+}
+
 interface InventoryItem {
   id: string
   _type: 'inventory' | 'repair' 
@@ -53,6 +68,15 @@ interface InventoryItem {
   net_weight_g: number
   total_stone_weight_cts: number
   total_stone_pieces: number
+  
+  // --- DETAILED BREAKDOWN ---
+  solitaire_weight_cts: number
+  solitaire_pieces: number
+  melee_weight_cts: number
+  melee_pieces: number
+  color_stone_weight_cts: number
+  color_stone_pieces: number
+
   mrp: number | null
   status: string
   warehouse_id: string
@@ -81,6 +105,10 @@ interface InventoryItem {
   cost_making: number
   cost_total: number
   wastage_weight_g: number
+  created_at: string
+  updated_at: string
+  last_status_change_at: string
+  expected_delivery_date?: string
 }
 
 interface Warehouse {
@@ -103,13 +131,9 @@ export default function InventoryPage() {
   const [editingMrpId, setEditingId] = useState<string | null>(null)
   const [editingMrpVal, setEditingMrpVal] = useState<string>('')
   
-  // Printing State
   const [tagItem, setTagItem] = useState<InventoryItem | null>(null)
-
-  // Full Details Modal State
   const [viewItem, setViewItem] = useState<InventoryItem | null>(null)
 
-  // Dynamic MRP Calculator State
   const [isCalcModalOpen, setCalcModalOpen] = useState(false)
   const [calcStep, setCalcStep] = useState<'params' | 'preview'>('params')
   const [isCalculating, setIsCalculating] = useState(false)
@@ -160,7 +184,6 @@ export default function InventoryPage() {
     if (!appUser || !selectedLocation) return
     setLoading(true)
     try {
-      // 1. FETCH INVENTORY ITEMS
       let invQuery = supabase
         .from('inventory_items')
         .select(`*, custom_orders (id, order_number, origin:origin_warehouse_id(name))`)
@@ -170,7 +193,6 @@ export default function InventoryPage() {
         invQuery = invQuery.eq('warehouse_id', selectedLocation)
       }
 
-      // 2. FETCH REPAIR TICKETS (that act like inventory)
       let repQuery = supabase
         .from('repair_tickets')
         .select(`*, origin:warehouses!repair_tickets_origin_warehouse_id_fkey(name)`)
@@ -181,10 +203,8 @@ export default function InventoryPage() {
       if (invRes.error) throw invRes.error
       if (repRes.error) throw repRes.error
 
-      // Tag real inventory items
       const inventoryList = (invRes.data || []).map(item => ({ ...item, _type: 'inventory' as const, is_repair_ticket: false }))
 
-      // Map Repair Tickets to look exactly like Inventory Items
       const repairList = (repRes.data || []).map(rep => ({
         id: rep.id,
         _type: 'repair' as const,
@@ -195,10 +215,16 @@ export default function InventoryPage() {
         metal_type: 'Mixed',
         purity_karat: rep.purity || 'N/A',
         purity_percent: 0,
-        gross_weight_g: rep.gross_weight_g || 0, // Customer's total original item weight
-        net_weight_g: rep.issued_gold_g || 0, // The actual factory gold added
-        total_stone_weight_cts: rep.issued_diamond_cts || 0, // The actual factory diamonds added
+        gross_weight_g: rep.gross_weight_g || 0, 
+        net_weight_g: rep.issued_gold_g || 0, 
+        total_stone_weight_cts: rep.issued_diamond_cts || 0, 
         total_stone_pieces: 0,
+        solitaire_weight_cts: 0,
+        solitaire_pieces: 0,
+        melee_weight_cts: 0,
+        melee_pieces: 0,
+        color_stone_weight_cts: 0,
+        color_stone_pieces: 0,
         mrp: rep.actual_cost || 0, 
         status: rep.status,
         warehouse_id: rep.status === 'fixed_ready_for_dispatch' && warehouses.find(w => w.name.includes('HQ'))?.id 
@@ -222,15 +248,17 @@ export default function InventoryPage() {
         cost_making: rep.labor_charges || 0,
         cost_total: rep.actual_cost || 0,
         wastage_weight_g: 0,
-        created_at: rep.created_at 
+        created_at: rep.created_at,
+        updated_at: rep.updated_at,
+        expected_delivery_date: rep.expected_delivery_date,
+        last_status_change_at: rep.updated_at
+        
       }))
 
-      // Filter repairs based on the selected location dropdown
       const filteredRepairs = selectedLocation === 'ALL' 
         ? repairList 
         : repairList.filter(r => r.warehouse_id === selectedLocation || (r.status === 'fixed_ready_for_dispatch' && isHQ));
 
-      // Combine and sort by newest first
       const combined = [...inventoryList, ...filteredRepairs].sort((a, b) => 
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
       );
@@ -262,7 +290,6 @@ export default function InventoryPage() {
   }
 
   const handleOpenCalc = () => {
-    // Only allow MRP calculation on real inventory items, not repairs
     const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
     
     if (selectedItems.length === 0) {
@@ -390,6 +417,13 @@ export default function InventoryPage() {
                 <span className="hidden sm:inline">Add / Import Stock</span>
               </Link>
             </Button>
+
+            <Button asChild variant="ghost" size="sm" className="h-8 px-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-none border border-transparent hover:border-indigo-200 hidden sm:flex">
+              <Link href="/inventory/import-detailed">
+                <Upload className="h-3.5 w-3.5 mr-1.5" />
+                <span className="hidden sm:inline">Add / Import Stock (Detailed)</span>
+              </Link>
+            </Button>
             <div className="h-4 w-px bg-slate-200 mx-1 hidden sm:block" />
 
             <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-none" onClick={fetchItems}>
@@ -500,22 +534,130 @@ export default function InventoryPage() {
         )}
       </main>
 
+      {/* --- MISSING BULK MRP CALCULATOR MODAL --- */}
+      <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
+        <DialogContent className="sm:max-w-[500px] border-slate-200 shadow-2xl rounded-xl">
+          <DialogHeader className="border-b border-slate-100 pb-4">
+            <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <Calculator className="w-5 h-5 text-indigo-600" />
+              Bulk MRP Calculator
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Calculate retail prices for {selectedIds.length} selected items based on current metal rates.
+            </DialogDescription>
+          </DialogHeader>
+
+          {calcStep === 'params' ? (
+            <div className="space-y-5 py-4">
+              <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <Label className="text-xs font-bold text-slate-600 uppercase tracking-widest">Base Metal Rates (Per Gram)</Label>
+                {Object.keys(goldRates).map(k => (
+                  <div key={k} className="flex items-center gap-3">
+                    <span className="w-12 text-sm font-semibold">{k}</span>
+                    <Input 
+                      type="number" 
+                      value={goldRates[k]} 
+                      onChange={e => setGoldRates({...goldRates, [k]: Number(e.target.value)})}
+                      className="h-9"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-slate-700">Diamond Rate (Per Ct)</Label>
+                  <Input 
+                    type="number" 
+                    value={calcParams.diamondRatePerCt} 
+                    onChange={e => setCalcParams({...calcParams, diamondRatePerCt: Number(e.target.value)})}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-semibold text-slate-700">Markup (%)</Label>
+                  <Input 
+                    type="number" 
+                    value={calcParams.markupPercent} 
+                    onChange={e => setCalcParams({...calcParams, markupPercent: Number(e.target.value)})}
+                  />
+                </div>
+                <div className="space-y-1.5 col-span-2">
+                  <Label className="text-xs font-semibold text-slate-700">Flat Add-on Charge (₹)</Label>
+                  <Input 
+                    type="number" 
+                    value={calcParams.flatCharge} 
+                    onChange={e => setCalcParams({...calcParams, flatCharge: Number(e.target.value)})}
+                  />
+                </div>
+              </div>
+              <Button onClick={handleGeneratePreview} className="w-full h-10 font-bold bg-indigo-600 hover:bg-indigo-700">
+                Generate Preview
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4 py-4">
+              <div className="max-h-[300px] overflow-y-auto border border-slate-200 rounded-lg custom-scrollbar">
+                <Table>
+                  <TableHeader className="bg-slate-50 sticky top-0">
+                    <TableRow>
+                      <TableHead className="text-[10px] font-bold h-8">Item</TableHead>
+                      <TableHead className="text-[10px] font-bold h-8 text-right">Current</TableHead>
+                      <TableHead className="text-[10px] font-bold h-8 text-right text-emerald-600">New MRP</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {previewData.map(p => (
+                      <TableRow key={p.id}>
+                        <TableCell className="py-2 text-xs font-mono">{p.barcode}</TableCell>
+                        <TableCell className="py-2 text-xs text-right text-slate-500">{p.mrp ? `₹${p.mrp}` : '-'}</TableCell>
+                        <TableCell className="py-2 text-xs text-right font-bold text-emerald-600">₹{p.newMrp}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              <div className="flex gap-3">
+                <Button variant="outline" className="flex-1" onClick={() => setCalcStep('params')}>Back to Edit</Button>
+                <Button 
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white" 
+                  onClick={handleApplyBulkMrp}
+                  disabled={isCalculating}
+                >
+                  {isCalculating ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                  Apply to Database
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* VIEW DETAILS MODAL */}
       <Dialog open={!!viewItem} onOpenChange={(val) => !val && setViewItem(null)}>
         <DialogContent className="sm:max-w-[700px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-slate-50">
           {viewItem && (
             <>
-              <DialogHeader className="bg-white p-5 border-b border-slate-200 flex flex-row items-center justify-between">
+              <DialogHeader className="bg-white p-5 border-b border-slate-200 flex flex-row items-start justify-between">
                 <div>
-                  <DialogTitle className="text-lg font-bold text-slate-900 font-mono flex items-center gap-2">
-                    {viewItem._type === 'repair' ? <Wrench className="w-5 h-5 text-amber-500" /> : <Package className="w-5 h-5 text-indigo-500" />}
-                    {viewItem.barcode}
-                  </DialogTitle>
-                  <DialogDescription className="text-xs font-medium text-slate-500 mt-1 uppercase tracking-widest">
-                    {viewItem.item_category} • {viewItem.sku_reference}
-                  </DialogDescription>
+                  <div className="flex items-center gap-2">
+                    <DialogTitle className="text-xl font-black text-slate-900 font-mono tracking-tight flex items-center gap-2">
+                      {viewItem._type === 'repair' ? <Wrench className="w-5 h-5 text-amber-500" /> : <Package className="w-5 h-5 text-indigo-600" />}
+                      {viewItem.barcode}
+                    </DialogTitle>
+                  </div>
+                  
+                  {/* DISTINCT SEPARATION OF SKU AND BARCODE */}
+                  <div className="mt-2 flex items-center gap-3">
+                    <Badge variant="outline" className="bg-slate-50 text-slate-600 border-slate-200 text-[10px] uppercase tracking-widest font-semibold px-2 py-0.5">
+                      Design SKU: {viewItem.sku_reference}
+                    </Badge>
+                    <span className="text-xs font-medium text-slate-500 uppercase tracking-widest">
+                      {viewItem.item_category}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex flex-col items-end gap-1">
+                
+                <div className="flex flex-col items-end gap-1.5">
                    <Badge className={cn("text-[10px] uppercase tracking-widest border", 
                       viewItem._type === 'repair' ? "bg-amber-50 text-amber-700 border-amber-200" :
                       viewItem.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600 border-slate-200")}>
@@ -528,6 +670,26 @@ export default function InventoryPage() {
               
               <div className="p-6 overflow-y-auto max-h-[70vh] custom-scrollbar space-y-6">
                 
+                {/* --- NEW: VAULT TIMELINE --- */}
+                <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 shadow-sm">
+                  <h3 className="text-[10px] font-bold text-indigo-800 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                    <Clock className="w-3.5 h-3.5" /> Vault Status & Timeline
+                  </h3>
+                  <div className="flex gap-8">
+                    <div>
+                      <p className="text-[10px] text-slate-500 uppercase font-semibold mb-0.5">Manufactured / Added On</p>
+                      <p className="text-xs font-mono font-medium text-slate-900">{formatDateTime(viewItem.created_at)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-slate-500 uppercase font-semibold mb-0.5">Last Moved / Received</p>
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+                        <p className="text-xs font-mono font-bold text-emerald-700">{formatDateTime(viewItem.last_status_change_at || viewItem.updated_at)}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Visual Header */}
                 <div className="flex flex-col md:flex-row gap-6">
                   <div className="w-full md:w-48 h-48 bg-white border border-slate-200 rounded-xl flex items-center justify-center shrink-0 overflow-hidden shadow-sm">
@@ -547,11 +709,35 @@ export default function InventoryPage() {
                       <p className="text-sm font-bold text-slate-900">{viewItem.metal_type} {viewItem.purity_karat !== 'N/A' ? `(${viewItem.purity_karat})` : ''}</p>
                       <p className="text-xs text-slate-500">{viewItem.purity_percent}% Purity • {viewItem.metal_color || 'Std Color'}</p>
                     </div>
-                    <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-1">
-                      <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><Gem className="w-3 h-3 text-blue-500"/> Stone Info</Label>
-                      <p className="text-sm font-bold text-slate-900">{viewItem.total_stone_weight_cts} cts</p>
-                      <p className="text-xs text-slate-500">{viewItem.total_stone_pieces} Pieces</p>
+                    
+                    {/* --- NEW: DETAILED DIAMOND BREAKDOWN CARD --- */}
+                    <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-3">
+                      <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                        <Gem className="w-3 h-3 text-blue-500"/> Stone Details
+                      </Label>
+                      <div>
+                         <p className="text-lg font-black text-slate-900 leading-none">{viewItem.total_stone_weight_cts?.toFixed(2)} <span className="text-xs text-slate-500 font-medium">cts</span></p>
+                         <p className="text-xs font-semibold text-slate-500 mt-1">{viewItem.total_stone_pieces} Total Pieces</p>
+                      </div>
+                      
+                      {(viewItem.solitaire_weight_cts > 0 || viewItem.melee_weight_cts > 0) && (
+                        <div className="pt-3 border-t border-slate-100 flex justify-between">
+                           {viewItem.solitaire_weight_cts > 0 && (
+                             <div>
+                               <p className="text-[9px] uppercase tracking-widest font-bold text-slate-400">Solitaire</p>
+                               <p className="text-xs font-bold text-slate-700">{viewItem.solitaire_weight_cts}ct <span className="text-[10px] font-normal">({viewItem.solitaire_pieces}p)</span></p>
+                             </div>
+                           )}
+                           {viewItem.melee_weight_cts > 0 && (
+                             <div className="text-right">
+                               <p className="text-[9px] uppercase tracking-widest font-bold text-slate-400">Melee / Side</p>
+                               <p className="text-xs font-bold text-slate-700">{viewItem.melee_weight_cts}ct <span className="text-[10px] font-normal">({viewItem.melee_pieces}p)</span></p>
+                             </div>
+                           )}
+                        </div>
+                      )}
                     </div>
+                    
                     <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-1 col-span-2">
                       <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
                         <Box className="w-3 h-3 text-emerald-500"/> 
@@ -649,169 +835,6 @@ export default function InventoryPage() {
         </DialogContent>
       </Dialog>
 
-      {/* MRP CALCULATOR MODAL */}
-      <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
-        <DialogContent className={cn("p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white transition-all", calcStep === 'preview' ? 'sm:max-w-[650px]' : 'sm:max-w-[450px]')}>
-          <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200">
-            <DialogTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
-               <Calculator className="w-4 h-4 text-indigo-600" /> 
-               {calcStep === 'params' ? 'Dynamic MRP Parameters' : 'Verification & Preview'}
-            </DialogTitle>
-            <DialogDescription className="text-xs text-slate-500 mt-1 leading-relaxed">
-              {calcStep === 'params' 
-                ? `System detected ${Object.keys(goldRates).length} distinct metal purities across the ${selectedIds.length} selected items.`
-                : `Review the calculated retail prices before committing changes to the database.`
-              }
-            </DialogDescription>
-          </DialogHeader>
-
-          {calcStep === 'params' ? (
-            <div className="p-5 space-y-6">
-              <div>
-                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 border-b border-slate-100 pb-1">1. Variable Gold Rates</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  {Object.entries(goldRates).map(([karat, rate]) => (
-                    <div key={karat} className="space-y-1.5">
-                      <Label className="text-xs font-bold text-slate-600 uppercase flex items-center gap-1.5">
-                        <Database className="w-3 h-3 text-emerald-500" /> {karat} Rate/g
-                      </Label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">₹</span>
-                        <Input 
-                          type="number" 
-                          className="pl-7 h-9 text-sm font-semibold border-slate-200 focus-visible:ring-indigo-500" 
-                          value={rate} 
-                          onChange={e => setGoldRates(prev => ({...prev, [karat]: Number(e.target.value)}))}
-                        />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div>
-                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 border-b border-slate-100 pb-1">2. Formulation Constants</h4>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-bold text-slate-600 uppercase flex items-center gap-1.5">
-                      <Gem className="w-3 h-3 text-blue-500" /> Diamond Rate / Ct
-                    </Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">₹</span>
-                      <Input 
-                        type="number" 
-                        className="pl-7 h-9 text-sm font-semibold border-slate-200 focus-visible:ring-indigo-500" 
-                        value={calcParams.diamondRatePerCt} 
-                        onChange={e => setCalcParams({...calcParams, diamondRatePerCt: Number(e.target.value)})}
-                      />
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-bold text-slate-600 uppercase flex items-center gap-1.5">
-                      <Hammer className="w-3 h-3 text-amber-500" /> Markup Margin
-                    </Label>
-                    <div className="relative">
-                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">%</span>
-                      <Input 
-                        type="number" 
-                        className="pr-7 h-9 text-sm font-semibold border-slate-200 focus-visible:ring-indigo-500" 
-                        value={calcParams.markupPercent} 
-                        onChange={e => setCalcParams({...calcParams, markupPercent: Number(e.target.value)})}
-                      />
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-bold text-slate-600 uppercase">
-                       Flat Addition (Chg.)
-                    </Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs">₹</span>
-                      <Input 
-                        type="number" 
-                        className="pl-7 h-9 text-sm font-semibold border-slate-200 focus-visible:ring-indigo-500" 
-                        value={calcParams.flatCharge} 
-                        onChange={e => setCalcParams({...calcParams, flatCharge: Number(e.target.value)})}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-[10px] text-slate-500 font-mono leading-relaxed">
-                <span className="font-bold text-slate-700">Formula Engine:</span><br/>
-                1. Base = (NetWt × KaratRate) + (DiaCt × DiaRate)<br/>
-                2. Subtotal = Base + (Base × {calcParams.markupPercent}%)<br/>
-                3. Final MRP = Math.round(Subtotal + ₹{calcParams.flatCharge})
-              </div>
-            </div>
-          ) : (
-            <div className="max-h-[60vh] overflow-y-auto border-b border-slate-200 custom-scrollbar">
-              <Table>
-                <TableHeader className="bg-slate-50 sticky top-0 z-10 shadow-sm">
-                  <TableRow className="border-none hover:bg-transparent">
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9">Asset Ref</TableHead>
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9">Purity</TableHead>
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 text-right">Net Wt</TableHead>
-                    <TableHead className="text-[10px] font-bold uppercase text-slate-500 h-9 text-right">Current MRP</TableHead>
-                    <TableHead className="text-[10px] font-bold uppercase text-indigo-600 h-9 text-right pr-6">Calculated MRP</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {previewData.map((item) => {
-                    const isDiff = item.mrp !== item.newMrp;
-                    return (
-                      <TableRow key={item.id} className="border-b border-slate-100 last:border-none">
-                        <TableCell className="py-2.5 font-mono text-xs font-semibold text-slate-900">{item.barcode}</TableCell>
-                        <TableCell className="py-2.5 text-xs text-slate-600">{item.purity_karat || '24K'}</TableCell>
-                        <TableCell className="py-2.5 text-xs text-right font-medium">{item.net_weight_g?.toFixed(3)}g</TableCell>
-                        <TableCell className="py-2.5 text-xs text-right text-slate-400 line-through">
-                          {item.mrp ? `₹${item.mrp.toLocaleString()}` : '---'}
-                        </TableCell>
-                        <TableCell className="py-2.5 text-sm font-bold text-right pr-6 text-slate-900">
-                          {isDiff && <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-2" />}
-                          ₹{item.newMrp.toLocaleString()}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-
-          <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 flex-row gap-3">
-             {calcStep === 'params' ? (
-               <>
-                 <Button variant="outline" className="flex-1 h-10 text-xs font-semibold rounded-lg border-slate-300 text-slate-700 bg-white hover:bg-slate-50" onClick={() => setCalcModalOpen(false)}>
-                   Cancel
-                 </Button>
-                 <Button 
-                    onClick={handleGeneratePreview}
-                    className="flex-[2] h-10 text-xs font-bold rounded-lg bg-slate-900 hover:bg-slate-800 text-white shadow-sm"
-                  >
-                   Generate Preview
-                 </Button>
-               </>
-             ) : (
-               <>
-                 <Button variant="outline" className="flex-1 h-10 text-xs font-semibold rounded-lg border-slate-300 text-slate-700 bg-white hover:bg-slate-50" onClick={() => setCalcStep('params')}>
-                   <ArrowLeft className="w-3.5 h-3.5 mr-2" /> Adjust Rates
-                 </Button>
-                 <Button 
-                    onClick={handleApplyBulkMrp}
-                    disabled={isCalculating}
-                    className="flex-[2] h-10 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm"
-                  >
-                   {isCalculating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <><Check className="w-4 h-4 mr-2" /> Save to Database</>}
-                 </Button>
-               </>
-             )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
       <ItemTagPreview item={tagItem} onClose={() => setTagItem(null)} />
 
     </div>
@@ -836,11 +859,12 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                   />
                 </TableHead>
               )}
-              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Identifier / SKU</TableHead>
+              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Item Code / Design SKU</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Specs</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 text-right px-4">Weights</TableHead>
+              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Vault Timeline</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 text-center">Status</TableHead>
-              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 w-[180px]">Price/Value</TableHead>
+              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 w-[140px] text-right">Price/Value</TableHead>
               <TableHead className="w-[120px] text-right px-6"></TableHead>
             </TableRow>
           </TableHeader>
@@ -859,9 +883,17 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                 )}
                 <TableCell className="py-3">
                   <div className="flex flex-col items-start">
-                     <span className="font-mono font-semibold text-sm text-slate-900 tracking-tight leading-tight">{item.barcode}</span>
-                     <span className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.sku_reference || 'NO SKU'}</span>
-                     <div className="flex gap-1 mt-1 flex-wrap">
+                     {/* Distinct styling for Barcode vs SKU */}
+                     <div className="flex items-center gap-1.5 mb-1">
+                        <Package className="w-3 h-3 text-indigo-500" />
+                        <span className="font-mono font-bold text-sm text-indigo-900 tracking-tight leading-tight">{item.barcode}</span>
+                     </div>
+                     <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">SKU:</span>
+                        <span className="text-xs text-slate-700 font-semibold">{item.sku_reference || 'NO SKU'}</span>
+                     </div>
+                     
+                     <div className="flex gap-1 mt-1.5 flex-wrap">
                        {item.is_exchanged && <Badge className="bg-rose-100 text-rose-700 border-rose-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Buyback</Badge>}
                        {item.is_custom_order && <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Custom: {item.custom_orders?.origin?.name || 'Branch'}</Badge>}
                        {item.is_repair_ticket && <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Repair: {item.origin_name}</Badge>}
@@ -888,6 +920,21 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                       </span>
                    </div>
                 </TableCell>
+                
+                {/* TIMELINE COLUMN */}
+                <TableCell className="py-3">
+                   <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-1.5" title="Last Updated / Received in Vault">
+                         <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+                         <span className="text-[10px] font-mono font-bold text-emerald-700">{formatDateShort(item.last_status_change_at || item.updated_at)}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 opacity-60" title="Manufactured Date">
+                         <CalendarDays className="w-3 h-3 text-slate-400" />
+                         <span className="text-[9px] font-mono text-slate-500">{formatDateShort(item.created_at)}</span>
+                      </div>
+                   </div>
+                </TableCell>
+
                 <TableCell className="text-center py-3">
                    <span className={cn("inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border", 
                       item._type === 'repair' ? "bg-amber-50 text-amber-700 border-amber-200" :
@@ -895,20 +942,20 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                      {item.status.replace(/_/g, ' ')}
                    </span>
                 </TableCell>
-                <TableCell className="py-3">
+                <TableCell className="text-right py-3 pr-4">
                    {editingMrpId === item.id ? (
-                     <div className="flex items-center gap-1.5">
-                       <Input className="h-8 w-24 text-xs font-semibold rounded-md border-slate-300 focus-visible:ring-indigo-500" value={editingMrpVal} onChange={e => setEditingMrpVal(e.target.value)} autoFocus />
-                       <Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 rounded-md shadow-sm border border-emerald-100" onClick={() => handleSaveMrp(item.id)}>
+                     <div className="flex items-center justify-end gap-1.5">
+                       <Input className="h-8 w-20 text-xs font-semibold rounded-md border-slate-300 focus-visible:ring-indigo-500" value={editingMrpVal} onChange={e => setEditingMrpVal(e.target.value)} autoFocus />
+                       <Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 rounded-md shadow-sm border border-emerald-100 shrink-0" onClick={() => handleSaveMrp(item.id)}>
                          <Check className="w-4 h-4" />
                        </Button>
                      </div>
                    ) : (
-                     <div className="group flex items-center gap-2 cursor-pointer w-max" onClick={() => { if(!isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
-                       <span className="text-xs font-semibold text-slate-900">
+                     <div className="group flex items-center justify-end gap-2 cursor-pointer" onClick={() => { if(!isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
+                       <span className="text-xs font-bold text-slate-900">
                           {item.mrp ? `₹${item.mrp.toLocaleString()}` : 'TBD'}
                        </span>
-                       {!isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 transition-all" />}
+                       {!isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 transition-all" />}
                      </div>
                    )}
                 </TableCell>
@@ -917,15 +964,16 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                       <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => setViewItem(item)} title="View Full Details">
                         <Eye className="h-4 w-4" />
                       </Button>
-                      {!item.is_repair_ticket && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors" onClick={() => setTagItem(item)} title="Print Label">
-                          <Printer className="h-4 w-4" />
-                        </Button>
-                      )}
+                      
+                      {/* REMOVED THE is_repair_ticket CHECK HERE */}
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors" onClick={() => setTagItem(item)} title="Print Label">
+                        <Printer className="h-4 w-4" />
+                      </Button>
+                      
                       {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
                          <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => handleSingleTransfer(item)} title="Transfer">
-                           <Truck className="h-4 w-4" />
-                         </Button>
+                        <Truck className="h-4 w-4" />
+                      </Button>
                       )}
                    </div>
                 </TableCell>
@@ -940,18 +988,29 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
         {data.map((item: any) => (
           <div key={item.id} className={cn("bg-white border rounded-xl p-4 shadow-sm flex flex-col gap-3", selectedIds.includes(item.id) ? "border-indigo-300 ring-1 ring-indigo-100" : "border-slate-200")}>
             <div className="flex justify-between items-start">
-               <div className="flex items-center gap-3">
+               <div className="flex items-start gap-3">
                  {!isSoldTab && (
                    <Checkbox 
                      checked={selectedIds.includes(item.id)} 
                      onCheckedChange={() => setSelectedIds((prev: any) => prev.includes(item.id) ? prev.filter((i: any) => i !== item.id) : [...prev, item.id])} 
                      disabled={item.status === 'sold'}
-                     className="rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 disabled:opacity-30"
+                     className="mt-1 rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 disabled:opacity-30"
                    />
                  )}
                  <div>
-                   <span className="font-mono font-semibold text-sm text-slate-900 tracking-tight leading-tight">{item.barcode}</span>
-                   <span className="block text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.sku_reference || 'NO SKU'}</span>
+                   <div className="flex items-center gap-1.5 mb-0.5">
+                      <Package className="w-3 h-3 text-indigo-500" />
+                      <span className="font-mono font-bold text-sm text-indigo-900 tracking-tight leading-tight">{item.barcode}</span>
+                   </div>
+                   <div className="flex items-center gap-1 mb-1">
+                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">SKU:</span>
+                      <span className="text-[11px] text-slate-700 font-semibold">{item.sku_reference || 'NO SKU'}</span>
+                   </div>
+                   
+                   <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-500 font-mono">
+                     <Clock className="w-3 h-3" /> {formatDateShort(item.last_status_change_at || item.updated_at)}
+                   </div>
+
                    {item.is_custom_order && <span className="block text-[9px] font-bold text-purple-600 uppercase tracking-widest mt-1">Custom: {item.custom_orders?.origin?.name || 'Branch'}</span>}
                    {item.is_repair_ticket && <span className="block text-[9px] font-bold text-amber-600 uppercase tracking-widest mt-1">Repair: {item.origin_name}</span>}
                  </div>
@@ -963,7 +1022,7 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                </div>
             </div>
             
-            <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-100">
+            <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-100 mt-1">
                <div>
                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Specs</p>
                  <p className="text-xs font-semibold text-slate-900">{item.item_category}</p>
@@ -1006,18 +1065,19 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                  )}
                </div>
                <div className="flex gap-1.5">
-                 {!item.is_repair_ticket && (
-                   <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 border-slate-200 bg-white" onClick={() => setTagItem(item)}>
-                     <Printer className="h-3.5 w-3.5" />
-                   </Button>
-                 )}
-                 {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
-                   <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
-                     <Truck className="h-3.5 w-3.5" />
-                   </Button>
-                 )}
-               </div>
-            </div>
+     
+     {/* REMOVED THE is_repair_ticket CHECK HERE */}
+     <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 border-slate-200 bg-white" onClick={() => setTagItem(item)}>
+       <Printer className="h-3.5 w-3.5" />
+     </Button>
+
+     {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
+       <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
+         <Truck className="h-3.5 w-3.5" />
+       </Button>
+     )}
+   </div>
+</div>
           </div>
         ))}
       </div>

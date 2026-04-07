@@ -15,6 +15,42 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 
+// --- NEW: THE QR SANITIZER ---
+// This strips away URLs, JSON formatting, or extra spaces that physical QR codes often contain.
+const sanitizeScannedQR = (scannedText: string): string => {
+  if (!scannedText) return '';
+  let cleanText = scannedText.trim();
+
+  // 1. If the QR code is a URL (e.g., https://your-app.com?hash=OUT-123)
+  if (cleanText.startsWith('http')) {
+    try {
+      const url = new URL(cleanText);
+      // Check common URL parameters
+      const hashParam = url.searchParams.get('hash') || url.searchParams.get('seal');
+      if (hashParam) return hashParam;
+      
+      // Fallback: Check if the hash is the very last part of the URL
+      const pathHash = url.pathname.split('/').pop();
+      if (pathHash) return pathHash;
+    } catch (e) {
+      // Ignore URL parse errors and fall through to standard return
+    }
+  }
+
+  // 2. If the QR code is JSON data (e.g., {"hash": "OUT-123"})
+  if (cleanText.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(cleanText);
+      return parsed.hash || parsed.seal_number || parsed.outer_qr_hash || parsed.inner_qr_hash || cleanText; 
+    } catch (e) {
+      // Ignore JSON parse errors
+    }
+  }
+
+  // 3. Fallback: Return the raw trimmed text
+  return cleanText;
+}
+
 export default function ReceiveStockPage() {
   const router = useRouter()
   const [searchInput, setSearchInput] = useState('')
@@ -30,8 +66,11 @@ export default function ReceiveStockPage() {
   const [showScanner, setShowScanner] = useState(false)
 
   const handleScanInput = async (inputStr: string) => {
-    const cleanInput = inputStr.trim().toUpperCase()
-    if (!cleanInput) return toast.error("Enter Hash or Scan QR")
+    // --- SANITIZE THE INPUT BEFORE DOING ANYTHING ELSE ---
+    const sanitizedInput = sanitizeScannedQR(inputStr);
+    const cleanInput = sanitizedInput.toUpperCase();
+    
+    if (!cleanInput) return toast.error("Enter Hash or Scan QR");
 
     // --- ANTI-LOOP FAST PATH ---
     if (transferData) {
@@ -73,7 +112,7 @@ export default function ReceiveStockPage() {
     setLoading(false)
 
     if (error || !data) {
-      return toast.error("Invalid QR Code or Hash.")
+      return toast.error(`Invalid QR Code or Hash: ${cleanInput}`)
     }
 
     // Normalize items so the UI doesn't have to care if it's a repair or inventory
@@ -184,7 +223,6 @@ export default function ReceiveStockPage() {
            const isReturningToOrigin = sampleItem?.originalData?.origin_warehouse_id === transferData.to_warehouse_id;
            const newRepairStatus = isReturningToOrigin ? 'received_at_store' : 'received_at_ho';
 
-           // STRICT ERROR CHECKING ADDED HERE
            const { error: repErr } = await supabase
              .from('repair_tickets')
              .update({ 
@@ -197,7 +235,6 @@ export default function ReceiveStockPage() {
            if (repErr) throw new Error("Repair Update Failed: " + repErr.message)
 
         } else {
-           // STRICT ERROR CHECKING ADDED HERE
            const { error: invErr } = await supabase
              .from('inventory_items')
              .update({ warehouse_id: transferData.to_warehouse_id, status: 'in_stock' })
@@ -250,6 +287,8 @@ export default function ReceiveStockPage() {
             <Scanner onScan={(codes) => {
               if (codes.length > 0) {
                 setShowScanner(false);
+                // The scanner rawValue goes directly into the handler, 
+                // which now runs the sanitizeScannedQR function immediately!
                 handleScanInput(codes[0].rawValue);
               }
             }} components={{ finder: true }} />

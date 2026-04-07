@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { 
   Dialog, DialogContent, DialogHeader, 
@@ -39,6 +40,10 @@ type ReceiveItem = {
   category: string
   barcode: string
   grossWeight: string
+  solitairePieces: string
+  solitaireWeight: string
+  meleePieces: string
+  meleeWeight: string
   stonePieces: string
   stoneWeight: string
   breakageWeight: string
@@ -202,10 +207,15 @@ export default function ReceiveTab({
           sku_reference: item.sku_reference,
           ornament_type: item.ornament_type || 'N/A', 
           category: category,
-          barcode: `JB${jobPrefix}-${categoryPrefix}-${item.sku_reference}-${currentSeq}`,
+          // Generates a clean, short 6-digit Item Code (e.g., ITM-492018)
+          barcode: `ITM-${Math.floor(100000 + Math.random() * 900000)}`,
           grossWeight: '',
           stonePieces: '',
           stoneWeight: '',
+          solitairePieces: '',
+          solitaireWeight: '',
+          meleePieces: '',
+          meleeWeight: '',
           breakageWeight: '',
           netWeight: '0',
           lossWeight: '0', 
@@ -253,22 +263,38 @@ export default function ReceiveTab({
   const updateBatchItem = (id: string, field: keyof ReceiveItem, value: any) => {
     setReceiveItems(prev => prev.map(item => {
       if (item.job_bag_item_id !== id) return item;
-
+  
       const updated = { ...item, [field]: value }
+  
+      // --- NEW: AUTO-SUM BREAKUP INTO MAIN TOTALS ---
+      if (field === 'solitairePieces' || field === 'meleePieces') {
+        const solP = parseInt(field === 'solitairePieces' ? value : updated.solitairePieces) || 0;
+        const melP = parseInt(field === 'meleePieces' ? value : updated.meleePieces) || 0;
+        updated.stonePieces = (solP + melP).toString();
+      }
+      if (field === 'solitaireWeight' || field === 'meleeWeight') {
+        const solW = parseFloat(field === 'solitaireWeight' ? value : updated.solitaireWeight) || 0;
+        const melW = parseFloat(field === 'meleeWeight' ? value : updated.meleeWeight) || 0;
+        updated.stoneWeight = (solW + melW).toFixed(2);
+      }
+      // ----------------------------------------------
 
-      // Standard Jewelry Math (Only apply if it's NOT a repair)
-      if (!item.is_repair && (field === 'grossWeight' || field === 'stoneWeight')) {
+      // Standard Jewelry Math (Notice we check 'stoneWeight' here too)
+      if (!item.is_repair && (field === 'grossWeight' || field === 'stoneWeight' || field === 'solitaireWeight' || field === 'meleeWeight')) {
         const gw = parseFloat(field === 'grossWeight' ? value : updated.grossWeight) || 0
-        const sw = parseFloat(field === 'stoneWeight' ? value : updated.stoneWeight) || 0
+        const sw = parseFloat(updated.stoneWeight) || 0 // Always use the current total stoneWeight
         const lr = parseFloat(laborRate) || 0
         
-        const calculatedNet = Math.max(0, gw - (sw * 0.2))
+        // 1 Carat = 0.2 Grams
+        const totalStoneGrams = sw * 0.2;
+        const calculatedNet = Math.max(0, gw - totalStoneGrams);
+        
         updated.netWeight = calculatedNet.toFixed(3)
         updated.costMaking = (calculatedNet * lr).toFixed(2)
       } 
-      // Repair Math (Net Weight is just the Added Gold)
+      // Repair Math
       else if (item.is_repair && field === 'grossWeight') {
-        updated.netWeight = value; // The "Gross" input is acting as "Added Gold"
+        updated.netWeight = value; 
       }
       
       return updated;
@@ -407,6 +433,12 @@ export default function ReceiveTab({
 
         } else {
           // --- PATH B: STANDARD INVENTORY / CUSTOM ORDER ---
+
+          const solW = Number(item.solitaireWeight) || 0;
+          const melW = Number(item.meleeWeight) || 0;
+          const solP = Number(item.solitairePieces) || 0;
+          const melP = Number(item.meleePieces) || 0;
+          
           const { error: invError } = await supabase.from('inventory_items').insert({
             company_id: companyId,
             warehouse_id: selectedWarehouseId,
@@ -425,8 +457,12 @@ export default function ReceiveTab({
             barcode: item.barcode,
             gross_weight_g: Number(item.grossWeight),
             net_weight_g: Number(item.netWeight),
-            total_stone_weight_cts: Number(item.stoneWeight),
-            total_stone_pieces: Number(item.stonePieces) || 0,
+            total_stone_weight_cts: solW + melW,
+            total_stone_pieces: solP + melP,
+            solitaire_weight_cts: solW,
+            solitaire_pieces: solP,
+            melee_weight_cts: melW,
+            melee_pieces: melP,
             wastage_weight_g: Number(item.lossWeight), 
             cost_making: Number(item.costMaking),
             mrp: item.mrp ? Number(item.mrp) : null,
@@ -653,20 +689,53 @@ export default function ReceiveTab({
                         </td>
 
                         <td className="p-3 align-top">
-                          <div className="font-bold text-xs text-slate-900 leading-tight">
-                            {item.sku_reference}
-                            {item.custom_order_id && <Badge className="ml-2 bg-purple-100 text-purple-700 text-[8px] uppercase tracking-widest border-purple-200">Custom</Badge>}
-                            {item.is_repair && <Badge className="ml-2 bg-amber-100 text-amber-700 text-[8px] uppercase tracking-widest border-amber-200">Repair</Badge>}
-                          </div>
-                          <div className="text-[10px] text-muted-foreground mb-2">{item.ornament_type}</div>
-                          <div className="space-y-1.5">
-                            <Input className="h-6 w-full text-[10px] uppercase font-mono px-2 bg-slate-50" placeholder="HUID CODE" value={item.huid_code} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'huid_code', e.target.value)} maxLength={6} />
-                            <div className="flex gap-1.5">
-                              <Input className="h-6 w-1/2 text-[10px] px-2 bg-slate-50" placeholder="Size" value={item.item_size} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'item_size', e.target.value)} />
-                              <Input className="h-6 w-1/2 text-[10px] px-2 bg-slate-50" placeholder="HSN" value={item.hsn_code} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'hsn_code', e.target.value)} />
-                            </div>
-                          </div>
-                        </td>
+  {/* 1. READ-ONLY SKU (The Design Template) */}
+  <div className="flex items-center gap-2 mb-1.5">
+    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">SKU:</span>
+    <span className="font-bold text-xs text-slate-900 leading-tight">{item.sku_reference}</span>
+    {item.custom_order_id && <Badge className="bg-purple-100 text-purple-700 text-[8px] uppercase tracking-widest border-purple-200 px-1.5">Custom</Badge>}
+    {item.is_repair && <Badge className="bg-amber-100 text-amber-700 text-[8px] uppercase tracking-widest border-amber-200 px-1.5">Repair</Badge>}
+  </div>
+  
+  <div className="text-[10px] text-muted-foreground mb-3">{item.ornament_type}</div>
+  
+  <div className="space-y-2">
+    {/* 2. EDITABLE ITEM CODE / BARCODE (The Physical Asset) */}
+    <div className="space-y-1">
+      <Label className="text-[9px] font-bold text-indigo-600 uppercase tracking-wider">Item Code / Barcode</Label>
+      <Input 
+        className="h-7 w-full text-xs font-mono font-bold px-2 bg-indigo-50/50 border-indigo-200 focus-visible:ring-indigo-500 text-indigo-900 shadow-inner" 
+        placeholder="Scan or Type..." 
+        value={item.barcode} 
+        onChange={(e) => updateBatchItem(item.job_bag_item_id, 'barcode', e.target.value)} 
+        title="Scan your barcode tag here, or use the auto-generated ID"
+      />
+    </div>
+
+    {/* 3. COMPLIANCE & SIZING */}
+    <Input 
+      className="h-6 w-full text-[10px] uppercase font-mono px-2 bg-slate-50 border-slate-200 placeholder:text-slate-400" 
+      placeholder="HUID CODE (6 Digits)" 
+      value={item.huid_code} 
+      onChange={(e) => updateBatchItem(item.job_bag_item_id, 'huid_code', e.target.value)} 
+      maxLength={6} 
+    />
+    <div className="flex gap-1.5">
+      <Input 
+        className="h-6 w-1/2 text-[10px] px-2 bg-slate-50 border-slate-200" 
+        placeholder="Size" 
+        value={item.item_size} 
+        onChange={(e) => updateBatchItem(item.job_bag_item_id, 'item_size', e.target.value)} 
+      />
+      <Input 
+        className="h-6 w-1/2 text-[10px] px-2 bg-slate-50 border-slate-200" 
+        placeholder="HSN" 
+        value={item.hsn_code} 
+        onChange={(e) => updateBatchItem(item.job_bag_item_id, 'hsn_code', e.target.value)} 
+      />
+    </div>
+  </div>
+</td>
 
                         <td className="p-3 bg-amber-50/20 align-top border-l border-amber-100/50">
                           <div className="space-y-1.5">
@@ -731,117 +800,198 @@ export default function ReceiveTab({
                           </div>
                         </td>
 
-                        <td className="p-3 bg-blue-50/10 align-top border-l border-blue-100/50">
-                          <div className="space-y-1.5">
-                            <div className="flex gap-1.5">
-                              <Input 
-                                type="number" className="h-6 w-1/3 text-[10px] px-2 bg-white" 
-                                placeholder={item.is_repair ? "+ Pcs" : "Pcs"} 
-                                value={item.stonePieces} 
-                                onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stonePieces', e.target.value)} 
-                              />
-                              <Input 
-                                type="number" step="0.01" className="h-6 w-1/3 text-[10px] px-2 bg-white font-bold" 
-                                placeholder={item.is_repair ? "+ Cts" : "Cts"} 
-                                value={item.stoneWeight} 
-                                onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stoneWeight', e.target.value)} 
-                              />
-                              <Input type="number" step="0.01" className="h-6 w-1/3 text-[10px] px-2 bg-red-50 text-red-600 border-red-200 placeholder:text-red-300" placeholder="Brk Ct" value={item.breakageWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'breakageWeight', e.target.value)} title="Broken Carats"/>
-                            </div>
-                            
-                            {/* DIAMOND SHAPE SMART SELECTOR */}
-                            {!item.showCustomShape ? (
-                               <Select value={item.diamondShape} onValueChange={(v) => {
-                                 if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomShape', true); updateBatchItem(item.job_bag_item_id, 'diamondShape', ''); }
-                                 else { updateBatchItem(item.job_bag_item_id, 'diamondShape', v); }
-                               }}>
-                                 <SelectTrigger className="h-6 w-full text-[10px] bg-white px-2"><SelectValue placeholder="Shape" /></SelectTrigger>
-                                 <SelectContent>
-                                   {DIAMOND_SHAPES.map(s => <SelectItem key={s} value={s} className="text-[10px]">{s}</SelectItem>)}
-                                   <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other (Type)</SelectItem>
-                                 </SelectContent>
-                               </Select>
-                            ) : (
-                               <div className="flex gap-1 h-6">
-                                 <Input className="h-6 w-full text-[10px] px-2 bg-white" placeholder="Custom Shape" value={item.diamondShape} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondShape', e.target.value)} />
-                                 <Button variant="ghost" size="icon" className="h-6 w-6 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomShape', false)}><ArrowLeft className="h-3 w-3" /></Button>
-                               </div>
-                            )}
+                        <td className="p-3 bg-blue-50/10 align-top border-l border-blue-100/50 min-w-[200px]">
+  <div className="space-y-2">
+    
+    {/* MAIN MANUAL ENTRY + GLASSMORPHISM POPOVER BUTTON */}
+    <div className="flex gap-1 items-center relative">
+      <Input 
+        type="number" className="h-6 w-[40%] text-[10px] px-2 bg-white" 
+        placeholder="Pcs" 
+        value={item.stonePieces} 
+        onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stonePieces', e.target.value)} 
+      />
+      <Input 
+        type="number" step="0.01" className="h-6 w-[40%] text-[10px] px-2 bg-white font-bold" 
+        placeholder="Cts" 
+        value={item.stoneWeight} 
+        onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stoneWeight', e.target.value)} 
+      />
+      
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button 
+            variant="outline" 
+            size="icon" 
+            className={cn(
+              "h-6 w-[20%] transition-all", 
+              (Number(item.solitaireWeight) > 0 || Number(item.meleeWeight) > 0) 
+                ? "bg-blue-600 text-white border-blue-700 hover:bg-blue-700 shadow-inner" 
+                : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50"
+            )}
+            title="Advanced Diamond Breakup"
+          >
+            <Layers className="w-3 h-3" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent 
+          side="left" 
+          align="start"
+          className="w-72 p-4 bg-white/70 backdrop-blur-xl border border-white/50 shadow-[0_8px_30px_rgb(0,0,0,0.12)] rounded-2xl ring-1 ring-black/5 z-50"
+        >
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 border-b border-slate-200/50 pb-2">
+              <Gem className="w-4 h-4 text-blue-600" />
+              <h4 className="text-xs font-black uppercase tracking-widest text-slate-800">Stone Breakup</h4>
+            </div>
+            
+            {/* Solitaire Input */}
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-bold text-slate-500 uppercase">Solitaire / Center Stone</Label>
+              <div className="flex gap-2">
+                <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.solitairePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitairePieces', e.target.value)} />
+                <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.solitaireWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitaireWeight', e.target.value)} />
+              </div>
+            </div>
 
-                            <div className="flex gap-1.5">
-                               {/* DIAMOND COLOR SMART SELECTOR */}
-                               {!item.showCustomColor ? (
-                                 <Select value={item.diamondColor} onValueChange={(v) => {
-                                   if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomColor', true); updateBatchItem(item.job_bag_item_id, 'diamondColor', ''); }
-                                   else { updateBatchItem(item.job_bag_item_id, 'diamondColor', v); }
-                                 }}>
-                                   <SelectTrigger className="h-6 w-1/2 text-[10px] bg-white px-1"><SelectValue placeholder="Color" /></SelectTrigger>
-                                   <SelectContent>
-                                     {DIAMOND_COLORS.map(c => <SelectItem key={c} value={c} className="text-[10px]">{c}</SelectItem>)}
-                                     <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other</SelectItem>
-                                   </SelectContent>
-                                 </Select>
-                               ) : (
-                                 <div className="flex w-1/2 gap-0.5 h-6">
-                                   <Input className="h-6 w-full text-[10px] px-1 bg-white" placeholder="Color" value={item.diamondColor} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondColor', e.target.value)} />
-                                   <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomColor', false)}><ArrowLeft className="h-3 w-3" /></Button>
-                                 </div>
-                               )}
+            {/* Melee Input */}
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-bold text-slate-500 uppercase">Melee / Side Stones</Label>
+              <div className="flex gap-2">
+                <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.meleePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleePieces', e.target.value)} />
+                <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.meleeWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleeWeight', e.target.value)} />
+              </div>
+            </div>
 
-                               {/* DIAMOND CLARITY SMART SELECTOR */}
-                               {!item.showCustomClarity ? (
-                                 <Select value={item.diamondClarity} onValueChange={(v) => {
-                                   if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomClarity', true); updateBatchItem(item.job_bag_item_id, 'diamondClarity', ''); }
-                                   else { updateBatchItem(item.job_bag_item_id, 'diamondClarity', v); }
-                                 }}>
-                                   <SelectTrigger className="h-6 w-1/2 text-[10px] bg-white px-1"><SelectValue placeholder="Clarity" /></SelectTrigger>
-                                   <SelectContent>
-                                     {DIAMOND_CLARITIES.map(c => <SelectItem key={c} value={c} className="text-[10px]">{c}</SelectItem>)}
-                                     <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other</SelectItem>
-                                   </SelectContent>
-                                 </Select>
-                               ) : (
-                                 <div className="flex w-1/2 gap-0.5 h-6">
-                                   <Input className="h-6 w-full text-[10px] px-1 bg-white" placeholder="Clarity" value={item.diamondClarity} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondClarity', e.target.value)} />
-                                   <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomClarity', false)}><ArrowLeft className="h-3 w-3" /></Button>
-                                 </div>
-                               )}
-                            </div>
-                          </div>
-                        </td>
+            <div className="pt-2 border-t border-slate-200/50 flex justify-between items-center">
+              <span className="text-[10px] font-medium text-slate-500">Auto-calculates main totals.</span>
+              <Badge variant="secondary" className="bg-blue-100 text-blue-700 hover:bg-blue-100 border-none font-mono text-[10px]">
+                {item.stoneWeight || "0.00"} ct
+              </Badge>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
+    </div>
 
-                        <td className="p-3 bg-emerald-50/10 align-top border-l border-emerald-100/50">
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between">
-                              <span className="text-[10px] font-bold text-slate-500 uppercase">
-                                {item.is_repair ? "Labor Fee:" : "Making Chg:"}
-                              </span>
-                              {item.is_repair ? (
-                                <Input 
-                                  type="number" 
-                                  className="h-6 w-16 text-[10px] font-black text-emerald-700 bg-white border-emerald-200 px-1 text-right focus-visible:ring-emerald-500" 
-                                  value={item.costMaking} 
-                                  onChange={(e) => updateBatchItem(item.job_bag_item_id, 'costMaking', e.target.value)} 
-                                />
-                              ) : (
-                                <span className="text-[11px] font-black text-emerald-700">₹{item.costMaking}</span>
-                              )}
-                            </div>
-                            <Input 
-                              type="number" step="0.01" 
-                              className="h-7 w-full text-[12px] font-black text-slate-900 bg-white border-emerald-200 focus-visible:ring-emerald-500 px-2" 
-                              placeholder={item.is_repair ? "Total Repair Bill (₹)" : "Final Cost/MRP"} 
-                              value={item.mrp} 
-                              onChange={(e) => updateBatchItem(item.job_bag_item_id, 'mrp', e.target.value)} 
-                            />
-                            <Input 
-                              className="h-6 w-full text-[10px] px-2 bg-white border-slate-200" 
-                              placeholder="Internal Notes / Remarks..." 
-                              value={item.item_remarks} 
-                              onChange={(e) => updateBatchItem(item.job_bag_item_id, 'item_remarks', e.target.value)} 
-                            />
-                          </div>
-                        </td>
+    {/* BREAKAGE */}
+    <Input 
+      type="number" step="0.01" 
+      className="h-6 w-full text-[10px] px-2 bg-red-50 text-red-600 border-red-200 placeholder:text-red-300" 
+      placeholder="Broken Carats (Brk Ct)" 
+      value={item.breakageWeight} 
+      onChange={(e) => updateBatchItem(item.job_bag_item_id, 'breakageWeight', e.target.value)} 
+      title="Broken Carats"
+    />
+
+    {/* DIAMOND SHAPE SMART SELECTOR */}
+    {!item.showCustomShape ? (
+       <Select value={item.diamondShape} onValueChange={(v) => {
+         if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomShape', true); updateBatchItem(item.job_bag_item_id, 'diamondShape', ''); }
+         else { updateBatchItem(item.job_bag_item_id, 'diamondShape', v); }
+       }}>
+         <SelectTrigger className="h-6 w-full text-[10px] bg-white px-2"><SelectValue placeholder="Shape" /></SelectTrigger>
+         <SelectContent>
+           {DIAMOND_SHAPES.map(s => <SelectItem key={s} value={s} className="text-[10px]">{s}</SelectItem>)}
+           <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other (Type)</SelectItem>
+         </SelectContent>
+       </Select>
+    ) : (
+       <div className="flex gap-1 h-6">
+         <Input className="h-6 w-full text-[10px] px-2 bg-white" placeholder="Custom Shape" value={item.diamondShape} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondShape', e.target.value)} />
+         <Button variant="ghost" size="icon" className="h-6 w-6 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomShape', false)}><ArrowLeft className="h-3 w-3" /></Button>
+       </div>
+    )}
+
+    <div className="flex gap-1.5">
+       {/* DIAMOND COLOR SMART SELECTOR */}
+       {!item.showCustomColor ? (
+         <Select value={item.diamondColor} onValueChange={(v) => {
+           if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomColor', true); updateBatchItem(item.job_bag_item_id, 'diamondColor', ''); }
+           else { updateBatchItem(item.job_bag_item_id, 'diamondColor', v); }
+         }}>
+           <SelectTrigger className="h-6 w-1/2 text-[10px] bg-white px-1"><SelectValue placeholder="Color" /></SelectTrigger>
+           <SelectContent>
+             {DIAMOND_COLORS.map(c => <SelectItem key={c} value={c} className="text-[10px]">{c}</SelectItem>)}
+             <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other</SelectItem>
+           </SelectContent>
+         </Select>
+       ) : (
+         <div className="flex w-1/2 gap-0.5 h-6">
+           <Input className="h-6 w-full text-[10px] px-1 bg-white" placeholder="Color" value={item.diamondColor} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondColor', e.target.value)} />
+           <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomColor', false)}><ArrowLeft className="h-3 w-3" /></Button>
+         </div>
+       )}
+
+       {/* DIAMOND CLARITY SMART SELECTOR */}
+       {!item.showCustomClarity ? (
+         <Select value={item.diamondClarity} onValueChange={(v) => {
+           if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomClarity', true); updateBatchItem(item.job_bag_item_id, 'diamondClarity', ''); }
+           else { updateBatchItem(item.job_bag_item_id, 'diamondClarity', v); }
+         }}>
+           <SelectTrigger className="h-6 w-1/2 text-[10px] bg-white px-1"><SelectValue placeholder="Clarity" /></SelectTrigger>
+           <SelectContent>
+             {DIAMOND_CLARITIES.map(c => <SelectItem key={c} value={c} className="text-[10px]">{c}</SelectItem>)}
+             <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other</SelectItem>
+           </SelectContent>
+         </Select>
+       ) : (
+         <div className="flex w-1/2 gap-0.5 h-6">
+           <Input className="h-6 w-full text-[10px] px-1 bg-white" placeholder="Clarity" value={item.diamondClarity} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondClarity', e.target.value)} />
+           <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomClarity', false)}><ArrowLeft className="h-3 w-3" /></Button>
+         </div>
+       )}
+    </div>
+  </div>
+</td>
+
+<td className="p-3 bg-emerald-50/10 align-top border-l border-emerald-100/50 min-w-[160px]">
+  <div className="space-y-2.5">
+    
+    {/* 1. MAKING CHARGE / LABOR (Auto-calculated or Manual for repairs) */}
+    <div className="flex items-center justify-between border-b border-emerald-100/50 pb-1.5">
+      <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+        {item.is_repair ? "Labor Fee:" : "Making Chg:"}
+      </span>
+      {item.is_repair ? (
+        <Input 
+          type="number" 
+          className="h-6 w-16 text-[10px] font-black text-emerald-700 bg-white border-emerald-200 px-1 text-right focus-visible:ring-emerald-500" 
+          value={item.costMaking} 
+          onChange={(e) => updateBatchItem(item.job_bag_item_id, 'costMaking', e.target.value)} 
+        />
+      ) : (
+        <span className="text-[10px] font-black text-slate-600">₹{item.costMaking}</span>
+      )}
+    </div>
+
+    {/* 2. SELLING PRICE / MRP (The main input) */}
+    <div className="space-y-1">
+      <Label className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">
+        {item.is_repair ? "Total Repair Bill" : "Selling Price (MRP)"}
+      </Label>
+      <div className="relative">
+        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
+        <Input 
+          type="number" step="0.01" 
+          className="h-8 w-full text-xs font-black text-slate-900 bg-white border-emerald-300 shadow-inner focus-visible:ring-emerald-500 pl-6" 
+          placeholder="0.00" 
+          value={item.mrp} 
+          onChange={(e) => updateBatchItem(item.job_bag_item_id, 'mrp', e.target.value)} 
+        />
+      </div>
+    </div>
+
+    {/* 3. INTERNAL NOTES */}
+    <Input 
+      className="h-6 w-full text-[10px] px-2 bg-white border-slate-200 text-slate-600 placeholder:text-slate-400" 
+      placeholder="Internal Notes / Remarks..." 
+      value={item.item_remarks} 
+      onChange={(e) => updateBatchItem(item.job_bag_item_id, 'item_remarks', e.target.value)} 
+    />
+    
+  </div>
+</td>
 
                       </tr>
                     ))}

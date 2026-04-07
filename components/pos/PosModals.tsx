@@ -12,7 +12,7 @@ export function PosModals({
     showPreviewModal, setShowPreviewModal, 
     showPrintModal, setShowPrintModal, 
     previewData, lastInvoiceData, setLastInvoiceData, executeCheckout,
-    isProcessing // <--- ADDED THIS HERE
+    isProcessing 
   }: any) {
   
   const printRef = useRef<HTMLDivElement>(null)
@@ -29,7 +29,6 @@ export function PosModals({
 
   return (
     <>
-      {/* 1. CAMERA SCANNER MODAL - FIXED SIZE FLOATING WINDOW */}
       {/* 1. CAMERA SCANNER MODAL - VERCEL-STYLE SLEEK UI */}
       <Dialog open={showScanner} onOpenChange={setShowScanner}>
         <DialogContent className="sm:max-w-md p-0 overflow-hidden bg-white border border-slate-200 rounded-2xl shadow-xl">
@@ -80,7 +79,7 @@ export function PosModals({
           <div className="flex-1 overflow-y-auto p-4 sm:p-8 flex justify-center bg-slate-200/50 custom-scrollbar shadow-inner">
              {previewData && (
                <div className="bg-white shadow-xl origin-top scale-[0.6] sm:scale-75 md:scale-[0.85] transition-transform h-max pb-10 border border-slate-300">
-                  <InvoicePrintTemplate data={previewData} />
+                  <InvoicePrintTemplate data={previewData} copyLabel="Preview Draft" />
                </div>
              )}
           </div>
@@ -119,9 +118,26 @@ export function PosModals({
         </DialogContent>
       </Dialog>
 
-      {/* HIDDEN PRINT TEMPLATE TARGET */}
+      {/* HIDDEN PRINT TEMPLATE TARGET - UPDATED FOR DUAL COPIES */}
       <div className="hidden">
-        <InvoicePrintTemplate ref={printRef} data={lastInvoiceData} />
+        <div ref={printRef} className="print-container bg-white">
+          
+          {/* First Page: Customer Copy */}
+          <InvoicePrintTemplate 
+            data={lastInvoiceData} 
+            copyLabel="Customer Copy" 
+          />
+          
+          {/* Page Break: Forces printer to start a new sheet of paper */}
+          <div style={{ pageBreakAfter: 'always' }}></div>
+          
+          {/* Second Page: Store Copy */}
+          <InvoicePrintTemplate 
+            data={lastInvoiceData} 
+            copyLabel="Store Copy" 
+          />
+          
+        </div>
       </div>
     </>
   )

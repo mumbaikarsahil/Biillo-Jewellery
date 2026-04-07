@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { supabase } from '@/lib/supabaseClient'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -18,21 +19,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Trash2, Plus, Save, ListPlus, AlertCircle, Hammer, Wrench } from 'lucide-react'
+import { Trash2, Plus, Save, ListPlus, AlertCircle, Hammer, Wrench, Check, ArrowLeft } from 'lucide-react'
 
 interface Props {
   job: JobBag
 }
 
-// Temporary type for the staging grid
 type DraftItem = {
   id: string 
   sku_reference: string
   ornament_type: string
   expected_gold_weight_g: string
   expected_diamond_weight_cts: string
-  custom_order_id?: string // Tracks the origin custom order
-  repair_ticket_id?: string // Tracks the origin repair ticket
+  custom_order_id?: string
+  repair_ticket_id?: string
   is_repair?: boolean
 }
 
@@ -41,7 +41,6 @@ export default function OverviewTab({ job }: Props) {
   const [isLoading, setIsLoading] = useState(true)
   const { toast } = useToast()
 
-  // --- ROUTING STATE (CUSTOM ORDERS & REPAIRS) ---
   const searchParams = useSearchParams()
   const customOrderId = searchParams.get('custom_order')
   const repairTicketId = searchParams.get('repair_ticket')
@@ -49,7 +48,6 @@ export default function OverviewTab({ job }: Props) {
   const [activeCustomOrderId, setActiveCustomOrderId] = useState<string | null>(null)
   const [activeRepairTicketId, setActiveRepairTicketId] = useState<string | null>(null)
 
-  // Draft Grid State
   const [draftItems, setDraftItems] = useState<DraftItem[]>([])
   const [isSaving, setIsSaving] = useState(false)
 
@@ -60,11 +58,59 @@ export default function OverviewTab({ job }: Props) {
   const [expectedGold, setExpectedGold] = useState('')
   const [expectedDiamond, setExpectedDiamond] = useState('')
 
+  // --- NEW: CATEGORY & SKU AUTOCOMPLETE STATE ---
+  const [categories, setCategories] = useState<string[]>([
+    'Ring', 'Necklace', 'Earrings', 'Bracelet', 'Bangle', 'Pendant', 'Chain', 'Mangalsutra'
+  ])
+  const [showCustomType, setShowCustomType] = useState(false)
+  
+  const [skuSuggestions, setSkuSuggestions] = useState<string[]>([])
+  const [showSkuSuggestions, setShowSkuSuggestions] = useState(false)
+
   useEffect(() => {
     fetchItems()
+    fetchExistingCategories()
   }, [job.id])
 
-  // --- AUTOMATIC PRE-FILL FROM CUSTOM ORDER ---
+  // --- NEW: FETCH CATEGORIES ON MOUNT ---
+  const fetchExistingCategories = async () => {
+    // Fetch recent categories from existing items to populate dropdown dynamically
+    const { data } = await supabase
+      .from('job_bag_items')
+      .select('ornament_type')
+      .neq('ornament_type', null)
+      .limit(300)
+    
+    if (data) {
+      // Deduplicate and filter out empty strings
+      const uniqueCategories = Array.from(new Set(data.map(d => d.ornament_type))).filter(Boolean) as string[]
+      setCategories(prev => {
+        const combined = new Set([...prev, ...uniqueCategories])
+        return Array.from(combined).sort()
+      })
+    }
+  }
+
+  // --- NEW: FETCH SKU SUGGESTIONS ---
+  const handleSkuSearch = async (val: string) => {
+    setSkuReference(val)
+    if (val.length < 2) {
+      setSkuSuggestions([])
+      return
+    }
+
+    const { data } = await supabase
+      .from('job_bag_items')
+      .select('sku_reference')
+      .ilike('sku_reference', `%${val}%`)
+      .limit(10)
+    
+    if (data) {
+      const uniqueSkus = Array.from(new Set(data.map(d => d.sku_reference))) as string[]
+      setSkuSuggestions(uniqueSkus)
+    }
+  }
+
   useEffect(() => {
     if (customOrderId) {
       const fetchCustomOrderDetails = async () => {
@@ -81,17 +127,17 @@ export default function OverviewTab({ job }: Props) {
           setExpectedDiamond(data.expected_diamond_cts?.toString() || '')
           setActiveCustomOrderId(data.id)
           
-          toast({ 
-            title: "Store Request Loaded", 
-            description: "Custom order specifications have been populated in the grid." 
-          })
+          if (data.item_category && !categories.includes(data.item_category)) {
+            setCategories(prev => [...prev, data.item_category])
+          }
+
+          toast({ title: "Store Request Loaded", description: "Custom order specifications have been populated in the grid." })
         }
       }
       fetchCustomOrderDetails()
     }
   }, [customOrderId, toast])
 
-  // --- AUTOMATIC PRE-FILL FROM REPAIR TICKET ---
   useEffect(() => {
     if (repairTicketId) {
       const fetchRepairDetails = async () => {
@@ -107,10 +153,9 @@ export default function OverviewTab({ job }: Props) {
           setExpectedGold(data.gross_weight_g?.toString() || '') 
           setActiveRepairTicketId(data.id)
           
-          toast({ 
-            title: "Repair Ticket Loaded", 
-            description: "Repair specifications have been populated in the grid." 
-          })
+          if (!categories.includes('Repair')) setCategories(prev => [...prev, 'Repair'])
+
+          toast({ title: "Repair Ticket Loaded", description: "Repair specifications have been populated in the grid." })
         }
       }
       fetchRepairDetails()
@@ -135,7 +180,6 @@ export default function OverviewTab({ job }: Props) {
     }
   }
 
-  // --- 1. DRAFTING LOGIC ---
   const handleAddDrafts = (e: React.FormEvent) => {
     e.preventDefault()
     if (!skuReference) {
@@ -163,7 +207,6 @@ export default function OverviewTab({ job }: Props) {
 
     setDraftItems([...draftItems, ...newDrafts])
     
-    // Clear active links so subsequent manual additions aren't linked to the same customer
     setActiveCustomOrderId(null)
     setActiveRepairTicketId(null)
     setSkuReference('')
@@ -180,7 +223,6 @@ export default function OverviewTab({ job }: Props) {
     setDraftItems(drafts => drafts.filter(draft => draft.id !== id))
   }
 
-  // --- 2. COMMITTING LOGIC ---
   const saveDraftsToDatabase = async () => {
     if (draftItems.length === 0) return
 
@@ -201,29 +243,21 @@ export default function OverviewTab({ job }: Props) {
       const { error } = await supabase.from('job_bag_items').insert(payload)
       if (error) throw error
 
-      // Update Custom Order Statuses to 'in_production' if any were linked
       const linkedOrderIds = draftItems.filter(d => d.custom_order_id).map(d => d.custom_order_id)
       if (linkedOrderIds.length > 0) {
-        await supabase
-          .from('custom_orders')
-          .update({ status: 'in_production' })
-          .in('id', linkedOrderIds)
+        await supabase.from('custom_orders').update({ status: 'in_production' }).in('id', linkedOrderIds)
       }
 
-      // Update Repair Ticket Statuses to 'in_repair' if any were linked
       const linkedRepairIds = draftItems.filter(d => d.repair_ticket_id).map(d => d.repair_ticket_id)
       if (linkedRepairIds.length > 0) {
-        await supabase
-          .from('repair_tickets')
-          .update({ status: 'in_repair' })
-          .in('id', linkedRepairIds)
+        await supabase.from('repair_tickets').update({ status: 'in_repair' }).in('id', linkedRepairIds)
       }
 
       toast({ title: "Success", description: `Added ${draftItems.length} items to job bag.` })
       setDraftItems([])
       fetchItems()
+      fetchExistingCategories() // Refresh categories after saving
       
-      // Clean up URL so a page refresh doesn't trigger the auto-fill again
       window.history.replaceState(null, '', window.location.pathname)
 
     } catch (error: any) {
@@ -233,7 +267,6 @@ export default function OverviewTab({ job }: Props) {
     }
   }
 
-  // --- 3. DELETE SAVED ITEM ---
   const deleteSavedItem = async (itemId: string, status: string) => {
     if (status !== 'pending') {
       return toast({ title: "Cannot Delete", description: "Only pending items can be deleted.", variant: "destructive" })
@@ -251,7 +284,6 @@ export default function OverviewTab({ job }: Props) {
     }
   }
 
-  // Styling Helpers based on what is actively loaded
   const isCustomLoaded = !!activeCustomOrderId;
   const isRepairLoaded = !!activeRepairTicketId;
   const cardBorderClass = isCustomLoaded ? 'border-purple-300 ring-2 ring-purple-100' : isRepairLoaded ? 'border-amber-300 ring-2 ring-amber-100' : 'border-primary/20';
@@ -263,7 +295,6 @@ export default function OverviewTab({ job }: Props) {
   return (
     <div className="space-y-6">
       
-      {/* 1. Job Bag Summary Card */}
       <Card>
         <CardContent className="p-6 space-y-4">
           <div className="flex justify-between items-center">
@@ -292,8 +323,7 @@ export default function OverviewTab({ job }: Props) {
         </CardContent>
       </Card>
 
-      {/* 2. Fast Entry System (Drafting) */}
-      <Card className={`shadow-sm overflow-hidden ${cardBorderClass}`}>
+      <Card className={`shadow-sm overflow-visible ${cardBorderClass}`}>
         <CardHeader className={`py-4 border-b flex flex-row items-center justify-between ${headerBgClass}`}>
           <CardTitle className={`text-sm flex items-center gap-2 ${headerIconClass}`}>
             <ListPlus className="w-4 h-4" />
@@ -312,21 +342,103 @@ export default function OverviewTab({ job }: Props) {
             )}
           </div>
         </CardHeader>
-        <CardContent className="p-0">
+        <CardContent className="p-0 overflow-visible">
           
-          <form onSubmit={handleAddDrafts} className={`flex flex-wrap md:flex-nowrap items-end gap-3 p-4 border-b ${formBgClass}`}>
+          <form onSubmit={handleAddDrafts} className={`flex flex-wrap md:flex-nowrap items-end gap-3 p-4 border-b overflow-visible ${formBgClass}`}>
             <div className="w-full md:w-20 space-y-1.5">
               <Label className="text-[10px] font-bold uppercase text-muted-foreground">Qty</Label>
               <Input type="number" min="1" required className="h-9 text-xs font-bold bg-white" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
             </div>
-            <div className="w-full md:flex-1 space-y-1.5">
+            
+            {/* --- NEW: SKU AUTOCOMPLETE FIELD --- */}
+            <div className="w-full md:flex-1 space-y-1.5 relative">
               <Label className="text-[10px] font-bold uppercase text-muted-foreground">Base SKU / Style *</Label>
-              <Input required placeholder="e.g. RNG-101" className="h-9 text-xs bg-white" value={skuReference} onChange={(e) => setSkuReference(e.target.value)} />
+              <Input 
+                required 
+                placeholder="e.g. RNG-101" 
+                className="h-9 text-xs bg-white" 
+                value={skuReference} 
+                onChange={(e) => handleSkuSearch(e.target.value)} 
+                onFocus={() => setShowSkuSuggestions(true)}
+                onBlur={() => setTimeout(() => setShowSkuSuggestions(false), 200)}
+              />
+              {showSkuSuggestions && skuSuggestions.length > 0 && (
+                <div className="absolute top-full left-0 w-full mt-1 bg-white border border-slate-200 shadow-xl rounded-md z-50 max-h-48 overflow-y-auto">
+                  {skuSuggestions.map(sku => (
+                    <div 
+                      key={sku} 
+                      className="px-3 py-2 text-xs font-medium hover:bg-primary/10 hover:text-primary cursor-pointer border-b border-slate-50 last:border-0"
+                      onClick={() => {
+                        setSkuReference(sku)
+                        setSkuSuggestions([])
+                        setShowSkuSuggestions(false)
+                      }}
+                    >
+                      {sku}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
+
+            {/* --- NEW: CATEGORY SELECTOR FIELD --- */}
             <div className="w-full md:flex-1 space-y-1.5">
               <Label className="text-[10px] font-bold uppercase text-muted-foreground">Type</Label>
-              <Input placeholder="e.g. Ring" className="h-9 text-xs bg-white" value={ornamentType} onChange={(e) => setOrnamentType(e.target.value)} />
+              {!showCustomType ? (
+                <Select value={ornamentType} onValueChange={(val) => {
+                  if (val === 'NEW') {
+                    setShowCustomType(true)
+                    setOrnamentType('')
+                  } else {
+                    setOrnamentType(val)
+                  }
+                }}>
+                  <SelectTrigger className="h-9 text-xs bg-white border-slate-200">
+                    <SelectValue placeholder="Category..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {categories.map(c => <SelectItem key={c} value={c} className="text-xs">{c}</SelectItem>)}
+                    <SelectItem value="NEW" className="text-xs font-bold text-primary">+ Add New Category</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <div className="flex gap-1 h-9">
+                  <Input 
+                    autoFocus
+                    placeholder="New Category Name" 
+                    className="h-9 text-xs bg-white border-primary" 
+                    value={ornamentType} 
+                    onChange={(e) => setOrnamentType(e.target.value)} 
+                  />
+                  <Button 
+                    type="button" 
+                    className="h-9 w-9 shrink-0 bg-primary text-primary-foreground hover:bg-primary/90" 
+                    size="icon" 
+                    onClick={() => {
+                      setShowCustomType(false);
+                      if (ornamentType && !categories.includes(ornamentType)) {
+                        setCategories(prev => [...prev, ornamentType].sort());
+                      }
+                    }}
+                  >
+                    <Check className="h-4 w-4" />
+                  </Button>
+                  <Button 
+                    type="button" 
+                    variant="ghost"
+                    className="h-9 w-9 shrink-0 text-slate-400" 
+                    size="icon" 
+                    onClick={() => {
+                      setShowCustomType(false);
+                      setOrnamentType('');
+                    }}
+                  >
+                    <ArrowLeft className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
             </div>
+
             <div className="w-full md:w-32 space-y-1.5">
               <Label className="text-[10px] font-bold uppercase text-muted-foreground">Exp. Gold (g)</Label>
               <Input type="number" step="0.001" placeholder="0.000" className="h-9 text-xs bg-white" value={expectedGold} onChange={(e) => setExpectedGold(e.target.value)} />
@@ -400,7 +512,6 @@ export default function OverviewTab({ job }: Props) {
         </CardContent>
       </Card>
 
-      {/* 3. Database Saved Items */}
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Committed Job Bag SKUs</CardTitle>
