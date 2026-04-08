@@ -38,7 +38,6 @@ import { cn } from "@/lib/utils"
 
 import { ItemTagPreview } from "@/components/ItemTagPreview" 
 
-// Helper to format dates cleanly
 const formatDateTime = (isoString: string) => {
   if (!isoString) return "Unknown"
   return new Intl.DateTimeFormat('en-IN', {
@@ -68,15 +67,12 @@ interface InventoryItem {
   net_weight_g: number
   total_stone_weight_cts: number
   total_stone_pieces: number
-  
-  // --- DETAILED BREAKDOWN ---
   solitaire_weight_cts: number
   solitaire_pieces: number
   melee_weight_cts: number
   melee_pieces: number
   color_stone_weight_cts: number
   color_stone_pieces: number
-
   mrp: number | null
   status: string
   warehouse_id: string
@@ -111,20 +107,18 @@ interface InventoryItem {
   expected_delivery_date?: string
 }
 
-interface Warehouse {
-  id: string
-  name: string
-  type?: string
-  warehouse_type?: string
-}
-
 export default function InventoryPage() {
   const { appUser } = useAuth()
   const router = useRouter()
+  
   const [items, setItems] = useState<InventoryItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
+  const [warehouses, setWarehouses] = useState<any[]>([])
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
+  
+  // --- NEW: RBAC Role State ---
+  const [userRole, setUserRole] = useState<string>('sales_person') // Default restrictive
+  
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
@@ -141,16 +135,30 @@ export default function InventoryPage() {
   const [goldRates, setGoldRates] = useState<Record<string, number>>({}) 
   const [previewData, setPreviewData] = useState<any[]>([])
   
+  const [isUploadingImage, setIsUploadingImage] = useState(false)
+
   const [calcParams, setCalcParams] = useState({
     diamondRatePerCt: 25000, 
     markupPercent: 80,
     flatCharge: 8000
   })
 
+  // --- DERIVED PERMISSION ---
+  const canEdit = ['owner', 'manager', 'operations_manager'].includes(userRole)
+
   useEffect(() => {
     const fetchInitialData = async () => {
       if (!appUser) return
       try {
+        // 1. Fetch Role for RBAC
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('id', appUser.user_id || appUser.id)
+          .maybeSingle()
+        if (profile) setUserRole(profile.role)
+
+        // 2. Fetch Warehouses
         const { data: whData } = await supabase
           .from('warehouses')
           .select('*')
@@ -165,6 +173,7 @@ export default function InventoryPage() {
           }
         }
 
+        // 3. Fetch Company Rates
         const { data: companyData } = await supabase
           .from('companies')
           .select('current_rate_24k, current_rate_diamond')
@@ -237,7 +246,7 @@ export default function InventoryPage() {
         origin_name: rep.origin?.name || 'Unknown Branch',
         huid_code: null,
         hsn_code: '9987', 
-        image_url: null, 
+        image_url: rep.condition_photo_url || null, 
         remarks: rep.issue_description || '',
         metal_color: 'N/A',
         diamond_shape: null,
@@ -252,7 +261,6 @@ export default function InventoryPage() {
         updated_at: rep.updated_at,
         expected_delivery_date: rep.expected_delivery_date,
         last_status_change_at: rep.updated_at
-        
       }))
 
       const filteredRepairs = selectedLocation === 'ALL' 
@@ -271,6 +279,8 @@ export default function InventoryPage() {
   useEffect(() => { fetchItems() }, [appUser, selectedLocation])
 
   const handleSaveMrp = async (id: string) => {
+    if (!canEdit) return toast.error("Unauthorized to edit prices");
+    
     const item = items.find(i => i.id === id);
     if (!item) return;
 
@@ -289,9 +299,54 @@ export default function InventoryPage() {
     toast.success('Price updated')
   }
 
-  const handleOpenCalc = () => {
-    const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, itemId: string, itemType: string) => {
+    if (!canEdit) return toast.error("Unauthorized to update images");
     
+    const file = e.target.files?.[0]
+    if (!file || !appUser) return
+
+    setIsUploadingImage(true)
+    try {
+      const fileExt = file.name.split('.').pop()
+      const fileName = `${itemId}-${Date.now()}.${fileExt}`
+      const filePath = `${appUser.company_id}/${fileName}`
+
+      const { error: uploadError } = await supabase.storage
+        .from('inventory-images')
+        .upload(filePath, file)
+
+      if (uploadError) throw uploadError
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('inventory-images')
+        .getPublicUrl(filePath)
+
+      if (itemType === 'repair') {
+        const { error: dbErr } = await supabase.from('repair_tickets').update({ condition_photo_url: publicUrl }).eq('id', itemId)
+        if (dbErr) throw dbErr
+      } else {
+        const { error: dbErr } = await supabase.from('inventory_items').update({ image_url: publicUrl }).eq('id', itemId)
+        if (dbErr) throw dbErr
+      }
+
+      setItems(prev => prev.map(i => i.id === itemId ? { ...i, image_url: publicUrl } : i))
+      if (viewItem && viewItem.id === itemId) {
+        setViewItem({ ...viewItem, image_url: publicUrl })
+      }
+      
+      toast.success("Image updated successfully!")
+    } catch (error: any) {
+      toast.error(error.message || "Failed to upload image")
+    } finally {
+      setIsUploadingImage(false)
+      e.target.value = '' 
+    }
+  }
+
+  const handleOpenCalc = () => {
+    if (!canEdit) return toast.error("Unauthorized to use bulk calculator");
+    
+    const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
     if (selectedItems.length === 0) {
       return toast.error("No valid items selected.", { description: "Repairs cannot be bulk-calculated. Select standard inventory." })
     }
@@ -499,13 +554,13 @@ export default function InventoryPage() {
 
           <TabsContent value="active">
              <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                {loading ? <TableSkeleton /> : <InventoryTable data={filteredActiveItems} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} />}
+                {loading ? <TableSkeleton /> : <InventoryTable data={filteredActiveItems} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />}
              </div>
           </TabsContent>
 
           <TabsContent value="sold">
              <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                {loading ? <TableSkeleton /> : <InventoryTable data={soldItems} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} />}
+                {loading ? <TableSkeleton /> : <InventoryTable data={soldItems} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />}
              </div>
           </TabsContent>
         </Tabs>
@@ -520,12 +575,17 @@ export default function InventoryPage() {
               <span className="text-xs font-medium text-slate-300 whitespace-nowrap">Selected</span>
             </div>
             <div className="flex items-center gap-1">
-              <Button size="sm" onClick={handleOpenCalc} className="h-8 px-4 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-sm transition-none whitespace-nowrap border border-emerald-400/50">
-                <Calculator className="w-3.5 h-3.5 mr-1.5" /> Calc MRP
-              </Button>
+              
+              {canEdit && (
+                <Button size="sm" onClick={handleOpenCalc} className="h-8 px-4 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-sm transition-none whitespace-nowrap border border-emerald-400/50">
+                  <Calculator className="w-3.5 h-3.5 mr-1.5" /> Calc MRP
+                </Button>
+              )}
+              
               <Button size="sm" onClick={handleBulkTransfer} className="h-8 px-4 text-xs font-semibold bg-white text-slate-900 hover:bg-slate-100 rounded-xl shadow-sm transition-none whitespace-nowrap">
                 <Truck className="w-3.5 h-3.5 mr-1.5" /> Transfer
               </Button>
+              
               <Button size="icon" variant="ghost" onClick={() => setSelectedIds([])} className="h-8 w-8 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl ml-1 transition-none shrink-0">
                 <X className="w-4 h-4" />
               </Button>
@@ -534,7 +594,7 @@ export default function InventoryPage() {
         )}
       </main>
 
-      {/* --- MISSING BULK MRP CALCULATOR MODAL --- */}
+      {/* BULK MRP CALCULATOR MODAL */}
       <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
         <DialogContent className="sm:max-w-[500px] border-slate-200 shadow-2xl rounded-xl">
           <DialogHeader className="border-b border-slate-100 pb-4">
@@ -646,7 +706,6 @@ export default function InventoryPage() {
                     </DialogTitle>
                   </div>
                   
-                  {/* DISTINCT SEPARATION OF SKU AND BARCODE */}
                   <div className="mt-2 flex items-center gap-3">
                     <Badge variant="outline" className="bg-slate-50 text-slate-600 border-slate-200 text-[10px] uppercase tracking-widest font-semibold px-2 py-0.5">
                       Design SKU: {viewItem.sku_reference}
@@ -670,7 +729,6 @@ export default function InventoryPage() {
               
               <div className="p-6 overflow-y-auto max-h-[70vh] custom-scrollbar space-y-6">
                 
-                {/* --- NEW: VAULT TIMELINE --- */}
                 <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 shadow-sm">
                   <h3 className="text-[10px] font-bold text-indigo-800 uppercase tracking-widest mb-3 flex items-center gap-1.5">
                     <Clock className="w-3.5 h-3.5" /> Vault Status & Timeline
@@ -690,9 +748,17 @@ export default function InventoryPage() {
                   </div>
                 </div>
 
-                {/* Visual Header */}
                 <div className="flex flex-col md:flex-row gap-6">
-                  <div className="w-full md:w-48 h-48 bg-white border border-slate-200 rounded-xl flex items-center justify-center shrink-0 overflow-hidden shadow-sm">
+                  
+                  {/* INTERACTIVE IMAGE UPLOAD OVERLAY (RBAC Applied) */}
+                  <div className="relative w-full md:w-48 h-48 bg-white border border-slate-200 rounded-xl flex items-center justify-center shrink-0 overflow-hidden shadow-sm group">
+                    {isUploadingImage && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/80 z-10">
+                        <Loader2 className="w-6 h-6 animate-spin text-indigo-600 mb-2" />
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-600">Uploading...</span>
+                      </div>
+                    )}
+                    
                     {viewItem.image_url ? (
                       <img src={viewItem.image_url} alt="Item" className="w-full h-full object-cover" />
                     ) : (
@@ -700,6 +766,20 @@ export default function InventoryPage() {
                         <ImageIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
                         <span className="text-[10px] font-bold uppercase tracking-widest">No Image</span>
                       </div>
+                    )}
+
+                    {canEdit && (
+                      <label className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center cursor-pointer transition-opacity text-white z-20">
+                        <Upload className="w-6 h-6 mb-1" />
+                        <span className="text-[10px] font-bold uppercase tracking-widest">Change Image</span>
+                        <input 
+                          type="file" 
+                          accept="image/*" 
+                          className="hidden" 
+                          onChange={(e) => handleImageUpload(e, viewItem.id, viewItem._type)} 
+                          disabled={isUploadingImage}
+                        />
+                      </label>
                     )}
                   </div>
 
@@ -710,7 +790,6 @@ export default function InventoryPage() {
                       <p className="text-xs text-slate-500">{viewItem.purity_percent}% Purity • {viewItem.metal_color || 'Std Color'}</p>
                     </div>
                     
-                    {/* --- NEW: DETAILED DIAMOND BREAKDOWN CARD --- */}
                     <div className="bg-white p-4 border border-slate-200 rounded-xl shadow-sm space-y-3">
                       <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
                         <Gem className="w-3 h-3 text-blue-500"/> Stone Details
@@ -761,7 +840,6 @@ export default function InventoryPage() {
                   </div>
                 </div>
 
-                {/* Identification & Compliance */}
                 <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                   <div className="bg-slate-50 border-b border-slate-200 px-4 py-2">
                     <h3 className="text-xs font-bold text-slate-600 uppercase tracking-widest">Compliance & Specs</h3>
@@ -796,7 +874,6 @@ export default function InventoryPage() {
                   )}
                 </div>
 
-                {/* Financials Ledger */}
                 <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                   <div className="bg-slate-50 border-b border-slate-200 px-4 py-2">
                     <h3 className="text-xs font-bold text-slate-600 uppercase tracking-widest">Costing Ledger</h3>
@@ -842,7 +919,7 @@ export default function InventoryPage() {
 }
 
 // --- HYBRID RENDER TABLE ---
-function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, setTagItem, handleSingleTransfer, setViewItem }: any) {
+function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, setTagItem, handleSingleTransfer, setViewItem, canEdit }: any) {
   return (
     <div className="h-full flex flex-col">
       {/* DESKTOP VIEW */}
@@ -883,7 +960,6 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                 )}
                 <TableCell className="py-3">
                   <div className="flex flex-col items-start">
-                     {/* Distinct styling for Barcode vs SKU */}
                      <div className="flex items-center gap-1.5 mb-1">
                         <Package className="w-3 h-3 text-indigo-500" />
                         <span className="font-mono font-bold text-sm text-indigo-900 tracking-tight leading-tight">{item.barcode}</span>
@@ -921,7 +997,6 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                    </div>
                 </TableCell>
                 
-                {/* TIMELINE COLUMN */}
                 <TableCell className="py-3">
                    <div className="flex flex-col gap-1">
                       <div className="flex items-center gap-1.5" title="Last Updated / Received in Vault">
@@ -942,8 +1017,10 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                      {item.status.replace(/_/g, ' ')}
                    </span>
                 </TableCell>
+                
+                {/* ROLE BASED MRP EDITING */}
                 <TableCell className="text-right py-3 pr-4">
-                   {editingMrpId === item.id ? (
+                   {editingMrpId === item.id && canEdit ? (
                      <div className="flex items-center justify-end gap-1.5">
                        <Input className="h-8 w-20 text-xs font-semibold rounded-md border-slate-300 focus-visible:ring-indigo-500" value={editingMrpVal} onChange={e => setEditingMrpVal(e.target.value)} autoFocus />
                        <Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 rounded-md shadow-sm border border-emerald-100 shrink-0" onClick={() => handleSaveMrp(item.id)}>
@@ -951,24 +1028,26 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                        </Button>
                      </div>
                    ) : (
-                     <div className="group flex items-center justify-end gap-2 cursor-pointer" onClick={() => { if(!isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
+                     <div className={`group flex items-center justify-end gap-2 ${canEdit ? 'cursor-pointer' : ''}`} onClick={() => { if(canEdit && !isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
                        <span className="text-xs font-bold text-slate-900">
                           {item.mrp ? `₹${item.mrp.toLocaleString()}` : 'TBD'}
                        </span>
-                       {!isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 transition-all" />}
+                       {canEdit && !isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 transition-all" />}
                      </div>
                    )}
                 </TableCell>
+                
                 <TableCell className="text-right px-6 py-3">
                    <div className="flex justify-end gap-1.5">
                       <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => setViewItem(item)} title="View Full Details">
                         <Eye className="h-4 w-4" />
                       </Button>
                       
-                      {/* REMOVED THE is_repair_ticket CHECK HERE */}
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors" onClick={() => setTagItem(item)} title="Print Label">
-                        <Printer className="h-4 w-4" />
-                      </Button>
+                      {canEdit && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors" onClick={() => setTagItem(item)} title="Print Label">
+                          <Printer className="h-4 w-4" />
+                        </Button>
+                      )}
                       
                       {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
                          <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => handleSingleTransfer(item)} title="Transfer">
@@ -1050,7 +1129,7 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
             <div className="flex justify-between items-end pt-1">
                <div>
                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Retail Price</p>
-                 {editingMrpId === item.id ? (
+                 {editingMrpId === item.id && canEdit ? (
                    <div className="flex items-center gap-1.5">
                      <Input className="h-8 w-24 text-xs font-semibold rounded-md border-slate-300 focus-visible:ring-indigo-500" value={editingMrpVal} onChange={e => setEditingMrpVal(e.target.value)} autoFocus />
                      <Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 rounded-md shadow-sm border border-emerald-100" onClick={() => handleSaveMrp(item.id)}>
@@ -1058,26 +1137,27 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                      </Button>
                    </div>
                  ) : (
-                   <div className="group flex items-center gap-2 cursor-pointer w-max" onClick={() => { if(!isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
+                   <div className={`group flex items-center gap-2 w-max ${canEdit ? 'cursor-pointer' : ''}`} onClick={() => { if(canEdit && !isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
                      <span className="text-sm font-bold text-slate-900">{item.mrp ? `₹${item.mrp.toLocaleString()}` : 'TBD'}</span>
-                     {!isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3.5 h-3.5 text-slate-400" />}
+                     {canEdit && !isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3.5 h-3.5 text-slate-400" />}
                    </div>
                  )}
                </div>
                <div className="flex gap-1.5">
-     
-     {/* REMOVED THE is_repair_ticket CHECK HERE */}
-     <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 border-slate-200 bg-white" onClick={() => setTagItem(item)}>
-       <Printer className="h-3.5 w-3.5" />
-     </Button>
+                 
+                 {canEdit && (
+                   <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 border-slate-200 bg-white" onClick={() => setTagItem(item)}>
+                     <Printer className="h-3.5 w-3.5" />
+                   </Button>
+                 )}
 
-     {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
-       <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
-         <Truck className="h-3.5 w-3.5" />
-       </Button>
-     )}
-   </div>
-</div>
+                 {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
+                   <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
+                     <Truck className="h-3.5 w-3.5" />
+                   </Button>
+                 )}
+               </div>
+            </div>
           </div>
         ))}
       </div>

@@ -134,10 +134,10 @@ export default function DetailedImportPage() {
             const grossWt = parseFloat(row[10]?.replace(/,/g, '')) || 0 // Column 11
             const netWt = parseFloat(row[11]?.replace(/,/g, '')) || 0   // Column 12
             
-            // --- NEW: Calculate Diamond Carats (Gross - Net) * 5 ---
+            // Calculate Diamond Carats (Gross - Net) * 5
             const calculatedCts = Math.max(0, parseFloat(((grossWt - netWt) * 5).toFixed(3)))
 
-            // --- NEW: Fetch MRP from Column 22 or 23 (indices 21 or 22) ---
+            // Fetch MRP from Column 22 or 23 (indices 21 or 22)
             const amountStr = row[22] || row[21] || '0'
             const amount = parseFloat(amountStr.replace(/,/g, '')) || 0
 
@@ -154,7 +154,7 @@ export default function DetailedImportPage() {
               color: '',
               clarity: '',
               diamond_pcs: 0,
-              diamond_weight_cts: calculatedCts, // Assigned instantly from math calculation
+              diamond_weight_cts: calculatedCts,
               total_amount: amount
             }
             continue
@@ -272,6 +272,8 @@ export default function DetailedImportPage() {
     try {
       const itemsToCommit = parsedItems.filter(item => selectedIds.has(item.temp_id))
 
+      // By explicitly omitting 'created_from_job_bag_id' here, 
+      // Supabase defaults it to null automatically (thanks to the SQL fix).
       const inventoryPayload = itemsToCommit.map(item => ({
         company_id: appUser?.company_id,
         warehouse_id: targetWarehouse,

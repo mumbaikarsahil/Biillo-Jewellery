@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
+import { useStoreLocation } from '@/hooks/useStoreLocation' // <-- NEW: Imported the hook
 import { supabase } from '@/lib/supabaseClient'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -33,13 +34,15 @@ import {
 export default function AccountsMasterPage() {
   const { appUser } = useAuth()
   
+  // --- NEW: Global Store Location State ---
+  const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
+  
   // States
   const [activeTab, setActiveTab] = useState("sales_register")
   const [showFilters, setShowFilters] = useState(false)
   const [loading, setLoading] = useState(true)
   
   const [warehouses, setWarehouses] = useState<any[]>([])
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState('all')
   const [startDate, setStartDate] = useState(() => {
     const d = new Date(); d.setDate(1); return d.toISOString().split('T')[0]; 
   })
@@ -65,21 +68,29 @@ export default function AccountsMasterPage() {
   useEffect(() => {
     const fetchWarehouses = async () => {
       if (!appUser?.company_id) return
-      const { data } = await supabase.from('warehouses').select('id, name').eq('company_id', appUser.company_id)
-      if (data) setWarehouses(data)
+      const { data } = await supabase.from('warehouses').select('id, name').eq('company_id', appUser.company_id).eq('is_active', true)
+      
+      if (data) {
+        setWarehouses(data)
+        // Forcefully initialize the location for branch users if not set
+        if (!selectedLocation && !isHQ) {
+          setSelectedLocation(data[0].id)
+        }
+      }
     }
     fetchWarehouses()
-  }, [appUser])
+  }, [appUser, isHQ, selectedLocation, setSelectedLocation])
 
   const fetchAccountingData = async () => {
-    if (!appUser?.company_id) return
+    // Wait until the location is fully resolved by the hook
+    if (!appUser?.company_id || !selectedLocation) return
+    
     setLoading(true)
     try {
       const safeEndDate = new Date(endDate)
       safeEndDate.setDate(safeEndDate.getDate() + 1)
       const safeEndDateStr = safeEndDate.toISOString().split('T')[0]
 
-      // NEW QUERY: Fetching profiles (user data), customers, warehouses AND invoice_items for the sold articles
       let query = supabase
         .from('invoices')
         .select(`
@@ -95,7 +106,11 @@ export default function AccountsMasterPage() {
         .lt('created_at', safeEndDateStr)
         .order('created_at', { ascending: false })
 
-      if (selectedWarehouseId !== 'all') query = query.eq('warehouse_id', selectedWarehouseId)
+      // --- NEW: Apply the locked warehouse logic ---
+      if (selectedLocation !== 'ALL') {
+        query = query.eq('warehouse_id', selectedLocation)
+      }
+      
       if (search.trim()) query = query.ilike('invoice_number', `%${search.trim()}%`)
 
       const { data: invData, error } = await query
@@ -145,9 +160,10 @@ export default function AccountsMasterPage() {
   }
 
   useEffect(() => {
+    // Watch `selectedLocation` instead of the old local state
     const delay = setTimeout(() => { fetchAccountingData() }, 300)
     return () => clearTimeout(delay)
-  }, [appUser, selectedWarehouseId, startDate, endDate, search])
+  }, [appUser, selectedLocation, startDate, endDate, search])
 
   // --- FETCH & OPEN PREVIEW MODAL ---
   const handleOpenPreview = async (invoiceId: string) => {
@@ -218,8 +234,6 @@ export default function AccountsMasterPage() {
     ];
 
     const csvRows = invoices.map(inv => {
-      
-      // Map the items array into a single comma-separated string for the CSV column
       const itemsString = inv.invoice_items?.map((i: any) => {
         const item = i.inventory_items;
         return item ? `[${item.barcode}] ${item.item_category} (${item.purity_karat || 'N/A'})` : 'Unknown Item'
@@ -327,13 +341,19 @@ export default function AccountsMasterPage() {
           </div>
 
           <div className={`flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 w-full ${showFilters ? 'flex' : 'hidden sm:flex'} animate-in slide-in-from-top-2 duration-200`}>
-            <Select value={selectedWarehouseId} onValueChange={setSelectedWarehouseId}>
+            
+            {/* --- NEW: Locked Warehouse Dropdown --- */}
+            <Select 
+              value={selectedLocation || ''} 
+              onValueChange={setSelectedLocation}
+              disabled={isLocked} // Locks it down for Branch Managers
+            >
               <SelectTrigger className="h-10 sm:h-9 text-xs sm:text-[11px] font-bold bg-zinc-50 border-zinc-200 rounded-xl sm:rounded-full w-full sm:w-[150px]">
                 <Store className="w-4 h-4 sm:w-3 sm:h-3 mr-1.5 text-zinc-500" />
                 <SelectValue placeholder="All Branches" />
               </SelectTrigger>
               <SelectContent className="rounded-xl shadow-xl border-zinc-200">
-                <SelectItem value="all" className="text-xs font-medium rounded-lg">Global Scope</SelectItem>
+                {isHQ && <SelectItem value="ALL" className="text-xs font-bold text-indigo-600 rounded-lg">All Branches (HQ)</SelectItem>}
                 {warehouses.map(w => <SelectItem key={w.id} value={w.id} className="text-xs font-medium rounded-lg">{w.name}</SelectItem>)}
               </SelectContent>
             </Select>

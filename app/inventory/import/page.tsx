@@ -195,12 +195,10 @@ export default function LegacyImportPage() {
   // --- SELECTION LOGIC ---
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
-      // Only select the currently filtered items
       const newSelected = new Set(selectedIds)
       filteredItems.forEach(item => newSelected.add(item.temp_id))
       setSelectedIds(newSelected)
     } else {
-      // Only deselect the currently filtered items
       const newSelected = new Set(selectedIds)
       filteredItems.forEach(item => newSelected.delete(item.temp_id))
       setSelectedIds(newSelected)
@@ -214,16 +212,13 @@ export default function LegacyImportPage() {
     setSelectedIds(newSet)
   }
 
-  // --- PAGINATION LOGIC ---
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / itemsPerPage))
   const currentItems = filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
 
-  // Reset page to 1 when filters change
   useEffect(() => {
     setCurrentPage(1)
   }, [searchTerm, categoryFilter])
 
-  // Check if all current filtered items are selected
   const isAllFilteredSelected = filteredItems.length > 0 && filteredItems.every(item => selectedIds.has(item.temp_id))
 
   // --- THE DATABASE COMMIT LOGIC ---
@@ -236,6 +231,8 @@ export default function LegacyImportPage() {
     try {
       const itemsToCommit = parsedItems.filter(item => selectedIds.has(item.temp_id))
 
+      // The key here is explicitly avoiding the `created_from_job_bag_id` field entirely
+      // so Supabase defaults it to null (after you run the ALTER TABLE command).
       const inventoryPayload = itemsToCommit.map(item => ({
         company_id: appUser?.company_id,
         warehouse_id: targetWarehouse,
@@ -243,7 +240,7 @@ export default function LegacyImportPage() {
         item_category: item.item_category,
         metal_type: item.metal_type,
         purity_karat: item.purity_karat,
-        purity_percent: 100, 
+        purity_percent: 100, // Legacy fallback
         quantity: Number(item.quantity) || 1,
         gross_weight_g: Number(item.gross_weight_g) || 0,
         net_weight_g: Number(item.net_weight_g) || 0,
@@ -271,7 +268,6 @@ export default function LegacyImportPage() {
     }
   }
 
-  // --- INLINE EDIT INPUT COMPONENT ---
   const EditableCell = ({ value, onChange, type = "text", align = "left", className = "" }: any) => (
     <input 
       type={type}

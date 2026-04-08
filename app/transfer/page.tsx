@@ -55,7 +55,7 @@ interface Transfer {
   transfer_number: string
   from_warehouse_id: string
   to_warehouse_id: string
-  status: 'draft' | 'in_transit' | 'completed' | 'cancelled'
+  status: 'draft' | 'in_transit' | 'completed' | 'cancelled' | 'disputed' | 'seal_verified'
   created_at: string
   notes: string
   from_warehouse: { name: string }
@@ -84,8 +84,6 @@ export default function TransferPage() {
 
       if (whData && whData.length > 0) {
         setWarehouses(whData)
-        // ✅ REMOVED: setSelectedWarehouseId(whData[0].id) 
-        // The hook handles the initial selection logic now.
       }
     } catch (err) {
       toast.error("Error loading warehouses")
@@ -93,26 +91,35 @@ export default function TransferPage() {
   }
 
   const fetchTransfers = async () => {
-    // ✅ Use selectedLocation from hook
-    if (!appUser || !selectedLocation) return 
+    // Wait until the branch location is fully initialized by the context
+    if (!appUser || !selectedLocation) {
+       if (!appUser) setLoading(false);
+       return; 
+    }
+    
     setLoading(true)
     try {
+      // THE FIX: Explicitly request both the raw IDs AND the related names 
+      // so Supabase doesn't accidentally overwrite the ID fields.
       let query = supabase
         .from('stock_transfers')
         .select(`
-          *,
+          id, transfer_number, status, created_at, notes,
+          from_warehouse_id, 
+          to_warehouse_id,
           from_warehouse:from_warehouse_id(name),
           to_warehouse:to_warehouse_id(name)
         `)
         .eq('company_id', appUser.company_id)
       
-      // ✅ SECURITY: If not HQ/ALL, filter by the locked location
+      // SECURITY: If not HQ/ALL, filter strictly by the locked location
       if (selectedLocation !== 'ALL') {
         query = query.or(`from_warehouse_id.eq.${selectedLocation},to_warehouse_id.eq.${selectedLocation}`)
       }
 
-      const { data: trData } = await query.order('created_at', { ascending: false })
-
+      const { data: trData, error } = await query.order('created_at', { ascending: false })
+      
+      if (error) throw error;
       if (trData) setTransfers(trData as any)
     } catch (err) {
       toast.error("Error loading transfer data")
@@ -122,29 +129,32 @@ export default function TransferPage() {
   }
 
   useEffect(() => { fetchWarehouses() }, [appUser])
-  // ✅ Sync effect with the global location
+  
+  // Reactively fetch transfers whenever the location lock settles
   useEffect(() => { fetchTransfers() }, [appUser, selectedLocation])
 
   const filteredBySearch = transfers.filter(t => 
     t.transfer_number.toLowerCase().includes(searchTerm.toLowerCase())
   )
   
-  // Logic: If 'ALL' is selected, show everything. Otherwise, filter by the specific ID.
+  // THE FIX: Simplified strict matching
+  const loc = selectedLocation || 'ALL';
+  const activeStatuses = ['draft', 'in_transit', 'seal_verified'];
+  const closedStatuses = ['completed', 'cancelled', 'disputed'];
+
   const incomingTransfers = filteredBySearch.filter(t => 
-    (selectedLocation === 'ALL' || t.to_warehouse_id === selectedLocation) && 
-    t.status !== 'completed'
+    (loc === 'ALL' || t.to_warehouse_id === loc) && 
+    activeStatuses.includes(t.status)
   )
   
   const outgoingTransfers = filteredBySearch.filter(t => 
-    (selectedLocation === 'ALL' || t.from_warehouse_id === selectedLocation) && 
-    t.status !== 'completed'
+    (loc === 'ALL' || t.from_warehouse_id === loc) && 
+    activeStatuses.includes(t.status)
   )
   
   const historyTransfers = filteredBySearch.filter(t => {
-    const matchesLocation = selectedLocation === 'ALL' || 
-                            t.to_warehouse_id === selectedLocation || 
-                            t.from_warehouse_id === selectedLocation;
-    return matchesLocation && t.status === 'completed';
+    const matchesLocation = loc === 'ALL' || t.to_warehouse_id === loc || t.from_warehouse_id === loc;
+    return matchesLocation && closedStatuses.includes(t.status);
   })
 
   if (!appUser) return null
@@ -212,27 +222,26 @@ export default function TransferPage() {
               />
             </div>
             <Select 
-  value={selectedLocation || ''} 
-  onValueChange={setSelectedLocation}
-  disabled={isLocked} // ✅ Prevents branch users from switching vaults
->
-  <SelectTrigger className="w-[180px] h-9 text-xs font-bold border-gray-200 bg-white">
-    <SelectValue placeholder="Select Vault" />
-  </SelectTrigger>
-  <SelectContent>
-    {/* ✅ Add ALL option for HQ users */}
-    {isHQ && (
-      <SelectItem value="ALL" className="text-xs font-bold text-indigo-600">
-        All Vaults (HQ)
-      </SelectItem>
-    )}
-    {warehouses.map(w => (
-      <SelectItem key={w.id} value={w.id} className="text-xs font-medium">
-        {w.name}
-      </SelectItem>
-    ))}
-  </SelectContent>
-</Select>
+              value={selectedLocation || ''} 
+              onValueChange={setSelectedLocation}
+              disabled={isLocked}
+            >
+              <SelectTrigger className="w-[180px] h-9 text-xs font-bold border-gray-200 bg-white">
+                <SelectValue placeholder="Select Vault" />
+              </SelectTrigger>
+              <SelectContent>
+                {isHQ && (
+                  <SelectItem value="ALL" className="text-xs font-bold text-indigo-600">
+                    All Vaults (HQ)
+                  </SelectItem>
+                )}
+                {warehouses.map(w => (
+                  <SelectItem key={w.id} value={w.id} className="text-xs font-medium">
+                    {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
@@ -337,9 +346,9 @@ function TransferList({ items, loading, onShowQR, type }: { items: Transfer[], l
                   </TableCell>
                   <TableCell className="px-4">
                     <div className="flex items-center justify-center gap-3">
-                       <span className="text-[11px] font-bold text-gray-600 bg-gray-100 px-2 py-0.5 rounded">{t.from_warehouse.name}</span>
+                       <span className="text-[11px] font-bold text-gray-600 bg-gray-100 px-2 py-0.5 rounded">{t.from_warehouse?.name || 'Unknown'}</span>
                        <ChevronRight className="w-3 h-3 text-gray-300" />
-                       <span className="text-[11px] font-bold text-primary bg-primary/5 px-2 py-0.5 rounded">{t.to_warehouse.name}</span>
+                       <span className="text-[11px] font-bold text-primary bg-primary/5 px-2 py-0.5 rounded">{t.to_warehouse?.name || 'Unknown'}</span>
                     </div>
                   </TableCell>
                   <TableCell className="px-4">
@@ -387,21 +396,21 @@ function TransferList({ items, loading, onShowQR, type }: { items: Transfer[], l
                       )}
                    </div>
                    <Badge variant="outline" className={`text-[9px] font-black uppercase px-1.5 ${t.status === 'completed' ? 'border-emerald-200 text-emerald-600' : 'border-gray-200 text-gray-500'}`}>
-                      {t.status}
+                      {t.status.replace('_', ' ')}
                    </Badge>
                 </div>
 
                 <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
                    <div className="text-center flex-1">
                       <p className="text-[8px] font-black text-gray-400 uppercase mb-1">Source</p>
-                      <p className="text-[11px] font-bold text-gray-700 truncate">{t.from_warehouse.name}</p>
+                      <p className="text-[11px] font-bold text-gray-700 truncate">{t.from_warehouse?.name || 'Unknown'}</p>
                    </div>
                    <div className="px-2">
                       <ChevronRight className="w-3 h-3 text-gray-300" />
                    </div>
                    <div className="text-center flex-1">
                       <p className="text-[8px] font-black text-gray-400 uppercase mb-1">Destination</p>
-                      <p className="text-[11px] font-bold text-primary truncate">{t.to_warehouse.name}</p>
+                      <p className="text-[11px] font-bold text-primary truncate">{t.to_warehouse?.name || 'Unknown'}</p>
                    </div>
                 </div>
 

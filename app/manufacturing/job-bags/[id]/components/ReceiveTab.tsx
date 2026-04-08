@@ -23,7 +23,7 @@ import {
   Save, Layers, Settings2, RefreshCw, CheckCircle2, 
   ArrowUpCircle, ArrowDownCircle, CheckSquare,
   Calculator, Database, Gem, Hammer, ArrowRight, ArrowLeft, Check, Box,
-  UploadCloud, Image as ImageIcon, Camera 
+  UploadCloud, Image as ImageIcon, Camera, AlertOctagon 
 } from 'lucide-react'
 
 interface Props {
@@ -60,9 +60,8 @@ type ReceiveItem = {
   diamondColor: string
   diamondClarity: string
   custom_order_id: string | null 
-  repair_ticket_id: string | null // <--- NEW: Tracks origin repair ticket
-  is_repair: boolean // <--- NEW: Determines routing logic
-  // --- NEW UI STATES FOR MANUAL ENTRY ---
+  repair_ticket_id: string | null
+  is_repair: boolean
   showCustomMetal: boolean
   showCustomShape: boolean
   showCustomColor: boolean
@@ -78,7 +77,6 @@ export default function ReceiveTab({
   warehouseId,
   refresh
 }: Props) {
-  // --- BATCH SETTINGS STATE ---
   const [metalType, setMetalType] = useState('Gold')
   const [purityKarat, setPurityKarat] = useState('22K')
   const [purityPercent, setPurityPercent] = useState('91.6')
@@ -93,12 +91,12 @@ export default function ReceiveTab({
   const [isProcessing, setIsProcessing] = useState(false)
 
   const [poolStats, setPoolStats] = useState({
-    issuedGold: 0,
+    issuedFineGold: 0,
     issuedDiaCts: 0,
-    consumedGold: 0 
+    consumedFineGold: 0,
+    consumedDiaCts: 0
   })
 
-  // --- MRP WIZARD STATE ---
   const [isCalcModalOpen, setCalcModalOpen] = useState(false)
   const [calcStep, setCalcStep] = useState<'params' | 'preview'>('params')
   const [base24kRate, setBase24kRate] = useState<number>(7250) 
@@ -110,7 +108,6 @@ export default function ReceiveTab({
     flatCharge: 8000
   })
 
-  // --- STANDARD JEWELRY DICTIONARIES ---
   const DIAMOND_SHAPES = ['Round', 'Princess', 'Oval', 'Marquise', 'Emerald', 'Pear', 'Cushion', 'Radiant', 'Heart', 'Asscher']
   const DIAMOND_COLORS = ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'EF', 'FG', 'GH', 'HI', 'IJ', 'Fancy']
   const DIAMOND_CLARITIES = ['FL', 'IF', 'VVS1', 'VVS2', 'VVS', 'VS1', 'VS2', 'VS', 'SI1', 'SI2', 'SI', 'I1', 'I2', 'I3']
@@ -166,20 +163,43 @@ export default function ReceiveTab({
   const loadJobBagItems = useCallback(async () => {
     setIsLoading(true)
     try {
-      const { data: gIssues } = await supabase.from('job_bag_gold_issues').select('issued_weight_g').eq('job_bag_id', jobId)
-      const totalBagGold = gIssues?.reduce((sum, row) => sum + Number(row.issued_weight_g), 0) || 0
+      // 1. Calculate EXACT Raw Materials Issued (Converting to FINE GOLD using table join!)
+      const { data: gIssues, error: gError } = await supabase
+        .from('job_bag_gold_issues')
+        .select('issued_weight_g, inventory_gold_batches ( purity_percent )')
+        .eq('job_bag_id', jobId)
+      
+      if (gError) console.error("Gold Fetch Error:", gError)
 
+      const totalBagFineGold = gIssues?.reduce((sum, row: any) => {
+         const purity = Number(row.inventory_gold_batches?.purity_percent || 100) / 100;
+         return sum + (Number(row.issued_weight_g) * purity);
+      }, 0) || 0;
+
+      // Fetch Diamond Issues AND Returns to get exact available pool
       const { data: dIssues } = await supabase.from('job_bag_diamond_issues').select('issued_weight_cts').eq('job_bag_id', jobId)
-      const totalBagDia = dIssues?.reduce((sum, row) => sum + Number(row.issued_weight_cts), 0) || 0
+      const issuedDia = dIssues?.reduce((sum, row) => sum + Number(row.issued_weight_cts), 0) || 0
+      
+      const { data: dReturns } = await supabase.from('job_bag_diamond_returns').select('returned_weight_cts').eq('job_bag_id', jobId)
+      const returnedDia = dReturns?.reduce((sum, row) => sum + Number(row.returned_weight_cts), 0) || 0
+      
+      const totalBagDia = issuedDia - returnedDia;
 
-      const { data: rItems } = await supabase.from('job_bag_items').select('actual_gross_weight_g, calculated_loss_g').eq('job_bag_id', jobId).eq('status', 'received')
-      const consumedGold = rItems?.reduce((sum, row) => sum + Number(row.actual_gross_weight_g || 0) + Number(row.calculated_loss_g || 0), 0) || 0
+      // 2. Calculate EXACT Consumed (Convert existing inventory items back to FINE GOLD)
+      const { data: invItems } = await supabase.from('inventory_items')
+        .select('net_weight_g, wastage_weight_g, purity_percent, total_stone_weight_cts')
+        .eq('created_from_job_bag_id', jobId);
 
-      setPoolStats({ issuedGold: totalBagGold, issuedDiaCts: totalBagDia, consumedGold })
+      const consumedFineGold = invItems?.reduce((sum, row) => {
+         const raw = Number(row.net_weight_g || 0) + Number(row.wastage_weight_g || 0);
+         const pct = Number(row.purity_percent || 100) / 100;
+         return sum + (raw * pct);
+      }, 0) || 0;
+      
+      const consumedDiaCts = invItems?.reduce((sum, row) => sum + Number(row.total_stone_weight_cts || 0), 0) || 0;
 
-      const jobPrefix = jobId.split('-')[0].substring(0, 4).toUpperCase()
+      setPoolStats({ issuedFineGold: totalBagFineGold, issuedDiaCts: totalBagDia, consumedFineGold, consumedDiaCts })
 
-      // FETCH ADDED: repair_ticket_id & is_repair
       const { data: items, error } = await supabase
         .from('job_bag_items')
         .select(`
@@ -198,16 +218,15 @@ export default function ReceiveTab({
       }
 
       const mappedItems: ReceiveItem[] = items.map((item: any, index: number) => {
-        const category = item.job_bags?.product_category || item.ornament_type || 'Jewelry'
-        const categoryPrefix = category.substring(0, 3).toUpperCase()
-        const currentSeq = (index + 1).toString().padStart(2, '0')
+        const category = (item.ornament_type && item.ornament_type !== 'N/A') 
+                          ? item.ornament_type 
+                          : (item.job_bags?.product_category || 'Jewelry')
 
         return {
           job_bag_item_id: item.id,
           sku_reference: item.sku_reference,
           ornament_type: item.ornament_type || 'N/A', 
-          category: category,
-          // Generates a clean, short 6-digit Item Code (e.g., ITM-492018)
+          category: category, 
           barcode: `ITM-${Math.floor(100000 + Math.random() * 900000)}`,
           grossWeight: '',
           stonePieces: '',
@@ -266,7 +285,6 @@ export default function ReceiveTab({
   
       const updated = { ...item, [field]: value }
   
-      // --- NEW: AUTO-SUM BREAKUP INTO MAIN TOTALS ---
       if (field === 'solitairePieces' || field === 'meleePieces') {
         const solP = parseInt(field === 'solitairePieces' ? value : updated.solitairePieces) || 0;
         const melP = parseInt(field === 'meleePieces' ? value : updated.meleePieces) || 0;
@@ -277,22 +295,18 @@ export default function ReceiveTab({
         const melW = parseFloat(field === 'meleeWeight' ? value : updated.meleeWeight) || 0;
         updated.stoneWeight = (solW + melW).toFixed(2);
       }
-      // ----------------------------------------------
 
-      // Standard Jewelry Math (Notice we check 'stoneWeight' here too)
       if (!item.is_repair && (field === 'grossWeight' || field === 'stoneWeight' || field === 'solitaireWeight' || field === 'meleeWeight')) {
         const gw = parseFloat(field === 'grossWeight' ? value : updated.grossWeight) || 0
-        const sw = parseFloat(updated.stoneWeight) || 0 // Always use the current total stoneWeight
+        const sw = parseFloat(updated.stoneWeight) || 0 
         const lr = parseFloat(laborRate) || 0
         
-        // 1 Carat = 0.2 Grams
         const totalStoneGrams = sw * 0.2;
         const calculatedNet = Math.max(0, gw - totalStoneGrams);
         
         updated.netWeight = calculatedNet.toFixed(3)
         updated.costMaking = (calculatedNet * lr).toFixed(2)
       } 
-      // Repair Math
       else if (item.is_repair && field === 'grossWeight') {
         updated.netWeight = value; 
       }
@@ -300,6 +314,7 @@ export default function ReceiveTab({
       return updated;
     }))
   }
+  
   const handleImageChange = (id: string, e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0]
@@ -363,6 +378,9 @@ export default function ReceiveTab({
     setCalcModalOpen(false)
   }
 
+  // ============================================================================
+  // THE STRICT VALIDATION GATE
+  // ============================================================================
   async function receiveSelectedBatch() {
     const selectedItems = receiveItems.filter(i => i.isSelected)
     
@@ -370,6 +388,32 @@ export default function ReceiveTab({
     
     const invalidItem = selectedItems.find(i => parseFloat(i.grossWeight) <= 0 || !i.grossWeight)
     if (invalidItem) return toast.error(`Enter a valid Gross Weight for ${invalidItem.sku_reference}.`)
+
+    // 1. Calculate Fine Gold requested by the staged items based on UI Purity Dropdown
+    const stagedRawGold = selectedItems.reduce((sum, item) => sum + (parseFloat(item.netWeight) || 0) + (parseFloat(item.lossWeight) || 0), 0)
+    const currentPurityPct = Number(purityPercent) / 100 || 1;
+    const stagedFineGoldRequired = stagedRawGold * currentPurityPct;
+    
+    const stagedDiaRequired = selectedItems.reduce((sum, item) => sum + (parseFloat(item.stoneWeight) || 0), 0)
+
+    // 2. Calculate Available Fine Balances
+    const pendingFineGold = poolStats.issuedFineGold - poolStats.consumedFineGold;
+    const availableDia = poolStats.issuedDiaCts - poolStats.consumedDiaCts;
+
+    // 3. HARD STOP: Check for Negative Reconciliation (0.01g tolerance for float math)
+    if (stagedFineGoldRequired > pendingFineGold + 0.01) {
+      return toast.error("CRITICAL: Negative Gold Reconciliation Prevented.", {
+        description: `You are trying to receive ${stagedFineGoldRequired.toFixed(3)}g of FINE GOLD, but only ${pendingFineGold.toFixed(3)}g is available in this Job Bag. Issue more gold to the artisan first.`,
+        duration: 8000
+      });
+    }
+
+    if (stagedDiaRequired > availableDia + 0.01) {
+      return toast.error("CRITICAL: Negative Diamond Reconciliation Prevented.", {
+        description: `You are attempting to receive ${stagedDiaRequired.toFixed(2)}ct of diamonds, but only ${availableDia.toFixed(2)}ct is available. Issue more diamonds first.`,
+        duration: 8000
+      });
+    }
 
     setIsProcessing(true)
     const { data: authData } = await supabase.auth.getUser()
@@ -393,7 +437,6 @@ export default function ReceiveTab({
               .getPublicUrl(fileName)
             finalImageUrl = publicUrlData.publicUrl
           } else {
-            console.error("Image Upload Error:", uploadError)
             toast.error(`Failed to upload image for ${item.sku_reference}`)
           }
         }
@@ -410,30 +453,21 @@ export default function ReceiveTab({
         if (item.diamondClarity) diamondSpecs.push(`Clarity: ${item.diamondClarity}`)
         const formattedDiamondLabel = diamondSpecs.length > 0 ? diamondSpecs.join(' | ') : null;
 
-        // ==========================================
-        // THE FORK IN THE ROAD: Asset vs. Liability
-        // ==========================================
         if (item.is_repair && item.repair_ticket_id) {
-          // --- PATH A: REPAIR (Bypass Inventory) ---
-          
           const finalBillableAmount = item.mrp ? Number(item.mrp) : Number(item.costMaking);
 
           const { error: repError } = await supabase.from('repair_tickets').update({
             status: 'fixed_ready_for_dispatch',
             actual_cost: finalBillableAmount, 
-            // --- NEW: SAVE THE CONSUMED MATERIALS AND LABOR ---
             issued_gold_g: Number(item.grossWeight) || 0, 
             issued_diamond_cts: Number(item.stoneWeight) || 0,
             labor_charges: Number(item.costMaking) || 0,
-            // --------------------------------------------------
             updated_at: new Date().toISOString()
           }).eq('id', item.repair_ticket_id)
 
           if (repError) throw new Error(`Repair Update Error (${item.sku_reference}): ${repError.message}`)
 
         } else {
-          // --- PATH B: STANDARD INVENTORY / CUSTOM ORDER ---
-
           const solW = Number(item.solitaireWeight) || 0;
           const melW = Number(item.meleeWeight) || 0;
           const solP = Number(item.solitairePieces) || 0;
@@ -488,7 +522,6 @@ export default function ReceiveTab({
           }
         }
 
-        // --- ALWAYS UPDATE JOB BAG ITEM STATUS ---
         const { error: jobItemError } = await supabase.from('job_bag_items').update({
           status: 'received',
           actual_gross_weight_g: Number(item.grossWeight),
@@ -512,6 +545,24 @@ export default function ReceiveTab({
   const selectedItems = receiveItems.filter(i => i.isSelected)
   const unselectedItems = receiveItems.filter(i => !i.isSelected)
 
+  // Calculate dynamic required totals for UI visual feedback
+  const stagedRawGold = selectedItems.reduce((sum, item) => sum + (parseFloat(item.netWeight) || 0) + (parseFloat(item.lossWeight) || 0), 0)
+  const stagedDiaRequired = selectedItems.reduce((sum, item) => sum + (parseFloat(item.stoneWeight) || 0), 0)
+
+  // CALCULATE EXACT RAW LIMITS BASED ON PURITY DROPDOWN
+  let pendingFineGold = poolStats.issuedFineGold - poolStats.consumedFineGold;
+  if (Math.abs(pendingFineGold) < 0.005) pendingFineGold = 0; // Float sanitizer
+
+  const currentPurityPct = Number(purityPercent) / 100 || 1;
+  let availableRawGold = pendingFineGold / currentPurityPct;
+  if (Math.abs(availableRawGold) < 0.005) availableRawGold = 0; // Float sanitizer
+
+  let availableDia = poolStats.issuedDiaCts - poolStats.consumedDiaCts;
+  if (Math.abs(availableDia) < 0.005) availableDia = 0;
+
+  const isGoldOverdraft = stagedRawGold > availableRawGold + 0.005;
+  const isDiaOverdraft = stagedDiaRequired > availableDia + 0.005;
+
   if (!isLoading && receiveItems.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed border-border rounded-xl bg-secondary/10">
@@ -525,32 +576,38 @@ export default function ReceiveTab({
   return (
     <div className="space-y-6">
 
-      <div className="grid grid-cols-3 gap-4">
-        <Card className="bg-amber-50/50 border-amber-100 shadow-sm">
+      {/* --- REAL-TIME RECONCILIATION DASHBOARD --- */}
+      <div className="grid grid-cols-2 gap-4">
+        <Card className={cn("shadow-sm transition-all duration-300 border-2", isGoldOverdraft ? "bg-red-50/80 border-red-400" : "bg-amber-50/50 border-amber-200")}>
           <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-amber-600 mb-1">Total Bag Gold</p>
-              <p className="text-2xl font-black text-amber-700">{poolStats.issuedGold.toFixed(3)}g</p>
+            <div className="space-y-1">
+              <p className={cn("text-[10px] font-bold uppercase tracking-wider", isGoldOverdraft ? "text-red-700" : "text-amber-700")}>Raw Gold Balance (at {purityKarat})</p>
+              <div className="flex items-end gap-2">
+                <p className={cn("text-2xl font-black", isGoldOverdraft ? "text-red-600" : "text-amber-600")}>{availableRawGold.toFixed(3)}g</p>
+                <p className="text-xs font-bold text-slate-500 mb-1">Available</p>
+              </div>
+              <p className="text-xs font-semibold text-slate-600">
+                Staged Required: <span className={isGoldOverdraft ? "text-red-600 font-bold" : ""}>{stagedRawGold.toFixed(3)}g</span>
+              </p>
+              <p className="text-[9px] text-slate-400 mt-1">*Based on {pendingFineGold.toFixed(3)}g Fine Gold liability.</p>
             </div>
-            <Database className="h-8 w-8 text-amber-200" />
+            {isGoldOverdraft ? <AlertOctagon className="h-10 w-10 text-red-300" /> : <Database className="h-10 w-10 text-amber-200" />}
           </CardContent>
         </Card>
-        <Card className="bg-blue-50/50 border-blue-100 shadow-sm">
+
+        <Card className={cn("shadow-sm transition-all duration-300 border-2", isDiaOverdraft ? "bg-red-50/80 border-red-400" : "bg-blue-50/50 border-blue-200")}>
           <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-blue-600 mb-1">Total Bag Diamonds</p>
-              <p className="text-2xl font-black text-blue-700">{poolStats.issuedDiaCts.toFixed(2)}ct</p>
+            <div className="space-y-1">
+              <p className={cn("text-[10px] font-bold uppercase tracking-wider", isDiaOverdraft ? "text-red-700" : "text-blue-700")}>Diamond Balance</p>
+              <div className="flex items-end gap-2">
+                <p className={cn("text-2xl font-black", isDiaOverdraft ? "text-red-600" : "text-blue-600")}>{availableDia.toFixed(2)}ct</p>
+                <p className="text-xs font-bold text-slate-500 mb-1">Available</p>
+              </div>
+              <p className="text-xs font-semibold text-slate-600">
+                Staged Required: <span className={isDiaOverdraft ? "text-red-600 font-bold" : ""}>{stagedDiaRequired.toFixed(2)}ct</span>
+              </p>
             </div>
-            <Gem className="h-8 w-8 text-blue-200" />
-          </CardContent>
-        </Card>
-        <Card className="bg-slate-50 border-slate-200 shadow-sm">
-          <CardContent className="p-4 flex items-center justify-between">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Pool Consumed (Gold)</p>
-              <p className="text-2xl font-black text-slate-700">{poolStats.consumedGold.toFixed(3)}g</p>
-            </div>
-            <Box className="h-8 w-8 text-slate-200" />
+            {isDiaOverdraft ? <AlertOctagon className="h-10 w-10 text-red-300" /> : <Gem className="h-10 w-10 text-blue-200" />}
           </CardContent>
         </Card>
       </div>
@@ -569,10 +626,10 @@ export default function ReceiveTab({
               size="sm" 
               onClick={receiveSelectedBatch} 
               disabled={isProcessing || selectedItems.length === 0}
-              className="h-8 px-4 text-xs font-bold uppercase shadow-md bg-foreground text-background hover:bg-foreground/90 transition-all active:scale-[0.98]"
+              className={cn("h-8 px-4 text-xs font-bold uppercase shadow-md transition-all active:scale-[0.98]", (isGoldOverdraft || isDiaOverdraft) ? "bg-red-600 hover:bg-red-700 text-white cursor-not-allowed" : "bg-foreground text-background hover:bg-foreground/90")}
             >
               {isProcessing ? <RefreshCw className="w-3 h-3 mr-2 animate-spin" /> : <Save className="w-3 h-3 mr-2" />}
-              Receive Selected ({selectedItems.length})
+              {(isGoldOverdraft || isDiaOverdraft) ? "Insufficient Materials" : `Receive Selected (${selectedItems.length})`}
             </Button>
           </div>
         </CardHeader>
@@ -682,64 +739,68 @@ export default function ReceiveTab({
                                 capture="environment" 
                                 className="hidden" 
                                 onChange={(e) => handleImageChange(item.job_bag_item_id, e)} 
-                                onClick={(e) => e.stopPropagation()} // Prevents table row clicks from interfering
+                                onClick={(e) => e.stopPropagation()} 
                               />
                             </div>
                           )}
                         </td>
 
                         <td className="p-3 align-top">
-  {/* 1. READ-ONLY SKU (The Design Template) */}
-  <div className="flex items-center gap-2 mb-1.5">
-    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">SKU:</span>
-    <span className="font-bold text-xs text-slate-900 leading-tight">{item.sku_reference}</span>
-    {item.custom_order_id && <Badge className="bg-purple-100 text-purple-700 text-[8px] uppercase tracking-widest border-purple-200 px-1.5">Custom</Badge>}
-    {item.is_repair && <Badge className="bg-amber-100 text-amber-700 text-[8px] uppercase tracking-widest border-amber-200 px-1.5">Repair</Badge>}
-  </div>
-  
-  <div className="text-[10px] text-muted-foreground mb-3">{item.ornament_type}</div>
-  
-  <div className="space-y-2">
-    {/* 2. EDITABLE ITEM CODE / BARCODE (The Physical Asset) */}
-    <div className="space-y-1">
-      <Label className="text-[9px] font-bold text-indigo-600 uppercase tracking-wider">Item Code / Barcode</Label>
-      <Input 
-        className="h-7 w-full text-xs font-mono font-bold px-2 bg-indigo-50/50 border-indigo-200 focus-visible:ring-indigo-500 text-indigo-900 shadow-inner" 
-        placeholder="Scan or Type..." 
-        value={item.barcode} 
-        onChange={(e) => updateBatchItem(item.job_bag_item_id, 'barcode', e.target.value)} 
-        title="Scan your barcode tag here, or use the auto-generated ID"
-      />
-    </div>
+                          <div className="flex items-center gap-2 mb-1.5">
+                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">SKU:</span>
+                            <span className="font-bold text-xs text-slate-900 leading-tight">{item.sku_reference}</span>
+                            {item.custom_order_id && <Badge className="bg-purple-100 text-purple-700 text-[8px] uppercase tracking-widest border-purple-200 px-1.5">Custom</Badge>}
+                            {item.is_repair && <Badge className="bg-amber-100 text-amber-700 text-[8px] uppercase tracking-widest border-amber-200 px-1.5">Repair</Badge>}
+                          </div>
+                          
+                          <div className="space-y-1 mb-2">
+                            <Input 
+                              className="h-7 w-full text-xs font-semibold px-2 bg-slate-50 border-slate-200 text-slate-700" 
+                              placeholder="e.g. Necklace, Ring..." 
+                              value={item.category} 
+                              onChange={(e) => updateBatchItem(item.job_bag_item_id, 'category', e.target.value)} 
+                              title="Edit item category"
+                            />
+                          </div>
+                          
+                          <div className="space-y-2">
+                            <div className="space-y-1">
+                              <Label className="text-[9px] font-bold text-indigo-600 uppercase tracking-wider">Item Code / Barcode</Label>
+                              <Input 
+                                className="h-7 w-full text-xs font-mono font-bold px-2 bg-indigo-50/50 border-indigo-200 focus-visible:ring-indigo-500 text-indigo-900 shadow-inner" 
+                                placeholder="Scan or Type..." 
+                                value={item.barcode} 
+                                onChange={(e) => updateBatchItem(item.job_bag_item_id, 'barcode', e.target.value)} 
+                                title="Scan your barcode tag here, or use the auto-generated ID"
+                              />
+                            </div>
 
-    {/* 3. COMPLIANCE & SIZING */}
-    <Input 
-      className="h-6 w-full text-[10px] uppercase font-mono px-2 bg-slate-50 border-slate-200 placeholder:text-slate-400" 
-      placeholder="HUID CODE (6 Digits)" 
-      value={item.huid_code} 
-      onChange={(e) => updateBatchItem(item.job_bag_item_id, 'huid_code', e.target.value)} 
-      maxLength={6} 
-    />
-    <div className="flex gap-1.5">
-      <Input 
-        className="h-6 w-1/2 text-[10px] px-2 bg-slate-50 border-slate-200" 
-        placeholder="Size" 
-        value={item.item_size} 
-        onChange={(e) => updateBatchItem(item.job_bag_item_id, 'item_size', e.target.value)} 
-      />
-      <Input 
-        className="h-6 w-1/2 text-[10px] px-2 bg-slate-50 border-slate-200" 
-        placeholder="HSN" 
-        value={item.hsn_code} 
-        onChange={(e) => updateBatchItem(item.job_bag_item_id, 'hsn_code', e.target.value)} 
-      />
-    </div>
-  </div>
-</td>
+                            <Input 
+                              className="h-6 w-full text-[10px] uppercase font-mono px-2 bg-slate-50 border-slate-200 placeholder:text-slate-400" 
+                              placeholder="HUID CODE (6 Digits)" 
+                              value={item.huid_code} 
+                              onChange={(e) => updateBatchItem(item.job_bag_item_id, 'huid_code', e.target.value)} 
+                              maxLength={6} 
+                            />
+                            <div className="flex gap-1.5">
+                              <Input 
+                                className="h-6 w-1/2 text-[10px] px-2 bg-slate-50 border-slate-200" 
+                                placeholder="Size" 
+                                value={item.item_size} 
+                                onChange={(e) => updateBatchItem(item.job_bag_item_id, 'item_size', e.target.value)} 
+                              />
+                              <Input 
+                                className="h-6 w-1/2 text-[10px] px-2 bg-slate-50 border-slate-200" 
+                                placeholder="HSN" 
+                                value={item.hsn_code} 
+                                onChange={(e) => updateBatchItem(item.job_bag_item_id, 'hsn_code', e.target.value)} 
+                              />
+                            </div>
+                          </div>
+                        </td>
 
                         <td className="p-3 bg-amber-50/20 align-top border-l border-amber-100/50">
                           <div className="space-y-1.5">
-                            {/* DYNAMIC GOLD LABEL */}
                             <div className="flex items-center gap-2">
                               <Label className={cn("text-[9px] font-bold uppercase w-8 shrink-0", item.is_repair ? "text-amber-600" : "text-slate-500")}>
                                 {item.is_repair ? "Add Gold" : "Gross"}
@@ -753,7 +814,6 @@ export default function ReceiveTab({
                               />
                             </div>
 
-                            {/* DYNAMIC LOSS LABEL */}
                             <div className="flex items-center gap-2">
                               <Label className="text-[9px] font-bold text-red-500 uppercase w-8 shrink-0">Loss</Label>
                               <Input 
@@ -764,7 +824,6 @@ export default function ReceiveTab({
                               />
                             </div>
 
-                            {/* DYNAMIC NET LABEL */}
                             {!item.is_repair && (
                               <div className="flex items-center gap-2 mb-1">
                                 <Label className="text-[9px] font-bold text-green-600 uppercase w-8 shrink-0">Net</Label>
@@ -772,7 +831,6 @@ export default function ReceiveTab({
                               </div>
                             )}
                             
-                            {/* METAL COLOR SMART SELECTOR */}
                             {!item.showCustomMetal ? (
                                <Select value={item.metalColor} onValueChange={(v) => {
                                  if (v === 'Other') {
@@ -801,197 +859,186 @@ export default function ReceiveTab({
                         </td>
 
                         <td className="p-3 bg-blue-50/10 align-top border-l border-blue-100/50 min-w-[200px]">
-  <div className="space-y-2">
-    
-    {/* MAIN MANUAL ENTRY + GLASSMORPHISM POPOVER BUTTON */}
-    <div className="flex gap-1 items-center relative">
-      <Input 
-        type="number" className="h-6 w-[40%] text-[10px] px-2 bg-white" 
-        placeholder="Pcs" 
-        value={item.stonePieces} 
-        onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stonePieces', e.target.value)} 
-      />
-      <Input 
-        type="number" step="0.01" className="h-6 w-[40%] text-[10px] px-2 bg-white font-bold" 
-        placeholder="Cts" 
-        value={item.stoneWeight} 
-        onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stoneWeight', e.target.value)} 
-      />
-      
-      <Popover>
-        <PopoverTrigger asChild>
-          <Button 
-            variant="outline" 
-            size="icon" 
-            className={cn(
-              "h-6 w-[20%] transition-all", 
-              (Number(item.solitaireWeight) > 0 || Number(item.meleeWeight) > 0) 
-                ? "bg-blue-600 text-white border-blue-700 hover:bg-blue-700 shadow-inner" 
-                : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50"
-            )}
-            title="Advanced Diamond Breakup"
-          >
-            <Layers className="w-3 h-3" />
-          </Button>
-        </PopoverTrigger>
-        <PopoverContent 
-          side="left" 
-          align="start"
-          className="w-72 p-4 bg-white/70 backdrop-blur-xl border border-white/50 shadow-[0_8px_30px_rgb(0,0,0,0.12)] rounded-2xl ring-1 ring-black/5 z-50"
-        >
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 border-b border-slate-200/50 pb-2">
-              <Gem className="w-4 h-4 text-blue-600" />
-              <h4 className="text-xs font-black uppercase tracking-widest text-slate-800">Stone Breakup</h4>
-            </div>
-            
-            {/* Solitaire Input */}
-            <div className="space-y-1.5">
-              <Label className="text-[10px] font-bold text-slate-500 uppercase">Solitaire / Center Stone</Label>
-              <div className="flex gap-2">
-                <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.solitairePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitairePieces', e.target.value)} />
-                <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.solitaireWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitaireWeight', e.target.value)} />
-              </div>
-            </div>
+                          <div className="space-y-2">
+                            
+                            <div className="flex gap-1 items-center relative">
+                              <Input 
+                                type="number" className="h-6 w-[40%] text-[10px] px-2 bg-white" 
+                                placeholder="Pcs" 
+                                value={item.stonePieces} 
+                                onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stonePieces', e.target.value)} 
+                              />
+                              <Input 
+                                type="number" step="0.01" className="h-6 w-[40%] text-[10px] px-2 bg-white font-bold" 
+                                placeholder="Cts" 
+                                value={item.stoneWeight} 
+                                onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stoneWeight', e.target.value)} 
+                              />
+                              
+                              <Popover>
+                                <PopoverTrigger asChild>
+                                  <Button 
+                                    variant="outline" 
+                                    size="icon" 
+                                    className={cn(
+                                      "h-6 w-[20%] transition-all", 
+                                      (Number(item.solitaireWeight) > 0 || Number(item.meleeWeight) > 0) 
+                                        ? "bg-blue-600 text-white border-blue-700 hover:bg-blue-700 shadow-inner" 
+                                        : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50"
+                                    )}
+                                    title="Advanced Diamond Breakup"
+                                  >
+                                    <Layers className="w-3 h-3" />
+                                  </Button>
+                                </PopoverTrigger>
+                                <PopoverContent 
+                                  side="left" 
+                                  align="start"
+                                  className="w-72 p-4 bg-white/70 backdrop-blur-xl border border-white/50 shadow-[0_8px_30px_rgb(0,0,0,0.12)] rounded-2xl ring-1 ring-black/5 z-50"
+                                >
+                                  <div className="space-y-4">
+                                    <div className="flex items-center gap-2 border-b border-slate-200/50 pb-2">
+                                      <Gem className="w-4 h-4 text-blue-600" />
+                                      <h4 className="text-xs font-black uppercase tracking-widest text-slate-800">Stone Breakup</h4>
+                                    </div>
+                                    
+                                    <div className="space-y-1.5">
+                                      <Label className="text-[10px] font-bold text-slate-500 uppercase">Solitaire / Center Stone</Label>
+                                      <div className="flex gap-2">
+                                        <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.solitairePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitairePieces', e.target.value)} />
+                                        <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.solitaireWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitaireWeight', e.target.value)} />
+                                      </div>
+                                    </div>
 
-            {/* Melee Input */}
-            <div className="space-y-1.5">
-              <Label className="text-[10px] font-bold text-slate-500 uppercase">Melee / Side Stones</Label>
-              <div className="flex gap-2">
-                <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.meleePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleePieces', e.target.value)} />
-                <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.meleeWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleeWeight', e.target.value)} />
-              </div>
-            </div>
+                                    <div className="space-y-1.5">
+                                      <Label className="text-[10px] font-bold text-slate-500 uppercase">Melee / Side Stones</Label>
+                                      <div className="flex gap-2">
+                                        <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.meleePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleePieces', e.target.value)} />
+                                        <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.meleeWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleeWeight', e.target.value)} />
+                                      </div>
+                                    </div>
 
-            <div className="pt-2 border-t border-slate-200/50 flex justify-between items-center">
-              <span className="text-[10px] font-medium text-slate-500">Auto-calculates main totals.</span>
-              <Badge variant="secondary" className="bg-blue-100 text-blue-700 hover:bg-blue-100 border-none font-mono text-[10px]">
-                {item.stoneWeight || "0.00"} ct
-              </Badge>
-            </div>
-          </div>
-        </PopoverContent>
-      </Popover>
-    </div>
+                                    <div className="pt-2 border-t border-slate-200/50 flex justify-between items-center">
+                                      <span className="text-[10px] font-medium text-slate-500">Auto-calculates main totals.</span>
+                                      <Badge variant="secondary" className="bg-blue-100 text-blue-700 hover:bg-blue-100 border-none font-mono text-[10px]">
+                                        {item.stoneWeight || "0.00"} ct
+                                      </Badge>
+                                    </div>
+                                  </div>
+                                </PopoverContent>
+                              </Popover>
+                            </div>
 
-    {/* BREAKAGE */}
-    <Input 
-      type="number" step="0.01" 
-      className="h-6 w-full text-[10px] px-2 bg-red-50 text-red-600 border-red-200 placeholder:text-red-300" 
-      placeholder="Broken Carats (Brk Ct)" 
-      value={item.breakageWeight} 
-      onChange={(e) => updateBatchItem(item.job_bag_item_id, 'breakageWeight', e.target.value)} 
-      title="Broken Carats"
-    />
+                            <Input 
+                              type="number" step="0.01" 
+                              className="h-6 w-full text-[10px] px-2 bg-red-50 text-red-600 border-red-200 placeholder:text-red-300" 
+                              placeholder="Broken Carats (Brk Ct)" 
+                              value={item.breakageWeight} 
+                              onChange={(e) => updateBatchItem(item.job_bag_item_id, 'breakageWeight', e.target.value)} 
+                              title="Broken Carats"
+                            />
 
-    {/* DIAMOND SHAPE SMART SELECTOR */}
-    {!item.showCustomShape ? (
-       <Select value={item.diamondShape} onValueChange={(v) => {
-         if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomShape', true); updateBatchItem(item.job_bag_item_id, 'diamondShape', ''); }
-         else { updateBatchItem(item.job_bag_item_id, 'diamondShape', v); }
-       }}>
-         <SelectTrigger className="h-6 w-full text-[10px] bg-white px-2"><SelectValue placeholder="Shape" /></SelectTrigger>
-         <SelectContent>
-           {DIAMOND_SHAPES.map(s => <SelectItem key={s} value={s} className="text-[10px]">{s}</SelectItem>)}
-           <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other (Type)</SelectItem>
-         </SelectContent>
-       </Select>
-    ) : (
-       <div className="flex gap-1 h-6">
-         <Input className="h-6 w-full text-[10px] px-2 bg-white" placeholder="Custom Shape" value={item.diamondShape} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondShape', e.target.value)} />
-         <Button variant="ghost" size="icon" className="h-6 w-6 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomShape', false)}><ArrowLeft className="h-3 w-3" /></Button>
-       </div>
-    )}
+                            {!item.showCustomShape ? (
+                               <Select value={item.diamondShape} onValueChange={(v) => {
+                                 if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomShape', true); updateBatchItem(item.job_bag_item_id, 'diamondShape', ''); }
+                                 else { updateBatchItem(item.job_bag_item_id, 'diamondShape', v); }
+                               }}>
+                                 <SelectTrigger className="h-6 w-full text-[10px] bg-white px-2"><SelectValue placeholder="Shape" /></SelectTrigger>
+                                 <SelectContent>
+                                   {DIAMOND_SHAPES.map(s => <SelectItem key={s} value={s} className="text-[10px]">{s}</SelectItem>)}
+                                   <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other (Type)</SelectItem>
+                                 </SelectContent>
+                               </Select>
+                            ) : (
+                               <div className="flex gap-1 h-6">
+                                 <Input className="h-6 w-full text-[10px] px-2 bg-white" placeholder="Custom Shape" value={item.diamondShape} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'showCustomShape', false)}><ArrowLeft className="h-3 w-3" /></Input>
+                               </div>
+                            )}
 
-    <div className="flex gap-1.5">
-       {/* DIAMOND COLOR SMART SELECTOR */}
-       {!item.showCustomColor ? (
-         <Select value={item.diamondColor} onValueChange={(v) => {
-           if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomColor', true); updateBatchItem(item.job_bag_item_id, 'diamondColor', ''); }
-           else { updateBatchItem(item.job_bag_item_id, 'diamondColor', v); }
-         }}>
-           <SelectTrigger className="h-6 w-1/2 text-[10px] bg-white px-1"><SelectValue placeholder="Color" /></SelectTrigger>
-           <SelectContent>
-             {DIAMOND_COLORS.map(c => <SelectItem key={c} value={c} className="text-[10px]">{c}</SelectItem>)}
-             <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other</SelectItem>
-           </SelectContent>
-         </Select>
-       ) : (
-         <div className="flex w-1/2 gap-0.5 h-6">
-           <Input className="h-6 w-full text-[10px] px-1 bg-white" placeholder="Color" value={item.diamondColor} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondColor', e.target.value)} />
-           <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomColor', false)}><ArrowLeft className="h-3 w-3" /></Button>
-         </div>
-       )}
+                            <div className="flex gap-1.5">
+                               {!item.showCustomColor ? (
+                                 <Select value={item.diamondColor} onValueChange={(v) => {
+                                   if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomColor', true); updateBatchItem(item.job_bag_item_id, 'diamondColor', ''); }
+                                   else { updateBatchItem(item.job_bag_item_id, 'diamondColor', v); }
+                                 }}>
+                                   <SelectTrigger className="h-6 w-1/2 text-[10px] bg-white px-1"><SelectValue placeholder="Color" /></SelectTrigger>
+                                   <SelectContent>
+                                     {DIAMOND_COLORS.map(c => <SelectItem key={c} value={c} className="text-[10px]">{c}</SelectItem>)}
+                                     <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other</SelectItem>
+                                   </SelectContent>
+                                 </Select>
+                               ) : (
+                                 <div className="flex w-1/2 gap-0.5 h-6">
+                                   <Input className="h-6 w-full text-[10px] px-1 bg-white" placeholder="Color" value={item.diamondColor} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondColor', e.target.value)} />
+                                   <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomColor', false)}><ArrowLeft className="h-3 w-3" /></Button>
+                                 </div>
+                               )}
 
-       {/* DIAMOND CLARITY SMART SELECTOR */}
-       {!item.showCustomClarity ? (
-         <Select value={item.diamondClarity} onValueChange={(v) => {
-           if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomClarity', true); updateBatchItem(item.job_bag_item_id, 'diamondClarity', ''); }
-           else { updateBatchItem(item.job_bag_item_id, 'diamondClarity', v); }
-         }}>
-           <SelectTrigger className="h-6 w-1/2 text-[10px] bg-white px-1"><SelectValue placeholder="Clarity" /></SelectTrigger>
-           <SelectContent>
-             {DIAMOND_CLARITIES.map(c => <SelectItem key={c} value={c} className="text-[10px]">{c}</SelectItem>)}
-             <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other</SelectItem>
-           </SelectContent>
-         </Select>
-       ) : (
-         <div className="flex w-1/2 gap-0.5 h-6">
-           <Input className="h-6 w-full text-[10px] px-1 bg-white" placeholder="Clarity" value={item.diamondClarity} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondClarity', e.target.value)} />
-           <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomClarity', false)}><ArrowLeft className="h-3 w-3" /></Button>
-         </div>
-       )}
-    </div>
-  </div>
-</td>
+                               {!item.showCustomClarity ? (
+                                 <Select value={item.diamondClarity} onValueChange={(v) => {
+                                   if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomClarity', true); updateBatchItem(item.job_bag_item_id, 'diamondClarity', ''); }
+                                   else { updateBatchItem(item.job_bag_item_id, 'diamondClarity', v); }
+                                 }}>
+                                   <SelectTrigger className="h-6 w-1/2 text-[10px] bg-white px-1"><SelectValue placeholder="Clarity" /></SelectTrigger>
+                                   <SelectContent>
+                                     {DIAMOND_CLARITIES.map(c => <SelectItem key={c} value={c} className="text-[10px]">{c}</SelectItem>)}
+                                     <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other</SelectItem>
+                                   </SelectContent>
+                                 </Select>
+                               ) : (
+                                 <div className="flex w-1/2 gap-0.5 h-6">
+                                   <Input className="h-6 w-full text-[10px] px-1 bg-white" placeholder="Clarity" value={item.diamondClarity} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondClarity', e.target.value)} />
+                                   <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomClarity', false)}><ArrowLeft className="h-3 w-3" /></Button>
+                                 </div>
+                               )}
+                            </div>
+                          </div>
+                        </td>
 
-<td className="p-3 bg-emerald-50/10 align-top border-l border-emerald-100/50 min-w-[160px]">
-  <div className="space-y-2.5">
-    
-    {/* 1. MAKING CHARGE / LABOR (Auto-calculated or Manual for repairs) */}
-    <div className="flex items-center justify-between border-b border-emerald-100/50 pb-1.5">
-      <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">
-        {item.is_repair ? "Labor Fee:" : "Making Chg:"}
-      </span>
-      {item.is_repair ? (
-        <Input 
-          type="number" 
-          className="h-6 w-16 text-[10px] font-black text-emerald-700 bg-white border-emerald-200 px-1 text-right focus-visible:ring-emerald-500" 
-          value={item.costMaking} 
-          onChange={(e) => updateBatchItem(item.job_bag_item_id, 'costMaking', e.target.value)} 
-        />
-      ) : (
-        <span className="text-[10px] font-black text-slate-600">₹{item.costMaking}</span>
-      )}
-    </div>
+                        <td className="p-3 bg-emerald-50/10 align-top border-l border-emerald-100/50 min-w-[160px]">
+                          <div className="space-y-2.5">
+                            
+                            <div className="flex items-center justify-between border-b border-emerald-100/50 pb-1.5">
+                              <span className="text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+                                {item.is_repair ? "Labor Fee:" : "Making Chg:"}
+                              </span>
+                              {item.is_repair ? (
+                                <Input 
+                                  type="number" 
+                                  className="h-6 w-16 text-[10px] font-black text-emerald-700 bg-white border-emerald-200 px-1 text-right focus-visible:ring-emerald-500" 
+                                  value={item.costMaking} 
+                                  onChange={(e) => updateBatchItem(item.job_bag_item_id, 'costMaking', e.target.value)} 
+                                />
+                              ) : (
+                                <span className="text-[10px] font-black text-slate-600">₹{item.costMaking}</span>
+                              )}
+                            </div>
 
-    {/* 2. SELLING PRICE / MRP (The main input) */}
-    <div className="space-y-1">
-      <Label className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">
-        {item.is_repair ? "Total Repair Bill" : "Selling Price (MRP)"}
-      </Label>
-      <div className="relative">
-        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
-        <Input 
-          type="number" step="0.01" 
-          className="h-8 w-full text-xs font-black text-slate-900 bg-white border-emerald-300 shadow-inner focus-visible:ring-emerald-500 pl-6" 
-          placeholder="0.00" 
-          value={item.mrp} 
-          onChange={(e) => updateBatchItem(item.job_bag_item_id, 'mrp', e.target.value)} 
-        />
-      </div>
-    </div>
+                            <div className="space-y-1">
+                              <Label className="text-[10px] font-black text-emerald-700 uppercase tracking-widest">
+                                {item.is_repair ? "Total Repair Bill" : "Selling Price (MRP)"}
+                              </Label>
+                              <div className="relative">
+                                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
+                                <Input 
+                                  type="number" step="0.01" 
+                                  className="h-8 w-full text-xs font-black text-slate-900 bg-white border-emerald-300 shadow-inner focus-visible:ring-emerald-500 pl-6" 
+                                  placeholder="0.00" 
+                                  value={item.mrp} 
+                                  onChange={(e) => updateBatchItem(item.job_bag_item_id, 'mrp', e.target.value)} 
+                                />
+                              </div>
+                            </div>
 
-    {/* 3. INTERNAL NOTES */}
-    <Input 
-      className="h-6 w-full text-[10px] px-2 bg-white border-slate-200 text-slate-600 placeholder:text-slate-400" 
-      placeholder="Internal Notes / Remarks..." 
-      value={item.item_remarks} 
-      onChange={(e) => updateBatchItem(item.job_bag_item_id, 'item_remarks', e.target.value)} 
-    />
-    
-  </div>
-</td>
+                            <Input 
+                              className="h-6 w-full text-[10px] px-2 bg-white border-slate-200 text-slate-600 placeholder:text-slate-400" 
+                              placeholder="Internal Notes / Remarks..." 
+                              value={item.item_remarks} 
+                              onChange={(e) => updateBatchItem(item.job_bag_item_id, 'item_remarks', e.target.value)} 
+                            />
+                            
+                          </div>
+                        </td>
 
                       </tr>
                     ))}
@@ -1039,7 +1086,7 @@ export default function ReceiveTab({
                           {item.custom_order_id && <Badge className="ml-2 bg-purple-100 text-purple-700 text-[8px] uppercase tracking-widest border-purple-200">Custom</Badge>}
                           {item.is_repair && <Badge className="ml-2 bg-amber-100 text-amber-700 text-[8px] uppercase tracking-widest border-amber-200">Repair</Badge>}
                         </div>
-                        <div className="text-[10px] text-muted-foreground">{item.ornament_type}</div>
+                        <div className="text-[10px] text-muted-foreground">{item.category}</div>
                       </td>
                       <td className="p-3 text-[10px] uppercase font-bold text-amber-600">
                         In Progress

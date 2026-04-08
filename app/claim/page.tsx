@@ -14,13 +14,13 @@ import { supabase } from '@/lib/supabaseClient'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 const BRANCHES = [
-  "HO", "Andheri", "Borivali", "Vashi", "Virar", "Ghatkopar", "Breach Candy", 
+  "Andheri", "Borivali", "Vashi", "Virar", "Ghatkopar", "Breach Candy", 
   "Thane", "Kurla", "Parel", "Kamothe", "Dombivali", "Badlapur", "Chakan", 
-  "New Sangvi", "Chhatrapati Sambhajinagar", "Uran"
+  "New Sangvi", "Chhatrapati Sambhajinagar", "Uran", "New Sangvi(Pune)", "Chakan (Pune)", "Ch. Sambhajinagar (Aurangabad)"
 ];
 
 const QUICK_QUESTIONS = [
-  { id: "value", short: "Voucher Value?", q: "What is the value and where can I use it?" },
+
   { id: "charges", short: "Extra Charges?", q: "Are there any extra or hidden charges?" },
   { id: "minimum", short: "Minimum Purchase?", q: "Is there a minimum purchase amount?" },
   { id: "timing", short: "Store Timings?", q: "What are your store timings?" },
@@ -29,12 +29,10 @@ const QUICK_QUESTIONS = [
 ];
 
 const BOT_ANSWERS: Record<string, string> = {
-  "value": "This gift voucher is worth ₹10,000. It is applicable on hallmarked gold and real diamond jewellery, and can be used at all Pavitram Diamond Jewellery showrooms.",
-  "charges": "There are no hidden conditions. You only pay handling charges & 3% GST on your total bill amount.",
   "minimum": "There is no restriction, you can buy whatever you love to buy. Our range starts from Rs 8,500/- only.",
   "timing": "Our store timings are 11:00am – 8:30pm. Yes, we are definitely open on Sundays.",
   "gold": "Sorry, we don’t sell plain gold. We have 14 carat & 18 carats of gold available in our diamond jewellery.",
-  "lab": "No. We do not deal in Lab grown diamonds. We deal only into mined, original, natural, Real diamond jewellery."
+  "lab": "No. We do not deal in Lab grown diamonds. We deal only into natural, Real diamond jewellery."
 };
 
 // --- Custom Mobile-Friendly Date Picker ---
@@ -98,7 +96,7 @@ export default function VoucherClaimPage() {
   const [openFaq, setOpenFaq] = useState<number | null>(null)
   const [chatInput, setChatInput] = useState('')
   const [chatMessages, setChatMessages] = useState<any[]>([
-    { sender: 'bot', text: "Hi there! 👋\nWelcome to Ossam Jewels. How can I help you today?" }
+    { sender: 'bot', text: "Hi there! 👋\nWelcome to Pavitram Diamond Jewellery. How can I help you today?" }
   ])
   const chatEndRef = useRef<HTMLDivElement>(null)
 
@@ -244,7 +242,7 @@ export default function VoucherClaimPage() {
         
         <div className="text-center space-y-3 flex flex-col items-center animate-in fade-in slide-in-from-top-4 duration-700">
           <img 
-            src="/pavitram-logo.jpg" 
+            src="/pavitram-logo.png" 
             alt="Pavitram Jewels" 
             className="h-16 sm:h-20 w-auto object-contain drop-shadow-sm mix-blend-multiply" 
             onError={(e) => {
@@ -253,7 +251,7 @@ export default function VoucherClaimPage() {
             }}
           />
           <div className="space-y-0.5">
-             <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-amber-700/80">Exclusive Privileges</p>
+             <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-amber-700/80">Voucher Redeemption</p>
           </div>
         </div>
 
@@ -321,7 +319,7 @@ export default function VoucherClaimPage() {
               <div className="animate-in slide-in-from-right-8 fade-in duration-500 space-y-6 w-full">
                 <div className="flex items-center justify-between mb-2">
                   <h2 className="text-xl font-serif text-slate-800 tracking-tight">
-                    Perfect. <br/>Who is this registered to?
+                    Please <br/> fill your details
                   </h2>
                   <button onClick={() => setStep(0)} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/80 hover:bg-white text-slate-600 rounded-full text-[10px] font-bold uppercase tracking-widest transition-colors border border-slate-200/60 shadow-sm">
                     <Edit3 className="w-3 h-3" /> {formData.code}
@@ -385,7 +383,7 @@ export default function VoucherClaimPage() {
                 <div className="space-y-2 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">
                   <h2 className="text-4xl font-serif text-transparent bg-clip-text bg-gradient-to-r from-emerald-800 to-emerald-500 tracking-tight">Activated!</h2>
                   <p className="text-sm text-slate-600 leading-relaxed max-w-[280px] mx-auto mt-2">
-                    Your exclusive voucher <strong className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100 shadow-sm">{formData.code.toUpperCase()}</strong> is securely linked to your profile. 
+                    Your exclusive voucher <strong className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100 shadow-sm">{formData.code.toUpperCase()}</strong> is registered sucessfully
                   </p>
                 </div>
                 <div className="bg-white/60 backdrop-blur-md p-5 rounded-2xl border border-white/50 w-full mt-8 text-left shadow-lg animate-in fade-in slide-in-from-bottom-8 duration-700 delay-500">
@@ -393,7 +391,7 @@ export default function VoucherClaimPage() {
                      <Sparkles className="w-3.5 h-3.5 text-emerald-500" /> How to redeem
                    </p>
                    <p className="text-sm text-slate-700 font-medium leading-snug">
-                     Visit our <b className="text-slate-900">{formData.nearestBranch}</b> branch and simply provide your mobile number <b className="text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded">({formData.phone})</b> at the billing counter.
+                     Visit our <b className="text-slate-900">nearest branch</b> and simply provide your Vocuher Code with a valid ID proof at the billing counter. Validity of voucher is 1 month from the date of activation.
                    </p>
                 </div>
               </div>
@@ -411,8 +409,7 @@ export default function VoucherClaimPage() {
             
             <div className="space-y-2">
               {[
-                { q: "What is the value of this voucher?", a: "This gift voucher is worth ₹10,000. It can be used at all Pavitram Diamond Jewellery showrooms." },
-                { q: "What products are covered?", a: "The voucher is applicable on hallmarked gold and real diamond jewellery. We do not sell plain gold." },
+                { q: "What products are covered?", a: "The voucher is applicable on all our jewellery which is hallmarked gold studded with real diamond jewellery. We do not sell plain gold." },
                 { q: "Are there any hidden conditions or extra charges?", a: "There are no hidden conditions. You only pay handling charges & 3% GST on your total bill amount." },
                 { q: "Is there a minimum purchase requirement?", a: "There is no restriction, you can buy whatever you love. Our real diamond jewellery range starts from Rs 8,500/- only." },
                 { q: "Can I combine it with other offers or get cash?", a: "No, this voucher is not valid with other offers or discounts, and it is not redeemable for cash. It must be used in a single transaction." },
@@ -448,7 +445,7 @@ export default function VoucherClaimPage() {
                  <img src="/pavitram-logo.jpg" alt="Logo" className="w-5 h-5 object-contain rounded-full bg-white" onError={(e) => e.currentTarget.style.display = 'none'} />
                </div>
                <div>
-                 <p className="font-bold text-sm leading-tight tracking-wide">Pavitram Concierge</p>
+                 <p className="font-bold text-sm leading-tight tracking-wide">Pavitram help bot</p>
                  <p className="text-[10px] text-amber-300/80 flex items-center gap-1 font-medium tracking-widest uppercase mt-0.5">
                    <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span> Online
                  </p>

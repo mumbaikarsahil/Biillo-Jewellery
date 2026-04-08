@@ -410,7 +410,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 </div>
               </div>
               <div className="text-center flex flex-col items-center justify-center -mt-6 z-10">
-                <img src="/pavitram-logo.jpg" alt="Pavitram" className={`h-14 mx-auto opacity-90 object-contain ${isEstimate ? 'grayscale' : ''}`} onError={(e) => e.currentTarget.style.display = 'none'} />
+                <img src="/pavitram-logo.png" alt="Pavitram" className={`h-14 mx-auto opacity-90 object-contain ${isEstimate ? 'grayscale' : ''}`} onError={(e) => e.currentTarget.style.display = 'none'} />
               </div>
               <div className="text-center px-6">
                 <p className="mb-6 text-[10px] text-slate-800 uppercase tracking-wider font-bold">For OSSAM JEWELS PVT. LTD.</p>
