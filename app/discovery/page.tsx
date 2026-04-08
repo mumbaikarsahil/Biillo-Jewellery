@@ -34,7 +34,6 @@ interface ProductDiscovery {
   sku_reference: string | null
   total_stone_pieces: number
   
-  // NEW ASSET FIELDS
   image_url?: string | null
   metal_color?: string | null
   diamond_shape?: string | null
@@ -117,11 +116,33 @@ export default function DiscoveryPage() {
   }
 
   const handleCheckout = () => {
-    // The main POS is now located at /sales. Shadow users still go to /shadow-pos.
     const isShadowUser = appUser?.role === 'shadow_manager' || appUser?.role === 'shadow_sales'
     const targetRoute = isShadowUser ? '/shadow-pos' : '/pos'
 
     if (product) {
+      // --- THE FIX: RACE CONDITION PREVENTION ---
+      // If HQ is in "ALL" mode, we must switch context before loading the POS.
+      if (product.warehouse_id && selectedLocation !== product.warehouse_id) {
+        
+        // Hard security block for branch managers
+        if (isLocked) {
+          toast.error("Cross-branch sales are not permitted for your role.");
+          return;
+        }
+
+        setSelectedLocation(product.warehouse_id);
+        toast.info("Context switched to match item branch.");
+        
+        // Wait 250ms for the global state to save to local storage
+        // before pushing to the POS page.
+        setTimeout(() => {
+          router.push(`${targetRoute}?barcode=${product.barcode}`)
+        }, 250);
+        
+        return; // Exit here so it doesn't trigger the instant push below
+      }
+
+      // Normal instant routing if locations already match
       router.push(`${targetRoute}?barcode=${product.barcode}`)
     } else {
       router.push(targetRoute)
@@ -171,7 +192,7 @@ export default function DiscoveryPage() {
         </div>
       )}
 
-      {/* HEADER - Exact h-14 height to match the Sidebar */}
+      {/* HEADER */}
       <header className="h-14 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center sticky top-0 z-10 shadow-sm box-border">
         <div className="w-full max-w-5xl mx-auto flex justify-between items-center gap-4">
           <div className="flex items-center gap-2.5">
@@ -183,7 +204,7 @@ export default function DiscoveryPage() {
           
           <div className="flex items-center gap-2 w-full sm:w-auto">
             <Store className="w-4 h-4 text-slate-400 hidden sm:block" />
-            <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
+            <Select value={selectedLocation || ''} onValueChange={setSelectedLocation} disabled={isLocked}>
               <SelectTrigger className="h-8 text-xs font-semibold bg-white border-slate-200 focus:ring-1 focus:ring-indigo-500 w-full sm:w-48 md:w-56 rounded-md shadow-sm">
                 <SelectValue placeholder="Select Context Node..." />
               </SelectTrigger>
