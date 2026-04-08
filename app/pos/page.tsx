@@ -1,8 +1,7 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
-// NEW: Added useSearchParams
-import { useSearchParams } from 'next/navigation' 
+import { useSearchParams, useRouter } from 'next/navigation' 
 import { useAuth } from '@/hooks/useAuth'
 import { useStoreLocation } from '@/hooks/useStoreLocation'
 import { useRpc } from '@/hooks/useRpc'
@@ -30,11 +29,12 @@ export type BillingMode = 'normal' | 'custom' | 'challan' | 'repair' | 'return'
 export default function POSPage() {
   const { appUser, loading } = useAuth()
   const { callRpc } = useRpc()
+  const router = useRouter()
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
   
-  // NEW: Read the URL parameters
   const searchParams = useSearchParams()
   const urlBarcode = searchParams.get('barcode')
+  const urlLocation = searchParams.get('location') // <--- NEW: Read the requested location
   
   // Core UI State
   const [mode, setMode] = useState<BillingMode>('normal')
@@ -44,7 +44,6 @@ export default function POSPage() {
   const [lastInvoiceData, setLastInvoiceData] = useState<any>(null)
   const [isEstimateCheckout, setIsEstimateCheckout] = useState(false)
   
-  // State to hold the rich warehouse data (for printing addresses)
   const [allBranches, setAllBranches] = useState<any[]>([])
 
   const [repairDetails, setRepairDetails] = useState<any>({
@@ -58,7 +57,7 @@ export default function POSPage() {
     conditionPhotoUrl: null
   })
 
-  // Form & Customer State (Managed here to feed both Sidebar and Checkout Hook)
+  // Form & Customer State
   const [customers, setCustomers] = useState<any[]>([])
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null)
   const [customOrderDetails, setCustomOrderDetails] = useState({ 
@@ -70,12 +69,10 @@ export default function POSPage() {
     advance_paid: '' 
   })
   
-  // State for the Buyback/Return form
   const [returnDetails, setReturnDetails] = useState({
     invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0
   })
 
-  // Fetch Customers on Mount
   useEffect(() => {
     const initData = async () => {
       if (!appUser?.company_id) return
@@ -89,27 +86,44 @@ export default function POSPage() {
     initData()
   }, [appUser])
 
-  // 1. Initialize Cart 
   const {
     cart, setCart, subtotal, itemSearchTerm, setItemSearchTerm, searchResults,
     processScannedItem, handleScanResult, clearCart, removeFromCart
   } = useCart(appUser?.company_id, selectedLocation, mode)
 
   // ======================================================================
-  // NEW: AUTO-ADD FROM DISCOVERY PAGE URL
+  // STABILIZED AUTO-ADD LOGIC
   // ======================================================================
   useEffect(() => {
-    if (urlBarcode && selectedLocation && appUser?.company_id) {
-      // 1. Automatically fetch and add the item to the cart
-      processScannedItem(urlBarcode)
-      
-      // 2. Wipe the barcode from the URL so a simple page refresh doesn't add it again!
-      window.history.replaceState(null, '', window.location.pathname)
-    }
-  }, [urlBarcode, selectedLocation, appUser?.company_id]) // Only run when these mount
-  // ======================================================================
+    // Wait until the system is fully booted and we have a target
+    if (!urlBarcode || !appUser?.company_id) return;
 
-  // 2. Initialize Checkout 
+    // Phase 1: Ensure the POS is locked into the correct branch before scanning
+    if (urlLocation && selectedLocation !== urlLocation) {
+      if (isLocked) {
+        // If they are a branch manager, they are physically incapable of switching.
+        toast.error("Cross-Branch Error", {
+          description: "This item belongs to another branch. You cannot bill it."
+        });
+        // Wipe URL so it stops looping
+        window.history.replaceState(null, '', window.location.pathname)
+        return;
+      } else {
+        // HQ users can switch, so we force the switch and wait for the next render cycle
+        setSelectedLocation(urlLocation);
+        return; 
+      }
+    }
+
+    // Phase 2: Location matches! Safe to process.
+    if (selectedLocation) {
+      processScannedItem(urlBarcode);
+      // Clean URL silently
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+    
+  }, [urlBarcode, urlLocation, selectedLocation, appUser?.company_id, isLocked, setSelectedLocation, processScannedItem])
+
   const checkoutHook = useCheckout({
     appUser, 
     selectedLocation, 
@@ -124,7 +138,6 @@ export default function POSPage() {
     allBranches       
   })
 
-  // Global Session Wipe
   const handleWipeSession = () => {
     clearCart()
     checkoutHook.resetCheckoutState()
@@ -134,7 +147,6 @@ export default function POSPage() {
     setRepairDetails({ itemDescription: '', grossWeight: '', purity: '22K', defectNotes: '', estimatedCost: '', advancePaid: '', expectedDelivery: '', conditionPhotoUrl: null })
   }
 
-  // Pre-flight check before showing the preview modal
   const handlePreviewRequest = (isEstimate: boolean = false) => {
     setIsEstimateCheckout(isEstimate) 
     setShowPreviewModal(true)
@@ -170,10 +182,7 @@ export default function POSPage() {
                setDetails={setCustomOrderDetails} 
                currentLocationId={selectedLocation}
                onAddToBill={(finalItemData: any) => {
-                 // 1. Switch back to normal mode
                  setMode('normal');
-                 
-                 // 2. Clear current cart and add the finished custom item
                  clearCart();
                  if (setCart) {
                    setCart([{
@@ -183,7 +192,6 @@ export default function POSPage() {
                      quantity: 1,
                      custom_order_id: finalItemData.custom_order_id,
                      advance_paid: finalItemData.advance_paid,
-                     // --- INJECT THE SPECS INTO THE CART STATE ---
                      net_weight_g: finalItemData.net_weight_g,
                      gross_weight_g: finalItemData.gross_weight_g,
                      total_stone_weight_cts: finalItemData.total_stone_weight_cts,
@@ -213,11 +221,11 @@ export default function POSPage() {
                   clearCart();
                   if (setCart) {
                     setCart([{
-                      id: finalItemData.inventory_id, // Pseudo ID
+                      id: finalItemData.inventory_id, 
                       barcode: finalItemData.barcode,
                       mrp: finalItemData.mrp,
                       quantity: 1,
-                      repair_ticket_id: finalItemData.repair_ticket_id, // <--- Key identifier
+                      repair_ticket_id: finalItemData.repair_ticket_id, 
                       advance_paid: finalItemData.advance_paid,
                       net_weight_g: finalItemData.net_weight_g,
                       total_stone_weight_cts: finalItemData.total_stone_weight_cts,
@@ -247,7 +255,7 @@ export default function POSPage() {
         <CheckoutSidebar 
           mode={mode}
           cartLength={cart.length}
-          cart={cart} // <--- PASSED CART SO IT CAN READ ADVANCE PAYMENTS
+          cart={cart} 
           subtotal={subtotal}
           customers={customers}
           setCustomers={setCustomers}

@@ -120,30 +120,34 @@ export default function DiscoveryPage() {
     const targetRoute = isShadowUser ? '/shadow-pos' : '/pos'
 
     if (product) {
-      // --- THE FIX: RACE CONDITION PREVENTION ---
-      // If HQ is in "ALL" mode, we must switch context before loading the POS.
-      if (product.warehouse_id && selectedLocation !== product.warehouse_id) {
+      // Forces both IDs to be lowercase and trims any invisible spaces
+      const prodWhId = String(product.warehouse_id || '').toLowerCase().trim();
+      const currWhId = String(selectedLocation || '').toLowerCase().trim();
+
+      if (prodWhId && currWhId !== 'all' && currWhId !== prodWhId) {
         
         // Hard security block for branch managers
         if (isLocked) {
-          toast.error("Cross-branch sales are not permitted for your role.");
+          toast.error("Cross-branch sales are not permitted.", {
+             description: "This item belongs to a different branch."
+          });
           return;
         }
 
-        setSelectedLocation(product.warehouse_id);
+        // THE FIX: Add "|| ''" to satisfy TypeScript's strict string requirement
+        setSelectedLocation(product.warehouse_id || '');
         toast.info("Context switched to match item branch.");
         
-        // Wait 250ms for the global state to save to local storage
-        // before pushing to the POS page.
+        // Pass the explicit location in the URL to bypass POS race conditions
         setTimeout(() => {
-          router.push(`${targetRoute}?barcode=${product.barcode}`)
+          router.push(`${targetRoute}?barcode=${product.barcode}&location=${product.warehouse_id || ''}`)
         }, 250);
         
-        return; // Exit here so it doesn't trigger the instant push below
+        return; 
       }
 
-      // Normal instant routing if locations already match
-      router.push(`${targetRoute}?barcode=${product.barcode}`)
+      // Normal instant routing with explicit location passing
+      router.push(`${targetRoute}?barcode=${product.barcode}&location=${product.warehouse_id || ''}`)
     } else {
       router.push(targetRoute)
     }
