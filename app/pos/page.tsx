@@ -23,7 +23,6 @@ import { PosModals } from '@/components/pos/PosModals'
 import { ReturnIntakeForm } from '@/components/pos/ReturnIntakeForm'
 import { RepairIntakeForm } from '@/components/pos/RepairIntakeForm'
 
-// Strict Types
 export type BillingMode = 'normal' | 'custom' | 'challan' | 'repair' | 'return'
 
 export default function POSPage() {
@@ -34,7 +33,7 @@ export default function POSPage() {
   
   const searchParams = useSearchParams()
   const urlBarcode = searchParams.get('barcode')
-  const urlLocation = searchParams.get('location') // <--- NEW: Read the requested location
+  const urlLocation = searchParams.get('location') 
   
   // Core UI State
   const [mode, setMode] = useState<BillingMode>('normal')
@@ -57,7 +56,6 @@ export default function POSPage() {
     conditionPhotoUrl: null
   })
 
-  // Form & Customer State
   const [customers, setCustomers] = useState<any[]>([])
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null)
   const [customOrderDetails, setCustomOrderDetails] = useState({ 
@@ -92,37 +90,44 @@ export default function POSPage() {
   } = useCart(appUser?.company_id, selectedLocation, mode)
 
   // ======================================================================
-  // STABILIZED AUTO-ADD LOGIC
+  // THE FIX: STABILIZED AUTO-ADD LOGIC W/ HYDRATION GATE
   // ======================================================================
   useEffect(() => {
-    // Wait until the system is fully booted and we have a target
+    // 1. Wait until system is booted AND URL has a barcode
     if (!urlBarcode || !appUser?.company_id) return;
 
-    // Phase 1: Ensure the POS is locked into the correct branch before scanning
-    if (urlLocation && selectedLocation !== urlLocation) {
+    // 2. THE HYDRATION GATE: Never process until React has fully loaded the branch ID
+    if (!selectedLocation) return; 
+
+    const safeUrlLoc = String(urlLocation || '').toLowerCase().trim();
+    const safeSelLoc = String(selectedLocation || '').toLowerCase().trim();
+
+    // 3. Check for HQ Context Switches
+    if (safeUrlLoc && safeSelLoc !== safeUrlLoc) {
       if (isLocked) {
-        // If they are a branch manager, they are physically incapable of switching.
+        // This stops branch managers from exploiting URLs
         toast.error("Cross-Branch Error", {
-          description: "This item belongs to another branch. You cannot bill it."
+          description: "This item resides at a different location. Cannot add to cart."
         });
-        // Wipe URL so it stops looping
         window.history.replaceState(null, '', window.location.pathname)
         return;
       } else {
-        // HQ users can switch, so we force the switch and wait for the next render cycle
-        setSelectedLocation(urlLocation);
-        return; 
+        // Force HQ users to switch to the item's branch
+        setSelectedLocation(urlLocation!);
+        return; // Exit and wait for the re-render with the new location
       }
     }
 
-    // Phase 2: Location matches! Safe to process.
-    if (selectedLocation) {
+    // 4. Safe Execution: Delay slightly to ensure useCart has fully caught up with the location state
+    const executionTimer = setTimeout(() => {
       processScannedItem(urlBarcode);
-      // Clean URL silently
       window.history.replaceState(null, '', window.location.pathname);
-    }
+    }, 300);
+
+    return () => clearTimeout(executionTimer);
     
   }, [urlBarcode, urlLocation, selectedLocation, appUser?.company_id, isLocked, setSelectedLocation, processScannedItem])
+  // ======================================================================
 
   const checkoutHook = useCheckout({
     appUser, 

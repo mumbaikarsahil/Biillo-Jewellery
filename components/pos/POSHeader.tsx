@@ -1,301 +1,113 @@
-'use client'
-
-import React, { useState, useEffect } from 'react'
-import { useSearchParams, useRouter } from 'next/navigation' 
+import React, { useEffect, useState } from 'react'
+import { format } from 'date-fns'
+import { Building, Trash2 } from 'lucide-react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/useAuth'
-import { useStoreLocation } from '@/hooks/useStoreLocation'
-import { useRpc } from '@/hooks/useRpc'
-import { Loader2 } from 'lucide-react'
-import { fetchCustomers } from '@/lib/api'
-import { toast } from 'sonner' 
+import { supabase } from '@/lib/supabaseClient'
 
-// Hooks
-import { useCart } from '@/hooks/useCart'
-import { useCheckout } from '@/hooks/useCheckout'
+interface POSHeaderProps {
+  isHQ: boolean
+  isLocked: boolean
+  selectedLocation: string
+  setSelectedLocation: (val: string) => void
+  onWipeSession: () => void
+  onWarehousesLoaded?: (warehouses: any[]) => void // <--- NEW: Passes the rich data up to the main page
+}
 
-// Components
-import { POSHeader } from '@/components/pos/POSHeader'
-import { ModeTabs } from '@/components/pos/ModeTabs'
-import { CartPanel } from '@/components/pos/CartPanel'
-import { CheckoutSidebar } from '@/components/pos/CheckoutSidebar'
-import { CustomOrderForm } from '@/components/pos/CustomOrderForm'
-import { PosModals } from '@/components/pos/PosModals'
-import { ReturnIntakeForm } from '@/components/pos/ReturnIntakeForm'
-import { RepairIntakeForm } from '@/components/pos/RepairIntakeForm'
-
-// Strict Types
-export type BillingMode = 'normal' | 'custom' | 'challan' | 'repair' | 'return'
-
-export default function POSPage() {
-  const { appUser, loading } = useAuth()
-  const { callRpc } = useRpc()
-  const router = useRouter()
-  const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
+export function POSHeader({ isHQ, isLocked, selectedLocation, setSelectedLocation, onWipeSession, onWarehousesLoaded }: POSHeaderProps) {
+  const { appUser } = useAuth()
   
-  const searchParams = useSearchParams()
-  const urlBarcode = searchParams.get('barcode')
-  const urlLocation = searchParams.get('location') // <--- NEW: Read the requested location
-  
-  // Core UI State
-  const [mode, setMode] = useState<BillingMode>('normal')
-  const [showScanner, setShowScanner] = useState(false)
-  const [showPreviewModal, setShowPreviewModal] = useState(false)
-  const [showPrintModal, setShowPrintModal] = useState(false)
-  const [lastInvoiceData, setLastInvoiceData] = useState<any>(null)
-  const [isEstimateCheckout, setIsEstimateCheckout] = useState(false)
-  
-  const [allBranches, setAllBranches] = useState<any[]>([])
+  // Expanded state to hold the new address and contact columns
+  const [warehouses, setWarehouses] = useState<{
+    id: string, 
+    name: string, 
+    address?: string, 
+    contact_number?: string, 
+    gstin?: string
+  }[]>([])
 
-  const [repairDetails, setRepairDetails] = useState<any>({
-    itemDescription: '',
-    grossWeight: '',
-    purity: '22K',
-    defectNotes: '',
-    estimatedCost: '',
-    advancePaid: '',
-    expectedDelivery: '',
-    conditionPhotoUrl: null
-  })
-
-  // Form & Customer State
-  const [customers, setCustomers] = useState<any[]>([])
-  const [selectedCustomer, setSelectedCustomer] = useState<any>(null)
-  const [customOrderDetails, setCustomOrderDetails] = useState({ 
-    design_reference: '', 
-    item_category: '', 
-    expected_gold_g: '', 
-    expected_diamond_cts: '', 
-    estimated_value: '', 
-    advance_paid: '' 
-  })
-  
-  const [returnDetails, setReturnDetails] = useState({
-    invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0
-  })
-
+  // Fetch branches specific to this company
   useEffect(() => {
-    const initData = async () => {
+    const fetchWarehouses = async () => {
       if (!appUser?.company_id) return
       try {
-        const { data: custData } = await fetchCustomers(appUser.company_id)
-        setCustomers(custData || [])
+        // Now fetching the new columns from the database
+        const { data, error } = await supabase
+          .from('warehouses')
+          .select('id, name, address, contact_number, gstin')
+          .eq('company_id', appUser.company_id)
+          .eq('is_active', true)
+          .order('name')
+        
+        if (error) throw error
+        
+        if (data) {
+          setWarehouses(data)
+          // Pass the rich data payload up to the parent component
+          if (onWarehousesLoaded) onWarehousesLoaded(data)
+        }
+
       } catch (err) {
-        console.error("Failed to load customers", err)
+        console.error('Failed to load branches:', err)
       }
     }
-    initData()
-  }, [appUser])
-
-  const {
-    cart, setCart, subtotal, itemSearchTerm, setItemSearchTerm, searchResults,
-    processScannedItem, handleScanResult, clearCart, removeFromCart
-  } = useCart(appUser?.company_id, selectedLocation, mode)
-
-  // ======================================================================
-  // STABILIZED AUTO-ADD LOGIC
-  // ======================================================================
-  useEffect(() => {
-    // Wait until the system is fully booted and we have a target
-    if (!urlBarcode || !appUser?.company_id) return;
-
-    // Phase 1: Ensure the POS is locked into the correct branch before scanning
-    if (urlLocation && selectedLocation !== urlLocation) {
-      if (isLocked) {
-        // If they are a branch manager, they are physically incapable of switching.
-        toast.error("Cross-Branch Error", {
-          description: "This item belongs to another branch. You cannot bill it."
-        });
-        // Wipe URL so it stops looping
-        window.history.replaceState(null, '', window.location.pathname)
-        return;
-      } else {
-        // HQ users can switch, so we force the switch and wait for the next render cycle
-        setSelectedLocation(urlLocation);
-        return; 
-      }
-    }
-
-    // Phase 2: Location matches! Safe to process.
-    if (selectedLocation) {
-      processScannedItem(urlBarcode);
-      // Clean URL silently
-      window.history.replaceState(null, '', window.location.pathname);
-    }
-    
-  }, [urlBarcode, urlLocation, selectedLocation, appUser?.company_id, isLocked, setSelectedLocation, processScannedItem])
-
-  const checkoutHook = useCheckout({
-    appUser, 
-    selectedLocation, 
-    mode, 
-    callRpc, 
-    cart, 
-    subtotal,
-    selectedCustomer, 
-    customOrderDetails,
-    repairDetails,     
-    returnDetails,    
-    allBranches       
-  })
-
-  const handleWipeSession = () => {
-    clearCart()
-    checkoutHook.resetCheckoutState()
-    setSelectedCustomer(null)
-    setCustomOrderDetails({ design_reference: '', item_category: '', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '' })
-    setReturnDetails({ invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0 })
-    setRepairDetails({ itemDescription: '', grossWeight: '', purity: '22K', defectNotes: '', estimatedCost: '', advancePaid: '', expectedDelivery: '', conditionPhotoUrl: null })
-  }
-
-  const handlePreviewRequest = (isEstimate: boolean = false) => {
-    setIsEstimateCheckout(isEstimate) 
-    setShowPreviewModal(true)
-  }
-
-  if (loading || !appUser) {
-    return (
-      <div className="h-screen flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-[#0078D7]" />
-      </div>
-    )
-  }
+    fetchWarehouses()
+  }, [appUser, onWarehousesLoaded])
 
   return (
-    <div className="min-h-[100dvh] lg:h-[100dvh] flex flex-col bg-[#E6E6E6] text-slate-900 font-sans overflow-hidden">
+    // Height snapped back to h-14 to perfectly align with the sidebar
+    <header className="z-40 w-full bg-white border-b border-slate-200 px-4 h-14 flex items-center justify-between shrink-0 sticky top-0 lg:static">
       
-      <POSHeader 
-        isHQ={isHQ} isLocked={isLocked} 
-        selectedLocation={selectedLocation} setSelectedLocation={setSelectedLocation} 
-        onWipeSession={handleWipeSession} 
-        onWarehousesLoaded={setAllBranches} 
-      />
+      {/* LEFT SECTION: Branch Selector ONLY */}
+      <div className="flex items-center gap-2">
+        <Building className="w-4 h-4 text-slate-400 hidden sm:block" />
+        <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
+          <SelectTrigger className="h-9 bg-slate-50 hover:bg-slate-100 border-slate-200 focus:ring-slate-200 text-xs font-semibold px-3 w-[160px] sm:w-[200px] rounded-lg transition-colors text-slate-700 shadow-sm outline-none">
+            <SelectValue placeholder="Identify Node..." />
+          </SelectTrigger>
+          <SelectContent className="rounded-xl border-slate-200 shadow-xl bg-white">
+            {isHQ && (
+              <SelectItem value="ALL" className="text-xs font-bold text-blue-600 rounded-md focus:bg-blue-50 focus:text-blue-700">
+                All Branches (HQ)
+              </SelectItem>
+            )}
+            
+            {/* Dynamically mapped warehouses from Supabase */}
+            {warehouses.map((w) => (
+              <SelectItem key={w.id} value={w.id} className="text-xs font-medium text-slate-700 uppercase rounded-md focus:bg-slate-50">
+                {w.name}
+              </SelectItem>
+            ))}
 
-      <ModeTabs mode={mode} setMode={setMode} />
-
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden p-2 gap-2">
+            {/* Fallback while loading */}
+            {warehouses.length === 0 && selectedLocation && selectedLocation !== 'ALL' && (
+               <SelectItem value={selectedLocation} className="text-xs uppercase font-medium text-slate-500">Loading...</SelectItem>
+            )}
+          </SelectContent>
+        </Select>
+      </div>
+      
+      {/* RIGHT SECTION: Date & Actions */}
+      <div className="flex items-center gap-3 sm:gap-6">
         
-        {/* LEFT PANEL */}
-        <div className="flex-1 flex flex-col bg-white border border-slate-300 shadow-sm overflow-hidden rounded-sm min-h-[400px] lg:min-h-0">
-        {mode === 'custom' ? (
-             <CustomOrderForm 
-               details={customOrderDetails} 
-               setDetails={setCustomOrderDetails} 
-               currentLocationId={selectedLocation}
-               onAddToBill={(finalItemData: any) => {
-                 setMode('normal');
-                 clearCart();
-                 if (setCart) {
-                   setCart([{
-                     id: finalItemData.inventory_id,
-                     barcode: finalItemData.barcode,
-                     mrp: finalItemData.mrp,
-                     quantity: 1,
-                     custom_order_id: finalItemData.custom_order_id,
-                     advance_paid: finalItemData.advance_paid,
-                     net_weight_g: finalItemData.net_weight_g,
-                     gross_weight_g: finalItemData.gross_weight_g,
-                     total_stone_weight_cts: finalItemData.total_stone_weight_cts,
-                     item_category: finalItemData.item_category,
-                     metal_type: finalItemData.metal_type,
-                     purity_karat: finalItemData.purity_karat
-                   }]);
-                   toast.success("Added to cart! Advance payment applied.");
-                 } else {
-                   toast.error("Cart error: Please ensure setCart is exported from useCart.");
-                 }
-               }}
-             />
-          ) : mode === 'return' ? (
-             <ReturnIntakeForm 
-               details={returnDetails} 
-               setDetails={setReturnDetails}
-               appUser={appUser} 
-             />
-            ) : mode === 'repair' ? (
-              <RepairIntakeForm 
-                details={repairDetails} 
-                setDetails={setRepairDetails} 
-                currentLocationId={selectedLocation}
-                onAddToBill={(finalItemData: any) => {
-                  setMode('normal');
-                  clearCart();
-                  if (setCart) {
-                    setCart([{
-                      id: finalItemData.inventory_id, 
-                      barcode: finalItemData.barcode,
-                      mrp: finalItemData.mrp,
-                      quantity: 1,
-                      repair_ticket_id: finalItemData.repair_ticket_id, 
-                      advance_paid: finalItemData.advance_paid,
-                      net_weight_g: finalItemData.net_weight_g,
-                      total_stone_weight_cts: finalItemData.total_stone_weight_cts,
-                      item_category: finalItemData.item_category
-                    }]);
-                    toast.success("Added to cart! Advance payment applied.");
-                  } else {
-                    toast.error("Cart error: Please ensure setCart is exported.");
-                  }
-                }}
-              />
-           ) : (
-             <CartPanel 
-               mode={mode} 
-               cart={cart}
-               itemSearchTerm={itemSearchTerm}
-               setItemSearchTerm={setItemSearchTerm}
-               searchResults={searchResults}
-               processScannedItem={processScannedItem}
-               removeFromCart={removeFromCart}
-               onOpenScanner={() => setShowScanner(true)} 
-             />
-          )}
+        {/* Current Date */}
+        <div className="hidden md:flex flex-col items-end justify-center mt-0.5">
+          <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 leading-tight">Terminal Active</span>
+          <span className="text-xs font-semibold text-slate-700 tracking-tight leading-tight">{format(new Date(), 'EEEE, dd MMM yyyy')}</span>
         </div>
 
-        {/* RIGHT PANEL */}
-        <CheckoutSidebar 
-          mode={mode}
-          cartLength={cart.length}
-          cart={cart} 
-          subtotal={subtotal}
-          customers={customers}
-          setCustomers={setCustomers}
-          selectedCustomer={selectedCustomer}
-          setSelectedCustomer={setSelectedCustomer}
-          appUser={appUser}
-          selectedLocation={selectedLocation}
-          repairDetails={repairDetails}
-          customOrderDetails={customOrderDetails}
-          returnDetails={returnDetails} 
-          onPreviewRequest={handlePreviewRequest}
-          setMode={setMode}
-          {...checkoutHook}
-        />
+        {/* Wipe Session Button */}
+        <Button 
+          variant="outline" 
+          size="sm" 
+          onClick={onWipeSession}
+          className="h-9 px-4 rounded-lg border-red-200 bg-red-50 text-red-600 hover:bg-red-600 hover:text-white hover:border-red-600 transition-all shadow-sm font-semibold text-xs" 
+        >
+          <span className="hidden sm:inline">Wipe Session</span>
+          <Trash2 className="h-4 w-4 sm:hidden" />
+        </Button>
       </div>
-
-      {/* MODALS */}
-      <PosModals 
-        mode={mode}
-        showScanner={showScanner} 
-        setShowScanner={setShowScanner} 
-        onScanSuccess={handleScanResult}
-        showPreviewModal={showPreviewModal} 
-        setShowPreviewModal={setShowPreviewModal}
-        showPrintModal={showPrintModal} 
-        setShowPrintModal={setShowPrintModal}
-        previewData={checkoutHook.generateDraftData(isEstimateCheckout)} 
-        lastInvoiceData={lastInvoiceData} 
-        setLastInvoiceData={setLastInvoiceData}
-        isProcessing={checkoutHook.isProcessing}
-        executeCheckout={async () => {
-          const result = await checkoutHook.executeCheckout(isEstimateCheckout) 
-          if (result.success) {
-            setLastInvoiceData(result.draftData)
-            setShowPreviewModal(false)
-            setShowPrintModal(true)
-            handleWipeSession()
-          }
-        }}
-      />
-    </div>
+    </header>
   )
 }

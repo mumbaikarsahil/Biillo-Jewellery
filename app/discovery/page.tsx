@@ -134,7 +134,6 @@ export default function DiscoveryPage() {
           return;
         }
 
-        // THE FIX: Add "|| ''" to satisfy TypeScript's strict string requirement
         setSelectedLocation(product.warehouse_id || '');
         toast.info("Context switched to match item branch.");
         
@@ -196,7 +195,7 @@ export default function DiscoveryPage() {
         </div>
       )}
 
-      {/* HEADER */}
+      {/* HEADER - Exact h-14 height to match the Sidebar */}
       <header className="h-14 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center sticky top-0 z-10 shadow-sm box-border">
         <div className="w-full max-w-5xl mx-auto flex justify-between items-center gap-4">
           <div className="flex items-center gap-2.5">
@@ -314,6 +313,14 @@ export default function DiscoveryPage() {
                 {/* Stones Breakdowns */}
                 {(product.total_stone_pieces > 0 || product.total_stone_weight_cts > 0) && (
                   <>
+                    {/* --- NEW: TOTAL DIAMOND WEIGHT --- */}
+                    <div className="flex justify-between py-1 border-b border-dotted border-slate-300">
+                      <span className="text-indigo-600 font-bold uppercase tracking-wider">Total Stones (Pcs/Cts)</span>
+                      <span className="font-black text-indigo-700">
+                        {product.total_stone_pieces || 0} / {Number(product.total_stone_weight_cts).toFixed(2)}ct
+                      </span>
+                    </div>
+
                     {Number(product.solitaire_weight_cts) > 0 && (
                       <div className="flex justify-between py-1 border-b border-dotted border-slate-300">
                         <span className="text-slate-500 uppercase tracking-wider">Solitaire (Pcs/Cts)</span>
