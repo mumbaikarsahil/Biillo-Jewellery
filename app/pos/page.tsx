@@ -8,6 +8,7 @@ import { useRpc } from '@/hooks/useRpc'
 import { Loader2 } from 'lucide-react'
 import { fetchCustomers } from '@/lib/api'
 import { toast } from 'sonner' 
+import { supabase } from '@/lib/supabaseClient' // <--- Added Supabase import
 
 // Hooks
 import { useCart } from '@/hooks/useCart'
@@ -90,38 +91,55 @@ export default function POSPage() {
   } = useCart(appUser?.company_id, selectedLocation, mode)
 
   // ======================================================================
-  // THE FIX: STABILIZED AUTO-ADD LOGIC W/ HYDRATION GATE
+  // THE FIX: FETCH OBJECT INSTEAD OF PASSING STRING
   // ======================================================================
   useEffect(() => {
-    // 1. Wait until system is booted AND URL has a barcode
-    if (!urlBarcode || !appUser?.company_id) return;
-
-    // 2. THE HYDRATION GATE: Never process until React has fully loaded the branch ID
-    if (!selectedLocation) return; 
+    if (!urlBarcode || !appUser?.company_id || !selectedLocation) return; 
 
     const safeUrlLoc = String(urlLocation || '').toLowerCase().trim();
     const safeSelLoc = String(selectedLocation || '').toLowerCase().trim();
 
-    // 3. Check for HQ Context Switches
+    // 1. Check Context Switches
     if (safeUrlLoc && safeSelLoc !== safeUrlLoc) {
       if (isLocked) {
-        // This stops branch managers from exploiting URLs
         toast.error("Cross-Branch Error", {
           description: "This item resides at a different location. Cannot add to cart."
         });
         window.history.replaceState(null, '', window.location.pathname)
         return;
       } else {
-        // Force HQ users to switch to the item's branch
         setSelectedLocation(urlLocation!);
-        return; // Exit and wait for the re-render with the new location
+        return; 
       }
     }
 
-    // 4. Safe Execution: Delay slightly to ensure useCart has fully caught up with the location state
+    // 2. Fetch the Full Item Object from Database
+    const fetchAndProcess = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('inventory_items')
+          .select('*, custom_orders(order_number)') 
+          .eq('barcode', urlBarcode)
+          .eq('company_id', appUser.company_id)
+          .maybeSingle();
+
+        if (error || !data) {
+          toast.error("Item not found or already sold.");
+        } else {
+          // PASS THE OBJECT (Not the string) to prevent the undefined warehouse error
+          processScannedItem(data);
+        }
+      } catch (err) {
+        console.error("Auto-add fetch error:", err);
+      } finally {
+        // Wipe URL so it doesn't loop on refresh
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+    };
+
+    // 3. Delay slightly to ensure useCart has fully caught up with the location state
     const executionTimer = setTimeout(() => {
-      processScannedItem(urlBarcode);
-      window.history.replaceState(null, '', window.location.pathname);
+      fetchAndProcess();
     }, 300);
 
     return () => clearTimeout(executionTimer);
