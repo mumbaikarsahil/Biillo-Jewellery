@@ -15,39 +15,32 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 
-// --- NEW: THE QR SANITIZER ---
-// This strips away URLs, JSON formatting, or extra spaces that physical QR codes often contain.
+// --- THE QR SANITIZER ---
 const sanitizeScannedQR = (scannedText: string): string => {
   if (!scannedText) return '';
   let cleanText = scannedText.trim();
 
-  // 1. If the QR code is a URL (e.g., https://your-app.com?hash=OUT-123)
   if (cleanText.startsWith('http')) {
     try {
       const url = new URL(cleanText);
-      // Check common URL parameters
       const hashParam = url.searchParams.get('hash') || url.searchParams.get('seal');
       if (hashParam) return hashParam;
-      
-      // Fallback: Check if the hash is the very last part of the URL
       const pathHash = url.pathname.split('/').pop();
       if (pathHash) return pathHash;
     } catch (e) {
-      // Ignore URL parse errors and fall through to standard return
+      // Ignore URL parse errors
     }
   }
 
-  // 2. If the QR code is JSON data (e.g., {"hash": "OUT-123"})
   if (cleanText.startsWith('{')) {
     try {
       const parsed = JSON.parse(cleanText);
       return parsed.hash || parsed.seal_number || parsed.outer_qr_hash || parsed.inner_qr_hash || cleanText; 
     } catch (e) {
-      // Ignore JSON parse errors
+      // Ignore JSON errors
     }
   }
 
-  // 3. Fallback: Return the raw trimmed text
   return cleanText;
 }
 
@@ -66,7 +59,6 @@ export default function ReceiveStockPage() {
   const [showScanner, setShowScanner] = useState(false)
 
   const handleScanInput = async (inputStr: string) => {
-    // --- SANITIZE THE INPUT BEFORE DOING ANYTHING ELSE ---
     const sanitizedInput = sanitizeScannedQR(inputStr);
     const cleanInput = sanitizedInput.toUpperCase();
     
@@ -85,7 +77,7 @@ export default function ReceiveStockPage() {
         }
       }
       if (cleanInput === transferData.outer_qr_hash) {
-        if (transferData.status === 'completed' || transferData.status === 'disputed') {
+        if (transferData.status === 'completed' || transferData.status === 'disputed' || transferData.status === 'partially_received') {
           return toast.error("This transfer is already closed.")
         }
         setActiveStep('verify_seal')
@@ -93,7 +85,6 @@ export default function ReceiveStockPage() {
         return toast.success("Outer Label Authenticated")
       }
     }
-    // ---------------------------
 
     setLoading(true)
     
@@ -115,7 +106,6 @@ export default function ReceiveStockPage() {
       return toast.error(`Invalid QR Code or Hash: ${cleanInput}`)
     }
 
-    // Normalize items so the UI doesn't have to care if it's a repair or inventory
     const isRepair = data.transfer_category === 'repair'
     let normalizedItems: any[] = []
     
@@ -142,9 +132,8 @@ export default function ReceiveStockPage() {
     data.normalizedItems = normalizedItems
     setTransferData(data)
 
-    // LOGIC: Determine what was scanned
     if (cleanInput === data.outer_qr_hash) {
-      if (data.status === 'completed' || data.status === 'disputed') {
+      if (data.status === 'completed' || data.status === 'disputed' || data.status === 'partially_received') {
         return toast.error("This transfer is already closed.")
       }
       setActiveStep('verify_seal')
@@ -203,23 +192,35 @@ export default function ReceiveStockPage() {
 
   const toggleAllItems = () => {
     if (tickedItems.size === transferData.normalizedItems.length) {
-      setTickedItems(new Set()) // Deselect all
+      setTickedItems(new Set()) 
     } else {
-      setTickedItems(new Set(transferData.normalizedItems.map((i: any) => i.id))) // Select all
+      setTickedItems(new Set(transferData.normalizedItems.map((i: any) => i.id))) 
     }
   }
 
+  // --- DISPUTE RESOLUTION ENGINE ---
   const handleFinalIngest = async () => {
     setIsProcessing(true)
     try {
       const isDisputed = tickedItems.size < transferData.normalizedItems.length
-      const tickedArr = Array.from(tickedItems)
       const isRepair = transferData.transfer_category === 'repair'
 
-      // 1. Ingest only ticked items into their respective tables
-      if (tickedArr.length > 0) {
+      // Separate the items into happy path vs disputed
+      const successIds: string[] = []
+      const disputedIds: string[] = []
+
+      transferData.normalizedItems.forEach((item: any) => {
+        if (tickedItems.has(item.id)) {
+          successIds.push(item.id)
+        } else {
+          disputedIds.push(item.id)
+        }
+      })
+
+      // 1. Process the Successfully Received Items
+      if (successIds.length > 0) {
         if (isRepair) {
-           const sampleItem = transferData.normalizedItems.find((i: any) => i.id === tickedArr[0]);
+           const sampleItem = transferData.normalizedItems.find((i: any) => i.id === successIds[0]);
            const isReturningToOrigin = sampleItem?.originalData?.origin_warehouse_id === transferData.to_warehouse_id;
            const newRepairStatus = isReturningToOrigin ? 'received_at_store' : 'received_at_ho';
 
@@ -230,7 +231,7 @@ export default function ReceiveStockPage() {
                 current_warehouse_id: transferData.to_warehouse_id,
                 updated_at: new Date().toISOString()
              })
-             .in('id', tickedArr)
+             .in('id', successIds)
              
            if (repErr) throw new Error("Repair Update Failed: " + repErr.message)
 
@@ -238,17 +239,43 @@ export default function ReceiveStockPage() {
            const { error: invErr } = await supabase
              .from('inventory_items')
              .update({ warehouse_id: transferData.to_warehouse_id, status: 'in_stock' })
-             .in('id', tickedArr)
+             .in('id', successIds)
              
            if (invErr) throw new Error("Inventory Update Failed: " + invErr.message)
         }
       }
 
-      // 2. Update Transfer Status
+      // 2. Process the Disputed Items (Lock them down)
+      if (disputedIds.length > 0) {
+        if (isRepair) {
+           const { error: repErr } = await supabase
+             .from('repair_tickets')
+             .update({ 
+                status: 'disputed', 
+                updated_at: new Date().toISOString()
+             })
+             .in('id', disputedIds)
+             
+           if (repErr) throw new Error("Dispute Update Failed: " + repErr.message)
+
+        } else {
+           const { error: invErr } = await supabase
+             .from('inventory_items')
+             .update({ status: 'disputed' }) // We leave them in transit warehouse, but freeze the status
+             .in('id', disputedIds)
+             
+           if (invErr) throw new Error("Inventory Dispute Update Failed: " + invErr.message)
+        }
+      }
+
+      // 3. Update Transfer Status
+      // If some items were missing, the transfer is partially received, not complete.
+      const newTransferStatus = isDisputed ? 'partially_received' : 'completed';
+
       const { error: trfErr } = await supabase
         .from('stock_transfers')
         .update({ 
-          status: isDisputed ? 'disputed' : 'completed',
+          status: newTransferStatus,
           received_at: new Date().toISOString() 
         })
         .eq('id', transferData.id)
@@ -256,7 +283,7 @@ export default function ReceiveStockPage() {
       if (trfErr) throw new Error("Transfer Update Failed: " + trfErr.message)
 
       if (isDisputed) {
-        toast.error(`DISPUTE LOGGED: ${transferData.normalizedItems.length - tickedItems.size} items missing. Head Office alerted.`, { duration: 8000 })
+        toast.error(`DISPUTE LOGGED: ${disputedIds.length} items missing. Anomalies have been quarantined.`, { duration: 8000 })
       } else {
         toast.success(isRepair ? "Repairs successfully checked in!" : "Stock ingested perfectly into vault!")
       }
@@ -287,8 +314,6 @@ export default function ReceiveStockPage() {
             <Scanner onScan={(codes) => {
               if (codes.length > 0) {
                 setShowScanner(false);
-                // The scanner rawValue goes directly into the handler, 
-                // which now runs the sanitizeScannedQR function immediately!
                 handleScanInput(codes[0].rawValue);
               }
             }} components={{ finder: true }} />

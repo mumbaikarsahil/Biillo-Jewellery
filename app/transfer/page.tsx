@@ -23,7 +23,11 @@ import {
   Database,
   ArrowUpRight,
   ArrowDownLeft,
-  MoreVertical
+  MoreVertical,
+  ShieldAlert,
+  CheckCircle2,
+  AlertOctagon,
+  Ghost
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -49,13 +53,14 @@ import {
   Dialog, DialogContent, DialogHeader, 
   DialogTitle, DialogDescription, DialogFooter
 } from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
 
 interface Transfer {
   id: string
   transfer_number: string
   from_warehouse_id: string
   to_warehouse_id: string
-  status: 'draft' | 'in_transit' | 'completed' | 'cancelled' | 'disputed' | 'seal_verified'
+  status: 'draft' | 'in_transit' | 'completed' | 'cancelled' | 'disputed' | 'seal_verified' | 'partially_received'
   created_at: string
   notes: string
   from_warehouse: { name: string }
@@ -66,11 +71,17 @@ export default function TransferPage() {
   const { appUser } = useAuth()
   
   const [transfers, setTransfers] = useState<Transfer[]>([])
+  const [disputedItems, setDisputedItems] = useState<any[]>([]) 
   const [warehouses, setWarehouses] = useState<{id: string, name: string}[]>([])
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
   const [loading, setLoading] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedQR, setSelectedQR] = useState<Transfer | null>(null)
+
+  // --- NEW: DISPUTE RESOLUTION MODAL STATES ---
+  const [resolveModalOpen, setResolveModalOpen] = useState(false)
+  const [resolvingItem, setResolvingItem] = useState<any>(null)
+  const [selectedDestWarehouse, setSelectedDestWarehouse] = useState<string>('')
 
   const fetchWarehouses = async () => {
     if (!appUser) return
@@ -91,7 +102,6 @@ export default function TransferPage() {
   }
 
   const fetchTransfers = async () => {
-    // Wait until the branch location is fully initialized by the context
     if (!appUser || !selectedLocation) {
        if (!appUser) setLoading(false);
        return; 
@@ -99,8 +109,6 @@ export default function TransferPage() {
     
     setLoading(true)
     try {
-      // THE FIX: Explicitly request both the raw IDs AND the related names 
-      // so Supabase doesn't accidentally overwrite the ID fields.
       let query = supabase
         .from('stock_transfers')
         .select(`
@@ -112,7 +120,6 @@ export default function TransferPage() {
         `)
         .eq('company_id', appUser.company_id)
       
-      // SECURITY: If not HQ/ALL, filter strictly by the locked location
       if (selectedLocation !== 'ALL') {
         query = query.or(`from_warehouse_id.eq.${selectedLocation},to_warehouse_id.eq.${selectedLocation}`)
       }
@@ -121,6 +128,20 @@ export default function TransferPage() {
       
       if (error) throw error;
       if (trData) setTransfers(trData as any)
+
+      if (isHQ || appUser.role === 'owner' || appUser.role === 'manager') {
+        const { data: dItems, error: dError } = await supabase
+          .from('inventory_items')
+          .select(`
+            id, barcode, item_category, net_weight_g, status, warehouse_id,
+            warehouses:warehouse_id(name)
+          `)
+          .eq('company_id', appUser.company_id)
+          .eq('status', 'disputed')
+        
+        if (!dError && dItems) setDisputedItems(dItems)
+      }
+
     } catch (err) {
       toast.error("Error loading transfer data")
     } finally {
@@ -129,18 +150,50 @@ export default function TransferPage() {
   }
 
   useEffect(() => { fetchWarehouses() }, [appUser])
-  
-  // Reactively fetch transfers whenever the location lock settles
   useEffect(() => { fetchTransfers() }, [appUser, selectedLocation])
+
+  const handleResolveDispute = async (itemId: string, resolution: 'origin' | 'destination' | 'lost', originId?: string, destinationId?: string) => {
+    // Only prompt confirmation for the instant actions (Origin and Lost). 
+    // Destination has its own modal confirmation now.
+    if (resolution !== 'destination' && !confirm(`Are you sure you want to mark this item as ${resolution.toUpperCase()}? This will update the inventory ledger.`)) return;
+
+    try {
+      let updatePayload: any = { status: 'in_stock' };
+
+      if (resolution === 'origin' && originId) {
+        updatePayload.warehouse_id = originId;
+        updatePayload.remarks = `Recovered: Left at Origin by Admin on ${format(new Date(), 'dd-MMM-yy')}`;
+      } else if (resolution === 'destination' && destinationId) {
+        updatePayload.warehouse_id = destinationId;
+        updatePayload.remarks = `Recovered: Found at Destination by Admin on ${format(new Date(), 'dd-MMM-yy')}`;
+      } else if (resolution === 'lost') {
+        updatePayload.status = 'written_off_lost';
+        updatePayload.remarks = `Written Off: Lost in Transit logged by Admin on ${format(new Date(), 'dd-MMM-yy')}`;
+      } else {
+        throw new Error("Invalid resolution parameters.");
+      }
+
+      const { error } = await supabase
+        .from('inventory_items')
+        .update(updatePayload)
+        .eq('id', itemId);
+
+      if (error) throw error;
+
+      toast.success(`Dispute resolved. Item status updated to ${updatePayload.status.replace(/_/g, ' ')}.`);
+      fetchTransfers(); // Refresh lists
+    } catch (err: any) {
+      toast.error(`Resolution Failed: ${err.message}`);
+    }
+  }
 
   const filteredBySearch = transfers.filter(t => 
     t.transfer_number.toLowerCase().includes(searchTerm.toLowerCase())
   )
   
-  // THE FIX: Simplified strict matching
   const loc = selectedLocation || 'ALL';
   const activeStatuses = ['draft', 'in_transit', 'seal_verified'];
-  const closedStatuses = ['completed', 'cancelled', 'disputed'];
+  const closedStatuses = ['completed', 'cancelled', 'disputed', 'partially_received'];
 
   const incomingTransfers = filteredBySearch.filter(t => 
     (loc === 'ALL' || t.to_warehouse_id === loc) && 
@@ -156,6 +209,8 @@ export default function TransferPage() {
     const matchesLocation = loc === 'ALL' || t.to_warehouse_id === loc || t.from_warehouse_id === loc;
     return matchesLocation && closedStatuses.includes(t.status);
   })
+
+  const canResolveDisputes = isHQ || appUser?.role === 'owner' || appUser?.role === 'manager';
 
   if (!appUser) return null
 
@@ -199,12 +254,12 @@ export default function TransferPage() {
         {/* ACTION BAR */}
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
           <div className="flex gap-2 w-full md:w-auto">
-            <Button asChild variant="outline" size="sm" className="flex-1 sm:flex-none h-9 font-bold text-xs uppercase tracking-tight bg-white border-gray-200 shadow-sm">
+            <Button asChild variant="outline" size="sm" className="flex-1 sm:flex-none h-9 font-bold text-xs uppercase tracking-tight bg-white border-gray-200 shadow-sm hover:bg-gray-50">
               <Link href="/transfer/receive">
                 <PackageCheck className="w-3.5 h-3.5 mr-2 text-emerald-600" /> Secure Receive
               </Link>
             </Button>
-            <Button asChild size="sm" className="flex-1 md:flex-none h-9 font-bold text-xs uppercase tracking-tight shadow-md">
+            <Button asChild size="sm" className="flex-1 md:flex-none h-9 font-bold text-xs uppercase tracking-tight shadow-md bg-gray-900 text-white hover:bg-gray-800">
               <Link href="/inventory">
                 <Truck className="w-3.5 h-3.5 mr-2" /> New Dispatch
               </Link>
@@ -216,7 +271,7 @@ export default function TransferPage() {
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
               <Input 
                 placeholder="Search Transfer ID..." 
-                className="pl-9 h-9 text-xs bg-white border-gray-200"
+                className="pl-9 h-9 text-xs bg-white border-gray-200 focus-visible:ring-blue-500"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
@@ -226,17 +281,17 @@ export default function TransferPage() {
               onValueChange={setSelectedLocation}
               disabled={isLocked}
             >
-              <SelectTrigger className="w-[180px] h-9 text-xs font-bold border-gray-200 bg-white">
+              <SelectTrigger className="w-[180px] h-9 text-xs font-bold border-gray-200 bg-white focus:ring-blue-500">
                 <SelectValue placeholder="Select Vault" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
                 {isHQ && (
-                  <SelectItem value="ALL" className="text-xs font-bold text-indigo-600">
+                  <SelectItem value="ALL" className="text-xs font-bold text-blue-600 py-2 rounded-lg">
                     All Vaults (HQ)
                   </SelectItem>
                 )}
                 {warehouses.map(w => (
-                  <SelectItem key={w.id} value={w.id} className="text-xs font-medium">
+                  <SelectItem key={w.id} value={w.id} className="text-xs font-medium py-2 rounded-lg cursor-pointer">
                     {w.name}
                   </SelectItem>
                 ))}
@@ -246,16 +301,21 @@ export default function TransferPage() {
         </div>
 
         <Tabs defaultValue="incoming" className="w-full">
-          <TabsList className="bg-transparent border-b rounded-none h-11 w-full justify-start p-0 gap-6 mb-6">
-            <TabsTrigger value="incoming" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold transition-all">
+          <TabsList className="bg-transparent border-b rounded-none h-11 w-full justify-start p-0 gap-6 mb-6 overflow-x-auto overflow-y-hidden no-scrollbar">
+            <TabsTrigger value="incoming" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold transition-all whitespace-nowrap">
               Active Incoming ({incomingTransfers.length})
             </TabsTrigger>
-            <TabsTrigger value="outgoing" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold transition-all">
+            <TabsTrigger value="outgoing" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold transition-all whitespace-nowrap">
               Active Outgoing ({outgoingTransfers.length})
             </TabsTrigger>
-            <TabsTrigger value="history" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold transition-all">
+            <TabsTrigger value="history" className="rounded-none border-b-2 border-transparent data-[state=active]:border-blue-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold transition-all whitespace-nowrap">
               History ({historyTransfers.length})
             </TabsTrigger>
+            {canResolveDisputes && (
+              <TabsTrigger value="disputes" className="rounded-none border-b-2 border-transparent data-[state=active]:border-red-500 data-[state=active]:text-red-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold transition-all whitespace-nowrap">
+                <ShieldAlert className="w-3.5 h-3.5 mr-1.5" /> Exceptions ({disputedItems.length})
+              </TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="incoming" className="mt-0">
@@ -267,26 +327,153 @@ export default function TransferPage() {
           <TabsContent value="history" className="mt-0">
             <TransferList items={historyTransfers} loading={loading} onShowQR={setSelectedQR} type="history" />
           </TabsContent>
+
+          {/* --- DISPUTE RESOLUTION TAB CONTENT --- */}
+          {canResolveDisputes && (
+            <TabsContent value="disputes" className="mt-0">
+              {loading ? (
+                <div className="space-y-3">
+                  {[1,2,3].map(i => <Skeleton key={i} className="h-16 w-full rounded-2xl border border-gray-100 bg-white" />)}
+                </div>
+              ) : disputedItems.length === 0 ? (
+                <div className="text-center py-24 bg-emerald-50/30 border border-emerald-100 border-dashed rounded-2xl">
+                  <CheckCircle2 className="w-12 h-12 mx-auto mb-4 text-emerald-400" strokeWidth={1.5} />
+                  <p className="text-xs font-bold text-emerald-700 uppercase tracking-widest">No transit exceptions detected</p>
+                  <p className="text-[11px] text-emerald-600/70 mt-1.5">All recent stock transfers have been perfectly reconciled.</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-4">
+                  {disputedItems.map(item => (
+                    <Card key={item.id} className="border-red-200/60 bg-white shadow-sm overflow-hidden rounded-2xl hover:border-red-300 transition-colors">
+                      <CardContent className="p-0">
+                        <div className="flex flex-col md:flex-row items-center justify-between p-5 gap-4">
+                           
+                           <div className="flex items-center gap-4 w-full md:w-auto">
+                             <div className="h-12 w-12 rounded-[14px] bg-red-50 flex items-center justify-center shrink-0 border border-red-100">
+                                <AlertOctagon className="w-6 h-6 text-red-500" strokeWidth={1.5} />
+                             </div>
+                             <div>
+                                <h4 className="text-[15px] font-black font-mono text-gray-900 tracking-tight">{item.barcode}</h4>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mt-1">{item.item_category} • {item.net_weight_g}g</p>
+                                <p className="text-[9px] font-bold uppercase tracking-widest text-red-500 mt-1.5 flex items-center gap-1">
+                                  <MapPin className="w-3 h-3" /> Origin/Transit: {item.warehouses?.name || 'Unknown'}
+                                </p>
+                             </div>
+                           </div>
+
+                           <div className="flex flex-wrap gap-2.5 w-full md:w-auto justify-start md:justify-end">
+                              <Button 
+                                variant="outline" 
+                                className="h-10 rounded-xl text-[11px] font-bold uppercase tracking-widest border-gray-200 text-gray-600 hover:bg-gray-50 transition-colors"
+                                onClick={() => handleResolveDispute(item.id, 'origin', item.warehouse_id, undefined)}
+                              >
+                                Left at Origin
+                              </Button>
+                              
+                              <Button 
+                                variant="outline" 
+                                className="h-10 rounded-xl text-[11px] font-bold uppercase tracking-widest border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:border-emerald-300 transition-colors"
+                                onClick={() => {
+                                   setResolvingItem(item);
+                                   setResolveModalOpen(true);
+                                }}
+                              >
+                                Found at Dest
+                              </Button>
+
+                              <Button 
+                                className="h-10 rounded-xl text-[11px] font-bold uppercase tracking-widest bg-gray-900 text-white hover:bg-black shadow-sm transition-colors"
+                                onClick={() => handleResolveDispute(item.id, 'lost')}
+                              >
+                                <Ghost className="w-3.5 h-3.5 mr-1.5" strokeWidth={2} /> Lost
+                              </Button>
+                           </div>
+
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+          )}
         </Tabs>
       </main>
 
+      {/* --- DESTINATION RESOLUTION MODAL --- */}
+      <Dialog open={resolveModalOpen} onOpenChange={setResolveModalOpen}>
+        <DialogContent className="sm:max-w-[400px] p-0 border-none shadow-[0_24px_60px_-15px_rgba(0,0,0,0.2)] rounded-[28px] overflow-hidden bg-white">
+          <DialogHeader className="bg-emerald-50/50 p-6 border-b border-emerald-100/50">
+            <DialogTitle className="flex items-center gap-2.5 text-emerald-900 font-bold text-lg">
+              <PackageCheck className="h-5 w-5 text-emerald-600" strokeWidth={2}/> Found at Destination
+            </DialogTitle>
+            <DialogDescription className="text-xs font-medium text-emerald-700/70 mt-1.5">
+              Select the warehouse vault where this item was physically located to reinstate its stock status.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="p-6 space-y-4 bg-white">
+            <div className="space-y-2">
+              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Target Vault / Location</Label>
+              <Select value={selectedDestWarehouse} onValueChange={setSelectedDestWarehouse}>
+                <SelectTrigger className="h-12 rounded-[14px] text-sm font-semibold bg-gray-50 border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-emerald-500/10 focus:border-emerald-500 shadow-sm transition-all">
+                  <SelectValue placeholder="Select Warehouse..." />
+                </SelectTrigger>
+                <SelectContent className="rounded-[16px] shadow-xl border-gray-100 p-1">
+                  {warehouses.map(w => (
+                    <SelectItem key={w.id} value={w.id} className="text-sm font-medium rounded-[10px] py-2.5 cursor-pointer focus:bg-emerald-50 focus:text-emerald-700">
+                      {w.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          
+          <DialogFooter className="bg-gray-50/80 p-5 border-t border-gray-100 flex flex-row gap-3 justify-end sm:justify-end">
+            <Button variant="ghost" className="h-11 rounded-[14px] text-xs uppercase font-bold text-gray-500 hover:text-gray-900 hover:bg-gray-200 px-6 transition-colors" 
+              onClick={() => { 
+                setResolveModalOpen(false); 
+                setResolvingItem(null); 
+                setSelectedDestWarehouse(''); 
+              }}>
+              Cancel
+            </Button>
+            <Button 
+              className="h-11 rounded-[14px] text-xs uppercase font-bold px-6 bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-200 transition-all active:scale-95" 
+              disabled={!selectedDestWarehouse}
+              onClick={() => {
+                if (resolvingItem && selectedDestWarehouse) {
+                  handleResolveDispute(resolvingItem.id, 'destination', undefined, selectedDestWarehouse);
+                  setResolveModalOpen(false);
+                  setResolvingItem(null);
+                  setSelectedDestWarehouse('');
+                }
+              }}
+            >
+              Confirm Recovery
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* QR DIALOG (Compact) */}
       <Dialog open={!!selectedQR} onOpenChange={() => setSelectedQR(null)}>
-        <DialogContent className="sm:max-w-[360px] p-0 overflow-hidden border-none shadow-2xl">
+        <DialogContent className="sm:max-w-[360px] p-0 overflow-hidden border-none shadow-2xl rounded-3xl">
           <DialogHeader className="bg-gray-50 p-6 border-b text-center">
-            <DialogTitle className="text-lg font-bold">Transfer Key</DialogTitle>
-            <DialogDescription className="text-xs">Physical verification required at destination.</DialogDescription>
+            <DialogTitle className="text-lg font-bold text-gray-900">Transfer Key</DialogTitle>
+            <DialogDescription className="text-xs text-gray-500">Physical verification required at destination.</DialogDescription>
           </DialogHeader>
           <div className="flex flex-col items-center justify-center p-8 bg-white">
-            <div className="p-4 rounded-xl border border-gray-100 shadow-inner bg-[#fafafa] mb-6">
+            <div className="p-4 rounded-2xl border border-gray-100 shadow-sm bg-[#fafafa] mb-6">
               {selectedQR && <QRCode value={selectedQR.id} size={160} level="H" />}
             </div>
-            <p className="font-mono text-sm font-black tracking-widest text-gray-900 uppercase">{selectedQR?.transfer_number}</p>
+            <p className="font-mono text-[15px] font-black tracking-widest text-gray-900 uppercase">{selectedQR?.transfer_number}</p>
           </div>
-          <DialogFooter className="bg-gray-50 p-4 border-t flex-row gap-2">
-            <Button variant="ghost" className="flex-1 text-xs font-bold uppercase" onClick={() => setSelectedQR(null)}>Close</Button>
-            <Button className="flex-1 text-xs font-bold uppercase" onClick={() => window.open(`/transfer/voucher/${selectedQR?.id}`, '_blank')}>
-              <Printer className="w-3.5 h-3.5 mr-2" /> Print
+          <DialogFooter className="bg-gray-50 p-4 border-t flex-row gap-3">
+            <Button variant="ghost" className="flex-1 h-11 rounded-xl text-xs font-bold uppercase text-gray-600 hover:bg-gray-200" onClick={() => setSelectedQR(null)}>Close</Button>
+            <Button className="flex-1 h-11 rounded-xl text-xs font-bold uppercase bg-gray-900 text-white hover:bg-black shadow-sm" onClick={() => window.open(`/transfer/voucher/${selectedQR?.id}`, '_blank')}>
+              <Printer className="w-4 h-4 mr-2" strokeWidth={2} /> Print
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -299,16 +486,16 @@ function TransferList({ items, loading, onShowQR, type }: { items: Transfer[], l
   if (loading) {
     return (
       <div className="space-y-3">
-        {[1,2,3].map(i => <Skeleton key={i} className="h-16 w-full rounded-lg border border-gray-100" />)}
+        {[1,2,3].map(i => <Skeleton key={i} className="h-16 w-full rounded-2xl border border-gray-100 bg-white" />)}
       </div>
     )
   }
 
   if (items.length === 0) {
     return (
-      <div className="text-center py-20 bg-gray-50/50 border border-dashed rounded-xl">
-        <History className="w-10 h-10 mx-auto mb-4 text-gray-200" />
-        <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter">No transfers found in this queue</p>
+      <div className="text-center py-20 bg-gray-50/50 border border-gray-200 border-dashed rounded-2xl">
+        <History className="w-10 h-10 mx-auto mb-4 text-gray-300" strokeWidth={1.5} />
+        <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">No transfers found in this queue</p>
       </div>
     )
   }
@@ -316,14 +503,14 @@ function TransferList({ items, loading, onShowQR, type }: { items: Transfer[], l
   return (
     <>
       {/* DESKTOP TABLE VIEW */}
-      <div className="hidden md:block overflow-hidden border border-gray-200/60 rounded-xl bg-white shadow-sm">
+      <div className="hidden md:block overflow-hidden border border-gray-200/60 rounded-2xl bg-white shadow-sm">
         <Table>
-          <TableHeader className="bg-gray-50/50 border-b">
-            <TableRow>
-              <TableHead className="text-[10px] font-black uppercase text-gray-400 px-6 h-10">Identifier</TableHead>
-              <TableHead className="text-[10px] font-black uppercase text-gray-400 px-4 h-10">Timestamp</TableHead>
-              <TableHead className="text-[10px] font-black uppercase text-gray-400 px-4 h-10 text-center">Route</TableHead>
-              <TableHead className="text-[10px] font-black uppercase text-gray-400 px-4 h-10">Status</TableHead>
+          <TableHeader className="bg-gray-50/80 border-b border-gray-100">
+            <TableRow className="hover:bg-transparent border-none">
+              <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 px-6 h-12">Identifier</TableHead>
+              <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 px-4 h-12">Timestamp</TableHead>
+              <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 px-4 h-12 text-center">Route</TableHead>
+              <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 px-4 h-12">Status</TableHead>
               <TableHead className="w-[120px] text-right px-6"></TableHead>
             </TableRow>
           </TableHeader>
@@ -331,41 +518,41 @@ function TransferList({ items, loading, onShowQR, type }: { items: Transfer[], l
             {items.map((t) => {
               const isBlind = type === 'incoming' && t.status === 'in_transit';
               return (
-                <TableRow key={t.id} className="hover:bg-gray-50/50 transition-colors border-b last:border-0">
+                <TableRow key={t.id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100 last:border-0">
                   <TableCell className="px-6 py-4">
                     {isBlind ? (
-                      <span className="flex items-center text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] italic">
-                        <Lock className="w-3 h-3 mr-1.5" /> Secure Parcel
+                      <span className="flex items-center text-[10px] font-black text-gray-400 uppercase tracking-widest italic">
+                        <Lock className="w-3 h-3 mr-1.5" strokeWidth={2} /> Secure Parcel
                       </span>
                     ) : (
-                      <span className="font-mono font-bold text-xs text-gray-900">{t.transfer_number}</span>
+                      <span className="font-mono font-bold text-[13px] text-gray-900">{t.transfer_number}</span>
                     )}
                   </TableCell>
                   <TableCell className="px-4">
-                    <span className="text-[11px] font-bold text-gray-400 uppercase">{format(new Date(t.created_at), "dd MMM yy · HH:mm")}</span>
+                    <span className="text-xs font-bold text-gray-500 uppercase tracking-wider">{format(new Date(t.created_at), "dd MMM yy · HH:mm")}</span>
                   </TableCell>
                   <TableCell className="px-4">
                     <div className="flex items-center justify-center gap-3">
-                       <span className="text-[11px] font-bold text-gray-600 bg-gray-100 px-2 py-0.5 rounded">{t.from_warehouse?.name || 'Unknown'}</span>
-                       <ChevronRight className="w-3 h-3 text-gray-300" />
-                       <span className="text-[11px] font-bold text-primary bg-primary/5 px-2 py-0.5 rounded">{t.to_warehouse?.name || 'Unknown'}</span>
+                       <span className="text-[11px] font-bold text-gray-700 bg-gray-100 px-2 py-0.5 rounded-md">{t.from_warehouse?.name || 'Unknown'}</span>
+                       <ChevronRight className="w-3 h-3 text-gray-300" strokeWidth={2} />
+                       <span className="text-[11px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded-md">{t.to_warehouse?.name || 'Unknown'}</span>
                     </div>
                   </TableCell>
                   <TableCell className="px-4">
-                     <Badge variant="outline" className={`text-[9px] font-black uppercase h-5 px-1.5 ${t.status === 'completed' ? 'border-emerald-200 text-emerald-600' : 'border-gray-200 text-gray-500'}`}>
+                     <Badge variant="outline" className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-lg border-none ${t.status === 'completed' ? 'bg-emerald-50 text-emerald-600' : t.status === 'partially_received' || t.status === 'disputed' ? 'bg-red-50 text-red-600' : 'bg-gray-100 text-gray-600'}`}>
                         {t.status.replace('_', ' ')}
                      </Badge>
                   </TableCell>
                   <TableCell className="px-6 text-right">
                     <div className="flex justify-end gap-2">
                       {type === 'outgoing' && t.status === 'in_transit' && (
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-gray-900" onClick={() => onShowQR(t)}>
-                          <QrCode className="h-4 w-4" />
+                        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-900 transition-colors" onClick={() => onShowQR(t)}>
+                          <QrCode className="h-4 w-4" strokeWidth={1.5} />
                         </Button>
                       )}
                       {!isBlind && (
-                        <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-gray-900" asChild>
-                          <Link href={`/transfer/voucher/${t.id}`}><Printer className="h-4 w-4" /></Link>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-900 transition-colors" asChild>
+                          <Link href={`/transfer/voucher/${t.id}`}><Printer className="h-4 w-4" strokeWidth={1.5} /></Link>
                         </Button>
                       )}
                     </div>
@@ -382,48 +569,48 @@ function TransferList({ items, loading, onShowQR, type }: { items: Transfer[], l
         {items.map((t) => {
           const isBlind = type === 'incoming' && t.status === 'in_transit';
           return (
-            <Card key={t.id} className="shadow-sm border-gray-200/60 overflow-hidden bg-white">
+            <Card key={t.id} className="shadow-sm border-gray-200/60 overflow-hidden bg-white rounded-2xl">
               <CardContent className="p-4 space-y-4">
                 <div className="flex justify-between items-start">
                    <div className="space-y-1">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest leading-none">Reference</p>
+                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">Reference</p>
                       {isBlind ? (
-                        <span className="flex items-center text-xs font-bold text-gray-400 italic mt-1">
-                          <Lock className="w-3 h-3 mr-1" /> SECURE PARCEL
+                        <span className="flex items-center text-xs font-bold text-gray-400 italic mt-1.5">
+                          <Lock className="w-3.5 h-3.5 mr-1" strokeWidth={2} /> SECURE PARCEL
                         </span>
                       ) : (
-                        <p className="text-sm font-mono font-bold text-gray-900 mt-1">{t.transfer_number}</p>
+                        <p className="text-[15px] font-mono font-bold text-gray-900 mt-1 tracking-tight">{t.transfer_number}</p>
                       )}
                    </div>
-                   <Badge variant="outline" className={`text-[9px] font-black uppercase px-1.5 ${t.status === 'completed' ? 'border-emerald-200 text-emerald-600' : 'border-gray-200 text-gray-500'}`}>
+                   <Badge variant="outline" className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-lg border-none ${t.status === 'completed' ? 'bg-emerald-50 text-emerald-600' : t.status === 'partially_received' || t.status === 'disputed' ? 'bg-red-50 text-red-600' : 'bg-gray-100 text-gray-600'}`}>
                       {t.status.replace('_', ' ')}
                    </Badge>
                 </div>
 
-                <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 border border-gray-100">
+                <div className="flex items-center justify-between p-3.5 rounded-xl bg-gray-50 border border-gray-100">
                    <div className="text-center flex-1">
-                      <p className="text-[8px] font-black text-gray-400 uppercase mb-1">Source</p>
+                      <p className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mb-1">Source</p>
                       <p className="text-[11px] font-bold text-gray-700 truncate">{t.from_warehouse?.name || 'Unknown'}</p>
                    </div>
-                   <div className="px-2">
-                      <ChevronRight className="w-3 h-3 text-gray-300" />
+                   <div className="px-3">
+                      <ChevronRight className="w-3.5 h-3.5 text-gray-300" strokeWidth={2} />
                    </div>
                    <div className="text-center flex-1">
-                      <p className="text-[8px] font-black text-gray-400 uppercase mb-1">Destination</p>
-                      <p className="text-[11px] font-bold text-primary truncate">{t.to_warehouse?.name || 'Unknown'}</p>
+                      <p className="text-[8px] font-bold text-gray-400 uppercase tracking-widest mb-1">Destination</p>
+                      <p className="text-[11px] font-bold text-blue-600 truncate">{t.to_warehouse?.name || 'Unknown'}</p>
                    </div>
                 </div>
 
                 <div className="flex items-center justify-between gap-3 pt-1">
-                   <span className="text-[10px] font-bold text-gray-400 uppercase">{format(new Date(t.created_at), "dd MMM · HH:mm")}</span>
+                   <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">{format(new Date(t.created_at), "dd MMM · HH:mm")}</span>
                    <div className="flex gap-2">
                       {type === 'outgoing' && t.status === 'in_transit' && (
-                        <Button variant="outline" size="sm" className="h-8 px-3 text-[10px] font-bold uppercase" onClick={() => onShowQR(t)}>
-                          <QrCode className="h-3.5 w-3.5 mr-1.5" /> Key
+                        <Button variant="outline" size="sm" className="h-9 rounded-xl px-4 text-[10px] font-bold uppercase tracking-widest text-gray-600 border-gray-200" onClick={() => onShowQR(t)}>
+                          <QrCode className="h-3.5 w-3.5 mr-1.5" strokeWidth={2} /> Key
                         </Button>
                       )}
                       {!isBlind && (
-                        <Button variant="secondary" size="sm" className="h-8 px-3 text-[10px] font-bold uppercase" asChild>
+                        <Button variant="secondary" size="sm" className="h-9 rounded-xl px-4 text-[10px] font-bold uppercase tracking-widest bg-gray-100 text-gray-700 hover:bg-gray-200" asChild>
                           <Link href={`/transfer/voucher/${t.id}`}>Voucher</Link>
                         </Button>
                       )}

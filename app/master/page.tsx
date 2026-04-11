@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Button } from '@/components/ui/button'
 import { 
   Building2, 
   Warehouse, 
@@ -16,9 +17,10 @@ import {
   ChevronRight, 
   Settings2,
   ShieldCheck,
-  Activity,
   LayoutGrid,
-  Info
+  Info,
+  LayoutDashboard,
+  Database
 } from 'lucide-react'
 
 const masterMenu = [
@@ -77,93 +79,106 @@ export default function MasterPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-col h-screen bg-background">
-        <div className="h-12 border-b border-border bg-card px-4 flex items-center"><Skeleton className="h-4 w-32" /></div>
-        <div className="p-8 space-y-8 max-w-5xl mx-auto w-full">
-           <Skeleton className="h-10 w-64" />
-           <div className="grid grid-cols-3 gap-4"><Skeleton className="h-32 w-full" /><Skeleton className="h-32 w-full" /><Skeleton className="h-32 w-full" /></div>
+      <div className="flex flex-col h-screen bg-[#F8F9FA]">
+        <div className="h-14 border-b border-gray-200/60 bg-white/80 px-4 flex items-center"><Skeleton className="h-4 w-32 rounded-full bg-gray-200" /></div>
+        <div className="p-6 md:p-8 space-y-8 max-w-[1200px] mx-auto w-full">
+           <Skeleton className="h-10 w-64 rounded-2xl bg-gray-200" />
+           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 md:gap-5">
+             <Skeleton className="h-36 w-full rounded-[24px] bg-gray-200" />
+             <Skeleton className="h-36 w-full rounded-[24px] bg-gray-200 hidden sm:block" />
+             <Skeleton className="h-36 w-full rounded-[24px] bg-gray-200 hidden md:block" />
+           </div>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="flex flex-col min-h-screen bg-background">
+    <div className="flex flex-col min-h-screen bg-[#F8F9FA] font-sans">
       
-      {/* --- SYSTEM TOOLBAR --- */}
-      <header className="sticky top-0 z-40 w-full bg-card border-b border-border px-4 h-12 flex items-center justify-between shadow-sm">
-        <div className="flex items-center gap-3">
-          <Settings2 className="h-4 w-4 text-muted-foreground" />
-          <Separator orientation="vertical" className="h-4" />
-          <nav className="flex items-center gap-2 text-sm">
-            <span className="font-bold text-foreground tracking-tight uppercase text-xs">Configuration Hub</span>
+      {/* --- MINIMAL HEADER --- */}
+      <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-md border-b border-gray-200/60 px-4 h-14 flex items-center justify-between shadow-sm">
+        <div className="flex items-center gap-3 overflow-hidden">
+          <Link href="/dashboard">
+            <Button variant="ghost" size="icon" className="h-9 w-9 rounded-xl hover:bg-gray-100 text-gray-500 transition-colors">
+              <LayoutDashboard className="h-[18px] w-[18px]" strokeWidth={1.5} />
+            </Button>
+          </Link>
+          <Separator orientation="vertical" className="h-5 bg-gray-200" />
+          <nav className="flex items-center gap-1.5 text-[13px] whitespace-nowrap overflow-hidden">
+            <span className="text-gray-500 font-medium hidden sm:inline">Administration</span>
+            <ChevronRight className="h-3.5 w-3.5 text-gray-400 hidden sm:inline" strokeWidth={1.5} />
+            <span className="font-bold text-gray-900 tracking-tight">Configuration Hub</span>
           </nav>
         </div>
 
         <div className="flex items-center gap-4">
-           <div className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded border border-emerald-200/50 bg-emerald-500/5">
-              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]" />
-              <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest">Registry Sync Active</span>
+           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-emerald-200 bg-emerald-50">
+              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest">Registry Sync Active</span>
            </div>
+           {/* Mobile Indicator */}
+           <div className="sm:hidden h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-emerald-100" />
         </div>
       </header>
 
-      <main className="flex-1 p-4 md:p-10 max-w-[1200px] w-full mx-auto space-y-12 animate-in fade-in duration-500">
+      <main className="flex-1 p-4 sm:p-6 md:p-8 lg:p-10 max-w-[1200px] w-full mx-auto space-y-8 md:space-y-10 animate-in fade-in duration-500 pb-20">
         
         {/* HERO SECTION */}
-        <div className="flex flex-col md:flex-row justify-between items-start gap-6">
-           <div className="space-y-1.5">
-              <h1 className="text-2xl font-black tracking-tight text-foreground uppercase">System Registry</h1>
-              <p className="text-sm text-muted-foreground max-w-xl">Configure core operational nodes, define artisan rates, and manage the legal architecture of your business.</p>
+        <div className="flex flex-col sm:flex-row justify-between items-start gap-6">
+           <div className="space-y-1.5 md:space-y-2">
+              <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-gray-900">System Registry</h1>
+              <p className="text-[13px] text-gray-500 font-medium max-w-xl leading-relaxed">Configure core operational nodes, define artisan rates, and manage the legal architecture of your business.</p>
            </div>
            
-           <div className="flex items-center gap-3 bg-secondary/30 p-4 rounded-xl border border-border shrink-0 w-full md:w-auto">
-              <div className="h-10 w-10 rounded-lg bg-card border border-border flex items-center justify-center">
-                 <ShieldCheck className="h-5 w-5 text-emerald-600" />
+           <div className="flex items-center gap-3.5 bg-white p-3.5 md:p-4 rounded-[20px] border border-gray-200/60 shadow-sm shrink-0 w-full sm:w-auto">
+              <div className="h-10 w-10 md:h-11 md:w-11 rounded-[12px] bg-emerald-50 flex items-center justify-center border border-emerald-100 shrink-0">
+                 <ShieldCheck className="h-5 w-5 text-emerald-600" strokeWidth={2} />
               </div>
-              <div>
-                 <p className="text-[10px] font-black text-muted-foreground uppercase tracking-widest leading-none mb-1.5">Setup Health</p>
+              <div className="flex flex-col justify-center">
+                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none mb-1.5">Setup Health</p>
                  <div className="flex items-center gap-2">
-                    <span className="text-lg font-black text-foreground leading-none tracking-tight">OPERATIONAL</span>
-                    <Badge className="bg-emerald-500 text-white border-none text-[8px] h-4">v1.0.4</Badge>
+                    <span className="text-[14px] md:text-[15px] font-black text-gray-900 leading-none tracking-tight">OPERATIONAL</span>
+                    <Badge variant="outline" className="border-emerald-200 text-emerald-600 bg-emerald-50 text-[9px] font-bold uppercase tracking-widest px-1.5 py-0 hidden sm:inline-flex">v1.0.4</Badge>
                  </div>
               </div>
            </div>
         </div>
 
         {/* CATEGORY GRID */}
-        <div className="space-y-16">
+        <div className="space-y-10 md:space-y-12">
           {masterMenu.map((section, idx) => (
-            <div key={idx} className="space-y-6">
-               <div className="flex items-center gap-4">
-                  <div className="p-2 bg-secondary rounded-md border border-border">
-                    <section.icon className="h-4 w-4 text-slate-700" />
+            <div key={idx} className="space-y-4 md:space-y-5">
+               
+               {/* SECTION HEADER */}
+               <div className="flex items-center gap-3">
+                  <div className="h-7 w-7 md:h-8 md:w-8 bg-gray-100 rounded-[10px] flex items-center justify-center border border-gray-200/60 shrink-0">
+                    <section.icon className="h-3.5 w-3.5 md:h-4 md:w-4 text-gray-500" strokeWidth={2} />
                   </div>
-                  <h3 className="text-[11px] font-black uppercase tracking-[0.25em] text-foreground">{section.category}</h3>
-                  <div className="h-px flex-1 bg-border/60"></div>
+                  <h3 className="text-[10px] md:text-[11px] font-bold uppercase tracking-widest text-gray-400 truncate">{section.category}</h3>
+                  <div className="h-px flex-1 bg-gray-200/60 ml-2"></div>
                </div>
 
-               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+               {/* CARDS */}
+               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 md:gap-5">
                   {section.items.map((item) => (
-                    <Link href={item.href} key={item.title} className="group block">
-                      <Card className="h-full border-2 border-border/40 bg-card hover:border-foreground/20 hover:shadow-xl transition-all duration-200 cursor-pointer overflow-hidden rounded-sm relative active:scale-[0.98]">
-                        
-                        {/* Hover Accent */}
-                        <div className="absolute top-0 left-0 w-full h-1 bg-secondary group-hover:bg-foreground/10 transition-colors" />
-
-                        <CardContent className="p-5">
-                          <div className="flex items-start justify-between mb-4">
-                             <div className="p-2.5 bg-secondary/50 rounded border border-border group-hover:bg-foreground group-hover:text-background transition-all">
-                                <item.icon className="w-5 h-5" />
+                    <Link href={item.href} key={item.title} className="group block outline-none">
+                      <Card className="h-full border border-gray-200/60 bg-white hover:border-blue-200 hover:shadow-[0_8px_30px_rgb(0,0,0,0.04)] transition-all duration-300 cursor-pointer overflow-hidden rounded-[20px] md:rounded-[24px] active:scale-[0.98]">
+                        <CardContent className="p-4 md:p-5 lg:p-6 flex flex-col h-full">
+                          <div className="flex items-start justify-between mb-4 md:mb-5">
+                             <div className="h-9 w-9 md:h-10 md:w-10 bg-gray-50 rounded-[10px] md:rounded-[12px] flex items-center justify-center border border-gray-100 group-hover:bg-blue-50 group-hover:text-blue-600 group-hover:border-blue-100 transition-colors text-gray-500 shrink-0">
+                                <item.icon className="w-4 h-4 md:w-4.5 md:h-4.5" strokeWidth={2} />
                              </div>
-                             <ChevronRight className="w-4 h-4 text-muted-foreground/30 group-hover:text-foreground transition-all group-hover:translate-x-1" />
+                             <div className="h-8 w-8 rounded-full flex items-center justify-center bg-transparent group-hover:bg-gray-50 transition-colors shrink-0">
+                               <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-gray-900 transition-colors" strokeWidth={2} />
+                             </div>
                           </div>
                           
-                          <div className="space-y-1.5">
-                             <h4 className="text-sm font-bold text-foreground uppercase tracking-tight group-hover:text-primary transition-colors">
+                          <div className="space-y-1 md:space-y-1.5 flex-1">
+                             <h4 className="text-[14px] md:text-[15px] font-bold text-gray-900 tracking-tight group-hover:text-blue-600 transition-colors">
                                 {item.title}
                              </h4>
-                             <p className="text-[11px] leading-relaxed text-muted-foreground font-medium">
+                             <p className="text-xs md:text-[13px] leading-relaxed text-gray-500 font-medium">
                                 {item.description}
                              </p>
                           </div>
@@ -177,10 +192,12 @@ export default function MasterPage() {
         </div>
 
         {/* SYSTEM LOG HINT */}
-        <div className="flex items-start gap-3 px-5 py-4 rounded-xl bg-secondary/20 border border-border/60 mt-12">
-          <Info className="h-4 w-4 text-muted-foreground mt-0.5" />
-          <p className="text-[10px] text-muted-foreground font-bold uppercase tracking-widest leading-relaxed">
-            Registry modifications require administrative privileges. All changes to company profile or warehouse configurations are permanently recorded in the <span className="text-foreground underline underline-offset-4 decoration-border">System Audit Trail</span>.
+        <div className="flex items-start gap-3 p-4 md:p-5 rounded-[20px] bg-white border border-gray-200/60 mt-8 md:mt-10 shadow-sm">
+          <div className="h-8 w-8 rounded-full bg-blue-50 flex items-center justify-center shrink-0 border border-blue-100">
+            <Info className="h-4 w-4 text-blue-500" strokeWidth={2} />
+          </div>
+          <p className="text-[10px] md:text-[11px] text-gray-500 font-medium tracking-widest uppercase leading-relaxed pt-1 sm:pt-1.5">
+            Registry modifications require administrative privileges. All changes to company profile or warehouse configurations are permanently recorded in the <span className="text-gray-900 font-bold underline decoration-gray-300 underline-offset-4 cursor-help">System Audit Trail</span>.
           </p>
         </div>
 
