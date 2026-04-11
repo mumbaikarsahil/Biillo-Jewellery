@@ -34,13 +34,17 @@ export interface TagItemData {
   melee_weight_cts?: number | string;
   melee_pieces?: number | string;
 
-  label_1?: string | null; // e.g., Gold Quality / Hallmark info
-  label_2?: string | null; // e.g., Diamond Quality / Certification
+  label_1?: string | null; 
+  label_2?: string | null; 
+  
+  diamond_shape?: string | null;
+  diamond_color?: string | null;
+  diamond_clarity?: string | null;
 
   // Repair Specific Fields
-  mrp?: number | null; // Used for Billable Amount
-  origin_name?: string; // Used for Branch
-  expected_delivery_date?: string; // Used for Due Date
+  mrp?: number | null; 
+  origin_name?: string; 
+  expected_delivery_date?: string; 
 }
 
 interface Props {
@@ -75,6 +79,9 @@ export function ItemTagPreview({ item, onClose }: Props) {
   const isRepair = item?._type === 'repair' || item?.is_repair_ticket;
   const hasSolitaire = Number(item?.solitaire_weight_cts) > 0;
   const hasMelee = Number(item?.melee_weight_cts) > 0;
+  
+  // Combine diamond attributes if they exist
+  const diamondSpecs = [item?.diamond_shape, item?.diamond_color, item?.diamond_clarity].filter(Boolean).join('/');
 
   return (
     <Dialog open={!!item} onOpenChange={(val) => !val && onClose()}>
@@ -92,49 +99,56 @@ export function ItemTagPreview({ item, onClose }: Props) {
             
             <div className="flex w-[70mm] h-full">
               
-              {/* LEFT: TEXT DETAILS AREA */}
-              <div className="flex flex-col justify-center h-full w-[41mm] pl-[2mm] pr-[1mm]" style={{ fontSize: '6px', lineHeight: '1.25', fontWeight: '700' }}>
+              {/* LEFT: TEXT DETAILS AREA (No Labels, Bigger Font) */}
+              <div className="flex flex-col justify-center h-full w-[41mm] pl-[2mm] pr-[1mm]" style={{ fontSize: '10px', lineHeight: '1.25', fontWeight: '800' }}>
                 
                 {isRepair ? (
                   /* ================= REPAIR TAG LAYOUT ================= */
                   <>
-                    <div className="font-extrabold uppercase tracking-tight text-[7px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate text-black">
+                    <div className="uppercase tracking-tight text-[11px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate text-black">
                       REPAIR: {item?.item_category || 'SERVICE'}
                     </div>
-                    <div className="flex items-center"><span className="w-[12mm] text-gray-700">TICKET</span><span className="truncate">: {item?.barcode || '---'}</span></div>
-                    <div className="flex items-center"><span className="w-[12mm] text-gray-700">BRANCH</span><span className="truncate">: {item?.origin_name || '---'}</span></div>
-                    <div className="flex items-center">
-                      <span className="w-[12mm] text-gray-700">DUE</span>
-                      <span className="truncate">: {item?.expected_delivery_date ? new Date(item.expected_delivery_date).toLocaleDateString('en-GB') : '---'}</span>
-                    </div>
-                    <div className="flex items-center"><span className="w-[12mm] text-gray-700">ADD GLD</span><span>: {Number(item?.net_weight_g||0).toFixed(3)}g</span></div>
-                    <div className="flex items-center"><span className="w-[12mm] text-gray-700">ADD DIA</span><span>: {Number(item?.total_stone_weight_cts||0).toFixed(2)}ct</span></div>
-                    <div className="flex items-center"><span className="w-[12mm] text-gray-700">BILL</span><span>: ₹{Number(item?.mrp||0).toLocaleString()}</span></div>
+                    <div className="truncate">{item?.barcode || '---'}</div>
+                    <div className="truncate">{item?.origin_name || '---'}</div>
+                    <div>{item?.expected_delivery_date ? new Date(item.expected_delivery_date).toLocaleDateString('en-GB') : '---'}</div>
+                    <div>{Number(item?.net_weight_g||0).toFixed(3)}g</div>
+                    <div>{Number(item?.total_stone_weight_cts||0).toFixed(2)}ct</div>
+                    <div>₹{Number(item?.mrp||0).toLocaleString()}</div>
                   </>
                 ) : (
                   /* ================= STANDARD INVENTORY LAYOUT ================= */
                   <>
-                    <div className="font-extrabold uppercase tracking-tight text-[7px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate">
-                      {item?.item_category || 'CATEGORY'}
+                    {/* Category + Style Number */}
+                    <div className="uppercase tracking-tight text-[11px] font-black leading-none mb-[2px] truncate">
+                      {item?.item_category || 'CATEGORY'} {item?.sku_reference ? item.sku_reference : ''}
                     </div>
                     
-                    <div className="flex items-center"><span className="w-[10mm] text-gray-700">STYLE</span><span className="truncate">: {item?.sku_reference || '---'}</span></div>
-                    <div className="flex items-center"><span className="w-[10mm] text-gray-700">GW/NW</span><span>: {Number(item?.gross_weight_g||0).toFixed(3)}g / {Number(item?.net_weight_g||0).toFixed(3)}g</span></div>
-                    <div className="flex items-center"><span className="w-[10mm] text-gray-700">KT/QLTY</span><span className="truncate">: {item?.purity_karat || '---'} {item?.label_1 ? `| ${item.label_1}` : ''}</span></div>
+                    {/* Gross / Net / Diamond Weight */}
+                    <div className="truncate">
+                      {Number(item?.gross_weight_g||0).toFixed(3)}g / {Number(item?.net_weight_g||0).toFixed(3)}g / {Number(item?.total_stone_weight_cts||0).toFixed(2)}ct
+                    </div>
                     
-                    <div className="flex items-center"><span className="w-[10mm] text-gray-700">STN(T)</span><span>: {item?.total_stone_pieces || 0}p / {Number(item?.total_stone_weight_cts||0).toFixed(2)}ct</span></div>
+                    {/* Karat / Purity */}
+                    <div className="truncate">
+                      {item?.purity_karat || '---'} {item?.label_1 ? `| ${item.label_1}` : ''}
+                    </div>
                     
-                    {/* DYNAMIC STONE BREAKDOWN */}
-                    {hasSolitaire && (
-                      <div className="flex items-center"><span className="w-[10mm] text-gray-700">SOL</span><span>: {item?.solitaire_pieces || 0}p / {Number(item?.solitaire_weight_cts||0).toFixed(2)}ct</span></div>
+                    {/* SOL / MEL Format */}
+                    {(hasSolitaire || hasMelee) && (
+                      <div className="truncate text-[9px]">
+                        {hasSolitaire ? `SOL ${Number(item?.solitaire_weight_cts||0).toFixed(2)}(${item?.solitaire_pieces || 0}) ` : ''}
+                        {hasMelee ? `MEL ${Number(item?.melee_weight_cts||0).toFixed(2)}(${item?.melee_pieces || 0})` : ''}
+                      </div>
                     )}
-                    {hasMelee && (
-                      <div className="flex items-center"><span className="w-[10mm] text-gray-700">MEL</span><span>: {item?.melee_pieces || 0}p / {Number(item?.melee_weight_cts||0).toFixed(2)}ct</span></div>
+                    
+                    {/* Diamond Qualities */}
+                    {diamondSpecs && (
+                      <div className="truncate">{diamondSpecs}</div>
                     )}
                     
-                    {/* Only show Diamond Quality if it exists to save space */}
-                    {(item?.label_2) && (
-                      <div className="flex items-center"><span className="w-[10mm] text-gray-700">DIA</span><span className="truncate">: {item?.label_2}</span></div>
+                    {/* Fallback if diamond breakdown doesn't exist but label_2 does */}
+                    {!diamondSpecs && item?.label_2 && (
+                      <div className="truncate">{item?.label_2}</div>
                     )}
                   </>
                 )}
@@ -142,32 +156,49 @@ export function ItemTagPreview({ item, onClose }: Props) {
               </div>
 
               {/* MIDDLE FOLD GAP (5mm) */}
-              <div className="h-full w-[5mm] flex items-center justify-center border-l border-r border-dashed border-gray-200 print:border-none opacity-50">
+              <div className="h-full w-[5mm] flex items-center justify-center border-l border-r border-dashed border-gray-200 print:border-none opacity-50 shrink-0">
                 <span className="text-[4px] text-gray-300 print:hidden rotate-90 tracking-widest whitespace-nowrap">FOLD HERE</span>
               </div>
 
-              {/* RIGHT: QR CODE AREA */}
-              <div className="flex flex-col justify-center items-center h-full w-[16mm]">
-                {item?.barcode ? (
-                  <QRCode value={item.barcode} size={64} level="M" style={{ height: "14mm", width: "14mm" }} />
-                ) : (
-                  <div className="h-[14mm] w-[14mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">N/A</div>
-                )}
-              </div>
+              {/* RIGHT: QR CODE & BRANDING AREA (24mm) */}
+              <div className="flex h-full w-[24mm] justify-between items-center shrink-0 pr-[1mm]">
+                 
+                 {/* Vertical Barcode Number */}
+                 <div className="h-full w-[5mm] flex items-center justify-center">
+                   <span 
+                     className="font-black text-[7px] tracking-widest" 
+                     style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+                   >
+                     {item?.barcode || 'NO-CODE'}
+                   </span>
+                 </div>
+                 
+                 {/* QR Code */}
+                 <div className="flex flex-col justify-center items-center w-[14mm]">
+                   {item?.barcode ? (
+                     <QRCode value={item.barcode} size={64} level="M" style={{ height: "14mm", width: "14mm" }} />
+                   ) : (
+                     <div className="h-[14mm] w-[14mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">N/A</div>
+                   )}
+                 </div>
 
-              {/* RIGHTMOST: VERTICAL BRANDING */}
-              <div className="flex justify-center items-center h-full w-[8mm] bg-black text-white">
-                <h2 
-                  className="font-black uppercase tracking-widest text-[9px] leading-none" 
-                  style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
-                >
-                  PAVITRAM
-                </h2>
+                 {/* Vertical Branding (Reduced Sideways/Width) */}
+                 <div className="h-full w-[4mm] flex items-center justify-center">
+                    <div className="bg-black text-white h-full w-full flex items-center justify-center">
+                      <h2 
+                        className="font-black uppercase tracking-widest text-[7px] leading-none" 
+                        style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+                      >
+                        PAVITRAM
+                      </h2>
+                    </div>
+                 </div>
+
               </div>
             </div>
 
-            {/* TAIL AREA (Wraps around the jewelry) */}
-            <div className="w-[30mm] h-full bg-gray-50 print:bg-white border-l border-gray-200 print:border-none flex items-center justify-center">
+            {/* TAIL AREA (30mm - Wraps around the jewelry) */}
+            <div className="w-[30mm] h-full bg-gray-50 print:bg-white border-l border-gray-200 print:border-none flex items-center justify-center shrink-0">
                <span className="text-[5px] text-gray-300 print:hidden rotate-90 tracking-widest">TAIL AREA</span>
             </div>
           </div>

@@ -20,12 +20,14 @@ import {
   BookOpen,
   Database,
   GitCommit,
-  FileText
+  FileText,
+  Lock
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge"; // Ensure you have the Shadcn Badge component
 
 // --- IMPORT OUR MASTER MODULES ---
 import { OverviewDashboard } from "./components/OverviewDashboard";
@@ -57,11 +59,11 @@ const TABS_CONFIG = [
 
   // Financial & Accounting
   { id: "manual_journal", label: "Journal Entry", icon: FileEdit },
-  { id: "day_book", label: "Day Book", icon: BookOpen },
-  { id: "trial_balance", label: "Trial Balance", icon: Scale },
-  { id: "profit_loss", label: "Profit & Loss", icon: Activity },
-  { id: "balance_sheet", label: "Balance Sheet", icon: Landmark },
-  { id: "aging", label: "AR/AP Aging", icon: Clock },
+  { id: "day_book", label: "Day Book", icon: BookOpen, isComingSoon: true },
+  { id: "trial_balance", label: "Trial Balance", icon: Scale, isComingSoon: true },
+  { id: "profit_loss", label: "Profit & Loss", icon: Activity, isComingSoon: true },
+  { id: "balance_sheet", label: "Balance Sheet", icon: Landmark, isComingSoon: true },
+  { id: "aging", label: "AR/AP Aging", icon: Clock, isComingSoon: true },
 
   // Jewelry Specific & Compliance
   { id: "metal_ledger", label: "Metal Vault", icon: Database },
@@ -105,13 +107,28 @@ export default function ReportsMasterPage() {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           {/* DESKTOP VIEW: WRAPPING TABS */}
           <div className="hidden sm:block w-full pb-4 print:hidden">
-            <TabsList className="bg-transparent border-none p-0 h-auto flex flex-wrap justify-start gap-2.5 pb-1">{TABS_CONFIG.map((tab) => (
+            <TabsList className="bg-transparent border-none p-0 h-auto flex flex-wrap justify-start gap-2.5 pb-1">
+              {TABS_CONFIG.map((tab) => (
                 <TabsTrigger
                   key={tab.id}
                   value={tab.id}
-                  className="rounded-full h-9 text-xs font-bold px-4 py-0 bg-secondary/60 border border-border data-[state=active]:bg-foreground data-[state=active]:text-background data-[state=active]:shadow-md transition-all shrink-0"
+                  disabled={tab.isComingSoon}
+                  className={`
+                    relative rounded-full h-9 text-xs font-bold px-4 py-0 transition-all shrink-0 border
+                    ${tab.isComingSoon 
+                      ? "bg-secondary/40 border-dashed border-border text-muted-foreground/60 cursor-not-allowed" 
+                      : "bg-secondary/60 border-border data-[state=active]:bg-foreground data-[state=active]:text-background data-[state=active]:shadow-md"
+                    }
+                  `}
                 >
-                  <tab.icon className="w-3.5 h-3.5 mr-2" /> {tab.label}
+                  <tab.icon className={`w-3.5 h-3.5 mr-2 ${tab.isComingSoon ? "opacity-40" : ""}`} /> 
+                  {tab.label}
+                  
+                  {tab.isComingSoon && (
+                    <span className="absolute -top-2 -right-1 flex h-4 items-center rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 px-1.5 text-[8px] font-black uppercase tracking-tighter text-white shadow-sm ring-1 ring-white">
+                      Soon
+                    </span>
+                  )}
                 </TabsTrigger>
               ))}
             </TabsList>
@@ -143,21 +160,30 @@ export default function ReportsMasterPage() {
                     return (
                       <button
                         key={tab.id}
+                        disabled={tab.isComingSoon}
                         onClick={() => {
+                          if (tab.isComingSoon) return;
                           setActiveTab(tab.id);
                           setIsMobileMenuOpen(false);
                         }}
                         className={`w-full flex items-center gap-2.5 p-2.5 rounded-lg transition-colors text-left ${
                           isActive
                             ? "bg-gray-100/80 text-gray-900"
-                            : "bg-transparent text-gray-600 hover:bg-gray-50"
+                            : tab.isComingSoon 
+                              ? "opacity-50 grayscale bg-transparent text-gray-400 cursor-not-allowed" 
+                              : "bg-transparent text-gray-600 hover:bg-gray-50"
                         }`}
                       >
                         <tab.icon className={`h-3.5 w-3.5 ${isActive ? "text-gray-900" : "text-gray-400"}`} />
                         <span className={`text-xs flex-1 ${isActive ? "font-bold" : "font-medium"}`}>
                           {tab.label}
                         </span>
-                        {isActive && <div className="h-1.5 w-1.5 rounded-full bg-gray-900 mr-1" />}
+                        
+                        {tab.isComingSoon ? (
+                          <Badge variant="outline" className="text-[8px] h-4 font-black uppercase px-1 border-indigo-200 text-indigo-500">Coming Soon</Badge>
+                        ) : isActive && (
+                          <div className="h-1.5 w-1.5 rounded-full bg-gray-900 mr-1" />
+                        )}
                       </button>
                     );
                   })}
@@ -178,11 +204,17 @@ export default function ReportsMasterPage() {
 
             {/* Financial & Accounting */}
             <TabsContent value="manual_journal" className="m-0 border-none outline-none"><ManualJournalForm /></TabsContent>
-            <TabsContent value="day_book" className="m-0 border-none outline-none"><DayBookReport /></TabsContent>
-            <TabsContent value="trial_balance" className="m-0 border-none outline-none"><TrialBalanceReport /></TabsContent>
-            <TabsContent value="profit_loss" className="m-0 border-none outline-none"><ProfitAndLossReport /></TabsContent>
-            <TabsContent value="balance_sheet" className="m-0 border-none outline-none"><BalanceSheetReport /></TabsContent>
-            <TabsContent value="aging" className="m-0 border-none outline-none"><AgingDashboard /></TabsContent>
+            
+            {/* Logic: Only render content if not Coming Soon */}
+            {!currentTab.isComingSoon && (
+              <>
+                <TabsContent value="day_book" className="m-0 border-none outline-none"><DayBookReport /></TabsContent>
+                <TabsContent value="trial_balance" className="m-0 border-none outline-none"><TrialBalanceReport /></TabsContent>
+                <TabsContent value="profit_loss" className="m-0 border-none outline-none"><ProfitAndLossReport /></TabsContent>
+                <TabsContent value="balance_sheet" className="m-0 border-none outline-none"><BalanceSheetReport /></TabsContent>
+                <TabsContent value="aging" className="m-0 border-none outline-none"><AgingDashboard /></TabsContent>
+              </>
+            )}
 
             {/* Jewelry Specific & Compliance */}
             <TabsContent value="metal_ledger" className="m-0 border-none outline-none"><MetalAccountingReport /></TabsContent>

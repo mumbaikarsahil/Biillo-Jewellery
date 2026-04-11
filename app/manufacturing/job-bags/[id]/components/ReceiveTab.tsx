@@ -61,6 +61,7 @@ type ReceiveItem = {
   diamondClarity: string
   custom_order_id: string | null 
   repair_ticket_id: string | null
+  store_restock_id: string | null // NEW: Added support for Restock Requests
   is_repair: boolean
   showCustomMetal: boolean
   showCustomShape: boolean
@@ -163,7 +164,7 @@ export default function ReceiveTab({
   const loadJobBagItems = useCallback(async () => {
     setIsLoading(true)
     try {
-      // 1. Calculate EXACT Raw Materials Issued (Converting to FINE GOLD using table join!)
+      // 1. Calculate EXACT Raw Materials Issued
       const { data: gIssues, error: gError } = await supabase
         .from('job_bag_gold_issues')
         .select('issued_weight_g, inventory_gold_batches ( purity_percent )')
@@ -185,7 +186,7 @@ export default function ReceiveTab({
       
       const totalBagDia = issuedDia - returnedDia;
 
-      // 2. Calculate EXACT Consumed (Convert existing inventory items back to FINE GOLD)
+      // 2. Calculate EXACT Consumed
       const { data: invItems } = await supabase.from('inventory_items')
         .select('net_weight_g, wastage_weight_g, purity_percent, total_stone_weight_cts')
         .eq('created_from_job_bag_id', jobId);
@@ -200,10 +201,11 @@ export default function ReceiveTab({
 
       setPoolStats({ issuedFineGold: totalBagFineGold, issuedDiaCts: totalBagDia, consumedFineGold, consumedDiaCts })
 
+      // NEW: Added store_restock_id to the select query
       const { data: items, error } = await supabase
         .from('job_bag_items')
         .select(`
-          id, sku_reference, ornament_type, status, custom_order_id, repair_ticket_id, is_repair,
+          id, sku_reference, ornament_type, status, custom_order_id, repair_ticket_id, store_restock_id, is_repair,
           job_bags ( product_category )
         `)
         .eq('job_bag_id', jobId)
@@ -250,6 +252,7 @@ export default function ReceiveTab({
           diamondClarity: '',
           custom_order_id: item.custom_order_id || null, 
           repair_ticket_id: item.repair_ticket_id || null, 
+          store_restock_id: item.store_restock_id || null, // NEW: Mapping the restock ID
           is_repair: item.is_repair || false, 
           showCustomMetal: false,
           showCustomShape: false,
@@ -282,9 +285,9 @@ export default function ReceiveTab({
   const updateBatchItem = (id: string, field: keyof ReceiveItem, value: any) => {
     setReceiveItems(prev => prev.map(item => {
       if (item.job_bag_item_id !== id) return item;
-  
+ 
       const updated = { ...item, [field]: value }
-  
+ 
       if (field === 'solitairePieces' || field === 'meleePieces') {
         const solP = parseInt(field === 'solitairePieces' ? value : updated.solitairePieces) || 0;
         const melP = parseInt(field === 'meleePieces' ? value : updated.meleePieces) || 0;
@@ -389,18 +392,15 @@ export default function ReceiveTab({
     const invalidItem = selectedItems.find(i => parseFloat(i.grossWeight) <= 0 || !i.grossWeight)
     if (invalidItem) return toast.error(`Enter a valid Gross Weight for ${invalidItem.sku_reference}.`)
 
-    // 1. Calculate Fine Gold requested by the staged items based on UI Purity Dropdown
     const stagedRawGold = selectedItems.reduce((sum, item) => sum + (parseFloat(item.netWeight) || 0) + (parseFloat(item.lossWeight) || 0), 0)
     const currentPurityPct = Number(purityPercent) / 100 || 1;
     const stagedFineGoldRequired = stagedRawGold * currentPurityPct;
     
     const stagedDiaRequired = selectedItems.reduce((sum, item) => sum + (parseFloat(item.stoneWeight) || 0), 0)
 
-    // 2. Calculate Available Fine Balances
     const pendingFineGold = poolStats.issuedFineGold - poolStats.consumedFineGold;
     const availableDia = poolStats.issuedDiaCts - poolStats.consumedDiaCts;
 
-    // 3. HARD STOP: Check for Negative Reconciliation (0.01g tolerance for float math)
     if (stagedFineGoldRequired > pendingFineGold + 0.01) {
       return toast.error("CRITICAL: Negative Gold Reconciliation Prevented.", {
         description: `You are trying to receive ${stagedFineGoldRequired.toFixed(3)}g of FINE GOLD, but only ${pendingFineGold.toFixed(3)}g is available in this Job Bag. Issue more gold to the artisan first.`,
@@ -473,12 +473,14 @@ export default function ReceiveTab({
           const solP = Number(item.solitairePieces) || 0;
           const melP = Number(item.meleePieces) || 0;
           
+          // NEW: We inject the store_restock_id safely into the inventory ledger table here.
           const { error: invError } = await supabase.from('inventory_items').insert({
             company_id: companyId,
             warehouse_id: selectedWarehouseId,
             created_from_job_bag_id: jobId,
             created_from_job_bag_item_id: item.job_bag_item_id,
             custom_order_id: item.custom_order_id || null,
+            store_restock_id: item.store_restock_id || null, // FIX IMPLEMENTED HERE
             is_custom_order: !!item.custom_order_id,
             status: 'in_stock',
             metal_type: metalType,
@@ -751,6 +753,8 @@ export default function ReceiveTab({
                             <span className="font-bold text-xs text-slate-900 leading-tight">{item.sku_reference}</span>
                             {item.custom_order_id && <Badge className="bg-purple-100 text-purple-700 text-[8px] uppercase tracking-widest border-purple-200 px-1.5">Custom</Badge>}
                             {item.is_repair && <Badge className="bg-amber-100 text-amber-700 text-[8px] uppercase tracking-widest border-amber-200 px-1.5">Repair</Badge>}
+                            {/* NEW: Display the Restock badge just like the others */}
+                            {item.store_restock_id && <Badge className="bg-blue-100 text-blue-700 text-[8px] uppercase tracking-widest border-blue-200 px-1.5">Restock</Badge>}
                           </div>
                           
                           <div className="space-y-1 mb-2">
@@ -1081,10 +1085,12 @@ export default function ReceiveTab({
                         </Button>
                       </td>
                       <td className="p-3 font-medium text-xs text-foreground">
-                        <div className="font-bold">
+                        <div className="font-bold flex items-center">
                           {item.sku_reference}
                           {item.custom_order_id && <Badge className="ml-2 bg-purple-100 text-purple-700 text-[8px] uppercase tracking-widest border-purple-200">Custom</Badge>}
                           {item.is_repair && <Badge className="ml-2 bg-amber-100 text-amber-700 text-[8px] uppercase tracking-widest border-amber-200">Repair</Badge>}
+                          {/* NEW: Unselected Table Restock Badge */}
+                          {item.store_restock_id && <Badge className="ml-2 bg-blue-100 text-blue-700 text-[8px] uppercase tracking-widest border-blue-200">Restock</Badge>}
                         </div>
                         <div className="text-[10px] text-muted-foreground">{item.category}</div>
                       </td>

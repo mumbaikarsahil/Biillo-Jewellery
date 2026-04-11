@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Search, Plus, X, IndianRupee, Star, Gem } from 'lucide-react'
+import { Search, Plus, X, IndianRupee, Gem, Info } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -17,7 +17,7 @@ interface CustomerSelectorProps {
   appUser?: any 
   selectedLocation?: string
   subtotal?: number 
-  onApplyWallet?: (type: 'credit' | 'points' | 'kitty', availableAmount: number) => void 
+  onApplyWallet?: (type: 'credit' | 'kitty', availableAmount: number) => void 
 }
 
 export function CustomerSelector({ 
@@ -75,20 +75,53 @@ export function CustomerSelector({
     }
   }
 
-  // --- KITTY MATH HELPER ---
+  // --- UPDATED: FLEXIBLE KITTY MATH HELPER ---
   const handleKittyRedemption = () => {
     const monthlyAmt = Number(selectedCustomer.kitty_installment_amount) || 0;
+    const monthsPaid = Number(selectedCustomer.kitty_months_paid) || 0;
     
-    // Total is strictly 13 months (12 paid + 1 bonus) -> e.g. 13 * 5,000 = 65,000
-    const totalRedemptionValue = 13 * monthlyAmt; 
+    // Base amount is what they actually paid
+    let totalRedemptionValue = monthsPaid * monthlyAmt;
+    
+    // Add the Jeweler's Bonus ONLY if the plan is fully matured (12 months paid)
+    let bonusApplied = false;
+    if (monthsPaid === 12) {
+      totalRedemptionValue += monthlyAmt; 
+      bonusApplied = true;
+    }
 
-    // STRICT CHECK: Must check against the full 13-month value (65,000)
+    if (totalRedemptionValue <= 0) {
+      return toast.error("No kitty funds available to redeem.");
+    }
+
     if (subtotal < totalRedemptionValue) {
       toast.error(`Bill amount (₹${subtotal.toLocaleString()}) must be greater than Harvesting Value (₹${totalRedemptionValue.toLocaleString()}) to redeem.`);
       return;
     }
 
+    if (bonusApplied) {
+      toast.success("13-Month Maturity Bonus Applied!");
+    } else {
+      toast.info(`Early Redemption: Applied ${monthsPaid} months of paid value.`);
+    }
+
     onApplyWallet?.('kitty', totalRedemptionValue);
+  }
+
+  // --- UPDATED: STORE CREDIT WITH 20% DEDUCTION ---
+  const handleCreditRedemption = () => {
+    const rawCredit = Number(selectedCustomer.store_credit_balance) || 0;
+    if (rawCredit <= 0) return;
+
+    // Apply the strict 20% processing/handling fee reduction
+    const netUsableCredit = Math.floor(rawCredit * 0.80);
+    const deduction = rawCredit - netUsableCredit;
+
+    toast.info("Wallet Applied (Post-Handling Fee)", {
+      description: `Original Wallet: ₹${rawCredit.toLocaleString()} | Handling Charge (-20%): ₹${deduction.toLocaleString()} | Usable Discount: ₹${netUsableCredit.toLocaleString()}`
+    });
+
+    onApplyWallet?.('credit', netUsableCredit);
   }
 
   return (
@@ -127,7 +160,7 @@ export function CustomerSelector({
           </div>
 
           {/* --- INTERACTIVE WALLET REDEMPTION BUTTONS --- */}
-          {(Number(selectedCustomer.store_credit_balance) > 0 || Number(selectedCustomer.pavitram_points) > 0 || (selectedCustomer.customer_status === 'Kitty Member' && selectedCustomer.kitty_plan_status !== 'Redeemed')) && (
+          {(Number(selectedCustomer.store_credit_balance) > 0 || (selectedCustomer.customer_status === 'Kitty Member' && selectedCustomer.kitty_plan_status !== 'Redeemed')) && (
             <div className="flex flex-col gap-1.5 mt-3 pt-3 border-t border-slate-100 w-full">
               
               {/* 1. Kitty Plan Redeemer */}
@@ -135,15 +168,22 @@ export function CustomerSelector({
                 <div 
                   onClick={handleKittyRedemption}
                   className="flex items-center justify-between w-full bg-purple-50 border border-purple-200 rounded-sm p-2 cursor-pointer hover:bg-purple-100 transition-colors group"
-                  title="Redeem 12-Month Kitty + Bonus"
+                  title="Redeem Harvesting Plan"
                 >
-                  <div className="flex items-center gap-1.5 text-purple-700">
-                    <Gem className="w-3.5 h-3.5" />
-                    <span className="text-[10px] font-bold uppercase tracking-wider">Harvest Plan</span>
+                  <div className="flex flex-col gap-0.5 text-purple-700">
+                    <div className="flex items-center gap-1.5">
+                      <Gem className="w-3.5 h-3.5" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider">Harvest Plan</span>
+                    </div>
+                    {Number(selectedCustomer.kitty_months_paid) < 12 && (
+                       <span className="text-[8px] font-semibold text-purple-500 flex items-center gap-1">
+                         <Info className="w-2.5 h-2.5" /> Early Redemption ({selectedCustomer.kitty_months_paid} Mths)
+                       </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-[10px] font-black text-purple-700 tabular-nums">
-                      (12+1) ₹{((13) * Number(selectedCustomer.kitty_installment_amount)).toLocaleString()}
+                      ₹{((Number(selectedCustomer.kitty_months_paid) === 12 ? 13 : Number(selectedCustomer.kitty_months_paid)) * Number(selectedCustomer.kitty_installment_amount)).toLocaleString()}
                     </span>
                     <span className="bg-purple-600 text-white text-[9px] font-bold uppercase px-2 py-0.5 rounded-sm opacity-90 group-hover:opacity-100 group-hover:shadow-sm transition-all">Redeem</span>
                   </div>
@@ -153,35 +193,27 @@ export function CustomerSelector({
               {/* 2. Store Credit Redeemer */}
               {Number(selectedCustomer.store_credit_balance) > 0 && (
                 <div 
-                  onClick={() => onApplyWallet?.('credit', Number(selectedCustomer.store_credit_balance))}
+                  onClick={handleCreditRedemption}
                   className="flex items-center justify-between w-full bg-emerald-50 border border-emerald-200 rounded-sm p-2 cursor-pointer hover:bg-emerald-100 transition-colors group"
-                  title="Click to apply credit as discount"
+                  title="Click to apply credit (Note: 20% processing fee applies)"
                 >
-                  <div className="flex items-center gap-1.5 text-emerald-700">
-                    <IndianRupee className="w-3.5 h-3.5" />
-                    <span className="text-[10px] font-bold uppercase tracking-wider">Store Credit</span>
+                  <div className="flex flex-col gap-0.5 text-emerald-700">
+                    <div className="flex items-center gap-1.5">
+                      <IndianRupee className="w-3.5 h-3.5" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider">Wallet Credit</span>
+                    </div>
+                    <span className="text-[8px] font-semibold text-emerald-600 flex items-center gap-1">
+                      <Info className="w-2.5 h-2.5" /> 20% Processing Fee Applies
+                    </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-black text-emerald-700 tabular-nums">₹{Number(selectedCustomer.store_credit_balance).toLocaleString()}</span>
+                    <div className="flex flex-col items-end">
+                      <span className="text-xs font-black text-emerald-700 tabular-nums leading-none">
+                        ₹{Math.floor(Number(selectedCustomer.store_credit_balance) * 0.80).toLocaleString()}
+                      </span>
+                      <span className="text-[8px] text-emerald-500 line-through">₹{Number(selectedCustomer.store_credit_balance).toLocaleString()}</span>
+                    </div>
                     <span className="bg-emerald-600 text-white text-[9px] font-bold uppercase px-2 py-0.5 rounded-sm opacity-90 group-hover:opacity-100 group-hover:shadow-sm transition-all">Redeem</span>
-                  </div>
-                </div>
-              )}
-
-              {/* 3. Loyalty Points Redeemer */}
-              {Number(selectedCustomer.pavitram_points) > 0 && (
-                <div 
-                  onClick={() => onApplyWallet?.('points', Number(selectedCustomer.pavitram_points))}
-                  className="flex items-center justify-between w-full bg-amber-50 border border-amber-200 rounded-sm p-2 cursor-pointer hover:bg-amber-100 transition-colors group"
-                  title="Click to apply points as discount"
-                >
-                  <div className="flex items-center gap-1.5 text-amber-700">
-                    <Star className="w-3.5 h-3.5" />
-                    <span className="text-[10px] font-bold uppercase tracking-wider">Pavitram Points</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-black text-amber-700 tabular-nums">{Number(selectedCustomer.pavitram_points).toLocaleString()} Pts</span>
-                    <span className="bg-amber-500 text-white text-[9px] font-bold uppercase px-2 py-0.5 rounded-sm opacity-90 group-hover:opacity-100 group-hover:shadow-sm transition-all">Redeem</span>
                   </div>
                 </div>
               )}
@@ -225,8 +257,7 @@ export function CustomerSelector({
                   <span className="font-semibold text-xs text-slate-700">{c.full_name}</span>
                   <div className="flex gap-1 mt-0.5">
                     <span className="text-[10px] font-mono text-slate-500">{c.phone}</span>
-                    {Number(c.store_credit_balance) > 0 && <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded-sm ml-1">₹Credit</span>}
-                    {Number(c.pavitram_points) > 0 && <span className="text-[9px] font-bold text-amber-600 bg-amber-50 px-1 rounded-sm ml-0.5">Pts</span>}
+                    {Number(c.store_credit_balance) > 0 && <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded-sm ml-1">Credits</span>}
                     {c.customer_status === 'Kitty Member' && c.kitty_plan_status !== 'Redeemed' && <span className="text-[9px] font-bold text-purple-600 bg-purple-50 px-1 rounded-sm ml-0.5">Kitty</span>}
                   </div>
                 </div>

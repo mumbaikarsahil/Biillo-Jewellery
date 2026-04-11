@@ -1,4 +1,4 @@
-'use client'
+"use client"
 
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
@@ -19,7 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Trash2, Plus, Save, ListPlus, AlertCircle, Hammer, Wrench, Check, ArrowLeft } from 'lucide-react'
+import { Trash2, Plus, Save, ListPlus, AlertCircle, Hammer, Wrench, Check, ArrowLeft, Box, LayoutGrid, Loader2 } from 'lucide-react'
 
 interface Props {
   job: JobBag
@@ -33,6 +33,7 @@ type DraftItem = {
   expected_diamond_weight_cts: string
   custom_order_id?: string
   repair_ticket_id?: string
+  store_restock_id?: string
   is_repair?: boolean
 }
 
@@ -44,9 +45,11 @@ export default function OverviewTab({ job }: Props) {
   const searchParams = useSearchParams()
   const customOrderId = searchParams.get('custom_order')
   const repairTicketId = searchParams.get('repair_ticket')
+  const storeRestockId = searchParams.get('store_restock')
   
   const [activeCustomOrderId, setActiveCustomOrderId] = useState<string | null>(null)
   const [activeRepairTicketId, setActiveRepairTicketId] = useState<string | null>(null)
+  const [activeStoreRestockId, setActiveStoreRestockId] = useState<string | null>(null)
 
   const [draftItems, setDraftItems] = useState<DraftItem[]>([])
   const [isSaving, setIsSaving] = useState(false)
@@ -58,7 +61,7 @@ export default function OverviewTab({ job }: Props) {
   const [expectedGold, setExpectedGold] = useState('')
   const [expectedDiamond, setExpectedDiamond] = useState('')
 
-  // --- NEW: CATEGORY & SKU AUTOCOMPLETE STATE ---
+  // --- CATEGORY & SKU AUTOCOMPLETE STATE ---
   const [categories, setCategories] = useState<string[]>([
     'Ring', 'Necklace', 'Earrings', 'Bracelet', 'Bangle', 'Pendant', 'Chain', 'Mangalsutra'
   ])
@@ -72,9 +75,8 @@ export default function OverviewTab({ job }: Props) {
     fetchExistingCategories()
   }, [job.id])
 
-  // --- NEW: FETCH CATEGORIES ON MOUNT ---
+  // --- FETCH CATEGORIES ON MOUNT ---
   const fetchExistingCategories = async () => {
-    // Fetch recent categories from existing items to populate dropdown dynamically
     const { data } = await supabase
       .from('job_bag_items')
       .select('ornament_type')
@@ -82,7 +84,6 @@ export default function OverviewTab({ job }: Props) {
       .limit(300)
     
     if (data) {
-      // Deduplicate and filter out empty strings
       const uniqueCategories = Array.from(new Set(data.map(d => d.ornament_type))).filter(Boolean) as string[]
       setCategories(prev => {
         const combined = new Set([...prev, ...uniqueCategories])
@@ -91,7 +92,7 @@ export default function OverviewTab({ job }: Props) {
     }
   }
 
-  // --- NEW: FETCH SKU SUGGESTIONS ---
+  // --- FETCH SKU SUGGESTIONS ---
   const handleSkuSearch = async (val: string) => {
     setSkuReference(val)
     if (val.length < 2) {
@@ -136,7 +137,7 @@ export default function OverviewTab({ job }: Props) {
       }
       fetchCustomOrderDetails()
     }
-  }, [customOrderId, toast])
+  }, [customOrderId])
 
   useEffect(() => {
     if (repairTicketId) {
@@ -160,7 +161,35 @@ export default function OverviewTab({ job }: Props) {
       }
       fetchRepairDetails()
     }
-  }, [repairTicketId, toast])
+  }, [repairTicketId])
+
+  useEffect(() => {
+    if (storeRestockId) {
+      const fetchRestockDetails = async () => {
+        const { data, error } = await supabase
+          .from('branch_restock_requests')
+          .select('*')
+          .eq('id', storeRestockId)
+          .single()
+
+        if (!error && data) {
+          setSkuReference(data.sku_reference || data.design_reference || '')
+          setOrnamentType(data.item_category || data.category || 'Restock')
+          setExpectedGold(data.expected_gold_g?.toString() || '')
+          setExpectedDiamond(data.expected_diamond_cts?.toString() || '')
+          setActiveStoreRestockId(data.id)
+          
+          const cat = data.item_category || data.category
+          if (cat && !categories.includes(cat)) {
+            setCategories(prev => [...prev, cat])
+          }
+
+          toast({ title: "Store Restock Loaded", description: "Restock specifications have been populated in the grid." })
+        }
+      }
+      fetchRestockDetails()
+    }
+  }, [storeRestockId])
 
   const fetchItems = async () => {
     try {
@@ -201,6 +230,7 @@ export default function OverviewTab({ job }: Props) {
         expected_diamond_weight_cts: expectedDiamond,
         custom_order_id: activeCustomOrderId || undefined,
         repair_ticket_id: activeRepairTicketId || undefined,
+        store_restock_id: activeStoreRestockId || undefined,
         is_repair: !!activeRepairTicketId
       })
     }
@@ -209,6 +239,7 @@ export default function OverviewTab({ job }: Props) {
     
     setActiveCustomOrderId(null)
     setActiveRepairTicketId(null)
+    setActiveStoreRestockId(null)
     setSkuReference('')
     setQuantity('1')
   }
@@ -236,6 +267,7 @@ export default function OverviewTab({ job }: Props) {
         expected_diamond_weight_cts: draft.expected_diamond_weight_cts ? parseFloat(draft.expected_diamond_weight_cts) : null,
         custom_order_id: draft.custom_order_id || null,
         repair_ticket_id: draft.repair_ticket_id || null,
+        store_restock_id: draft.store_restock_id || null,
         is_repair: draft.is_repair || false,
         status: 'pending'
       }))
@@ -253,10 +285,15 @@ export default function OverviewTab({ job }: Props) {
         await supabase.from('repair_tickets').update({ status: 'in_repair' }).in('id', linkedRepairIds)
       }
 
+      const linkedRestockIds = draftItems.filter(d => d.store_restock_id).map(d => d.store_restock_id)
+      if (linkedRestockIds.length > 0) {
+        await supabase.from('branch_restock_requests').update({ status: 'in_production' }).in('id', linkedRestockIds)
+      }
+
       toast({ title: "Success", description: `Added ${draftItems.length} items to job bag.` })
       setDraftItems([])
       fetchItems()
-      fetchExistingCategories() // Refresh categories after saving
+      fetchExistingCategories() 
       
       window.history.replaceState(null, '', window.location.pathname)
 
@@ -284,90 +321,107 @@ export default function OverviewTab({ job }: Props) {
     }
   }
 
+  // UI Theme Logic based on active loaded items
   const isCustomLoaded = !!activeCustomOrderId;
   const isRepairLoaded = !!activeRepairTicketId;
-  const cardBorderClass = isCustomLoaded ? 'border-purple-300 ring-2 ring-purple-100' : isRepairLoaded ? 'border-amber-300 ring-2 ring-amber-100' : 'border-primary/20';
-  const headerBgClass = isCustomLoaded ? 'bg-purple-50/80 border-purple-200' : isRepairLoaded ? 'bg-amber-50/80 border-amber-200' : 'bg-primary/5 border-primary/10';
-  const headerIconClass = isCustomLoaded ? 'text-purple-800' : isRepairLoaded ? 'text-amber-800' : 'text-primary';
-  const formBgClass = (isCustomLoaded || isRepairLoaded) ? 'bg-white/50' : 'bg-muted/10';
-  const buttonClass = isCustomLoaded ? 'bg-purple-600 hover:bg-purple-700' : isRepairLoaded ? 'bg-amber-600 hover:bg-amber-700 text-white' : '';
+  const isRestockLoaded = !!activeStoreRestockId;
+
+  const cardBorderClass = isCustomLoaded ? 'border-purple-200' : isRepairLoaded ? 'border-amber-200' : isRestockLoaded ? 'border-blue-200' : 'border-gray-200/60';
+  const buttonClass = isCustomLoaded ? 'bg-purple-600 hover:bg-purple-700 text-white' : isRepairLoaded ? 'bg-amber-600 hover:bg-amber-700 text-white' : isRestockLoaded ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-900 hover:bg-gray-800 text-white';
 
   return (
     <div className="space-y-6">
       
-      <Card>
-        <CardContent className="p-6 space-y-4">
-          <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold">Job Bag: {job.job_bag_number}</h2>
-            <Badge>{job.status}</Badge>
+      {/* HEADER METADATA CARD */}
+      <Card className="shadow-sm border-gray-200/60 rounded-2xl overflow-hidden bg-white">
+        <CardContent className="p-5 sm:p-6">
+          <div className="flex justify-between items-center mb-5 border-b border-gray-100 pb-4">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">Job Bag Reference</p>
+              <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">{job.job_bag_number}</h2>
+            </div>
+            <Badge variant="secondary" className="bg-gray-100 text-gray-600 uppercase tracking-widest text-[10px] font-bold px-2.5 py-1 rounded-lg">
+              {job.status}
+            </Badge>
           </div>
 
-          <div className="grid md:grid-cols-4 gap-4 text-sm mt-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Product Category</p>
-              <p className="font-medium mt-1">{job.product_category || '-'}</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Category</p>
+              <p className="text-sm font-semibold text-gray-800">{job.product_category || 'Unspecified'}</p>
             </div>
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Design Code</p>
-              <p className="font-medium mt-1">{job.design_code || '-'}</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Design Code</p>
+              <p className="text-sm font-semibold text-gray-800">{job.design_code || 'N/A'}</p>
             </div>
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Total Expected Gold</p>
-              <p className="font-medium mt-1">{job.gold_expected_weight_g || 0} g</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Est. Gold</p>
+              <p className="text-sm font-semibold text-gray-800">{job.gold_expected_weight_g || 0} <span className="text-gray-400 font-medium">g</span></p>
             </div>
             <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Total Expected Diamond</p>
-              <p className="font-medium mt-1">{job.diamond_expected_weight_cts || 0} cts</p>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Est. Diamond</p>
+              <p className="text-sm font-semibold text-gray-800">{job.diamond_expected_weight_cts || 0} <span className="text-gray-400 font-medium">cts</span></p>
             </div>
           </div>
         </CardContent>
       </Card>
 
-      <Card className={`shadow-sm overflow-visible ${cardBorderClass}`}>
-        <CardHeader className={`py-4 border-b flex flex-row items-center justify-between ${headerBgClass}`}>
-          <CardTitle className={`text-sm flex items-center gap-2 ${headerIconClass}`}>
-            <ListPlus className="w-4 h-4" />
+      {/* FAST SKU ENTRY CARD */}
+      <Card className={`shadow-sm overflow-visible rounded-2xl bg-white transition-colors border ${cardBorderClass}`}>
+        <CardHeader className="py-4 px-5 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gray-50/50">
+          <CardTitle className="text-[13px] font-bold text-gray-700 flex items-center gap-2">
+            <LayoutGrid className="w-4 h-4 text-gray-400" strokeWidth={2} />
             Fast SKU Entry Grid
           </CardTitle>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {isCustomLoaded && (
-              <Badge className="bg-purple-600 text-white font-bold tracking-widest uppercase text-[10px] flex items-center gap-1.5">
-                <Hammer className="w-3 h-3"/> Custom Order Loaded
+              <Badge variant="secondary" className="bg-purple-50 text-purple-700 border-purple-200/50 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg flex items-center gap-1.5">
+                <Hammer className="w-3 h-3" strokeWidth={2}/> Custom Order Linked
               </Badge>
             )}
             {isRepairLoaded && (
-              <Badge className="bg-amber-600 text-white font-bold tracking-widest uppercase text-[10px] flex items-center gap-1.5">
-                <Wrench className="w-3 h-3"/> Repair Ticket Loaded
+              <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-200/50 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg flex items-center gap-1.5">
+                <Wrench className="w-3 h-3" strokeWidth={2}/> Repair Ticket Linked
+              </Badge>
+            )}
+            {isRestockLoaded && (
+              <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200/50 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg flex items-center gap-1.5">
+                <Box className="w-3 h-3" strokeWidth={2}/> Restock Linked
               </Badge>
             )}
           </div>
         </CardHeader>
         <CardContent className="p-0 overflow-visible">
           
-          <form onSubmit={handleAddDrafts} className={`flex flex-wrap md:flex-nowrap items-end gap-3 p-4 border-b overflow-visible ${formBgClass}`}>
+          <form onSubmit={handleAddDrafts} className="flex flex-col md:flex-row md:items-end gap-3 p-5 border-b border-gray-100 overflow-visible">
+            
             <div className="w-full md:w-20 space-y-1.5">
-              <Label className="text-[10px] font-bold uppercase text-muted-foreground">Qty</Label>
-              <Input type="number" min="1" required className="h-9 text-xs font-bold bg-white" value={quantity} onChange={(e) => setQuantity(e.target.value)} />
+              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Qty</Label>
+              <Input 
+                type="number" min="1" required 
+                className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all" 
+                value={quantity} 
+                onChange={(e) => setQuantity(e.target.value)} 
+              />
             </div>
             
-            {/* --- NEW: SKU AUTOCOMPLETE FIELD --- */}
             <div className="w-full md:flex-1 space-y-1.5 relative">
-              <Label className="text-[10px] font-bold uppercase text-muted-foreground">Base SKU / Style *</Label>
+              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Base SKU / Style <span className="text-red-400">*</span></Label>
               <Input 
                 required 
                 placeholder="e.g. RNG-101" 
-                className="h-9 text-xs bg-white" 
+                className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all font-mono uppercase" 
                 value={skuReference} 
                 onChange={(e) => handleSkuSearch(e.target.value)} 
                 onFocus={() => setShowSkuSuggestions(true)}
                 onBlur={() => setTimeout(() => setShowSkuSuggestions(false), 200)}
               />
               {showSkuSuggestions && skuSuggestions.length > 0 && (
-                <div className="absolute top-full left-0 w-full mt-1 bg-white border border-slate-200 shadow-xl rounded-md z-50 max-h-48 overflow-y-auto">
+                <div className="absolute top-full left-0 w-full mt-2 bg-white border border-gray-200 shadow-xl rounded-xl z-50 max-h-48 overflow-y-auto p-1">
                   {skuSuggestions.map(sku => (
                     <div 
                       key={sku} 
-                      className="px-3 py-2 text-xs font-medium hover:bg-primary/10 hover:text-primary cursor-pointer border-b border-slate-50 last:border-0"
+                      className="px-3 py-2.5 text-sm font-medium hover:bg-gray-50 hover:text-blue-600 cursor-pointer rounded-lg transition-colors"
                       onClick={() => {
                         setSkuReference(sku)
                         setSkuSuggestions([])
@@ -381,9 +435,8 @@ export default function OverviewTab({ job }: Props) {
               )}
             </div>
 
-            {/* --- NEW: CATEGORY SELECTOR FIELD --- */}
             <div className="w-full md:flex-1 space-y-1.5">
-              <Label className="text-[10px] font-bold uppercase text-muted-foreground">Type</Label>
+              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Category Type</Label>
               {!showCustomType ? (
                 <Select value={ornamentType} onValueChange={(val) => {
                   if (val === 'NEW') {
@@ -393,26 +446,25 @@ export default function OverviewTab({ job }: Props) {
                     setOrnamentType(val)
                   }
                 }}>
-                  <SelectTrigger className="h-9 text-xs bg-white border-slate-200">
-                    <SelectValue placeholder="Category..." />
+                  <SelectTrigger className="h-10 rounded-xl text-sm font-medium bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all">
+                    <SelectValue placeholder="Select..." />
                   </SelectTrigger>
-                  <SelectContent>
-                    {categories.map(c => <SelectItem key={c} value={c} className="text-xs">{c}</SelectItem>)}
-                    <SelectItem value="NEW" className="text-xs font-bold text-primary">+ Add New Category</SelectItem>
+                  <SelectContent className="rounded-xl shadow-xl border-gray-100 p-1">
+                    {categories.map(c => <SelectItem key={c} value={c} className="text-sm font-medium rounded-lg py-2 cursor-pointer">{c}</SelectItem>)}
+                    <SelectItem value="NEW" className="text-sm font-bold text-blue-600 rounded-lg py-2 cursor-pointer">+ Add Custom Type</SelectItem>
                   </SelectContent>
                 </Select>
               ) : (
-                <div className="flex gap-1 h-9">
+                <div className="flex gap-1.5 h-10">
                   <Input 
-                    autoFocus
-                    placeholder="New Category Name" 
-                    className="h-9 text-xs bg-white border-primary" 
+                    placeholder="Custom Type" 
+                    className="h-10 rounded-xl text-sm font-medium bg-white border-blue-300 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all" 
                     value={ornamentType} 
                     onChange={(e) => setOrnamentType(e.target.value)} 
                   />
                   <Button 
                     type="button" 
-                    className="h-9 w-9 shrink-0 bg-primary text-primary-foreground hover:bg-primary/90" 
+                    className="h-10 w-10 shrink-0 bg-blue-600 text-white hover:bg-blue-700 rounded-xl shadow-sm" 
                     size="icon" 
                     onClick={() => {
                       setShowCustomType(false);
@@ -421,78 +473,88 @@ export default function OverviewTab({ job }: Props) {
                       }
                     }}
                   >
-                    <Check className="h-4 w-4" />
+                    <Check className="h-4 w-4" strokeWidth={2.5} />
                   </Button>
                   <Button 
                     type="button" 
                     variant="ghost"
-                    className="h-9 w-9 shrink-0 text-slate-400" 
+                    className="h-10 w-10 shrink-0 text-gray-400 rounded-xl hover:bg-gray-100" 
                     size="icon" 
                     onClick={() => {
                       setShowCustomType(false);
                       setOrnamentType('');
                     }}
                   >
-                    <ArrowLeft className="h-4 w-4" />
+                    <ArrowLeft className="h-4 w-4" strokeWidth={2} />
                   </Button>
                 </div>
               )}
             </div>
 
             <div className="w-full md:w-32 space-y-1.5">
-              <Label className="text-[10px] font-bold uppercase text-muted-foreground">Exp. Gold (g)</Label>
-              <Input type="number" step="0.001" placeholder="0.000" className="h-9 text-xs bg-white" value={expectedGold} onChange={(e) => setExpectedGold(e.target.value)} />
+              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Exp. Gold</Label>
+              <div className="relative">
+                <Input type="number" step="0.001" placeholder="0.00" className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all pr-6" value={expectedGold} onChange={(e) => setExpectedGold(e.target.value)} />
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-gray-400">g</span>
+              </div>
             </div>
             <div className="w-full md:w-32 space-y-1.5">
-              <Label className="text-[10px] font-bold uppercase text-muted-foreground">Exp. Dia (ct)</Label>
-              <Input type="number" step="0.001" placeholder="0.000" className="h-9 text-xs bg-white" value={expectedDiamond} onChange={(e) => setExpectedDiamond(e.target.value)} />
+              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Exp. Dia</Label>
+              <div className="relative">
+                <Input type="number" step="0.01" placeholder="0.00" className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all pr-6" value={expectedDiamond} onChange={(e) => setExpectedDiamond(e.target.value)} />
+                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-gray-400">ct</span>
+              </div>
             </div>
-            <Button type="submit" className={`w-full md:w-auto h-9 text-xs font-bold ${buttonClass}`}>
-              <Plus className="w-4 h-4 mr-1" /> Add to Grid
+            <Button type="submit" className={`w-full md:w-auto h-10 px-5 rounded-xl text-[13px] font-bold shadow-sm transition-all active:scale-95 ${buttonClass}`}>
+              <Plus className="w-4 h-4 mr-1.5" strokeWidth={2} /> Stage
             </Button>
           </form>
 
+          {/* DRAFT ITEMS GRID */}
           {draftItems.length > 0 && (
-            <div className="p-0 animate-in fade-in slide-in-from-top-2">
-              <div className="max-h-[300px] overflow-y-auto">
+            <div className="p-0 animate-in fade-in duration-300">
+              <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
                 <Table>
-                  <TableHeader className="bg-secondary/40 sticky top-0">
-                    <TableRow>
-                      <TableHead className="w-[40px]"></TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">SKU / Style</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Ornament Type</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Exp. Gold (g)</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Exp. Dia (ct)</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Tags</TableHead>
+                  <TableHeader className="bg-gray-50/50 sticky top-0 z-10 backdrop-blur-md">
+                    <TableRow className="border-gray-200/60 hover:bg-transparent">
+                      <TableHead className="w-[50px]"></TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">SKU / Style Ref</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Category</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Gold (g)</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Dia (ct)</TableHead>
+                      <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Context Tags</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {draftItems.map((draft) => (
-                      <TableRow key={draft.id} className={draft.is_repair ? "bg-amber-50/20" : draft.custom_order_id ? "bg-purple-50/20" : "bg-slate-50/50"}>
-                        <TableCell className="p-2">
-                          <Button type="button" variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-red-500" onClick={() => removeDraftItem(draft.id)}>
-                            <Trash2 className="w-3.5 h-3.5" />
+                      <TableRow key={draft.id} className={draft.is_repair ? "bg-amber-50/30" : draft.custom_order_id ? "bg-purple-50/30" : draft.store_restock_id ? "bg-blue-50/30" : "bg-white hover:bg-gray-50/50 border-gray-100"}>
+                        <TableCell className="p-2 text-center">
+                          <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors" onClick={() => removeDraftItem(draft.id)}>
+                            <Trash2 className="w-4 h-4" strokeWidth={1.5} />
                           </Button>
                         </TableCell>
                         <TableCell className="p-2">
-                          <Input className="h-8 text-xs font-semibold bg-white border-border/50" value={draft.sku_reference} onChange={(e) => updateDraftItem(draft.id, 'sku_reference', e.target.value)} />
+                          <Input className="h-9 rounded-lg text-xs font-bold bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.sku_reference} onChange={(e) => updateDraftItem(draft.id, 'sku_reference', e.target.value)} />
                         </TableCell>
                         <TableCell className="p-2">
-                          <Input className="h-8 text-xs bg-white border-border/50" value={draft.ornament_type} onChange={(e) => updateDraftItem(draft.id, 'ornament_type', e.target.value)} />
+                          <Input className="h-9 rounded-lg text-xs font-medium bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.ornament_type} onChange={(e) => updateDraftItem(draft.id, 'ornament_type', e.target.value)} />
                         </TableCell>
                         <TableCell className="p-2">
-                          <Input type="number" step="0.001" className="h-8 text-xs bg-white border-border/50" value={draft.expected_gold_weight_g} onChange={(e) => updateDraftItem(draft.id, 'expected_gold_weight_g', e.target.value)} />
+                          <Input type="number" step="0.001" className="h-9 rounded-lg text-xs font-medium bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.expected_gold_weight_g} onChange={(e) => updateDraftItem(draft.id, 'expected_gold_weight_g', e.target.value)} />
                         </TableCell>
                         <TableCell className="p-2">
-                          <Input type="number" step="0.001" className="h-8 text-xs bg-white border-border/50" value={draft.expected_diamond_weight_cts} onChange={(e) => updateDraftItem(draft.id, 'expected_diamond_weight_cts', e.target.value)} />
+                          <Input type="number" step="0.001" className="h-9 rounded-lg text-xs font-medium bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.expected_diamond_weight_cts} onChange={(e) => updateDraftItem(draft.id, 'expected_diamond_weight_cts', e.target.value)} />
                         </TableCell>
                         <TableCell className="p-2">
-                          <div className="flex gap-1">
+                          <div className="flex flex-wrap gap-1.5">
                             {draft.custom_order_id && (
-                              <Badge className="bg-purple-100 text-purple-700 text-[9px] uppercase tracking-widest border-purple-200">Custom</Badge>
+                              <Badge variant="secondary" className="bg-purple-50 text-purple-700 text-[9px] uppercase tracking-widest font-bold border-purple-200/60 px-2 rounded-md">Custom</Badge>
                             )}
                             {draft.is_repair && (
-                              <Badge className="bg-amber-100 text-amber-700 text-[9px] uppercase tracking-widest border-amber-200">Repair</Badge>
+                              <Badge variant="secondary" className="bg-amber-50 text-amber-700 text-[9px] uppercase tracking-widest font-bold border-amber-200/60 px-2 rounded-md">Repair</Badge>
+                            )}
+                            {draft.store_restock_id && (
+                              <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-[9px] uppercase tracking-widest font-bold border-blue-200/60 px-2 rounded-md">Restock</Badge>
                             )}
                           </div>
                         </TableCell>
@@ -501,10 +563,11 @@ export default function OverviewTab({ job }: Props) {
                   </TableBody>
                 </Table>
               </div>
-              <div className="p-4 bg-primary/5 border-t border-primary/10 flex justify-between items-center">
-                <p className="text-xs font-medium text-primary flex items-center"><AlertCircle className="w-3.5 h-3.5 mr-1.5" /> {draftItems.length} uncommitted item(s) in grid.</p>
-                <Button onClick={saveDraftsToDatabase} disabled={isSaving} className="h-9 text-xs font-bold shadow-md">
-                  <Save className="w-4 h-4 mr-2" /> Commit {draftItems.length} Items to Job Bag
+              <div className="p-4 bg-gray-50/50 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-4">
+                <p className="text-xs font-semibold text-gray-500 flex items-center"><AlertCircle className="w-4 h-4 mr-1.5 text-gray-400" strokeWidth={1.5} /> {draftItems.length} uncommitted item(s) in staging grid.</p>
+                <Button onClick={saveDraftsToDatabase} disabled={isSaving} className="h-10 px-6 rounded-xl text-[13px] font-bold shadow-sm bg-gray-900 text-white hover:bg-gray-800 transition-all w-full sm:w-auto">
+                  {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" strokeWidth={2} />} 
+                  Commit to Job Bag
                 </Button>
               </div>
             </div>
@@ -512,69 +575,84 @@ export default function OverviewTab({ job }: Props) {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm">Committed Job Bag SKUs</CardTitle>
+      {/* COMMITTED SKUS LIST */}
+      <Card className="shadow-sm border-gray-200/60 rounded-2xl overflow-hidden bg-white">
+        <CardHeader className="py-4 px-5 border-b border-gray-100 bg-white">
+          <CardTitle className="text-[13px] font-bold text-gray-800">Committed Job Bag SKUs</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {isLoading ? (
-            <p className="text-sm text-muted-foreground text-center py-4">Loading items...</p>
+            <p className="text-sm font-medium text-gray-400 text-center py-8">Loading items...</p>
           ) : items.length === 0 ? (
-            <div className="text-center py-10 border-2 border-dashed rounded-lg bg-muted/5">
-              <p className="text-sm text-muted-foreground">No items in this job bag yet.</p>
-              <p className="text-xs text-muted-foreground mt-1">Use the fast entry grid above to add SKUs.</p>
+            <div className="text-center py-12 bg-gray-50/30">
+              <div className="h-12 w-12 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-3">
+                 <ListPlus className="w-6 h-6 text-gray-300" strokeWidth={1.5} />
+              </div>
+              <p className="text-sm font-bold text-gray-600">No items committed yet.</p>
+              <p className="text-xs font-medium text-gray-400 mt-1">Use the fast entry grid above to stage and add SKUs.</p>
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">SKU Reference</TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Type</TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground text-right">Exp Gold</TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground text-right">Exp Dia</TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">Status / Tags</TableHead>
-                  <TableHead className="w-[50px]"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {items.map((item: any) => (
-                  <TableRow key={item.id}>
-                    <TableCell className="font-bold text-xs">{item.sku_reference}</TableCell>
-                    <TableCell className="text-xs">{item.ornament_type || '-'}</TableCell>
-                    <TableCell className="text-xs text-right text-amber-600 font-medium">
-                      {item.expected_gold_weight_g ? `${item.expected_gold_weight_g} g` : '-'}
-                    </TableCell>
-                    <TableCell className="text-xs text-right text-blue-600 font-medium">
-                      {item.expected_diamond_weight_cts ? `${item.expected_diamond_weight_cts} cts` : '-'}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        <Badge variant={item.status === 'pending' ? 'outline' : 'secondary'} className="text-[10px] uppercase">
-                          {item.status}
-                        </Badge>
-                        {item.custom_order_id && (
-                          <Badge className="bg-purple-100 text-purple-700 text-[9px] uppercase tracking-widest border-purple-200">
-                            Custom
-                          </Badge>
-                        )}
-                        {item.is_repair && (
-                          <Badge className="bg-amber-100 text-amber-700 text-[9px] uppercase tracking-widest border-amber-200">
-                            Repair
-                          </Badge>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {item.status === 'pending' && (
-                        <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-red-500" onClick={() => deleteSavedItem(item.id, item.status)}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                      )}
-                    </TableCell>
+            <div className="overflow-x-auto custom-scrollbar">
+              <Table>
+                <TableHeader className="bg-gray-50/80">
+                  <TableRow className="border-gray-200/60 hover:bg-transparent">
+                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 px-5">SKU Reference</TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Category</TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Gold</TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Dia</TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Status / Tags</TableHead>
+                    <TableHead className="w-[60px] h-11"></TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {items.map((item: any) => (
+                    <TableRow key={item.id} className="hover:bg-gray-50/50 border-gray-100 transition-colors">
+                      <TableCell className="px-5 py-3.5">
+                        <div className="font-mono font-bold text-[13px] text-gray-900">{item.sku_reference}</div>
+                      </TableCell>
+                      <TableCell className="py-3.5">
+                        <div className="text-[13px] font-medium text-gray-700">{item.ornament_type || '-'}</div>
+                      </TableCell>
+                      <TableCell className="text-[13px] text-right font-semibold text-gray-700 py-3.5">
+                        {item.expected_gold_weight_g ? `${item.expected_gold_weight_g} g` : '-'}
+                      </TableCell>
+                      <TableCell className="text-[13px] text-right font-semibold text-gray-700 py-3.5">
+                        {item.expected_diamond_weight_cts ? `${item.expected_diamond_weight_cts} cts` : '-'}
+                      </TableCell>
+                      <TableCell className="py-3.5">
+                        <div className="flex flex-wrap gap-1.5">
+                          <Badge variant={item.status === 'pending' ? 'outline' : 'secondary'} className="text-[9px] font-bold uppercase tracking-widest px-2 rounded-md bg-gray-50 text-gray-600 border-gray-200">
+                            {item.status}
+                          </Badge>
+                          {item.custom_order_id && (
+                            <Badge variant="secondary" className="bg-purple-50 text-purple-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
+                              Custom
+                            </Badge>
+                          )}
+                          {item.is_repair && (
+                            <Badge variant="secondary" className="bg-amber-50 text-amber-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
+                              Repair
+                            </Badge>
+                          )}
+                          {item.store_restock_id && (
+                            <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
+                              Restock
+                            </Badge>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="py-3.5 text-right px-4">
+                        {item.status === 'pending' && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors" onClick={() => deleteSavedItem(item.id, item.status)}>
+                            <Trash2 className="w-4 h-4" strokeWidth={1.5} />
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </CardContent>
       </Card>

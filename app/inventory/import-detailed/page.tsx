@@ -1,10 +1,10 @@
-'use client'
+"use client"
 
 import React, { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { 
   UploadCloud, FileSpreadsheet, AlertCircle, CheckCircle2, 
-  ArrowLeft, Database, Loader2, Warehouse,
+  ArrowLeft, Database, Loader2, Warehouse, LayoutList,
   ChevronLeft, ChevronRight, Search, Filter
 } from 'lucide-react'
 import Papa from 'papaparse'
@@ -23,6 +23,7 @@ interface ParsedJewelleryItem {
   temp_id: string; 
   item_category: string;
   barcode: string;
+  sku_reference?: string; // NEW: Holds the auto-generated sequential SKU
   metal_type: string;
   purity_karat: string;
   quantity: number;
@@ -35,6 +36,26 @@ interface ParsedJewelleryItem {
   diamond_weight_cts: number;
   total_amount: number;
 }
+
+// --- CATEGORY PREFIX MAPPER ---
+const getCategoryPrefix = (category: string): string => {
+  if (!category) return 'UNK';
+  const c = category.toUpperCase();
+  if (c.includes('NECKLACE')) return 'NEC';
+  if (c.includes('RING')) return 'RNG';
+  if (c.includes('EARRING')) return 'EAR';
+  if (c.includes('BANGLE')) return 'BAN';
+  if (c.includes('BRACELET')) return 'BRA';
+  if (c.includes('CHAIN')) return 'CHN';
+  if (c.includes('PENDANT')) return 'PND';
+  if (c.includes('MANGALSUTRA')) return 'MGL';
+  if (c.includes('NOSE')) return 'NOS';
+  if (c.includes('SET')) return 'SET';
+  if (c.includes('COIN')) return 'COIN';
+  
+  // Default: Take first 3 letters
+  return c.substring(0, 3).replace(/[^A-Z]/g, '').padEnd(3, 'X');
+};
 
 export default function DetailedImportPage() {
   const { appUser } = useAuth()
@@ -66,7 +87,7 @@ export default function DetailedImportPage() {
   // --- BULLETPROOF FORMAT 2 PARSER ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
-    if (!selectedFile) return
+    if (!selectedFile || !appUser?.company_id) return
     
     setFile(selectedFile)
     setIsParsing(true)
@@ -79,7 +100,7 @@ export default function DetailedImportPage() {
 
     Papa.parse(selectedFile, {
       skipEmptyLines: true,
-      complete: (results) => {
+      complete: async (results) => {
         const rows = results.data as string[][]
         const cleanInventory: ParsedJewelleryItem[] = []
         
@@ -194,6 +215,56 @@ export default function DetailedImportPage() {
         
         if (currentItem) cleanInventory.push(currentItem)
 
+        // =====================================================================
+        // PHASE 1: ASYNC OPTIMISTIC SKU GENERATION (FOR PREVIEW ONLY)
+        // =====================================================================
+        try {
+          const groupedByPrefix: Record<string, typeof cleanInventory> = {};
+          
+          cleanInventory.forEach(item => {
+            const prefix = getCategoryPrefix(item.item_category);
+            if (!groupedByPrefix[prefix]) groupedByPrefix[prefix] = [];
+            groupedByPrefix[prefix].push(item);
+          });
+
+          const prefixCounters: Record<string, number> = {};
+          
+          for (const prefix of Object.keys(groupedByPrefix)) {
+            const { data: existingSkus } = await supabase
+              .from('inventory_items')
+              .select('sku_reference')
+              .eq('company_id', appUser.company_id)
+              .ilike('sku_reference', `${prefix}-%`)
+              
+            let maxSeq = 100; // Start at 100 if none exist
+            if (existingSkus && existingSkus.length > 0) {
+              existingSkus.forEach(row => {
+                if (row.sku_reference) {
+                  const numPart = row.sku_reference.split('-')[1];
+                  const num = parseInt(numPart, 10);
+                  if (!isNaN(num) && num > maxSeq) {
+                    maxSeq = num;
+                  }
+                }
+              });
+            }
+            prefixCounters[prefix] = maxSeq + 1; // Set counter to next available
+          }
+
+          // Apply optimistic SKUs back to the parsed items so the user sees them
+          for (const prefix of Object.keys(groupedByPrefix)) {
+            let currentCounter = prefixCounters[prefix];
+            for (const item of groupedByPrefix[prefix]) {
+              item.sku_reference = `${prefix}-${currentCounter}`;
+              currentCounter++;
+            }
+          }
+        } catch (skuError) {
+          console.error("Failed to generate preview SKUs:", skuError);
+          toast.warning("Failed to auto-generate preview SKUs. They will generate upon commit.");
+        }
+        // =====================================================================
+
         setParsedItems(cleanInventory)
         setSelectedIds(new Set(cleanInventory.map(item => item.temp_id)))
         setIsParsing(false)
@@ -219,7 +290,8 @@ export default function DetailedImportPage() {
   const filteredItems = useMemo(() => {
     return parsedItems.filter(item => {
       const matchesSearch = item.barcode.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            item.item_category.toLowerCase().includes(searchTerm.toLowerCase())
+                            item.item_category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                            (item.sku_reference?.toLowerCase() || '').includes(searchTerm.toLowerCase())
       const matchesCategory = categoryFilter === 'ALL' || item.item_category === categoryFilter
       return matchesSearch && matchesCategory
     })
@@ -262,9 +334,11 @@ export default function DetailedImportPage() {
 
   const isAllFilteredSelected = filteredItems.length > 0 && filteredItems.every(item => selectedIds.has(item.temp_id))
 
-  // --- THE DATABASE COMMIT LOGIC ---
+  // =========================================================================
+  // PHASE 2: THE DATABASE COMMIT LOGIC (BULLETPROOF AUTO-SKU GENERATION)
+  // =========================================================================
   const handleCommitToDatabase = async () => {
-    if (!targetWarehouse) return toast.error("Please select a target warehouse first.")
+    if (!targetWarehouse || !appUser) return toast.error("Please select a target warehouse first.")
     if (selectedIds.size === 0) return toast.error("No items selected to commit.")
 
     setIsCommitting(true)
@@ -272,28 +346,75 @@ export default function DetailedImportPage() {
     try {
       const itemsToCommit = parsedItems.filter(item => selectedIds.has(item.temp_id))
 
-      // By explicitly omitting 'created_from_job_bag_id' here, 
-      // Supabase defaults it to null automatically (thanks to the SQL fix).
-      const inventoryPayload = itemsToCommit.map(item => ({
-        company_id: appUser?.company_id,
-        warehouse_id: targetWarehouse,
-        barcode: item.barcode,
-        item_category: item.item_category,
-        metal_type: item.metal_type,
-        purity_karat: item.purity_karat,
-        purity_percent: 100, 
-        quantity: Number(item.quantity) || 1,
-        gross_weight_g: Number(item.gross_weight_g) || 0,
-        net_weight_g: Number(item.net_weight_g) || 0,
-        total_stone_weight_cts: Number(item.diamond_weight_cts) || 0,
-        total_stone_pieces: Number(item.diamond_pcs) || 0,
-        diamond_shape: item.shape,
-        diamond_color: item.color,
-        diamond_clarity: item.clarity,
-        mrp: Number(item.total_amount) || 0, 
-        status: 'in_stock' 
-      }))
+      // 1. Group items by prefix to know which sequences we need to query
+      const groupedByPrefix: Record<string, typeof itemsToCommit> = {};
+      
+      itemsToCommit.forEach(item => {
+        const prefix = getCategoryPrefix(item.item_category);
+        if (!groupedByPrefix[prefix]) groupedByPrefix[prefix] = [];
+        groupedByPrefix[prefix].push(item);
+      });
 
+      // 2. Fetch the HIGHEST existing sequence number right now (prevents race conditions)
+      const prefixCounters: Record<string, number> = {};
+      
+      for (const prefix of Object.keys(groupedByPrefix)) {
+        const { data: existingSkus } = await supabase
+          .from('inventory_items')
+          .select('sku_reference')
+          .eq('company_id', appUser.company_id)
+          .ilike('sku_reference', `${prefix}-%`)
+          
+        let maxSeq = 100; // Standard starting point
+        if (existingSkus && existingSkus.length > 0) {
+          existingSkus.forEach(row => {
+            if (row.sku_reference) {
+              const numPart = row.sku_reference.split('-')[1];
+              const num = parseInt(numPart, 10);
+              if (!isNaN(num) && num > maxSeq) {
+                maxSeq = num;
+              }
+            }
+          });
+        }
+        
+        prefixCounters[prefix] = maxSeq + 1; // The absolute next available number
+      }
+
+      // 3. Build the final payload, assigning the fresh sequential SKUs
+      const inventoryPayload: any[] = [];
+      
+      for (const prefix of Object.keys(groupedByPrefix)) {
+        let currentCounter = prefixCounters[prefix];
+        
+        for (const item of groupedByPrefix[prefix]) {
+          const guaranteedUniqueSku = `${prefix}-${currentCounter}`;
+          currentCounter++; // Increment for the next item in this loop
+          
+          inventoryPayload.push({
+            company_id: appUser.company_id,
+            warehouse_id: targetWarehouse,
+            barcode: item.barcode,
+            sku_reference: guaranteedUniqueSku, // Bulletproof SKU
+            item_category: item.item_category,
+            metal_type: item.metal_type,
+            purity_karat: item.purity_karat,
+            purity_percent: 100, 
+            quantity: Number(item.quantity) || 1,
+            gross_weight_g: Number(item.gross_weight_g) || 0,
+            net_weight_g: Number(item.net_weight_g) || 0,
+            total_stone_weight_cts: Number(item.diamond_weight_cts) || 0,
+            total_stone_pieces: Number(item.diamond_pcs) || 0,
+            diamond_shape: item.shape,
+            diamond_color: item.color,
+            diamond_clarity: item.clarity,
+            mrp: Number(item.total_amount) || 0, 
+            status: 'in_stock' 
+          });
+        }
+      }
+
+      // 4. Batch insert into Supabase
       const chunkSize = 100
       for (let i = 0; i < inventoryPayload.length; i += chunkSize) {
         const chunk = inventoryPayload.slice(i, i + chunkSize)
@@ -302,7 +423,7 @@ export default function DetailedImportPage() {
       }
 
       setCommitSuccess(true)
-      toast.success(`Successfully committed ${itemsToCommit.length} items to inventory!`)
+      toast.success(`Successfully committed ${itemsToCommit.length} detailed items with unique SKUs!`)
     } catch (err: any) {
       toast.error("Database Error: " + err.message)
     } finally {
@@ -311,11 +432,12 @@ export default function DetailedImportPage() {
   }
 
   // --- INLINE EDIT INPUT COMPONENT ---
-  const EditableCell = ({ value, onChange, type = "text", align = "left", className = "" }: any) => (
+  const EditableCell = ({ value, onChange, type = "text", align = "left", className = "", placeholder = "" }: any) => (
     <input 
       type={type}
       value={value}
       onChange={onChange}
+      placeholder={placeholder}
       className={`w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:bg-white rounded px-1.5 py-1 text-xs outline-none transition-colors text-${align} ${className}`}
     />
   )
@@ -345,7 +467,7 @@ export default function DetailedImportPage() {
             </div>
             <div>
               <h2 className="text-2xl font-black text-emerald-800 tracking-tight">Migration Complete</h2>
-              <p className="text-emerald-600 font-medium mt-1">Successfully ingested {selectedIds.size} detailed inventory assets.</p>
+              <p className="text-emerald-600 font-medium mt-1">Successfully ingested {selectedIds.size} detailed inventory assets with auto-generated SKUs.</p>
             </div>
             <div className="pt-4 flex justify-center gap-4">
               <Button onClick={() => window.location.reload()} variant="outline" className="border-emerald-200 text-emerald-700 hover:bg-emerald-100">
@@ -418,7 +540,7 @@ export default function DetailedImportPage() {
                     <div>
                       <h3 className="text-sm font-bold text-emerald-900">Ready to Commit</h3>
                       <p className="text-xs text-emerald-700 mt-1 leading-relaxed">
-                        You have selected <strong className="text-slate-900 bg-emerald-200 px-1 rounded">{selectedIds.size} of {parsedItems.length}</strong> items to ingest into the vault.
+                        You have selected <strong className="text-slate-900 bg-emerald-200 px-1 rounded">{selectedIds.size} of {parsedItems.length}</strong> items to ingest. SKUs have been generated.
                       </p>
                     </div>
                   </div>
@@ -444,7 +566,7 @@ export default function DetailedImportPage() {
                     <div className="relative w-full max-w-sm">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                       <Input 
-                        placeholder="Search Barcode or Category..." 
+                        placeholder="Search Barcode, SKU, or Category..." 
                         className="pl-9 h-9 text-sm bg-white"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
@@ -496,7 +618,7 @@ export default function DetailedImportPage() {
                             />
                           </th>
                           <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 w-32">Category</th>
-                          <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 w-28">Barcode</th>
+                          <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 w-36">Barcode / SKU</th>
                           <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 text-center w-16">Purity</th>
                           <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 text-center w-24">Shape/Clr/Col</th>
                           <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 text-right w-16">Dia Pcs</th>
@@ -511,7 +633,7 @@ export default function DetailedImportPage() {
                           const isSelected = selectedIds.has(item.temp_id)
                           return (
                             <tr key={item.temp_id} className={`transition-colors ${isSelected ? 'bg-emerald-50/30' : 'hover:bg-slate-50/50'}`}>
-                              <td className="py-1 px-3 text-center">
+                              <td className="py-1 px-3 text-center align-top pt-2">
                                 <input 
                                   type="checkbox" 
                                   className="w-4 h-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-600 cursor-pointer"
@@ -519,21 +641,23 @@ export default function DetailedImportPage() {
                                   onChange={() => handleSelectRow(item.temp_id)}
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   value={item.item_category} 
                                   onChange={(e: any) => handleItemEdit(item.temp_id, 'item_category', e.target.value)} 
                                   className="font-semibold text-slate-600 truncate"
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-1.5">
                                 <EditableCell 
                                   value={item.barcode} 
                                   onChange={(e: any) => handleItemEdit(item.temp_id, 'barcode', e.target.value)} 
-                                  className="font-mono font-bold text-slate-900"
+                                  className="font-mono font-bold text-slate-900 leading-none"
                                 />
+                                {/* PREVIEWING THE NEW SKU */}
+                                <div className="text-[10px] font-mono font-bold text-emerald-600 px-1.5 mt-0.5">{item.sku_reference}</div>
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   value={item.purity_karat} 
                                   onChange={(e: any) => handleItemEdit(item.temp_id, 'purity_karat', e.target.value)} 
@@ -566,7 +690,7 @@ export default function DetailedImportPage() {
                                   />
                                 </div>
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   type="number"
                                   value={item.diamond_pcs} 
@@ -575,7 +699,7 @@ export default function DetailedImportPage() {
                                   className="text-slate-500 font-medium"
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   type="number"
                                   value={item.gross_weight_g} 
@@ -584,7 +708,7 @@ export default function DetailedImportPage() {
                                   className="font-medium"
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   type="number"
                                   value={item.net_weight_g} 
@@ -593,7 +717,7 @@ export default function DetailedImportPage() {
                                   className="font-bold text-slate-800"
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   type="number"
                                   value={item.diamond_weight_cts} 
@@ -602,7 +726,7 @@ export default function DetailedImportPage() {
                                   className="font-black text-emerald-600 bg-emerald-50/50"
                                 />
                               </td>
-                              <td className="py-1 px-1 pr-3">
+                              <td className="py-1 px-1 pr-3 align-top pt-2">
                                 <EditableCell 
                                   type="number"
                                   value={item.total_amount} 

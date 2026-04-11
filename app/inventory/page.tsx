@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useState, useMemo } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
@@ -10,7 +10,7 @@ import {
   Search, Printer, Edit2, Check, X, Store, Truck, 
   RefreshCw, Database, Package, Calculator, Gem, Hammer, 
   ArrowLeft, Upload, Eye, Image as ImageIcon, CheckCircle2, Box, Layers, Wrench, Clock, CalendarDays,
-  Loader2
+  Loader2, Filter, IndianRupee
 } from "lucide-react"
 
 import { useAuth } from "@/hooks/useAuth"
@@ -22,6 +22,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Label } from "@/components/ui/label"
+import { Slider } from "@/components/ui/slider"
 import { 
   Table, TableBody, TableCell, TableHead, 
   TableHeader, TableRow 
@@ -116,70 +117,51 @@ export default function InventoryPage() {
   const [warehouses, setWarehouses] = useState<any[]>([])
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
   
-  // --- NEW: RBAC Role State ---
-  const [userRole, setUserRole] = useState<string>('sales_person') // Default restrictive
+  const [userRole, setUserRole] = useState<string>('sales_person') 
+  const canEdit = ['owner', 'manager', 'operations_manager'].includes(userRole)
   
   const [selectedIds, setSelectedIds] = useState<string[]>([])
-  const [searchTerm, setSearchTerm] = useState('')
-  const [filterStatus, setFilterStatus] = useState('all')
   const [editingMrpId, setEditingId] = useState<string | null>(null)
   const [editingMrpVal, setEditingMrpVal] = useState<string>('')
   
   const [tagItem, setTagItem] = useState<InventoryItem | null>(null)
   const [viewItem, setViewItem] = useState<InventoryItem | null>(null)
 
+  // --- ADVANCED FILTER STATES ---
+  const [searchTerm, setSearchTerm] = useState('')
+  const [showFilters, setShowFilters] = useState(false)
+  const [filterStatus, setFilterStatus] = useState('all')
+  const [filterCategory, setFilterCategory] = useState('all')
+  const [filterPurity, setFilterPurity] = useState('all')
+  
+  const [maxCatalogPrice, setMaxCatalogPrice] = useState(1000000)
+  const [priceRange, setPriceRange] = useState<number[]>([0, 1000000])
+
+  // --- MRP CALCULATOR STATES ---
   const [isCalcModalOpen, setCalcModalOpen] = useState(false)
   const [calcStep, setCalcStep] = useState<'params' | 'preview'>('params')
   const [isCalculating, setIsCalculating] = useState(false)
   const [base24kRate, setBase24kRate] = useState<number>(7250) 
   const [goldRates, setGoldRates] = useState<Record<string, number>>({}) 
   const [previewData, setPreviewData] = useState<any[]>([])
-  
   const [isUploadingImage, setIsUploadingImage] = useState(false)
-
-  const [calcParams, setCalcParams] = useState({
-    diamondRatePerCt: 25000, 
-    markupPercent: 80,
-    flatCharge: 8000
-  })
-
-  // --- DERIVED PERMISSION ---
-  const canEdit = ['owner', 'manager', 'operations_manager'].includes(userRole)
+  const [calcParams, setCalcParams] = useState({ diamondRatePerCt: 25000, markupPercent: 80, flatCharge: 8000 })
 
   useEffect(() => {
     const fetchInitialData = async () => {
       if (!appUser) return
       try {
-        // 1. Fetch Role for RBAC
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('role')
-          .eq('id', appUser.user_id || appUser.id)
-          .maybeSingle()
+        const { data: profile } = await supabase.from('profiles').select('role').eq('id', appUser.user_id || appUser.id).maybeSingle()
         if (profile) setUserRole(profile.role)
 
-        // 2. Fetch Warehouses
-        const { data: whData } = await supabase
-          .from('warehouses')
-          .select('*')
-          .eq('company_id', appUser.company_id)
-          .eq('is_active', true)
-          .order('name')
+        const { data: whData } = await supabase.from('warehouses').select('*').eq('company_id', appUser.company_id).eq('is_active', true).order('name')
 
         if (whData && whData.length > 0) {
           setWarehouses(whData)
-          if (!selectedLocation && isHQ) {
-            setSelectedLocation(whData[0].id)
-          }
+          if (!selectedLocation && isHQ) setSelectedLocation(whData[0].id)
         }
 
-        // 3. Fetch Company Rates
-        const { data: companyData } = await supabase
-          .from('companies')
-          .select('current_rate_24k, current_rate_diamond')
-          .eq('id', appUser.company_id)
-          .maybeSingle()
-
+        const { data: companyData } = await supabase.from('companies').select('current_rate_24k, current_rate_diamond').eq('id', appUser.company_id).maybeSingle()
         if (companyData) {
           if (companyData.current_rate_24k) setBase24kRate(companyData.current_rate_24k)
           if (companyData.current_rate_diamond) setCalcParams(prev => ({ ...prev, diamondRatePerCt: companyData.current_rate_diamond }))
@@ -193,85 +175,39 @@ export default function InventoryPage() {
     if (!appUser || !selectedLocation) return
     setLoading(true)
     try {
-      let invQuery = supabase
-        .from('inventory_items')
-        .select(`*, custom_orders (id, order_number, origin:origin_warehouse_id(name))`)
-        .eq('company_id', appUser.company_id)
+      let invQuery = supabase.from('inventory_items').select(`*, custom_orders (id, order_number, origin:origin_warehouse_id(name))`).eq('company_id', appUser.company_id)
+      if (selectedLocation !== 'ALL') invQuery = invQuery.eq('warehouse_id', selectedLocation)
 
-      if (selectedLocation !== 'ALL') {
-        invQuery = invQuery.eq('warehouse_id', selectedLocation)
-      }
-
-      let repQuery = supabase
-        .from('repair_tickets')
-        .select(`*, origin:warehouses!repair_tickets_origin_warehouse_id_fkey(name)`)
-        .eq('company_id', appUser.company_id)
+      let repQuery = supabase.from('repair_tickets').select(`*, origin:warehouses!repair_tickets_origin_warehouse_id_fkey(name)`).eq('company_id', appUser.company_id)
         
       const [invRes, repRes] = await Promise.all([invQuery, repQuery])
-
       if (invRes.error) throw invRes.error
       if (repRes.error) throw repRes.error
 
       const inventoryList = (invRes.data || []).map(item => ({ ...item, _type: 'inventory' as const, is_repair_ticket: false }))
 
       const repairList = (repRes.data || []).map(rep => ({
-        id: rep.id,
-        _type: 'repair' as const,
-        barcode: rep.ticket_number,
-        sku_reference: 'REPAIR TICKET',
-        item_category: rep.item_description || 'Repair Service',
-        item_size: 'N/A',
-        metal_type: 'Mixed',
-        purity_karat: rep.purity || 'N/A',
-        purity_percent: 0,
-        gross_weight_g: rep.gross_weight_g || 0, 
-        net_weight_g: rep.issued_gold_g || 0, 
-        total_stone_weight_cts: rep.issued_diamond_cts || 0, 
-        total_stone_pieces: 0,
-        solitaire_weight_cts: 0,
-        solitaire_pieces: 0,
-        melee_weight_cts: 0,
-        melee_pieces: 0,
-        color_stone_weight_cts: 0,
-        color_stone_pieces: 0,
-        mrp: rep.actual_cost || 0, 
-        status: rep.status,
-        warehouse_id: rep.status === 'fixed_ready_for_dispatch' && warehouses.find(w => w.name.includes('HQ'))?.id 
-                        ? warehouses.find(w => w.name.includes('HQ'))?.id || rep.origin_warehouse_id 
-                        : rep.origin_warehouse_id, 
-        is_exchanged: false,
-        is_custom_order: false,
-        is_repair_ticket: true,
-        custom_order_id: null,
-        origin_name: rep.origin?.name || 'Unknown Branch',
-        huid_code: null,
-        hsn_code: '9987', 
-        image_url: rep.condition_photo_url || null, 
-        remarks: rep.issue_description || '',
-        metal_color: 'N/A',
-        diamond_shape: null,
-        diamond_color: null,
-        diamond_clarity: null,
-        cost_metal: 0,
-        cost_stone: 0,
-        cost_making: rep.labor_charges || 0,
-        cost_total: rep.actual_cost || 0,
-        wastage_weight_g: 0,
-        created_at: rep.created_at,
-        updated_at: rep.updated_at,
-        expected_delivery_date: rep.expected_delivery_date,
-        last_status_change_at: rep.updated_at
+        id: rep.id, _type: 'repair' as const, barcode: rep.ticket_number, sku_reference: 'REPAIR TICKET', item_category: rep.item_description || 'Repair Service',
+        item_size: 'N/A', metal_type: 'Mixed', purity_karat: rep.purity || 'N/A', purity_percent: 0, gross_weight_g: rep.gross_weight_g || 0, 
+        net_weight_g: rep.issued_gold_g || 0, total_stone_weight_cts: rep.issued_diamond_cts || 0, total_stone_pieces: 0, solitaire_weight_cts: 0, solitaire_pieces: 0, melee_weight_cts: 0,
+        melee_pieces: 0, color_stone_weight_cts: 0, color_stone_pieces: 0, mrp: rep.actual_cost || 0, status: rep.status,
+        warehouse_id: rep.status === 'fixed_ready_for_dispatch' && warehouses.find(w => w.name.includes('HQ'))?.id ? warehouses.find(w => w.name.includes('HQ'))?.id || rep.origin_warehouse_id : rep.origin_warehouse_id, 
+        is_exchanged: false, is_custom_order: false, is_repair_ticket: true, custom_order_id: null, origin_name: rep.origin?.name || 'Unknown Branch', huid_code: null,
+        hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: null, diamond_color: null,
+        diamond_clarity: null, cost_metal: 0, cost_stone: 0, cost_making: rep.labor_charges || 0, cost_total: rep.actual_cost || 0, wastage_weight_g: 0,
+        created_at: rep.created_at, updated_at: rep.updated_at, expected_delivery_date: rep.expected_delivery_date, last_status_change_at: rep.updated_at
       }))
 
-      const filteredRepairs = selectedLocation === 'ALL' 
-        ? repairList 
-        : repairList.filter(r => r.warehouse_id === selectedLocation || (r.status === 'fixed_ready_for_dispatch' && isHQ));
-
-      const combined = [...inventoryList, ...filteredRepairs].sort((a, b) => 
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
+      const filteredRepairs = selectedLocation === 'ALL' ? repairList : repairList.filter(r => r.warehouse_id === selectedLocation || (r.status === 'fixed_ready_for_dispatch' && isHQ));
+      const combined = [...inventoryList, ...filteredRepairs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
       setItems(combined)
+
+      // Auto-calibrate Price Slider Max Value
+      const highestPrice = Math.max(...combined.map(c => c.mrp || 0), 100000);
+      setMaxCatalogPrice(highestPrice);
+      setPriceRange([0, highestPrice]);
+
     } catch (error) { toast.error('Failed to load inventory') } 
     finally { setLoading(false) }
   }
@@ -280,7 +216,6 @@ export default function InventoryPage() {
 
   const handleSaveMrp = async (id: string) => {
     if (!canEdit) return toast.error("Unauthorized to edit prices");
-    
     const item = items.find(i => i.id === id);
     if (!item) return;
 
@@ -301,7 +236,6 @@ export default function InventoryPage() {
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, itemId: string, itemType: string) => {
     if (!canEdit) return toast.error("Unauthorized to update images");
-    
     const file = e.target.files?.[0]
     if (!file || !appUser) return
 
@@ -311,15 +245,10 @@ export default function InventoryPage() {
       const fileName = `${itemId}-${Date.now()}.${fileExt}`
       const filePath = `${appUser.company_id}/${fileName}`
 
-      const { error: uploadError } = await supabase.storage
-        .from('inventory-images')
-        .upload(filePath, file)
-
+      const { error: uploadError } = await supabase.storage.from('inventory-images').upload(filePath, file)
       if (uploadError) throw uploadError
 
-      const { data: { publicUrl } } = supabase.storage
-        .from('inventory-images')
-        .getPublicUrl(filePath)
+      const { data: { publicUrl } } = supabase.storage.from('inventory-images').getPublicUrl(filePath)
 
       if (itemType === 'repair') {
         const { error: dbErr } = await supabase.from('repair_tickets').update({ condition_photo_url: publicUrl }).eq('id', itemId)
@@ -330,9 +259,7 @@ export default function InventoryPage() {
       }
 
       setItems(prev => prev.map(i => i.id === itemId ? { ...i, image_url: publicUrl } : i))
-      if (viewItem && viewItem.id === itemId) {
-        setViewItem({ ...viewItem, image_url: publicUrl })
-      }
+      if (viewItem && viewItem.id === itemId) setViewItem({ ...viewItem, image_url: publicUrl })
       
       toast.success("Image updated successfully!")
     } catch (error: any) {
@@ -343,13 +270,11 @@ export default function InventoryPage() {
     }
   }
 
+  // --- MRP CALCULATOR LOGIC ---
   const handleOpenCalc = () => {
     if (!canEdit) return toast.error("Unauthorized to use bulk calculator");
-    
     const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
-    if (selectedItems.length === 0) {
-      return toast.error("No valid items selected.", { description: "Repairs cannot be bulk-calculated. Select standard inventory." })
-    }
+    if (selectedItems.length === 0) return toast.error("No valid items selected.", { description: "Repairs cannot be bulk-calculated. Select standard inventory." })
 
     const uniqueKarats = Array.from(new Set(selectedItems.map(i => i.purity_karat || '24K')))
     const initialRates: Record<string, number> = {}
@@ -382,9 +307,7 @@ export default function InventoryPage() {
   const handleApplyBulkMrp = async () => {
     setIsCalculating(true)
     try {
-      await Promise.all(previewData.map(p => 
-        supabase.from('inventory_items').update({ mrp: p.newMrp }).eq('id', p.id)
-      ))
+      await Promise.all(previewData.map(p => supabase.from('inventory_items').update({ mrp: p.newMrp }).eq('id', p.id)))
       setItems(prev => prev.map(item => {
         const update = previewData.find(px => px.id === item.id)
         return update ? { ...item, mrp: update.newMrp } : item
@@ -399,28 +322,61 @@ export default function InventoryPage() {
     }
   }
 
-  const filteredActiveItems = items.filter(item => {
-    if (item.status === 'sold' || item.status === 'delivered') return false; 
-    const matchesSearch = item.barcode?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          item.sku_reference?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          item.item_category?.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    if (filterStatus === 'all') return matchesSearch;
-    if (filterStatus === 'repairs') return matchesSearch && item._type === 'repair';
-    if (filterStatus === 'exchanged') return matchesSearch && item.is_exchanged === true;
-    return matchesSearch && item.status === filterStatus;
-  });
+  // --- ADVANCED FILTERING ENGINE ---
+  const uniqueCategories = useMemo(() => Array.from(new Set(items.map(c => c.item_category))).filter(Boolean).sort(), [items]);
+  const uniquePurities = useMemo(() => Array.from(new Set(items.map(c => c.purity_karat))).filter(Boolean).sort(), [items]);
 
-  const soldItems = items.filter(item => {
-    const matchesSearch = item.barcode?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          item.item_category?.toLowerCase().includes(searchTerm.toLowerCase())
-    return (item.status === 'sold' || item.status === 'delivered') && matchesSearch
-  })
+  const { activeItemsFiltered, soldItemsFiltered } = useMemo(() => {
+    let active = []
+    let sold = []
 
-  const handleSingleTransfer = (item: InventoryItem) => {
-    router.push(`/transfer/new?ids=${item.id}&from=${item.warehouse_id}`)
+    for (const item of items) {
+      // Base Split
+      const isSold = item.status === 'sold' || item.status === 'delivered';
+      
+      // 1. Text Search
+      let matchesSearch = true;
+      if (searchTerm) {
+        const q = searchTerm.toLowerCase()
+        matchesSearch = !!(item.barcode?.toLowerCase().includes(q) || item.sku_reference?.toLowerCase().includes(q) || item.item_category?.toLowerCase().includes(q));
+      }
+      if (!matchesSearch) continue;
+
+      // 2. Dropdown Filters
+      if (filterCategory !== 'all' && item.item_category !== filterCategory) continue;
+      if (filterPurity !== 'all' && item.purity_karat !== filterPurity) continue;
+      if (filterStatus !== 'all') {
+        if (filterStatus === 'repairs' && item._type !== 'repair') continue;
+        if (filterStatus === 'exchanged' && !item.is_exchanged) continue;
+        if (filterStatus !== 'repairs' && filterStatus !== 'exchanged' && item.status !== filterStatus) continue;
+      }
+
+      // 3. Price Filter
+      const itemMrp = item.mrp || 0;
+      if (itemMrp < priceRange[0] || itemMrp > priceRange[1]) continue;
+
+      if (isSold) {
+        sold.push(item);
+      } else {
+        active.push(item);
+      }
+    }
+
+    return { activeItemsFiltered: active, soldItemsFiltered: sold }
+  }, [items, searchTerm, filterCategory, filterPurity, filterStatus, priceRange]);
+
+  const activeFilterCount = [filterCategory, filterPurity, filterStatus].filter(f => f !== 'all').length + (priceRange[0] > 0 || priceRange[1] < maxCatalogPrice ? 1 : 0);
+
+  const clearFilters = () => {
+    setFilterCategory("all");
+    setFilterPurity("all");
+    setFilterStatus("all");
+    setPriceRange([0, maxCatalogPrice]);
+    setSearchTerm("");
   }
 
+
+  const handleSingleTransfer = (item: InventoryItem) => router.push(`/transfer/new?ids=${item.id}&from=${item.warehouse_id}`)
   const handleBulkTransfer = () => {
     if (selectedIds.length === 0) return
     const selectedItems = items.filter(i => selectedIds.includes(i.id))
@@ -467,28 +423,16 @@ export default function InventoryPage() {
           
           <div className="flex items-center gap-2">
             <Button asChild variant="ghost" size="sm" className="h-8 px-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-none border border-transparent hover:border-indigo-200 hidden sm:flex">
-              <Link href="/inventory/import">
-                <Upload className="h-3.5 w-3.5 mr-1.5" />
-                <span className="hidden sm:inline">Add / Import Stock</span>
-              </Link>
+              <Link href="/inventory/import"><Upload className="h-3.5 w-3.5 mr-1.5" /><span className="hidden sm:inline">Add Stock</span></Link>
             </Button>
 
             <Button asChild variant="ghost" size="sm" className="h-8 px-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-none border border-transparent hover:border-indigo-200 hidden sm:flex">
-              <Link href="/inventory/import-detailed">
-                <Upload className="h-3.5 w-3.5 mr-1.5" />
-                <span className="hidden sm:inline">Add / Import Stock (Detailed)</span>
-              </Link>
+              <Link href="/inventory/import-detailed"><Upload className="h-3.5 w-3.5 mr-1.5" /><span className="hidden sm:inline">Add Stock detailed</span></Link>
             </Button>
             <div className="h-4 w-px bg-slate-200 mx-1 hidden sm:block" />
-
             <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-none" onClick={fetchItems}>
               <RefreshCw className={`h-3.5 w-3.5 sm:mr-1.5 ${loading ? 'animate-spin text-indigo-500' : ''}`} />
               <span className="hidden sm:inline">Refresh</span>
-            </Button>
-            <div className="h-4 w-px bg-slate-200 mx-1" />
-            <Button variant="outline" size="sm" className="h-8 text-xs font-semibold px-3 border-slate-200 bg-white text-slate-700 shadow-sm rounded-md hidden sm:flex pointer-events-none">
-              <Database className="h-3.5 w-3.5 mr-1.5 text-emerald-500" />
-              Optimal
             </Button>
           </div>
         </div>
@@ -496,71 +440,160 @@ export default function InventoryPage() {
 
       <main className="p-4 md:p-6 max-w-7xl w-full mx-auto space-y-6 animate-in fade-in duration-300">
         
-        {/* TOOLBAR */}
-        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col lg:flex-row gap-3 items-start lg:items-center justify-between">
-           <div className="flex items-center gap-2 w-full lg:w-auto overflow-x-auto">
-              <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-lg border border-slate-200">
-                 <div className="pl-2 pr-1"><Store className="w-4 h-4 text-slate-400" /></div>
-                 <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
-                   <SelectTrigger className="h-8 border-none bg-transparent shadow-none text-xs font-semibold text-slate-700 w-[180px] focus:ring-0">
-                     <SelectValue placeholder="Select Location..." />
-                   </SelectTrigger>
-                   <SelectContent className="rounded-md border-slate-200 shadow-lg">
-                     {isHQ && <SelectItem value="ALL" className="text-xs font-bold text-indigo-600">All Branches (HQ)</SelectItem>}
-                     {warehouses.map(w => <SelectItem key={w.id} value={w.id} className="text-xs font-medium">{w.name}</SelectItem>)}
-                   </SelectContent>
-                 </Select>
-              </div>
-              <Button asChild variant="outline" size="sm" className="h-10 px-4 text-xs font-semibold border-slate-200 text-slate-700 hover:bg-slate-50 rounded-lg shadow-sm">
-                 <Link href="/transfer"><Truck className="w-4 h-4 mr-2 text-indigo-500" /> Logistics</Link>
-              </Button>
-           </div>
-
-           <div className="flex items-center gap-2 w-full lg:w-auto">
-              <div className="relative flex-1 lg:w-64">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        {/* NEW FILTER BAR */}
+        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm flex flex-col gap-3 transition-all">
+          <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
+            
+            <div className="relative w-full sm:max-w-md flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
                 <Input 
-                  placeholder="Search barcode or SKU..." 
-                  className="pl-9 h-10 text-xs font-medium bg-slate-50 border-slate-200 focus-visible:bg-white focus-visible:border-slate-400 focus-visible:ring-1 focus-visible:ring-slate-400 rounded-lg transition-all" 
-                  value={searchTerm} 
-                  onChange={e => setSearchTerm(e.target.value)} 
+                  placeholder="Search Barcode or SKU..." 
+                  className="pl-9 h-10 bg-gray-50 border-gray-200 focus-visible:bg-white focus-visible:ring-indigo-500 transition-all font-medium text-sm"
+                  value={searchTerm}
+                  onChange={e => setSearchTerm(e.target.value)}
                 />
               </div>
-              <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="h-10 text-xs font-semibold border-slate-200 bg-white rounded-lg w-[140px] shadow-sm">
-                  <SelectValue placeholder="Status" />
+              <Button 
+                variant={showFilters ? "default" : "outline"} 
+                className={`h-10 px-4 transition-all ${showFilters ? "bg-gray-900 hover:bg-gray-800 text-white" : "text-gray-600 bg-white"}`}
+                onClick={() => setShowFilters(!showFilters)}
+              >
+                <Filter className="w-4 h-4 mr-2" /> 
+                Filters 
+                {activeFilterCount > 0 && (
+                  <span className="ml-2 bg-gray-100 text-gray-900 text-[10px] font-black px-1.5 py-0.5 rounded-full">
+                    {activeFilterCount}
+                  </span>
+                )}
+              </Button>
+            </div>
+
+            <div className="flex flex-col items-end w-full sm:w-auto px-2">
+              <span className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-1">Active Vault Context</span>
+              <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
+                <SelectTrigger className="h-8 border-none bg-slate-100 shadow-none text-xs font-bold text-slate-700 w-full sm:w-[200px] focus:ring-0">
+                  <Store className="w-3.5 h-3.5 mr-2 text-indigo-500" />
+                  <SelectValue placeholder="Select Location..." />
                 </SelectTrigger>
                 <SelectContent className="rounded-md border-slate-200 shadow-lg">
-                  <SelectItem value="all" className="text-xs font-medium">All Items</SelectItem>
-                  <SelectItem value="in_stock" className="text-xs font-medium">Available</SelectItem>
-                  <SelectItem value="transit" className="text-xs font-medium">In Transit</SelectItem>
-                  <SelectItem value="repairs" className="text-xs font-medium text-amber-600">Repairs</SelectItem>
-                  <SelectItem value="exchanged" className="text-xs font-medium">Buybacks</SelectItem>
+                  {isHQ && <SelectItem value="ALL" className="text-xs font-bold text-indigo-600">All Branches (HQ)</SelectItem>}
+                  {warehouses.map(w => <SelectItem key={w.id} value={w.id} className="text-xs font-medium">{w.name}</SelectItem>)}
                 </SelectContent>
               </Select>
-           </div>
+            </div>
+          </div>
+
+          {/* COLLAPSIBLE ADVANCED FILTERS */}
+          {showFilters && (
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 pt-3 border-t border-gray-100 animate-in slide-in-from-top-2">
+              
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1"><Package className="w-3 h-3"/> Category</Label>
+                <Select value={filterCategory} onValueChange={setFilterCategory}>
+                  <SelectTrigger className="h-9 text-xs bg-gray-50 border-gray-200"><SelectValue placeholder="All Categories" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Categories</SelectItem>
+                    {uniqueCategories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1"><Badge className="w-3 h-3 p-0 bg-transparent text-gray-400 shadow-none hover:bg-transparent">K</Badge> Purity</Label>
+                <Select value={filterPurity} onValueChange={setFilterPurity}>
+                  <SelectTrigger className="h-9 text-xs bg-gray-50 border-gray-200"><SelectValue placeholder="All Purities" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Purities</SelectItem>
+                    {uniquePurities.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1"><Layers className="w-3 h-3"/> Lifecycle Status</Label>
+                <Select value={filterStatus} onValueChange={setFilterStatus}>
+                  <SelectTrigger className="h-9 text-xs bg-gray-50 border-gray-200"><SelectValue placeholder="All Items" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all" className="text-xs font-bold text-indigo-600">All Items</SelectItem>
+                    <SelectItem value="in_stock" className="text-xs font-medium">Available (In Stock)</SelectItem>
+                    <SelectItem value="transit" className="text-xs font-medium">In Transit</SelectItem>
+                    <SelectItem value="repairs" className="text-xs font-medium text-amber-600">Repairs Only</SelectItem>
+                    <SelectItem value="exchanged" className="text-xs font-medium text-rose-600">Buybacks Only</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* DUAL RANGE SLIDER & INPUTS */}
+              <div className="space-y-3 col-span-2 bg-gray-50/50 p-3 rounded-lg border border-gray-100">
+                <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1">
+                  <IndianRupee className="w-3 h-3"/> Price Range
+                </Label>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
+                    <Input 
+                      type="number" 
+                      className="h-8 pl-6 text-xs font-mono font-bold bg-white border-gray-200 shadow-sm" 
+                      value={priceRange[0]} 
+                      onChange={e => setPriceRange([Number(e.target.value), priceRange[1]])} 
+                    />
+                  </div>
+                  <span className="text-gray-400 text-xs font-bold">-</span>
+                  <div className="relative flex-1">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
+                    <Input 
+                      type="number" 
+                      className="h-8 pl-6 text-xs font-mono font-bold bg-white border-gray-200 shadow-sm" 
+                      value={priceRange[1]} 
+                      onChange={e => setPriceRange([priceRange[0], Number(e.target.value)])} 
+                    />
+                  </div>
+                </div>
+                <div className="px-2 pt-1 pb-1">
+                  <Slider 
+                    min={0} 
+                    max={maxCatalogPrice} 
+                    step={1000} 
+                    value={priceRange} 
+                    onValueChange={setPriceRange} 
+                    className="mt-1.5"
+                  />
+                </div>
+              </div>
+
+              {/* CLEAR BUTTON */}
+              {(activeFilterCount > 0 || searchTerm) && (
+                <div className="flex items-center justify-end h-full">
+                  <Button variant="ghost" size="sm" onClick={clearFilters} className="h-9 text-xs font-bold text-red-500 hover:bg-red-50 hover:text-red-600 w-full sm:w-auto">
+                    <X className="w-3.5 h-3.5 mr-1" /> Clear All
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* TABS & TABLE CARD */}
         <Tabs defaultValue="active" className="space-y-4">
           <TabsList className="bg-transparent border-b border-slate-200 rounded-none h-11 w-full justify-start p-0 gap-6 mb-2">
             <TabsTrigger value="active" className="rounded-none border-b-2 border-transparent data-[state=active]:border-indigo-600 data-[state=active]:text-indigo-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-500 transition-all hover:text-slate-800">
-              Live Stock <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-[9px] text-slate-600">{filteredActiveItems.length}</span>
+              Live Stock <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-[9px] text-slate-600">{activeItemsFiltered.length}</span>
             </TabsTrigger>
             <TabsTrigger value="sold" className="rounded-none border-b-2 border-transparent data-[state=active]:border-slate-800 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600 data-[state=active]:text-slate-800 transition-all">
-              Archive / Sold <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-[9px] text-slate-600">{soldItems.length}</span>
+              Archive / Sold <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-[9px] text-slate-600">{soldItemsFiltered.length}</span>
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="active">
              <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                {loading ? <TableSkeleton /> : <InventoryTable data={filteredActiveItems} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />}
+                {loading ? <TableSkeleton /> : <InventoryTable data={activeItemsFiltered} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />}
              </div>
           </TabsContent>
 
           <TabsContent value="sold">
              <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                {loading ? <TableSkeleton /> : <InventoryTable data={soldItems} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />}
+                {loading ? <TableSkeleton /> : <InventoryTable data={soldItemsFiltered} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />}
              </div>
           </TabsContent>
         </Tabs>
@@ -596,21 +629,21 @@ export default function InventoryPage() {
 
       {/* BULK MRP CALCULATOR MODAL */}
       <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
-        <DialogContent className="sm:max-w-[500px] border-slate-200 shadow-2xl rounded-xl">
-          <DialogHeader className="border-b border-slate-100 pb-4">
+        <DialogContent className="sm:max-w-[500px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden">
+          <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5">
             <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Calculator className="w-5 h-5 text-indigo-600" />
               Bulk MRP Calculator
             </DialogTitle>
-            <DialogDescription className="text-xs">
+            <DialogDescription className="text-xs mt-1">
               Calculate retail prices for {selectedIds.length} selected items based on current metal rates.
             </DialogDescription>
           </DialogHeader>
 
           {calcStep === 'params' ? (
-            <div className="space-y-5 py-4">
+            <div className="space-y-5 p-5">
               <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                <Label className="text-xs font-bold text-slate-600 uppercase tracking-widest">Base Metal Rates (Per Gram)</Label>
+                <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Base Metal Rates (Per Gram)</Label>
                 {Object.keys(goldRates).map(k => (
                   <div key={k} className="flex items-center gap-3">
                     <span className="w-12 text-sm font-semibold">{k}</span>
@@ -618,7 +651,7 @@ export default function InventoryPage() {
                       type="number" 
                       value={goldRates[k]} 
                       onChange={e => setGoldRates({...goldRates, [k]: Number(e.target.value)})}
-                      className="h-9"
+                      className="h-9 bg-white"
                     />
                   </div>
                 ))}
@@ -626,7 +659,7 @@ export default function InventoryPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-slate-700">Diamond Rate (Per Ct)</Label>
+                  <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Diamond Rate (Per Ct)</Label>
                   <Input 
                     type="number" 
                     value={calcParams.diamondRatePerCt} 
@@ -634,7 +667,7 @@ export default function InventoryPage() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-semibold text-slate-700">Markup (%)</Label>
+                  <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Markup (%)</Label>
                   <Input 
                     type="number" 
                     value={calcParams.markupPercent} 
@@ -642,7 +675,7 @@ export default function InventoryPage() {
                   />
                 </div>
                 <div className="space-y-1.5 col-span-2">
-                  <Label className="text-xs font-semibold text-slate-700">Flat Add-on Charge (₹)</Label>
+                  <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Flat Add-on Charge (₹)</Label>
                   <Input 
                     type="number" 
                     value={calcParams.flatCharge} 
@@ -650,13 +683,13 @@ export default function InventoryPage() {
                   />
                 </div>
               </div>
-              <Button onClick={handleGeneratePreview} className="w-full h-10 font-bold bg-indigo-600 hover:bg-indigo-700">
+              <Button onClick={handleGeneratePreview} className="w-full h-11 rounded-xl font-bold bg-indigo-600 hover:bg-indigo-700 text-white uppercase tracking-widest text-xs">
                 Generate Preview
               </Button>
             </div>
           ) : (
             <div className="space-y-4 py-4">
-              <div className="max-h-[300px] overflow-y-auto border border-slate-200 rounded-lg custom-scrollbar">
+              <div className="max-h-[300px] overflow-y-auto border border-slate-200 rounded-lg mx-5 custom-scrollbar">
                 <Table>
                   <TableHeader className="bg-slate-50 sticky top-0">
                     <TableRow>
@@ -676,10 +709,10 @@ export default function InventoryPage() {
                   </TableBody>
                 </Table>
               </div>
-              <div className="flex gap-3">
-                <Button variant="outline" className="flex-1" onClick={() => setCalcStep('params')}>Back to Edit</Button>
+              <div className="flex gap-3 px-5">
+                <Button variant="outline" className="flex-1 rounded-xl h-11 text-xs font-bold text-gray-500 uppercase tracking-widest" onClick={() => setCalcStep('params')}>Back to Edit</Button>
                 <Button 
-                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white" 
+                  className="flex-1 rounded-xl h-11 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs uppercase tracking-widest" 
                   onClick={handleApplyBulkMrp}
                   disabled={isCalculating}
                 >
@@ -694,10 +727,10 @@ export default function InventoryPage() {
 
       {/* VIEW DETAILS MODAL */}
       <Dialog open={!!viewItem} onOpenChange={(val) => !val && setViewItem(null)}>
-        <DialogContent className="sm:max-w-[700px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-slate-50">
+        <DialogContent className="sm:max-w-[700px] p-0 overflow-hidden border-none shadow-2xl rounded-2xl bg-white">
           {viewItem && (
             <>
-              <DialogHeader className="bg-white p-5 border-b border-slate-200 flex flex-row items-start justify-between">
+              <DialogHeader className="bg-slate-50 p-6 border-b border-slate-100 flex flex-row items-start justify-between">
                 <div>
                   <div className="flex items-center gap-2">
                     <DialogTitle className="text-xl font-black text-slate-900 font-mono tracking-tight flex items-center gap-2">
@@ -707,7 +740,7 @@ export default function InventoryPage() {
                   </div>
                   
                   <div className="mt-2 flex items-center gap-3">
-                    <Badge variant="outline" className="bg-slate-50 text-slate-600 border-slate-200 text-[10px] uppercase tracking-widest font-semibold px-2 py-0.5">
+                    <Badge variant="outline" className="bg-white text-slate-600 border-slate-200 text-[10px] uppercase tracking-widest font-semibold px-2 py-0.5">
                       Design SKU: {viewItem.sku_reference}
                     </Badge>
                     <span className="text-xs font-medium text-slate-500 uppercase tracking-widest">
@@ -751,7 +784,7 @@ export default function InventoryPage() {
                 <div className="flex flex-col md:flex-row gap-6">
                   
                   {/* INTERACTIVE IMAGE UPLOAD OVERLAY (RBAC Applied) */}
-                  <div className="relative w-full md:w-48 h-48 bg-white border border-slate-200 rounded-xl flex items-center justify-center shrink-0 overflow-hidden shadow-sm group">
+                  <div className="relative w-full md:w-48 h-48 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-center shrink-0 overflow-hidden shadow-sm group">
                     {isUploadingImage && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/80 z-10">
                         <Loader2 className="w-6 h-6 animate-spin text-indigo-600 mb-2" />
@@ -1153,8 +1186,8 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
 
                  {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
                    <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
-                     <Truck className="h-3.5 w-3.5" />
-                   </Button>
+                  <Truck className="h-3.5 w-3.5" />
+                </Button>
                  )}
                </div>
             </div>

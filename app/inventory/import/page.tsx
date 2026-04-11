@@ -20,9 +20,10 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 
 interface ParsedJewelleryItem {
-  temp_id: string; // Used for UI selection tracking
+  temp_id: string; 
   item_category: string;
   barcode: string;
+  sku_reference?: string; // NEW: Added to state interface
   metal_type: string;
   purity_karat: string;
   quantity: number;
@@ -34,6 +35,27 @@ interface ParsedJewelleryItem {
   diamond_weight_cts: number;
   total_amount: number;
 }
+
+// --- CATEGORY PREFIX MAPPER ---
+const getCategoryPrefix = (category: string): string => {
+  if (!category) return 'UNK';
+  const c = category.toUpperCase();
+  if (c.includes('NECKLACE')) return 'NEC';
+  if (c.includes('RING')) return 'RNG';
+  if (c.includes('EARRING')) return 'EAR';
+  if (c.includes('BANGLE')) return 'BAN';
+  if (c.includes('BRACELET')) return 'BRA';
+  if (c.includes('CHAIN')) return 'CHN';
+  if (c.includes('PENDANT')) return 'PND';
+  if (c.includes('MANGALSUTRA')) return 'MGL';
+  if (c.includes('NOSE')) return 'NOS';
+  if (c.includes('SET')) return 'SET';
+  if (c.includes('COIN')) return 'COIN';
+  
+  // Default: Take first 3 letters
+  return c.substring(0, 3).replace(/[^A-Z]/g, '').padEnd(3, 'X');
+};
+
 
 export default function LegacyImportPage() {
   const { appUser } = useAuth()
@@ -47,7 +69,6 @@ export default function LegacyImportPage() {
   const [isCommitting, setIsCommitting] = useState(false)
   const [commitSuccess, setCommitSuccess] = useState(false)
 
-  // --- SELECTION, PAGINATION & FILTER STATE ---
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [currentPage, setCurrentPage] = useState(1)
   const [searchTerm, setSearchTerm] = useState('')
@@ -63,10 +84,9 @@ export default function LegacyImportPage() {
     fetchWarehouses()
   }, [appUser])
 
-  // --- THE PARSER ---
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
-    if (!selectedFile) return
+    if (!selectedFile || !appUser?.company_id) return
     
     setFile(selectedFile)
     setIsParsing(true)
@@ -79,7 +99,7 @@ export default function LegacyImportPage() {
 
     Papa.parse(selectedFile, {
       skipEmptyLines: true,
-      complete: (results) => {
+      complete: async (results) => {
         const rows = results.data as string[][]
         const cleanInventory: ParsedJewelleryItem[] = []
         
@@ -159,10 +179,60 @@ export default function LegacyImportPage() {
 
         if (currentItem) cleanInventory.push(currentItem)
 
+        // =====================================================================
+        // NEW: ASYNC SKU GENERATION PHASE (RUNS BEFORE DISPLAYING PREVIEW)
+        // =====================================================================
+        try {
+          const groupedByPrefix: Record<string, typeof cleanInventory> = {};
+          
+          cleanInventory.forEach(item => {
+            const prefix = getCategoryPrefix(item.item_category);
+            if (!groupedByPrefix[prefix]) groupedByPrefix[prefix] = [];
+            groupedByPrefix[prefix].push(item);
+          });
+
+          const prefixCounters: Record<string, number> = {};
+          
+          for (const prefix of Object.keys(groupedByPrefix)) {
+            const { data: existingSkus } = await supabase
+              .from('inventory_items')
+              .select('sku_reference')
+              .eq('company_id', appUser.company_id)
+              .ilike('sku_reference', `${prefix}-%`)
+              
+            let maxSeq = 100; // Start at 100 if none exist
+            if (existingSkus && existingSkus.length > 0) {
+              existingSkus.forEach(row => {
+                if (row.sku_reference) {
+                  const numPart = row.sku_reference.split('-')[1];
+                  const num = parseInt(numPart, 10);
+                  if (!isNaN(num) && num > maxSeq) {
+                    maxSeq = num;
+                  }
+                }
+              });
+            }
+            prefixCounters[prefix] = maxSeq + 1; // Set counter to next available
+          }
+
+          // Apply SKUs back to the parsed items
+          for (const prefix of Object.keys(groupedByPrefix)) {
+            let currentCounter = prefixCounters[prefix];
+            for (const item of groupedByPrefix[prefix]) {
+              item.sku_reference = `${prefix}-${currentCounter}`;
+              currentCounter++;
+            }
+          }
+        } catch (skuError) {
+          console.error("Failed to generate SKUs:", skuError);
+          toast.warning("Failed to auto-generate SKUs. They will default to Unassigned.");
+        }
+        // =====================================================================
+
         setParsedItems(cleanInventory)
         setSelectedIds(new Set(cleanInventory.map(item => item.temp_id)))
         setIsParsing(false)
-        toast.success(`Parsed ${cleanInventory.length} inventory assets!`)
+        toast.success(`Parsed and mapped ${cleanInventory.length} inventory assets!`)
       },
       error: (error) => {
         toast.error("Failed to parse file: " + error.message)
@@ -171,7 +241,6 @@ export default function LegacyImportPage() {
     })
   }
 
-  // --- FILTERING LOGIC ---
   const uniqueCategories = useMemo(() => {
     return Array.from(new Set(parsedItems.map(item => item.item_category))).sort()
   }, [parsedItems])
@@ -179,20 +248,19 @@ export default function LegacyImportPage() {
   const filteredItems = useMemo(() => {
     return parsedItems.filter(item => {
       const matchesSearch = item.barcode.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            item.item_category.toLowerCase().includes(searchTerm.toLowerCase())
+                            item.item_category.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                            (item.sku_reference?.toLowerCase() || '').includes(searchTerm.toLowerCase())
       const matchesCategory = categoryFilter === 'ALL' || item.item_category === categoryFilter
       return matchesSearch && matchesCategory
     })
   }, [parsedItems, searchTerm, categoryFilter])
 
-  // --- EDITING LOGIC ---
   const handleItemEdit = (tempId: string, field: keyof ParsedJewelleryItem, value: string | number) => {
     setParsedItems(prev => prev.map(item => 
       item.temp_id === tempId ? { ...item, [field]: value } : item
     ))
   }
 
-  // --- SELECTION LOGIC ---
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       const newSelected = new Set(selectedIds)
@@ -215,43 +283,91 @@ export default function LegacyImportPage() {
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / itemsPerPage))
   const currentItems = filteredItems.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
 
-  useEffect(() => {
-    setCurrentPage(1)
-  }, [searchTerm, categoryFilter])
+  useEffect(() => { setCurrentPage(1) }, [searchTerm, categoryFilter])
 
   const isAllFilteredSelected = filteredItems.length > 0 && filteredItems.every(item => selectedIds.has(item.temp_id))
 
-  // --- THE DATABASE COMMIT LOGIC ---
+ // =========================================================================
+  // THE DATABASE COMMIT LOGIC (BULLETPROOF AUTO-SKU GENERATION)
+  // =========================================================================
   const handleCommitToDatabase = async () => {
-    if (!targetWarehouse) return toast.error("Please select a target warehouse first.")
+    if (!targetWarehouse || !appUser) return toast.error("Please select a target warehouse first.")
     if (selectedIds.size === 0) return toast.error("No items selected to commit.")
 
     setIsCommitting(true)
     
     try {
       const itemsToCommit = parsedItems.filter(item => selectedIds.has(item.temp_id))
+      
+      // 1. Group items by prefix to know which sequences we need to query
+      const groupedByPrefix: Record<string, typeof itemsToCommit> = {};
+      
+      itemsToCommit.forEach(item => {
+        const prefix = getCategoryPrefix(item.item_category);
+        if (!groupedByPrefix[prefix]) groupedByPrefix[prefix] = [];
+        groupedByPrefix[prefix].push(item);
+      });
 
-      // The key here is explicitly avoiding the `created_from_job_bag_id` field entirely
-      // so Supabase defaults it to null (after you run the ALTER TABLE command).
-      const inventoryPayload = itemsToCommit.map(item => ({
-        company_id: appUser?.company_id,
-        warehouse_id: targetWarehouse,
-        barcode: item.barcode,
-        item_category: item.item_category,
-        metal_type: item.metal_type,
-        purity_karat: item.purity_karat,
-        purity_percent: 100, // Legacy fallback
-        quantity: Number(item.quantity) || 1,
-        gross_weight_g: Number(item.gross_weight_g) || 0,
-        net_weight_g: Number(item.net_weight_g) || 0,
-        total_stone_weight_cts: Number(item.diamond_weight_cts) || 0,
-        total_stone_pieces: Number(item.diamond_pcs) || 0,
-        diamond_shape: item.shape,
-        diamond_clarity: item.clarity,
-        mrp: Number(item.total_amount) || 0, 
-        status: 'in_stock' 
-      }))
+      // 2. Fetch the HIGHEST existing sequence number right now (prevents race conditions)
+      const prefixCounters: Record<string, number> = {};
+      
+      for (const prefix of Object.keys(groupedByPrefix)) {
+        const { data: existingSkus, error } = await supabase
+          .from('inventory_items')
+          .select('sku_reference')
+          .eq('company_id', appUser.company_id)
+          .ilike('sku_reference', `${prefix}-%`)
+          
+        let maxSeq = 100; // Standard starting point
+        if (existingSkus && existingSkus.length > 0) {
+          existingSkus.forEach(row => {
+            if (row.sku_reference) {
+              // Extract the number after the hyphen (e.g., "NEC-142" -> 142)
+              const numPart = row.sku_reference.split('-')[1];
+              const num = parseInt(numPart, 10);
+              if (!isNaN(num) && num > maxSeq) {
+                maxSeq = num;
+              }
+            }
+          });
+        }
+        
+        prefixCounters[prefix] = maxSeq + 1; // The absolute next available number
+      }
 
+      // 3. Build the final payload, assigning the fresh sequential SKUs
+      const inventoryPayload: any[] = [];
+      
+      for (const prefix of Object.keys(groupedByPrefix)) {
+        let currentCounter = prefixCounters[prefix];
+        
+        for (const item of groupedByPrefix[prefix]) {
+          const guaranteedUniqueSku = `${prefix}-${currentCounter}`;
+          currentCounter++; // Increment for the next item in this loop
+          
+          inventoryPayload.push({
+            company_id: appUser.company_id,
+            warehouse_id: targetWarehouse,
+            barcode: item.barcode,
+            sku_reference: guaranteedUniqueSku, // Assigning the bulletproof SKU
+            item_category: item.item_category,
+            metal_type: item.metal_type,
+            purity_karat: item.purity_karat,
+            purity_percent: 100, 
+            quantity: Number(item.quantity) || 1,
+            gross_weight_g: Number(item.gross_weight_g) || 0,
+            net_weight_g: Number(item.net_weight_g) || 0,
+            total_stone_weight_cts: Number(item.diamond_weight_cts) || 0,
+            total_stone_pieces: Number(item.diamond_pcs) || 0,
+            diamond_shape: item.shape,
+            diamond_clarity: item.clarity,
+            mrp: Number(item.total_amount) || 0, 
+            status: 'in_stock' 
+          });
+        }
+      }
+
+      // 4. Batch insert into Supabase
       const chunkSize = 100
       for (let i = 0; i < inventoryPayload.length; i += chunkSize) {
         const chunk = inventoryPayload.slice(i, i + chunkSize)
@@ -260,7 +376,7 @@ export default function LegacyImportPage() {
       }
 
       setCommitSuccess(true)
-      toast.success(`Successfully committed ${itemsToCommit.length} items to inventory!`)
+      toast.success(`Successfully committed ${itemsToCommit.length} items with unique SKUs!`)
     } catch (err: any) {
       toast.error("Database Error: " + err.message)
     } finally {
@@ -302,7 +418,7 @@ export default function LegacyImportPage() {
             </div>
             <div>
               <h2 className="text-2xl font-black text-emerald-800 tracking-tight">Migration Complete</h2>
-              <p className="text-emerald-600 font-medium mt-1">Successfully ingested {selectedIds.size} inventory assets.</p>
+              <p className="text-emerald-600 font-medium mt-1">Successfully ingested {selectedIds.size} inventory assets with auto-generated SKUs.</p>
             </div>
             <div className="pt-4 flex justify-center gap-4">
               <Button onClick={() => window.location.reload()} variant="outline" className="border-emerald-200 text-emerald-700 hover:bg-emerald-100">
@@ -372,7 +488,7 @@ export default function LegacyImportPage() {
                     <div>
                       <h3 className="text-sm font-bold text-blue-900">Ready to Commit</h3>
                       <p className="text-xs text-blue-700 mt-1 leading-relaxed">
-                        You have selected <strong className="text-slate-900 bg-blue-200 px-1 rounded">{selectedIds.size} of {parsedItems.length}</strong> items to ingest into the vault.
+                        You have selected <strong className="text-slate-900 bg-blue-200 px-1 rounded">{selectedIds.size} of {parsedItems.length}</strong> items to ingest. SKUs have been generated.
                       </p>
                     </div>
                   </div>
@@ -398,8 +514,8 @@ export default function LegacyImportPage() {
                     <div className="relative w-full max-w-sm">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
                       <Input 
-                        placeholder="Search Barcode or Category..." 
-                        className="pl-9 h-9 text-sm bg-white"
+                        placeholder="Search Barcode, SKU, or Category..." 
+                        className="pl-9 h-9 text-sm bg-white border-slate-200"
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
                       />
@@ -450,7 +566,7 @@ export default function LegacyImportPage() {
                             />
                           </th>
                           <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 w-32">Category</th>
-                          <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 w-28">Barcode</th>
+                          <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 w-36">Barcode / SKU</th>
                           <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 text-center w-16">Purity</th>
                           <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 text-center w-24">Shape/Clr</th>
                           <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-500 text-right w-16">Dia Pcs</th>
@@ -465,7 +581,7 @@ export default function LegacyImportPage() {
                           const isSelected = selectedIds.has(item.temp_id)
                           return (
                             <tr key={item.temp_id} className={`transition-colors ${isSelected ? 'bg-indigo-50/30' : 'hover:bg-slate-50/50'}`}>
-                              <td className="py-1 px-3 text-center">
+                              <td className="py-1 px-3 text-center align-top pt-2">
                                 <input 
                                   type="checkbox" 
                                   className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600 cursor-pointer"
@@ -473,21 +589,22 @@ export default function LegacyImportPage() {
                                   onChange={() => handleSelectRow(item.temp_id)}
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   value={item.item_category} 
                                   onChange={(e: any) => handleItemEdit(item.temp_id, 'item_category', e.target.value)} 
                                   className="font-semibold text-slate-600 truncate"
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-1.5">
                                 <EditableCell 
                                   value={item.barcode} 
                                   onChange={(e: any) => handleItemEdit(item.temp_id, 'barcode', e.target.value)} 
-                                  className="font-mono font-bold text-slate-900"
+                                  className="font-mono font-bold text-slate-900 leading-none"
                                 />
+                                <div className="text-[10px] font-mono font-bold text-indigo-600 px-1.5 mt-0.5">{item.sku_reference}</div>
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   value={item.purity_karat} 
                                   onChange={(e: any) => handleItemEdit(item.temp_id, 'purity_karat', e.target.value)} 
@@ -495,7 +612,7 @@ export default function LegacyImportPage() {
                                   className="font-bold text-amber-600"
                                 />
                               </td>
-                              <td className="py-1 px-1 flex gap-1">
+                              <td className="py-1 px-1 flex gap-1 align-top pt-2">
                                 <EditableCell 
                                   value={item.shape} 
                                   onChange={(e: any) => handleItemEdit(item.temp_id, 'shape', e.target.value)} 
@@ -511,7 +628,7 @@ export default function LegacyImportPage() {
                                   placeholder="Clr"
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   type="number"
                                   value={item.diamond_pcs} 
@@ -520,7 +637,7 @@ export default function LegacyImportPage() {
                                   className="text-slate-500 font-medium"
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   type="number"
                                   value={item.gross_weight_g} 
@@ -529,7 +646,7 @@ export default function LegacyImportPage() {
                                   className="font-medium"
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   type="number"
                                   value={item.net_weight_g} 
@@ -538,7 +655,7 @@ export default function LegacyImportPage() {
                                   className="font-bold text-slate-800"
                                 />
                               </td>
-                              <td className="py-1 px-1">
+                              <td className="py-1 px-1 align-top pt-2">
                                 <EditableCell 
                                   type="number"
                                   value={item.diamond_weight_cts} 
@@ -547,7 +664,7 @@ export default function LegacyImportPage() {
                                   className="font-black text-indigo-600 bg-indigo-50/50"
                                 />
                               </td>
-                              <td className="py-1 px-1 pr-3">
+                              <td className="py-1 px-1 pr-3 align-top pt-2">
                                 <EditableCell 
                                   type="number"
                                   value={item.total_amount} 

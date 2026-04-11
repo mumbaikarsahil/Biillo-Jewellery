@@ -77,12 +77,13 @@ export async function middleware(request: NextRequest) {
     // Define route groups
     const isMasterRoute = path.startsWith('/master')
     const isVoucherRoute = path.startsWith('/vouchers')
-    const isOpsRoute = path.startsWith('/purchases') || path.startsWith('/manufacturing') || path.startsWith('/inventory') || path.startsWith('/transfer')
+    const isOpsRoute = path.startsWith('/purchases') || path.startsWith('/manufacturing') || path.startsWith('/inventory') || path.startsWith('/transfer') || path.startsWith('/catalog')
     
-    // ADDED: /transfer to the allowed routes for Branch/Shadow Managers
-    const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/crm') || path.startsWith('/transfer')
+    // ADDED: /catalog to the allowed routes for Branch/Shadow Managers
+    const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/crm') || path.startsWith('/transfer') || path.startsWith('/catalog')
     
-    const isSalesRoute = path.startsWith('/discovery') || path.startsWith('/pos') || path.startsWith('/crm')
+    // ADDED: /catalog to Sales routes as well so sales staff can show the catalog to customers
+    const isSalesRoute = path.startsWith('/discovery') || path.startsWith('/pos') || path.startsWith('/crm') || path.startsWith('/catalog')
     
     // Everyone is allowed on the dashboard
     if (path === '/dashboard' || path === '/') {

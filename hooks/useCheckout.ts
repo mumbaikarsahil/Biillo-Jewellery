@@ -31,7 +31,6 @@ export function useCheckout({
 
   // --- CENTRALIZED WALLET STATE ---
   const [appliedKittyAmount, setAppliedKittyAmount] = useState(0)
-  const [appliedPointsAmount, setAppliedPointsAmount] = useState(0)
   const [appliedCreditAmount, setAppliedCreditAmount] = useState(0)
   
   const currentSplitTotal = 
@@ -56,19 +55,33 @@ export function useCheckout({
   const [exchangeValue, setExchangeValue] = useState<string>('')
   const [exchangeNotes, setExchangeNotes] = useState<string>('')
 
+
+  // ==============================================================
+  // --- CLUBBING VALIDATION OVERRIDES ---
+  // ==============================================================
+  
+  // 1. If Manual Discount or Voucher exists, wipe out Wallet/Kitty
+  const discountNum = parseFloat(discountValue) || 0
+  const standardDiscount = discountType === 'percent' ? (subtotal * discountNum) / 100 : discountNum
+  const hasManualDiscount = standardDiscount > 0
+  const hasVoucher = activeVoucher !== null
+
+  if ((hasManualDiscount || hasVoucher) && (appliedKittyAmount > 0 || appliedCreditAmount > 0)) {
+     setAppliedKittyAmount(0);
+     setAppliedCreditAmount(0);
+     toast.warning("Clubbing Restricted", { description: "Wallet & Kitty credits cannot be combined with manual discounts or vouchers." });
+  }
+
   // ==============================================================
   // --- MATH ENGINE (PRE-TAX & ADVANCE ADJUSTMENTS) ---
   // ==============================================================
   
-  // 1. Calculate Advance Paid (If this is a custom order pickup)
   const cartAdvance = cart?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
 
-  // 2. Calculate Deductions
-  const discountNum = parseFloat(discountValue) || 0
-  const standardDiscount = discountType === 'percent' ? (subtotal * discountNum) / 100 : discountNum
-  const totalWalletRedemptions = appliedKittyAmount + appliedPointsAmount + appliedCreditAmount;
+  // Total Wallet Deductions (Credits are already calculated at 80% usable value from the sidebar before being set in state)
+  const totalWalletRedemptions = appliedKittyAmount + appliedCreditAmount;
 
-  // 3. Deduct all pre-tax discounts
+  // Deduct all pre-tax discounts
   let baseTaxable = Math.max(0, subtotal - standardDiscount - totalWalletRedemptions)
   
   const exchangeNum = parseFloat(exchangeValue) || 0
@@ -90,11 +103,11 @@ export function useCheckout({
       }
   }
 
-  // 4. Calculate GST on Taxable Value
+  // Calculate GST on Taxable Value
   const cgstAmount = parseFloat((finalTaxableValue * 0.015).toFixed(2))
   const sgstAmount = parseFloat((finalTaxableValue * 0.015).toFixed(2))
   
-  // 5. Finalize Totals (Gross vs Net)
+  // Finalize Totals (Gross vs Net)
   const exactFinalPayable = finalTaxableValue + cgstAmount + sgstAmount
   const finalPayableGross = Math.round(exactFinalPayable)
   const roundOffAmount = parseFloat((finalPayableGross - exactFinalPayable).toFixed(2))
@@ -102,18 +115,27 @@ export function useCheckout({
   // Net payable is the Invoice Total MINUS the Advance they already paid
   const finalPayableNet = Math.max(0, finalPayableGross - cartAdvance);
 
+
+  // ==============================================================
+  // --- HANDLERS ---
   // ==============================================================
 
+  // PHASE 1: VERIFICATION (Just checking the code)
   const handleApplyVoucher = async () => {
+    if (appliedKittyAmount > 0 || appliedCreditAmount > 0) {
+      return toast.error("Clubbing Error", { description: "Cannot apply vouchers when Wallet or Kitty balances are in use. Please clear wallet balances first." });
+    }
+
     if (!voucherCode.trim()) return;
     let codeToSearch = voucherCode.trim();
     if (codeToSearch.includes('?code=')) {
       codeToSearch = codeToSearch.split('?code=')[1].split('&')[0];
     }
+    
     try {
       const { data: voucher, error } = await supabase
         .from('vouchers')
-        .select(`id, code, discount_value, handling_fee, status, expiry_date, customer_id, customers ( id, full_name, phone )`)
+        .select(`id, code, discount_value, handling_fee, status, expiry_date, customer_id, scan_count, customers ( id, full_name, phone )`)
         .ilike('code', codeToSearch) 
         .maybeSingle()
       
@@ -134,10 +156,21 @@ export function useCheckout({
         }
       }
 
+      // --> THIS IS THE METRIC UPDATE <--
+      // We log that an attempt to scan/use this code happened right now.
+      // Notice we do NOT change the status to "redeemed" here.
+      await supabase
+        .from('vouchers')
+        .update({ 
+           last_scanned_at: new Date().toISOString(),
+           scan_count: (voucher.scan_count || 0) + 1 
+        })
+        .eq('id', voucher.id);
+
       setActiveVoucher({ id: voucher.id, code: voucher.code, amount: voucher.discount_value, handling_fee: voucher.handling_fee })
       setHandlingFee(voucher.handling_fee?.toString() || '0') 
       setVoucherCode('')
-      toast.success(`Voucher Applied!`)
+      toast.success(`Voucher Validated & Applied!`)
     } catch (err) {
       toast.error('Failed to validate voucher.')
     }
@@ -190,11 +223,10 @@ export function useCheckout({
       expectedDiamondCts: customOrderDetails.expected_diamond_cts,
     } : null;
 
-    // Estimate Overrides
     let printCgst = cgstAmount;
     let printSgst = sgstAmount;
     let printRoundOff = roundOffAmount;
-    let printFinalTotal = finalPayableGross; // Print the gross before advance
+    let printFinalTotal = finalPayableGross; 
     let printEstimateHandlingAmt = 0;
 
     if (isEstimate && mode === 'normal') {
@@ -237,7 +269,6 @@ export function useCheckout({
       exchangeValue: exchangeNum, 
       
       appliedKitty: appliedKittyAmount,
-      appliedPoints: appliedPointsAmount,
       appliedCredit: appliedCreditAmount,
       
       estimateChargeType, 
@@ -248,22 +279,21 @@ export function useCheckout({
                 : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                 : mode === 'return' ? (Number(returnDetails?.refundAmount) || 0) 
                 : isEstimate && mode === 'normal' ? printFinalTotal 
-                : finalPayableGross, // ALWAYS PASS GROSS TO THE PRINTER
+                : finalPayableGross, 
       paymentMode: formattedPaymentMode
     }
   }
 
+  // PHASE 2: REDEMPTION (The bill is actually made)
   const executeCheckout = async (isEstimate = false, customTransactionContext?: any) => {
     setIsProcessing(true)
     let finalNo = ''
     try {
       if (customTransactionContext) {
          if (customTransactionContext.applied_kitty) setAppliedKittyAmount(customTransactionContext.applied_kitty);
-         if (customTransactionContext.applied_points) setAppliedPointsAmount(customTransactionContext.applied_points);
          if (customTransactionContext.applied_credit) setAppliedCreditAmount(customTransactionContext.applied_credit);
       }
 
-      // Ensure split validation checks against the NET amount, not the gross!
       const requiredTotal = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
                           : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                           : mode === 'return' ? (Number(returnDetails?.refundAmount) || 0) 
@@ -279,15 +309,13 @@ export function useCheckout({
         toast.success("Estimate generated.")
       } 
       else if (mode === 'normal') {
-        const totalDeductions = standardDiscount + appliedKittyAmount + appliedPointsAmount + appliedCreditAmount;
+        const totalDeductions = standardDiscount + appliedKittyAmount + appliedCreditAmount;
 
-        // PERFECT SCHEMA MATCH: Every field mapped explicitly
         const invoiceData = {
             customer_id: selectedCustomer?.id, 
             warehouse_id: selectedLocation,
             items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
             
-            // Financials
             subtotal: subtotal, 
             discount_amount: totalDeductions, 
             discounted_total: Math.max(0, subtotal - totalDeductions),
@@ -295,17 +323,15 @@ export function useCheckout({
             cgst_amount: cgstAmount, 
             sgst_amount: sgstAmount, 
             round_off_amount: roundOffAmount,
-            final_total: finalPayableGross, // DB stores the FULL INVOICE VALUE
-            advance_adjusted: cartAdvance,  // DB stores the ADVANCE DEDUCTION
+            final_total: finalPayableGross, 
+            advance_adjusted: cartAdvance, 
             
-            // Vouchers & Exchanges
             voucher_code: activeVoucher?.code || null,
             voucher_discount: appliedVoucherAmount, 
             Voucher_handling_fee: handlingAmt,
             exchange_value: exchangeNum, 
             exchange_notes: exchangeNotes, 
             
-            // Payment Data
             payment_mode: paymentMode,
             split_payments: paymentMode === 'split' ? splitPayments : null,
             transaction_reference: customTransactionContext?.transaction_reference || null,
@@ -318,7 +344,16 @@ export function useCheckout({
         if (error) throw error
         
         finalNo = data?.invoice_number || `INV-${Date.now().toString().slice(-6)}`
-        if (activeVoucher) await supabase.from('vouchers').update({ status: 'redeemed', redeemed_at: new Date().toISOString() }).eq('id', activeVoucher.id)
+        
+        // --> THIS IS THE REDEMPTION UPDATE <--
+        // Now that the bill is successfully created, we finally kill the voucher 
+        // so it can never be used again.
+        if (activeVoucher) {
+          await supabase.from('vouchers').update({ 
+            status: 'redeemed', 
+            redeemed_at: new Date().toISOString() 
+          }).eq('id', activeVoucher.id)
+        }
         
         const customOrderIds = cart.filter(item => item.custom_order_id).map(item => item.custom_order_id);
         if (customOrderIds.length > 0) {
@@ -334,12 +369,9 @@ export function useCheckout({
             let updatePayload: any = {};
             let shouldUpdateCustomer = false;
 
-            if (customTransactionContext?.applied_points > 0) {
-                updatePayload.pavitram_points = Math.max(0, (selectedCustomer.pavitram_points || 0) - customTransactionContext.applied_points);
-                shouldUpdateCustomer = true;
-            }
             if (customTransactionContext?.applied_credit > 0) {
-                updatePayload.store_credit_balance = Math.max(0, (selectedCustomer.store_credit_balance || 0) - customTransactionContext.applied_credit);
+                const fullRawCreditDeducted = Number(customTransactionContext.applied_credit) / 0.80; 
+                updatePayload.store_credit_balance = Math.max(0, (selectedCustomer.store_credit_balance || 0) - fullRawCreditDeducted);
                 shouldUpdateCustomer = true;
             }
             if (customTransactionContext?.applied_kitty > 0) {
@@ -402,7 +434,6 @@ export function useCheckout({
       } 
       else if (mode === 'custom') {
         if (!selectedCustomer) throw new Error("Please select a customer for this Custom Order.")
-        
         finalNo = `ORD-${Date.now().toString().slice(-6)}`
         const payload = {
           company_id: appUser?.company_id,
@@ -417,7 +448,6 @@ export function useCheckout({
           advance_paid: Number(customOrderDetails.advance_paid) || 0,
           status: 'pending_manufacturing' 
         }
-
         const { error } = await supabase.from('custom_orders').insert(payload)
         if (error) throw error
         toast.success(`Custom Order ${finalNo} submitted to manufacturing!`)
@@ -426,7 +456,6 @@ export function useCheckout({
       const finalDraftData = generateDraftData(isEstimate);
       if (customTransactionContext) {
           finalDraftData.appliedKitty = customTransactionContext.applied_kitty || 0;
-          finalDraftData.appliedPoints = customTransactionContext.applied_points || 0;
           finalDraftData.appliedCredit = customTransactionContext.applied_credit || 0;
       }
 
@@ -440,7 +469,7 @@ export function useCheckout({
     setDiscountValue(''); setActiveVoucher(null); setHandlingFee('0'); 
     setExchangeValue(''); setExchangeNotes(''); setExchangeInvoiceNo('');
     setIsExchangeOpen(false); setPaymentMode('cash');
-    setAppliedKittyAmount(0); setAppliedPointsAmount(0); setAppliedCreditAmount(0); 
+    setAppliedKittyAmount(0); setAppliedCreditAmount(0); 
     setSplitPayments({ cash: '', card: '', upi: '', bank: '', cheque: '' });
   }
 
@@ -451,11 +480,10 @@ export function useCheckout({
     isExchangeOpen, setIsExchangeOpen, exchangeInvoiceNo, setExchangeInvoiceNo, exchangeValue, setExchangeValue, exchangeNotes, setExchangeNotes,
     discountAmount: standardDiscount, appliedVoucherAmount, handlingAmt, finalTaxableValue, cgstAmount, sgstAmount, exactFinalPayable, roundOffAmount, 
     
-    // We export the Net Payable (Amount Due) so the Sidebar knows what to charge!
     finalPayable: finalPayableNet, 
     exchangeNum,
     
-    appliedKittyAmount, setAppliedKittyAmount, appliedPointsAmount, setAppliedPointsAmount, appliedCreditAmount, setAppliedCreditAmount,
+    appliedKittyAmount, setAppliedKittyAmount, appliedCreditAmount, setAppliedCreditAmount,
     estimateChargeType, setEstimateChargeType, estimateHandlingPercent, setEstimateHandlingPercent, 
 
     handleApplyVoucher, handleFetchExchangeItem, generateDraftData, executeCheckout, resetCheckoutState

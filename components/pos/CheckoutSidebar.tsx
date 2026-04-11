@@ -41,7 +41,6 @@ export function CheckoutSidebar({
   
   // WALLET STATES FROM HOOK
   appliedKittyAmount, setAppliedKittyAmount,
-  appliedPointsAmount, setAppliedPointsAmount,
   appliedCreditAmount, setAppliedCreditAmount,
 
   estimateChargeType, 
@@ -75,10 +74,9 @@ export function CheckoutSidebar({
   useEffect(() => {
     if (!selectedCustomer) {
       setAppliedKittyAmount(0)
-      setAppliedPointsAmount(0)
       setAppliedCreditAmount(0)
     }
-  }, [selectedCustomer, setAppliedKittyAmount, setAppliedPointsAmount, setAppliedCreditAmount])
+  }, [selectedCustomer, setAppliedKittyAmount, setAppliedCreditAmount])
 
   useEffect(() => {
     const fetchBanks = async () => {
@@ -105,8 +103,17 @@ export function CheckoutSidebar({
 
   const customEstBase = Number(customOrderDetails?.estimated_value) || 0;
   const customDiscount = discountType === 'percent' ? (customEstBase * (Number(discountValue) || 0) / 100) : (Number(discountValue) || 0);
-  const totalWalletRedemptions = appliedKittyAmount + appliedPointsAmount + appliedCreditAmount;
+  const totalWalletRedemptions = appliedKittyAmount + appliedCreditAmount;
   const customNetEst = Math.max(0, customEstBase - customDiscount - exchangeNum - (activeVoucher?.amount || 0) - totalWalletRedemptions);
+
+  // FORCE RESET if user types a manual discount
+  useEffect(() => {
+    if ((Number(discountValue) > 0 || activeVoucher) && (appliedKittyAmount > 0 || appliedCreditAmount > 0)) {
+      setAppliedKittyAmount(0);
+      setAppliedCreditAmount(0);
+      toast.warning("Discounts Overridden", { description: "Applying a manual discount clears Wallet balances." });
+    }
+  }, [discountValue, activeVoucher]);
 
   const handleFinalize = (isEstimate: boolean) => {
     let finalRef = transactionRef;
@@ -130,7 +137,6 @@ export function CheckoutSidebar({
       transfer_type: finalTransferType,
       
       applied_kitty: appliedKittyAmount,
-      applied_points: appliedPointsAmount,
       applied_credit: appliedCreditAmount
     })
   }
@@ -151,30 +157,25 @@ export function CheckoutSidebar({
             appUser={appUser}
             selectedLocation={selectedLocation}
             subtotal={subtotal}
-            onApplyWallet={(type: 'kitty' | 'points' | 'credit', amount: number) => {
+            onApplyWallet={(type: 'kitty' | 'credit', amount: number) => {
+              // Strict Clubbing check triggered from Selector
+              if (Number(discountValue) > 0 || activeVoucher) {
+                 return toast.error("Clubbing Restricted", { description: "Cannot apply Wallet/Kitty when Manual Discounts or Vouchers are active. Clear them first."});
+              }
+
               if (type === 'kitty') {
                 if (subtotal < amount) {
                   toast.error(`Cannot Redeem: Cart subtotal (₹${subtotal.toLocaleString()}) must be at least the Harvesting value (₹${amount.toLocaleString()}).`);
                   return;
                 }
                 setAppliedKittyAmount(amount);
-                toast.success(`Redeemed Harvesting Plan Value: ₹${amount.toLocaleString()}`);
               } 
-              else if (type === 'points') {
+              else if (type === 'credit') {
                 if (subtotal < amount + appliedKittyAmount) {
                    toast.error("Discounts cannot exceed the total cart value.");
                    return;
                 }
-                setAppliedPointsAmount(amount);
-                toast.success(`Redeemed ${amount.toLocaleString()} Pavitram Points!`);
-              } 
-              else if (type === 'credit') {
-                if (subtotal < amount + appliedKittyAmount + appliedPointsAmount) {
-                   toast.error("Discounts cannot exceed the total cart value.");
-                   return;
-                }
                 setAppliedCreditAmount(amount);
-                toast.success(`Applied ₹${amount.toLocaleString()} Store Credit!`);
               }
             }}
           />
@@ -489,14 +490,8 @@ export function CheckoutSidebar({
             )}
             {appliedCreditAmount > 0 && (
               <div className="flex justify-between items-center text-emerald-600 animate-in fade-in">
-                <span>Store Credit Applied</span>
+                <span>Wallet Credit Applied</span>
                 <span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString()}</span>
-              </div>
-            )}
-            {appliedPointsAmount > 0 && (
-              <div className="flex justify-between items-center text-amber-600 animate-in fade-in">
-                <span>Pavitram Points ({appliedPointsAmount})</span>
-                <span className="tabular-nums">- ₹{appliedPointsAmount.toLocaleString()}</span>
               </div>
             )}
             
@@ -558,7 +553,6 @@ export function CheckoutSidebar({
             
             {appliedKittyAmount > 0 && <div className="flex justify-between items-center text-purple-600 font-bold"><span>Harvesting Plan Redemption</span><span className="tabular-nums">- ₹{appliedKittyAmount.toLocaleString()}</span></div>}
             {appliedCreditAmount > 0 && <div className="flex justify-between items-center text-emerald-600 font-bold"><span>Store Credit Applied</span><span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString()}</span></div>}
-            {appliedPointsAmount > 0 && <div className="flex justify-between items-center text-amber-600 font-bold"><span>Points Applied</span><span className="tabular-nums">- ₹{appliedPointsAmount.toLocaleString()}</span></div>}
 
             {exchangeNum > 0 && (
               <div className="flex justify-between items-center text-blue-600">
@@ -606,7 +600,7 @@ export function CheckoutSidebar({
                  </Select>
                </div>
                
-               {/* NEW: Custom Handling Percentage Input */}
+               {/* Custom Handling Percentage Input */}
                {estimateChargeType === 'handling' && (
                  <div className="flex justify-between items-center px-1 mt-1 animate-in fade-in">
                     <span className="text-[10px] text-slate-500 font-medium">Handling Percentage (%)</span>
