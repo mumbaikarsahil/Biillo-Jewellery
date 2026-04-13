@@ -52,7 +52,6 @@ const allOperationModules = [
   { href: '/transfer', label: 'Logistics', icon: Route, roles: ['owner', 'manager', 'operations_manager', 'branch_manager', 'shadow_manager'] },
   { href: '/crm', label: 'CRM', icon: Users, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
   { href: '/vouchers', label: 'Vouchers', icon: Tag, roles: ['owner', 'manager', 'voucher_manager'] },
-  { href: '/memo', label: 'Memos', icon: FileSignature, roles: ['owner', 'manager'] },
 ]
 
 export function AppLayout({ children, appUser }: { children: React.ReactNode, appUser?: any }) {

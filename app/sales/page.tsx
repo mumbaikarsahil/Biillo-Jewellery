@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
-import { useStoreLocation } from '@/hooks/useStoreLocation' // <-- NEW: Imported the hook
+import { useStoreLocation } from '@/hooks/useStoreLocation'
 import { supabase } from '@/lib/supabaseClient'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -34,7 +34,6 @@ import {
 export default function AccountsMasterPage() {
   const { appUser } = useAuth()
   
-  // --- NEW: Global Store Location State ---
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
   
   // States
@@ -50,6 +49,7 @@ export default function AccountsMasterPage() {
   const [search, setSearch] = useState('')
 
   const [invoices, setInvoices] = useState<any[]>([])
+  const [purchaseInvoices, setPurchaseInvoices] = useState<any[]>([])
   
   // Financial KPIs
   const [kpis, setKpis] = useState({ grossSales: 0, taxCollected: 0, b2bSales: 0, b2cSales: 0 })
@@ -72,7 +72,6 @@ export default function AccountsMasterPage() {
       
       if (data) {
         setWarehouses(data)
-        // Forcefully initialize the location for branch users if not set
         if (!selectedLocation && !isHQ) {
           setSelectedLocation(data[0].id)
         }
@@ -82,7 +81,6 @@ export default function AccountsMasterPage() {
   }, [appUser, isHQ, selectedLocation, setSelectedLocation])
 
   const fetchAccountingData = async () => {
-    // Wait until the location is fully resolved by the hook
     if (!appUser?.company_id || !selectedLocation) return
     
     setLoading(true)
@@ -91,7 +89,8 @@ export default function AccountsMasterPage() {
       safeEndDate.setDate(safeEndDate.getDate() + 1)
       const safeEndDateStr = safeEndDate.toISOString().split('T')[0]
 
-      let query = supabase
+      // 1. FETCH SALES INVOICES
+      let salesQuery = supabase
         .from('invoices')
         .select(`
           *, 
@@ -106,20 +105,41 @@ export default function AccountsMasterPage() {
         .lt('created_at', safeEndDateStr)
         .order('created_at', { ascending: false })
 
-      // --- NEW: Apply the locked warehouse logic ---
       if (selectedLocation !== 'ALL') {
-        query = query.eq('warehouse_id', selectedLocation)
+        salesQuery = salesQuery.eq('warehouse_id', selectedLocation)
       }
-      
-      if (search.trim()) query = query.ilike('invoice_number', `%${search.trim()}%`)
+      if (search.trim()) salesQuery = salesQuery.ilike('invoice_number', `%${search.trim()}%`)
 
-      const { data: invData, error } = await query
-      if (error) throw error
+      // 2. FETCH PURCHASE INVOICES WITH ITEMS
+      let purchaseQuery = supabase
+        .from('purchase_invoices')
+        .select(`
+          *,
+          suppliers(supplier_name, gstin),
+          warehouses(name),
+          purchase_invoice_items(*)
+        `)
+        .eq('company_id', appUser.company_id)
+        .gte('invoice_date', startDate)
+        .lt('invoice_date', safeEndDateStr)
+        .order('invoice_date', { ascending: false })
 
-      // Map Profiles Manually to bypass PGRST200
-      if (invData && invData.length > 0) {
+      if (selectedLocation !== 'ALL') {
+        purchaseQuery = purchaseQuery.eq('warehouse_id', selectedLocation)
+      }
+      if (search.trim()) purchaseQuery = purchaseQuery.ilike('invoice_number', `%${search.trim()}%`)
+
+      const [salesRes, purchaseRes] = await Promise.all([salesQuery, purchaseQuery])
+
+      if (salesRes.error) throw salesRes.error
+      if (purchaseRes.error) throw purchaseRes.error
+
+      const invData = salesRes.data || []
+      const purchData = purchaseRes.data || []
+
+      // Map Profiles Manually to bypass PGRST200 (for Sales)
+      if (invData.length > 0) {
         const uniqueUserIds = [...new Set(invData.map(inv => inv.user_id).filter(Boolean))];
-        
         if (uniqueUserIds.length > 0) {
           const { data: profilesData, error: profErr } = await supabase
             .from('profiles') 
@@ -135,11 +155,12 @@ export default function AccountsMasterPage() {
         }
       }
 
-      setInvoices(invData || [])
+      setInvoices(invData)
+      setPurchaseInvoices(purchData)
 
+      // KPIs calculation (Sales)
       let gross = 0; let tax = 0; let b2b = 0; let b2c = 0;
-
-      invData?.forEach(inv => {
+      invData.forEach(inv => {
         const total = Number(inv.final_total) || 0
         gross += total
         const baseValue = total / 1.03
@@ -160,13 +181,12 @@ export default function AccountsMasterPage() {
   }
 
   useEffect(() => {
-    // Watch `selectedLocation` instead of the old local state
     const delay = setTimeout(() => { fetchAccountingData() }, 300)
     return () => clearTimeout(delay)
   }, [appUser, selectedLocation, startDate, endDate, search])
 
-  // --- FETCH & OPEN PREVIEW MODAL ---
-  const handleOpenPreview = async (invoiceId: string) => {
+  // --- FETCH & OPEN SALES PREVIEW MODAL ---
+  const handleOpenSalesPreview = async (invoiceId: string) => {
     setIsFetchingPreview(true)
     try {
       const { data: invData, error } = await supabase
@@ -217,74 +237,191 @@ export default function AccountsMasterPage() {
     }
   }
 
-  // --- FULL SCHEMA CSV EXPORT ---
-  const handleExportCSV = () => {
-    if (invoices.length === 0) {
-      toast.error("No data to export");
-      return;
+  // --- FETCH & OPEN PURCHASE PREVIEW MODAL ---
+  const handleOpenPurchasePreview = async (invoiceId: string) => {
+    setIsFetchingPreview(true)
+    try {
+      const { data: invData, error } = await supabase
+        .from('purchase_invoices')
+        .select(`*, suppliers (*), purchase_invoice_items (*)`)
+        .eq('id', invoiceId)
+        .single()
+
+      if (error) throw error
+
+      // Tax Logic Mapping
+      const isIgst = invData.gst_type === 'IGST';
+      const totalTax = Number(invData.total_tax) || 0;
+      const cgst = isIgst ? 0 : totalTax / 2;
+      const sgst = isIgst ? 0 : totalTax / 2;
+
+      // Mock customer object using supplier data to satisfy InvoicePrintTemplate
+      const supplierAsCustomer = {
+        full_name: invData.suppliers?.supplier_name,
+        phone: invData.suppliers?.phone || '',
+        address_line1: invData.suppliers?.address || '',
+        state: invData.suppliers?.state || '',
+        pan_no: invData.suppliers?.gstin || ''
+      }
+
+      const safeItems = invData.purchase_invoice_items?.map((i: any) => {
+        return { 
+          mrp: i.rate || 0, 
+          barcode: i.item_type || 'Item',
+          item_category: i.description || '-',
+          metal_type: '-',
+          purity: '-',
+          hsn_code: '-',
+          gross_wt: i.weight || 0,
+          net_wt: i.quantity || 0,
+          dia_wt: 0
+        }
+      }) || []
+
+      const mappedData = {
+        mode: 'purchase',
+        invoice_number: invData.invoice_number,
+        date: invData.invoice_date,
+        customer: supplierAsCustomer, 
+        subtotal: invData.total_amount,
+        discountAmount: 0,
+        taxableValue: invData.total_amount,
+        cgstAmount: cgst,
+        sgstAmount: sgst,
+        exchangeValue: 0,
+        voucherAmount: 0,
+        finalTotal: invData.total_payable,
+        items: safeItems
+      }
+
+      setInvoiceToPrint(mappedData)
+      setShowPreviewModal(true)
+    } catch (err) {
+      toast.error('Failed to retrieve purchase invoice details')
+    } finally {
+      setIsFetchingPreview(false)
     }
+  }
 
-    const headers = [
-      "Date", "Invoice Number", "Branch / Warehouse", "Customer Name", "PAN No", 
-      "Items Sold", "Billed By (Name)", "Billed By (Role)", 
-      "Subtotal", "Manual Discount", "Voucher Code", "Voucher Discount", "Handling Fee",
-      "Exchange Value", "Exchange Notes", 
-      "Taxable Value", "CGST", "SGST", "Discounted Total", "Round Off", "Advance Adjusted", "Final Total",
-      "Payment Mode", "Split Payments JSON", "Transfer Type", "Transaction Reference", "Payment Remarks"
-    ];
 
-    const csvRows = invoices.map(inv => {
-      const itemsString = inv.invoice_items?.map((i: any) => {
-        const item = i.inventory_items;
-        return item ? `[${item.barcode}] ${item.item_category} (${item.purity_karat || 'N/A'})` : 'Unknown Item'
-      }).join(' | ') || 'No Items';
+  // --- DYNAMIC CSV EXPORT ---
+  const handleExportCSV = () => {
+    if (activeTab === 'sales_register') {
+      if (invoices.length === 0) return toast.error("No sales data to export");
 
-      return [
-        format(new Date(inv.created_at), 'yyyy-MM-dd HH:mm:ss'),
-        inv.invoice_number,
-        inv.warehouses?.name || 'Unknown',
-        inv.customers?.full_name || 'Walk-in',
-        inv.customers?.pan_no || '',
-        itemsString,
-        inv.profiles?.full_name || 'System',
-        inv.profiles?.role || 'N/A',
-        inv.subtotal || 0,
-        inv.discount_amount || 0,
-        inv.voucher_code || '',
-        inv.voucher_discount || 0,
-        inv.Voucher_handling_fee || 0,
-        inv.exchange_value || 0,
-        inv.exchange_notes || '',
-        inv.taxable_value || 0,
-        inv.cgst_amount || 0,
-        inv.sgst_amount || 0,
-        inv.discounted_total || 0,
-        inv.round_off_amount || 0,
-        inv.advance_adjusted || 0,
-        inv.final_total || 0,
-        inv.payment_mode || '',
-        inv.split_payments ? JSON.stringify(inv.split_payments) : '',
-        inv.transfer_type || '',
-        inv.transaction_reference || '',
-        inv.payment_remarks || ''
-      ]
-    });
+      const headers = [
+        "Date", "Invoice Number", "Branch / Warehouse", "Customer Name", "PAN No", 
+        "Items Sold", "Billed By (Name)", "Billed By (Role)", 
+        "Subtotal", "Manual Discount", "Voucher Code", "Voucher Discount", "Handling Fee",
+        "Exchange Value", "Exchange Notes", 
+        "Taxable Value", "CGST", "SGST", "Discounted Total", "Round Off", "Advance Adjusted", "Final Total",
+        "Payment Mode", "Split Payments JSON", "Transfer Type", "Transaction Reference", "Payment Remarks"
+      ];
 
+      const csvRows = invoices.map(inv => {
+        const itemsString = inv.invoice_items?.map((i: any) => {
+          const item = i.inventory_items;
+          return item ? `[${item.barcode}] ${item.item_category} (${item.purity_karat || 'N/A'})` : 'Unknown Item'
+        }).join(' | ') || 'No Items';
+
+        return [
+          format(new Date(inv.created_at), 'yyyy-MM-dd HH:mm:ss'),
+          inv.invoice_number,
+          inv.warehouses?.name || 'Unknown',
+          inv.customers?.full_name || 'Walk-in',
+          inv.customers?.pan_no || '',
+          itemsString,
+          inv.profiles?.full_name || 'System',
+          inv.profiles?.role || 'N/A',
+          inv.subtotal || 0,
+          inv.discount_amount || 0,
+          inv.voucher_code || '',
+          inv.voucher_discount || 0,
+          inv.Voucher_handling_fee || 0,
+          inv.exchange_value || 0,
+          inv.exchange_notes || '',
+          inv.taxable_value || 0,
+          inv.cgst_amount || 0,
+          inv.sgst_amount || 0,
+          inv.discounted_total || 0,
+          inv.round_off_amount || 0,
+          inv.advance_adjusted || 0,
+          inv.final_total || 0,
+          inv.payment_mode || '',
+          inv.split_payments ? JSON.stringify(inv.split_payments) : '',
+          inv.transfer_type || '',
+          inv.transaction_reference || '',
+          inv.payment_remarks || ''
+        ]
+      });
+
+      downloadBlob(headers, csvRows, `Master_Sales_Ledger_${startDate}_to_${endDate}.csv`);
+      toast.success("Sales Ledger CSV Downloaded!");
+
+    } else if (activeTab === 'purchase_register') {
+      if (purchaseInvoices.length === 0) return toast.error("No purchase data to export");
+
+      const headers = [
+        "Date", "Invoice Number", "Branch / Warehouse", "Supplier Name", "GSTIN", 
+        "Items Purchased",
+        "Taxable Amount", "CGST", "SGST", "IGST", "Total Tax", "Round Off", "Final Payable", "Status"
+      ];
+
+      const csvRows = purchaseInvoices.map(inv => {
+        const totalAmount = Number(inv.total_amount) || 0;
+        const totalTax = Number(inv.total_tax) || 0;
+        const totalPayable = Number(inv.total_payable) || 0;
+        const roundOff = Number(inv.round_off_amount) || 0;
+        
+        const isIgst = inv.gst_type === 'IGST';
+        const cgst = isIgst ? 0 : totalTax / 2;
+        const sgst = isIgst ? 0 : totalTax / 2;
+        const igst = isIgst ? totalTax : 0;
+
+        const itemsString = inv.purchase_invoice_items?.map((pi: any) => {
+          const typeStr = pi.item_type?.replace('_', ' ').toUpperCase();
+          const unit = pi.item_type === 'diamond_lot' ? 'ct' : 'g';
+          return `[${typeStr}] ${pi.description || 'N/A'} (Qty: ${pi.quantity || '-'}, Wt: ${pi.weight || '-'}${unit})`;
+        }).join(' | ') || 'No Items';
+
+        return [
+          format(new Date(inv.invoice_date), 'yyyy-MM-dd'),
+          inv.invoice_number,
+          inv.warehouses?.name || 'Unknown',
+          inv.suppliers?.supplier_name || 'Unknown',
+          inv.suppliers?.gstin || '',
+          itemsString,
+          totalAmount,
+          cgst,
+          sgst,
+          igst,
+          totalTax,
+          roundOff,
+          totalPayable,
+          inv.status
+        ]
+      });
+
+      downloadBlob(headers, csvRows, `Master_Purchase_Ledger_${startDate}_to_${endDate}.csv`);
+      toast.success("Purchase Ledger CSV Downloaded!");
+    }
+  }
+
+  // Helper to trigger the actual CSV download
+  const downloadBlob = (headers: string[], rows: any[][], filename: string) => {
     const csvContent = [
       headers.join(","),
-      ...csvRows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      ...rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
     ].join("\n");
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
-    link.setAttribute("download", `Master_Sales_Ledger_${startDate}_to_${endDate}.csv`);
+    link.setAttribute("download", filename);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    
-    toast.success("Full Ledger CSV Downloaded!");
   }
 
   return (
@@ -336,17 +473,17 @@ export default function AccountsMasterPage() {
               className="h-9 text-xs font-medium rounded-full hidden sm:flex shrink-0 text-zinc-700 border border-zinc-200 bg-white hover:bg-zinc-50 shadow-sm"
               onClick={handleExportCSV}
             >
-              <Download className="mr-2 h-3.5 w-3.5" /> Export Full Schema CSV
+              <Download className="mr-2 h-3.5 w-3.5" /> 
+              {activeTab === 'sales_register' ? 'Export Sales CSV' : activeTab === 'purchase_register' ? 'Export Purchase CSV' : 'Export CSV'}
             </Button>
           </div>
 
           <div className={`flex-col sm:flex-row flex-wrap items-stretch sm:items-center gap-2 w-full ${showFilters ? 'flex' : 'hidden sm:flex'} animate-in slide-in-from-top-2 duration-200`}>
             
-            {/* --- NEW: Locked Warehouse Dropdown --- */}
             <Select 
               value={selectedLocation || ''} 
               onValueChange={setSelectedLocation}
-              disabled={isLocked} // Locks it down for Branch Managers
+              disabled={isLocked}
             >
               <SelectTrigger className="h-10 sm:h-9 text-xs sm:text-[11px] font-bold bg-zinc-50 border-zinc-200 rounded-xl sm:rounded-full w-full sm:w-[150px]">
                 <Store className="w-4 h-4 sm:w-3 sm:h-3 mr-1.5 text-zinc-500" />
@@ -436,8 +573,6 @@ export default function AccountsMasterPage() {
           </div>
 
           <TabsContent value="sales_register" className="m-0 pt-2 w-full min-w-0">
-            
-            {/* ENFORCED WIDTH CONTAINER TO PREVENT BLOWOUT */}
             <div className="grid grid-cols-1 w-full min-w-0">
               <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
                 
@@ -457,15 +592,20 @@ export default function AccountsMasterPage() {
                         <div key={inv.id} className="p-4 bg-white m-2 rounded-xl shadow-sm border border-zinc-100">
                           <div className="flex justify-between items-start mb-3">
                             <div>
-                              <div className="font-mono text-sm font-bold text-zinc-900 tracking-tight">{inv.invoice_number}</div>
-                              <div className="text-[11px] text-zinc-500 font-medium mt-0.5">{format(new Date(inv.created_at), 'dd MMM yyyy, HH:mm')}</div>
+                              <div className="font-mono text-sm font-bold text-zinc-900 tracking-tight flex items-center gap-2">
+                                <Button variant="secondary" size="icon" className="h-6 w-6 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 shrink-0" onClick={() => handleOpenSalesPreview(inv.id)}>
+                                  <Printer className="h-3 w-3" />
+                                </Button>
+                                {inv.invoice_number}
+                              </div>
+                              <div className="text-[11px] text-zinc-500 font-medium mt-1 ml-8">{format(new Date(inv.created_at), 'dd MMM yyyy, HH:mm')}</div>
                             </div>
                             <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest ${isB2B ? 'bg-blue-50 text-blue-600 border border-blue-200' : 'bg-zinc-100 text-zinc-600 border border-zinc-200'}`}>
                               {isB2B ? 'B2B' : 'B2C'}
                             </span>
                           </div>
                           
-                          <div className="bg-zinc-50 rounded-lg p-3 border border-zinc-100 mb-3 space-y-2">
+                          <div className="bg-zinc-50 rounded-lg p-3 border border-zinc-100 mb-3 space-y-2 ml-8">
                             <div className="flex justify-between items-center">
                               <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Customer</span>
                               <span className="text-xs font-semibold text-zinc-800">{inv.customers?.full_name || 'Walk-in Consumer'}</span>
@@ -494,14 +634,11 @@ export default function AccountsMasterPage() {
                             </div>
                           </div>
 
-                          <div className="flex justify-between items-center mt-2">
+                          <div className="flex justify-between items-center mt-2 ml-8">
                              <div className="flex flex-col">
                                <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Net Final Total</span>
                                <span className="text-lg font-black text-zinc-900 leading-tight">₹{Number(inv.final_total).toLocaleString()}</span>
                              </div>
-                             <Button variant="secondary" size="sm" className="h-9 px-4 text-xs font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 rounded-lg" onClick={() => handleOpenPreview(inv.id)}>
-                               <Eye className="h-4 w-4 mr-1.5" /> View
-                             </Button>
                           </div>
                         </div>
                       )
@@ -514,6 +651,7 @@ export default function AccountsMasterPage() {
                   <Table className="w-full whitespace-nowrap">
                     <TableHeader className="bg-zinc-50/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                       <TableRow className="hover:bg-transparent border-zinc-200">
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider px-4 bg-zinc-50 z-20 w-[60px] text-center sticky left-0 border-r border-zinc-200">View</TableHead>
                         <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider px-4 bg-zinc-50 z-20">Date</TableHead>
                         <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50 z-20">Invoice No</TableHead>
                         <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50 z-20 border-r border-zinc-200">Branch</TableHead>
@@ -537,7 +675,6 @@ export default function AccountsMasterPage() {
                         
                         <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-center border-l border-zinc-200">Pay Mode</TableHead>
                         <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-left">Txn Ref / Details</TableHead>
-                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-center pr-4">Action</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -561,17 +698,24 @@ export default function AccountsMasterPage() {
 
                         return (
                           <TableRow key={inv.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors group">
-                            <TableCell className="px-4 py-2 text-[12px] font-medium text-zinc-600 whitespace-nowrap sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-50">
+                            {/* PINNED LEFT ACTION COLUMN */}
+                            <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
+                              <Button variant="outline" size="icon" className="h-7 w-7 rounded-md text-indigo-600 border-indigo-200 bg-indigo-50 hover:bg-indigo-100" onClick={() => handleOpenSalesPreview(inv.id)}>
+                                <Printer className="h-3.5 w-3.5" />
+                              </Button>
+                            </TableCell>
+
+                            <TableCell className="px-4 py-2 text-[12px] font-medium text-zinc-600 whitespace-nowrap">
                               {format(new Date(inv.created_at), 'dd MMM yy, HH:mm')}
                             </TableCell>
-                            <TableCell className="py-2 font-mono text-[12px] font-semibold text-zinc-900 sticky left-[120px] bg-white group-hover:bg-zinc-50 z-10">
+                            <TableCell className="py-2 font-mono text-[12px] font-semibold text-zinc-900 border-r border-zinc-100">
                               {inv.invoice_number}
                             </TableCell>
-                            <TableCell className="py-2 text-[11px] font-semibold text-zinc-600 uppercase tracking-wider sticky left-[250px] bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-100">
+                            <TableCell className="px-4 py-2 text-[11px] font-semibold text-zinc-600 uppercase tracking-wider">
                               {branchName}
                             </TableCell>
                             
-                            <TableCell className="py-2 min-w-[160px]">
+                            <TableCell className="px-4 py-2 min-w-[160px]">
                               <div className="flex flex-col">
                                 <span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate">{inv.customers?.full_name || 'Walk-in'}</span>
                                 {isB2B && <span className="text-[9px] font-bold uppercase text-blue-600 tracking-widest">{inv.customers?.pan_no}</span>}
@@ -625,7 +769,9 @@ export default function AccountsMasterPage() {
                             <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 bg-emerald-50/30">₹{sgst.toLocaleString(undefined, {minimumFractionDigits: 2})}</TableCell>
                             
                             <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-500 border-l border-zinc-200">{adv > 0 ? `- ₹${adv.toLocaleString()}` : '-'}</TableCell>
-                            <TableCell className="py-2 text-right text-[11px] font-medium text-zinc-500">{rOff !== 0 ? rOff.toFixed(2) : '-'}</TableCell>
+                            <TableCell className="py-2 text-right text-[11px] font-medium text-zinc-500">
+                              {rOff !== 0 ? (rOff > 0 ? '+' : '') + rOff.toFixed(2) : '-'}
+                            </TableCell>
                             
                             <TableCell className="py-2 text-right text-[13px] font-black text-zinc-900 bg-slate-100 border-l border-zinc-200">₹{total.toLocaleString()}</TableCell>
                             
@@ -640,12 +786,6 @@ export default function AccountsMasterPage() {
                                 {inv.transaction_reference || inv.payment_remarks || '-'}
                               </span>
                             </TableCell>
-                            
-                            <TableCell className="py-2 text-center pr-4">
-                              <Button variant="outline" size="sm" className="h-7 px-3 text-[11px] font-bold text-indigo-600 border-indigo-200 bg-indigo-50 hover:bg-indigo-100 rounded flex items-center justify-center m-auto" onClick={() => handleOpenPreview(inv.id)}>
-                                <Eye className="h-3 w-3 mr-1" /> View
-                              </Button>
-                            </TableCell>
                           </TableRow>
                         )
                       })}
@@ -656,12 +796,136 @@ export default function AccountsMasterPage() {
             </div>
           </TabsContent>
 
-          {/* Placeholders for future implementation */}
-          <TabsContent value="purchase_register" className="m-0 pt-2 w-full">
-            <div className="py-20 border border-dashed border-zinc-300 bg-white rounded-2xl flex flex-col items-center justify-center text-zinc-400 w-full">
-              <BookOpen className="h-10 w-10 mb-3 opacity-20" />
-              <h3 className="text-sm font-semibold tracking-tight text-zinc-600 mb-1">Purchase Register (GSTR-2)</h3>
-              <p className="text-[11px] font-medium">Inward supply and Input Tax Credit (ITC) data will appear here.</p>
+          {/* --- NEW: PURCHASE REGISTER TAB --- */}
+          <TabsContent value="purchase_register" className="m-0 pt-2 w-full min-w-0">
+            <div className="grid grid-cols-1 w-full min-w-0">
+              <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+                <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
+                  <Table className="w-full whitespace-nowrap">
+                    <TableHeader className="bg-zinc-50/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
+                      <TableRow className="hover:bg-transparent border-zinc-200">
+                  
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider px-4 bg-zinc-50 z-20">Date</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50 z-20">Invoice No</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50 z-20 border-r border-zinc-200">Branch</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider px-4">Supplier</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider">GSTIN</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider min-w-[250px]">Items Purchased</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-50/50 border-l border-zinc-200">Taxable Amt</TableHead>
+                        
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-emerald-50/30">CGST</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-emerald-50/30">SGST</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-blue-50/30">IGST</TableHead>
+                        
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-zinc-50 border-l border-zinc-200">R.Off</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-100 border-l border-zinc-200">Final Payable</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-center border-l border-zinc-200 pr-4">Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {purchaseInvoices.map((inv) => {
+                        const totalAmount = Number(inv.total_amount) || 0;
+                        const totalTax = Number(inv.total_tax) || 0;
+                        const totalPayable = Number(inv.total_payable) || 0;
+                        const rOff = Number(inv.round_off_amount) || 0;
+                        const branchName = inv.warehouses?.name || 'Unknown';
+                        const supplierName = inv.suppliers?.supplier_name || 'Unknown Supplier';
+                        const gstin = inv.suppliers?.gstin || '-';
+
+                        // Tax Calculation logic
+                        const isIgst = inv.gst_type === 'IGST';
+                        const cgst = isIgst ? 0 : totalTax / 2;
+                        const sgst = isIgst ? 0 : totalTax / 2;
+                        const igst = isIgst ? totalTax : 0;
+
+                        return (
+                          <TableRow key={inv.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors group">
+                            <TableCell className="px-4 py-2 text-[12px] font-medium text-zinc-600 whitespace-nowrap">
+                              {format(new Date(inv.invoice_date), 'dd MMM yyyy')}
+                            </TableCell>
+                            <TableCell className="py-2 font-mono text-[12px] font-semibold text-zinc-900 border-r border-zinc-100">
+                              {inv.invoice_number}
+                            </TableCell>
+                            <TableCell className="py-2 text-[11px] font-semibold text-zinc-600 uppercase tracking-wider">
+                              {branchName}
+                            </TableCell>
+                            
+                            <TableCell className="px-4 py-2 min-w-[160px]">
+                              <span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate">{supplierName}</span>
+                            </TableCell>
+
+                            <TableCell className="py-2">
+                              <span className="text-[10px] font-mono font-bold uppercase text-blue-600 tracking-widest">{gstin}</span>
+                            </TableCell>
+
+                            <TableCell className="px-4 py-2 min-w-[250px]">
+                               <div className="flex flex-col gap-1 max-h-[50px] overflow-y-auto custom-scrollbar pr-1">
+                                 {inv.purchase_invoice_items && inv.purchase_invoice_items.length > 0 ? (
+                                   inv.purchase_invoice_items.map((pi: any, idx: number) => {
+                                     const isDiamond = pi.item_type === 'diamond_lot';
+                                     const typeStr = pi.item_type?.replace('_', ' ').toUpperCase();
+                                     return (
+                                       <span key={idx} className="text-[10px] font-medium text-zinc-600 bg-zinc-100/50 px-1.5 py-0.5 rounded truncate">
+                                         <span className="font-mono font-bold text-zinc-400 mr-1">[{typeStr}]</span>
+                                         {pi.description || 'No Desc'} <span className="text-zinc-400">(Qty: {pi.quantity || '-'}, Wt: {pi.weight || '-'}{isDiamond ? 'ct' : 'g'})</span>
+                                       </span>
+                                     )
+                                   })
+                                 ) : (
+                                   <span className="text-[10px] text-zinc-400 italic">No items listed</span>
+                                 )}
+                               </div>
+                            </TableCell>
+                            
+                            <TableCell className="py-2 text-right text-[12px] font-bold text-zinc-800 bg-slate-50/50 border-l border-zinc-200">
+                              ₹{totalAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                            </TableCell>
+                            
+                            <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 bg-emerald-50/30">
+                              ₹{cgst.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                            </TableCell>
+                            
+                            <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 bg-emerald-50/30">
+                              ₹{sgst.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                            </TableCell>
+
+                            <TableCell className="py-2 text-right text-[12px] font-medium text-blue-600 bg-blue-50/30">
+                              ₹{igst.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                            </TableCell>
+
+                            <TableCell className="py-2 text-right text-[11px] font-medium text-zinc-500 border-l border-zinc-200">
+                              {rOff !== 0 ? (rOff > 0 ? '+' : '') + rOff.toFixed(2) : '-'}
+                            </TableCell>
+                            
+                            <TableCell className="py-2 text-right text-[13px] font-black text-zinc-900 bg-slate-100 border-l border-zinc-200">
+                              ₹{totalPayable.toLocaleString(undefined, {minimumFractionDigits: 2})}
+                            </TableCell>
+                            
+                            <TableCell className="py-2 text-center border-l border-zinc-200 pr-4">
+                              <span className={`px-2 py-1 rounded border text-[10px] font-bold uppercase tracking-wider whitespace-nowrap
+                                ${inv.status === 'confirmed' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 
+                                  inv.status === 'cancelled' ? 'bg-red-50 text-red-600 border-red-200' : 
+                                  'bg-zinc-100 text-zinc-600 border-zinc-200'}`}>
+                                {inv.status}
+                              </span>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+                
+                {/* MOBILE VIEW FALLBACK FOR PURCHASES */}
+                <div className="block xl:hidden">
+                  <div className="py-12 text-center text-zinc-400 bg-white">
+                     <BookOpen className="h-8 w-8 mx-auto mb-3 opacity-30" />
+                     <p className="text-sm font-semibold tracking-tight">View on Desktop</p>
+                     <p className="text-[11px] font-medium mt-1 px-4">Purchase ledger is currently optimized for desktop viewing.</p>
+                  </div>
+                </div>
+
+              </Card>
             </div>
           </TabsContent>
 

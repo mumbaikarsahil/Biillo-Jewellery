@@ -1,9 +1,10 @@
 "use client"
 
-import React, { useEffect, useState, useMemo } from "react"
+import React, { useEffect, useState, useMemo, useRef } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
+import { useReactToPrint } from "react-to-print"
 import { Badge } from "@/components/ui/badge"
 
 import { 
@@ -146,6 +147,16 @@ export default function InventoryPage() {
   const [previewData, setPreviewData] = useState<any[]>([])
   const [isUploadingImage, setIsUploadingImage] = useState(false)
   const [calcParams, setCalcParams] = useState({ diamondRatePerCt: 25000, markupPercent: 80, flatCharge: 8000 })
+
+  // --- PRINTING STATE & REFS ---
+  const printRef = useRef<HTMLDivElement>(null)
+  const handleBulkPrint = useReactToPrint({
+    contentRef: printRef,
+    documentTitle: `Bulk-Inventory-Tags`,
+  })
+
+  // Get the actual inventory records to print
+  const itemsToPrint = items.filter(i => selectedIds.includes(i.id))
 
   useEffect(() => {
     const fetchInitialData = async () => {
@@ -610,9 +621,16 @@ export default function InventoryPage() {
             <div className="flex items-center gap-1">
               
               {canEdit && (
-                <Button size="sm" onClick={handleOpenCalc} className="h-8 px-4 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-sm transition-none whitespace-nowrap border border-emerald-400/50">
-                  <Calculator className="w-3.5 h-3.5 mr-1.5" /> Calc MRP
-                </Button>
+                <>
+                  <Button size="sm" onClick={handleOpenCalc} className="h-8 px-4 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-sm transition-none whitespace-nowrap border border-emerald-400/50">
+                    <Calculator className="w-3.5 h-3.5 mr-1.5" /> Calc MRP
+                  </Button>
+                  
+                  {/* NEW BULK PRINT BUTTON */}
+                  <Button size="sm" onClick={handleBulkPrint} className="h-8 px-4 text-xs font-semibold bg-blue-500 hover:bg-blue-600 text-white rounded-xl shadow-sm transition-none whitespace-nowrap border border-blue-400/50">
+                    <Printer className="w-3.5 h-3.5 mr-1.5" /> Print Tags
+                  </Button>
+                </>
               )}
               
               <Button size="sm" onClick={handleBulkTransfer} className="h-8 px-4 text-xs font-semibold bg-white text-slate-900 hover:bg-slate-100 rounded-xl shadow-sm transition-none whitespace-nowrap">
@@ -626,6 +644,19 @@ export default function InventoryPage() {
           </div>
         )}
       </main>
+
+      {/* HIDDEN BULK PRINT CONTAINER */}
+      <div className="hidden">
+        <div ref={printRef} className="print:p-0 flex flex-col">
+           {itemsToPrint.map((invItem) => (
+             <ItemTagPreview 
+               key={invItem.id} 
+               item={invItem} 
+               isPrintOnly={true} 
+             />
+           ))}
+        </div>
+      </div>
 
       {/* BULK MRP CALCULATOR MODAL */}
       <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>

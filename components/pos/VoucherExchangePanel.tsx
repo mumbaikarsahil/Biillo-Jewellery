@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Ticket, CheckCircle2, X, RefreshCw, ChevronUp, ChevronDown, Check, AlertCircle } from 'lucide-react'
+import { Ticket, CheckCircle2, X, RefreshCw, ChevronUp, ChevronDown, Check, AlertCircle, Gift } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -16,10 +16,8 @@ export function VoucherExchangePanel(props: any) {
     
     setIsSearching(true)
     try {
-      // Await the hook function
       const success = await props.handleFetchExchangeItem()
       
-      // If it returns false or undefined, trigger manual mode
       if (!success) {
         setShowManualOverride(true)
         toast.info("System bill not found. Please enter the article cost manually.")
@@ -27,7 +25,6 @@ export function VoucherExchangePanel(props: any) {
         setShowManualOverride(false)
       }
     } catch (err) {
-      // If the hook crashes or throws an error, catch it and trigger manual mode
       setShowManualOverride(true)
       toast.info("System bill not found. Please enter the article cost manually.")
     } finally {
@@ -53,7 +50,6 @@ export function VoucherExchangePanel(props: any) {
     setManualArticleCost('')
   }
 
-  // Safety check for exchange value
   const activeExchangeValue = Number(props.exchangeNum) || 0;
 
   return (
@@ -88,19 +84,28 @@ export function VoucherExchangePanel(props: any) {
         <div className="space-y-1.5">
           <Label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Voucher Code</Label>
           {props.activeVoucher ? (
-            <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 h-10 px-3 rounded-lg shadow-sm animate-in zoom-in-95 duration-200">
-              <div className="flex items-center gap-1.5 overflow-hidden">
-                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                <span className="text-[10px] font-bold text-emerald-700 truncate tracking-tight">
-                  {props.activeVoucher.code} (-₹{props.activeVoucher.amount})
-                </span>
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 h-10 px-3 rounded-lg shadow-sm animate-in zoom-in-95 duration-200">
+                <div className="flex items-center gap-1.5 overflow-hidden">
+                  <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                  <span className="text-[10px] font-bold text-emerald-700 truncate tracking-tight">
+                    {props.activeVoucher.code} (-₹{props.activeVoucher.amount})
+                  </span>
+                </div>
+                <button 
+                  className="h-5 w-5 flex items-center justify-center rounded text-emerald-600 hover:bg-emerald-100 shrink-0 transition-colors"
+                  onClick={() => { props.setActiveVoucher(null); props.setHandlingFee('0'); }} 
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
               </div>
-              <button 
-                className="h-5 w-5 flex items-center justify-center rounded text-emerald-600 hover:bg-emerald-100 shrink-0 transition-colors"
-                onClick={() => { props.setActiveVoucher(null); props.setHandlingFee('0'); }} 
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
+              
+              {/* NEW: Birthday Rule Indicator in POS UI */}
+              {props.activeVoucher.is_birthday_redemption && (
+                <div className="flex items-center gap-1 text-[9px] font-bold text-pink-600 uppercase tracking-tighter ml-1">
+                  <Gift className="w-2.5 h-2.5" /> Birthday Month Validated
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex gap-1 relative shadow-sm">
@@ -147,7 +152,6 @@ export function VoucherExchangePanel(props: any) {
         {props.isExchangeOpen && (
           <div className="p-3 pt-0 bg-slate-50/50 border-t border-slate-100 animate-in slide-in-from-top-2 duration-200">
             
-            {/* The Unified Input */}
             <div className="mt-3 flex flex-col gap-2.5">
               <div className="flex gap-1.5">
                 <Input 
@@ -156,7 +160,7 @@ export function VoucherExchangePanel(props: any) {
                   value={props.exchangeInvoiceNo} 
                   onChange={(e) => {
                     props.setExchangeInvoiceNo(e.target.value);
-                    setShowManualOverride(false); // Hide manual override if they start typing a new bill
+                    setShowManualOverride(false);
                   }} 
                   onKeyDown={(e) => e.key === 'Enter' && handleSmartFetch()} 
                   disabled={activeExchangeValue > 0}
@@ -181,7 +185,6 @@ export function VoucherExchangePanel(props: any) {
                 )}
               </div>
 
-              {/* Dynamic Manual Fallback */}
               {showManualOverride && activeExchangeValue === 0 && (
                 <div className="flex gap-1.5 animate-in slide-in-from-top-1 fade-in duration-200 mt-1.5">
                   <div className="relative flex-1">
@@ -204,14 +207,12 @@ export function VoucherExchangePanel(props: any) {
                 </div>
               )}
               
-              {/* Helpful Hint if manual override is visible */}
               {showManualOverride && activeExchangeValue === 0 && (
                 <div className="flex items-start gap-1.5 text-[10px] text-slate-500 leading-tight mt-1">
                   <AlertCircle className="w-3 h-3 text-orange-400 shrink-0 mt-0.5" />
                   <span>System bill not found. Please manually verify the paper bill and enter the 100% pre-GST article cost above.</span>
                 </div>
               )}
-
             </div>
           </div>
         )}

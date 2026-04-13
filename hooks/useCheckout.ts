@@ -322,7 +322,7 @@ export function useCheckout({
             taxable_value: finalTaxableValue,
             cgst_amount: cgstAmount, 
             sgst_amount: sgstAmount, 
-            round_off_amount: roundOffAmount,
+            round_off_amount: roundOffAmount, // <-- SAVES THE ROUND OFF HERE
             final_total: finalPayableGross, 
             advance_adjusted: cartAdvance, 
             
@@ -454,17 +454,22 @@ export function useCheckout({
       }
 
       const finalDraftData = generateDraftData(isEstimate);
+      
+      // ALWAY overwrite the DRAFT placeholder with the newly generated real number
+      finalDraftData.invoice_number = finalNo;
+      
+      // Append wallet/kitty history if available
       if (customTransactionContext) {
           finalDraftData.appliedKitty = customTransactionContext.applied_kitty || 0;
           finalDraftData.appliedCredit = customTransactionContext.applied_credit || 0;
       }
 
       return { success: true, invoiceNo: finalNo, draftData: finalDraftData }
+      
     } catch (err: any) {
       toast.error(err.message || 'Checkout failed.'); return { success: false }
     } finally { setIsProcessing(false) }
   }
-
   const resetCheckoutState = () => {
     setDiscountValue(''); setActiveVoucher(null); setHandlingFee('0'); 
     setExchangeValue(''); setExchangeNotes(''); setExchangeInvoiceNo('');

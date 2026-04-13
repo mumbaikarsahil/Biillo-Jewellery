@@ -278,16 +278,24 @@ export default function IssueTab({ jobId, refresh }: Props) {
                   {diamondLots.length === 0 && (
                      <SelectItem value="empty" disabled className="text-xs">Zero inventory available</SelectItem>
                   )}
-                  {diamondLots.map(lot => (
-                    <SelectItem key={lot.id} value={lot.id} className="text-xs font-medium">
-                      <div className="flex items-center justify-between w-full gap-4">
-                        <span>{lot.lot_number} <span className="text-muted-foreground ml-1">({lot.shape})</span></span>
-                        <span className="text-[10px] font-bold text-muted-foreground uppercase">
-                          {lot.remaining_weight_cts}ct Avail
-                        </span>
-                      </div>
-                    </SelectItem>
-                  ))}
+                  {diamondLots.map(lot => {
+                    // Combine the specs for the UI display
+                    const specs = [lot.shape, lot.color, lot.clarity, lot.sieve_size].filter(Boolean).join(', ')
+                    
+                    return (
+                      <SelectItem key={lot.id} value={lot.id} className="text-xs font-medium">
+                        <div className="flex items-center justify-between w-full gap-4">
+                          <div className="flex flex-col text-left">
+                            <span>{lot.lot_number}</span>
+                            {specs && <span className="text-[9px] text-muted-foreground">{specs}</span>}
+                          </div>
+                          <span className="text-[10px] font-bold text-muted-foreground uppercase shrink-0">
+                            {lot.remaining_weight_cts}ct Avail
+                          </span>
+                        </div>
+                      </SelectItem>
+                    )
+                  })}
                 </SelectContent>
               </Select>
             </div>

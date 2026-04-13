@@ -180,7 +180,7 @@ export default function LegacyImportPage() {
         if (currentItem) cleanInventory.push(currentItem)
 
         // =====================================================================
-        // NEW: ASYNC SKU GENERATION PHASE (RUNS BEFORE DISPLAYING PREVIEW)
+        // NEW: SMART SKU GENERATION PHASE (STRICT DESIGN GROUPING)
         // =====================================================================
         try {
           const groupedByPrefix: Record<string, typeof cleanInventory> = {};
@@ -215,12 +215,33 @@ export default function LegacyImportPage() {
             prefixCounters[prefix] = maxSeq + 1; // Set counter to next available
           }
 
-          // Apply SKUs back to the parsed items
+          // Apply SMART SKUs back to the parsed items
           for (const prefix of Object.keys(groupedByPrefix)) {
             let currentCounter = prefixCounters[prefix];
+            
+            // Dictionary to track unique designs we've seen in THIS file
+            const seenDesigns: Record<string, string> = {};
+
             for (const item of groupedByPrefix[prefix]) {
-              item.sku_reference = `${prefix}-${currentCounter}`;
-              currentCounter++;
+              
+              // Normalize strings to prevent "VS1" and "vs1 " from generating different SKUs
+              const safeShape = (item.shape || 'NONE').toUpperCase().trim();
+              const safeClarity = (item.clarity || 'NONE').toUpperCase().trim();
+              const safePcs = item.diamond_pcs || 0;
+
+              // STRICT SIGNATURE: Must match Price + Pcs + Shape + Clarity exactly
+              const designSignature = `${prefix}_${item.total_amount}_${safePcs}_${safeShape}_${safeClarity}`;
+
+              if (seenDesigns[designSignature]) {
+                // Exact match found! Group them under the same SKU.
+                item.sku_reference = seenDesigns[designSignature];
+              } else {
+                // New unique design found. Assign fresh SKU and record it.
+                const freshSku = `${prefix}-${currentCounter}`;
+                item.sku_reference = freshSku;
+                seenDesigns[designSignature] = freshSku;
+                currentCounter++;
+              }
             }
           }
         } catch (skuError) {
@@ -228,7 +249,6 @@ export default function LegacyImportPage() {
           toast.warning("Failed to auto-generate SKUs. They will default to Unassigned.");
         }
         // =====================================================================
-
         setParsedItems(cleanInventory)
         setSelectedIds(new Set(cleanInventory.map(item => item.temp_id)))
         setIsParsing(false)

@@ -8,7 +8,7 @@ import { useRpc } from '@/hooks/useRpc'
 import { Loader2 } from 'lucide-react'
 import { fetchCustomers } from '@/lib/api'
 import { toast } from 'sonner' 
-import { supabase } from '@/lib/supabaseClient' // <--- Added Supabase import
+import { supabase } from '@/lib/supabaseClient'
 
 // Hooks
 import { useCart } from '@/hooks/useCart'
@@ -90,16 +90,12 @@ export default function POSPage() {
     processScannedItem, handleScanResult, clearCart, removeFromCart
   } = useCart(appUser?.company_id, selectedLocation, mode)
 
-  // ======================================================================
-  // THE FIX: FETCH OBJECT INSTEAD OF PASSING STRING
-  // ======================================================================
   useEffect(() => {
     if (!urlBarcode || !appUser?.company_id || !selectedLocation) return; 
 
     const safeUrlLoc = String(urlLocation || '').toLowerCase().trim();
     const safeSelLoc = String(selectedLocation || '').toLowerCase().trim();
 
-    // 1. Check Context Switches
     if (safeUrlLoc && safeSelLoc !== safeUrlLoc) {
       if (isLocked) {
         toast.error("Cross-Branch Error", {
@@ -113,7 +109,6 @@ export default function POSPage() {
       }
     }
 
-    // 2. Fetch the Full Item Object from Database
     const fetchAndProcess = async () => {
       try {
         const { data, error } = await supabase
@@ -126,18 +121,15 @@ export default function POSPage() {
         if (error || !data) {
           toast.error("Item not found or already sold.");
         } else {
-          // PASS THE OBJECT (Not the string) to prevent the undefined warehouse error
           processScannedItem(data);
         }
       } catch (err) {
         console.error("Auto-add fetch error:", err);
       } finally {
-        // Wipe URL so it doesn't loop on refresh
         window.history.replaceState(null, '', window.location.pathname);
       }
     };
 
-    // 3. Delay slightly to ensure useCart has fully caught up with the location state
     const executionTimer = setTimeout(() => {
       fetchAndProcess();
     }, 300);
@@ -145,7 +137,6 @@ export default function POSPage() {
     return () => clearTimeout(executionTimer);
     
   }, [urlBarcode, urlLocation, selectedLocation, appUser?.company_id, isLocked, setSelectedLocation, processScannedItem])
-  // ======================================================================
 
   const checkoutHook = useCheckout({
     appUser, 
@@ -312,10 +303,20 @@ export default function POSPage() {
         executeCheckout={async () => {
           const result = await checkoutHook.executeCheckout(isEstimateCheckout) 
           if (result.success) {
+            
+            // 1. Immediately set the new data into the React state
             setLastInvoiceData(result.draftData)
+            
+            // 2. Close preview
             setShowPreviewModal(false)
-            setShowPrintModal(true)
-            handleWipeSession()
+            
+            // 3. Short delay before showing print modal. 
+            // This guarantees the hidden Print Template has time to re-render with the new state 
+            // before the user can click the "Print" button.
+            setTimeout(() => {
+                setShowPrintModal(true)
+                handleWipeSession()
+            }, 100);
           }
         }}
       />

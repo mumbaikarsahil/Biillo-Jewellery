@@ -251,12 +251,28 @@ export default function DetailedImportPage() {
             prefixCounters[prefix] = maxSeq + 1; // Set counter to next available
           }
 
-          // Apply optimistic SKUs back to the parsed items so the user sees them
+          // Apply SMART SKUs back to the parsed items so the user sees them
           for (const prefix of Object.keys(groupedByPrefix)) {
             let currentCounter = prefixCounters[prefix];
+            const seenDesigns: Record<string, string> = {};
+
             for (const item of groupedByPrefix[prefix]) {
-              item.sku_reference = `${prefix}-${currentCounter}`;
-              currentCounter++;
+              const safeShape = (item.shape || 'NONE').toUpperCase().trim();
+              const safeClarity = (item.clarity || 'NONE').toUpperCase().trim();
+              const safeColor = (item.color || 'NONE').toUpperCase().trim();
+              const safePcs = item.diamond_pcs || 0;
+
+              // STRICT SIGNATURE: Price + Pcs + Shape + Clarity + Color
+              const designSignature = `${prefix}_${item.total_amount}_${safePcs}_${safeShape}_${safeClarity}_${safeColor}`;
+
+              if (seenDesigns[designSignature]) {
+                item.sku_reference = seenDesigns[designSignature];
+              } else {
+                const freshSku = `${prefix}-${currentCounter}`;
+                item.sku_reference = freshSku;
+                seenDesigns[designSignature] = freshSku;
+                currentCounter++;
+              }
             }
           }
         } catch (skuError) {

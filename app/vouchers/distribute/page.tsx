@@ -1,9 +1,10 @@
 "use client"
 
-import React, { useEffect, useState, useMemo } from 'react'
+import React, { useEffect, useState, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabaseClient'
 import { useAuth } from '@/hooks/useAuth'
+import { useReactToPrint } from 'react-to-print'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -19,7 +20,7 @@ import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { 
   Loader2, FileText, CheckCircle2, CalendarDays, IndianRupee, Send, 
-  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck 
+  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer 
 } from 'lucide-react'
 import { addMonths, format } from 'date-fns'
 
@@ -35,7 +36,8 @@ export default function DistributeVouchersPage() {
   const [distributors, setDistributors] = useState<any[]>([])
   const [batches, setBatches] = useState<any[]>([])
   const [challans, setChallans] = useState<any[]>([])
-  const [agents, setAgents] = useState<any[]>([]) // <--- NEW: Agents State
+  const [agents, setAgents] = useState<any[]>([]) 
+  const [companyData, setCompanyData] = useState<any>(null)
   
   // Form States
   const [distributorId, setDistributorId] = useState('')
@@ -45,6 +47,7 @@ export default function DistributeVouchersPage() {
   const [customExpiry, setCustomExpiry] = useState('')
   const [totalFee, setTotalFee] = useState('')
   const [deliveryAgent, setDeliveryAgent] = useState('')
+  const [isBirthdayRedemption, setIsBirthdayRedemption] = useState(false) // NEW: Birthday state
   
   // Sequence Tracking States
   const [availableVouchers, setAvailableVouchers] = useState<VoucherCode[]>([]);
@@ -52,15 +55,25 @@ export default function DistributeVouchersPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
 
-  // View Details Modal State
+  // View Details & Print Modal State
   const [viewChallan, setViewChallan] = useState<any>(null)
   const [viewSequence, setViewSequence] = useState<{start: string, end: string} | null>(null)
   const [isLoadingSequence, setIsLoadingSequence] = useState(false)
+  
+  const printRef = useRef<HTMLDivElement>(null)
+  const handlePrintChallan = useReactToPrint({ 
+    contentRef: printRef,
+    documentTitle: viewChallan ? `Delivery_Challan_${viewChallan.id.slice(0,8)}` : 'Delivery_Challan'
+  })
 
   const fetchData = async () => {
     if (!appUser?.company_id) return
     setIsLoading(true)
     try {
+      // Fetch Company details for the print template
+      const { data: comp } = await supabase.from('companies').select('*').eq('id', appUser.company_id).single()
+      if (comp) setCompanyData(comp)
+
       // 1. Fetch Distributors
       const { data: dists } = await supabase
         .from('voucher_distributors')
@@ -77,34 +90,41 @@ export default function DistributeVouchersPage() {
         .order('name')
       if (agentData) setAgents(agentData)
 
-      // 3. Fetch Batches that actually have stock
+      // 3. Fetch Batches
       const { data: batchData } = await supabase
         .from("voucher_batches")
         .select(`
           id, 
           batch_no, 
           discount_value,
-          vouchers (count)
+          handling_fee,
+          status,
+          vouchers ( status )
         `)
-        .eq("status", "received_from_printer")
-        .eq("vouchers.status", "in_stock");
+        .eq('company_id', appUser.company_id)
+        .order('created_at', { ascending: false }); 
 
       if (batchData) {
         const formattedBatches = (batchData as any[])
-          .map(b => ({
-            id: b.id,
-            batch_no: b.batch_no,
-            discount_value: b.discount_value,
-            available_stock: b.vouchers[0]?.count || 0
-          }))
-          .filter(b => b.available_stock > 0);
+          .map(b => {
+            const inStockCount = b.vouchers?.filter((v: any) => v.status === 'in_stock').length || 0;
+            return {
+              id: b.id,
+              batch_no: b.batch_no,
+              discount_value: b.discount_value,
+              handling_fee: b.handling_fee || 0,
+              available_stock: inStockCount
+            };
+          })
+          .filter(b => b.available_stock > 0); 
+          
         setBatches(formattedBatches);
       }
 
       // 4. Fetch Distribution Challans
       const { data: records } = await supabase
         .from('voucher_distributions')
-        .select('*, voucher_distributors(distributor_name)')
+        .select('*, voucher_distributors(*)')
         .eq('company_id', appUser.company_id)
         .order('created_at', { ascending: false })
       if (records) setChallans(records)
@@ -151,7 +171,6 @@ export default function DistributeVouchersPage() {
     fetchVoucherSequence();
   }, [selectedBatch]);
 
-  // --- AUTO-CAPPING QUANTITY LOGIC ---
   const handleQuantityChange = (val: string) => {
     if (!val) {
       setQuantity("");
@@ -201,6 +220,7 @@ export default function DistributeVouchersPage() {
     try {
       const voucherIds = vouchersToUpdate.map(v => v.id);
 
+      // 1. Insert Challan (Includes Birthday Rule)
       const { data: challan, error: challanErr } = await supabase
         .from('voucher_distributions')
         .insert({
@@ -210,13 +230,15 @@ export default function DistributeVouchersPage() {
           total_amount: parseFloat(totalFee),
           payment_status: 'pending',
           expiry_date: finalExpiryDate,
-          delivery_agent: (deliveryAgent && deliveryAgent !== 'none') ? deliveryAgent : null // Safely handle null
+          delivery_agent: (deliveryAgent && deliveryAgent !== 'none') ? deliveryAgent : null,
+          is_birthday_redemption: isBirthdayRedemption
         })
-        .select()
+        .select('*, voucher_distributors(*)')
         .single()
 
       if (challanErr) throw challanErr
 
+      // 2. Update Vouchers (Locks them to Birthday Rule)
       const { error: updateErr } = await supabase
         .from('vouchers')
         .update({
@@ -224,7 +246,8 @@ export default function DistributeVouchersPage() {
           distributor_id: distributorId,
           distribution_id: challan.id, 
           expiry_date: finalExpiryDate,
-          distributed_at: new Date().toISOString()
+          distributed_at: new Date().toISOString(),
+          is_birthday_redemption: isBirthdayRedemption
         })
         .in('id', voucherIds)
 
@@ -234,11 +257,17 @@ export default function DistributeVouchersPage() {
         description: `Successfully issued ${numQuantity} vouchers (${startCode} to ${endCode}).`
       })
       
+      // Auto-open print modal for the new challan
+      setViewChallan(challan)
+      setViewSequence({ start: startCode, end: endCode })
+      
+      // Reset Form
       setQuantity('')
       setTotalFee('')
       setDistributorId('')
       setSelectedBatch('')
       setDeliveryAgent('')
+      setIsBirthdayRedemption(false)
       fetchData()
 
     } catch (err: any) {
@@ -360,7 +389,7 @@ export default function DistributeVouchersPage() {
                 <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Distributor</Label>
                 <Select value={distributorId} onValueChange={setDistributorId}>
                   <SelectTrigger className="h-10 text-sm bg-gray-50 border-gray-200"><SelectValue placeholder="Select partner..." /></SelectTrigger>
-                  <SelectContent className="border-gray-200">
+                  <SelectContent className="border-gray-200 max-h-[300px]">
                     {distributors.map(d => (
                       <SelectItem key={d.id} value={d.id}>
                         <div className="flex items-center gap-2 font-medium">
@@ -376,13 +405,20 @@ export default function DistributeVouchersPage() {
                 <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Source Batch</Label>
                 <Select value={selectedBatch} onValueChange={setSelectedBatch}>
                   <SelectTrigger className="h-10 text-sm bg-gray-50 border-gray-200"><SelectValue placeholder="Choose batch from stock..." /></SelectTrigger>
-                  <SelectContent className="border-gray-200">
+                  <SelectContent className="border-gray-200 max-h-[300px]">
                     {batches.length === 0 && <SelectItem value="none" disabled>Insufficient inventory across all batches</SelectItem>}
                     {batches.map(batch => (
                       <SelectItem key={batch.id} value={batch.id} className="text-sm font-medium py-2">
-                        <div className="flex justify-between items-center w-full min-w-[200px]">
-                          <span className="flex items-center gap-2"><Package className="w-3.5 h-3.5 text-gray-400" /> {batch.batch_no}</span>
-                          <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">{batch.available_stock} Avail.</span>
+                        <div className="flex justify-between items-center w-full min-w-[300px]">
+                          <span className="flex items-center gap-2 font-bold text-slate-800"><Package className="w-3.5 h-3.5 text-indigo-500" /> {batch.batch_no}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-100 hidden sm:inline-block">
+                               ₹{batch.discount_value} Val / ₹{batch.handling_fee} Fee
+                            </span>
+                            <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
+                              {batch.available_stock} Avail.
+                            </span>
+                          </div>
                         </div>
                       </SelectItem>
                     ))}
@@ -464,7 +500,6 @@ export default function DistributeVouchersPage() {
                 </div>
               </div>
 
-              {/* NEW: DROPDOWN FOR AGENTS */}
               <div className="space-y-1.5 pt-3 border-t border-gray-100">
                 <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
                   <Truck className="w-3.5 h-3.5" /> Delivery Agent / Courier
@@ -473,7 +508,7 @@ export default function DistributeVouchersPage() {
                   <SelectTrigger className="h-10 text-sm bg-white border-gray-200">
                     <SelectValue placeholder="Assign delivery personnel (Optional)" />
                   </SelectTrigger>
-                  <SelectContent className="border-gray-200">
+                  <SelectContent className="border-gray-200 max-h-[300px]">
                     <SelectItem value="none" className="text-gray-500 italic">Self Pickup / No Agent</SelectItem>
                     {agents.map(a => (
                       <SelectItem key={a.id} value={a.name}>
@@ -485,6 +520,25 @@ export default function DistributeVouchersPage() {
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+
+              {/* NEW: Birthday Month Rule Toggle */}
+              <div className="space-y-1.5 pt-3 border-t border-gray-100 flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-[11px] font-bold text-gray-700 uppercase tracking-widest flex items-center gap-1.5 cursor-pointer" htmlFor="birthday-toggle">
+                    <Gift className="w-4 h-4 text-pink-500" /> Birthday Month Rule
+                  </Label>
+                  <p className="text-[10px] text-gray-500 leading-tight pr-4">
+                    If enabled, these vouchers can ONLY be redeemed during the customer's registered birth month.
+                  </p>
+                </div>
+                <input 
+                  id="birthday-toggle"
+                  type="checkbox" 
+                  className="w-5 h-5 rounded border-gray-300 text-pink-600 focus:ring-pink-500 cursor-pointer shrink-0"
+                  checked={isBirthdayRedemption}
+                  onChange={(e) => setIsBirthdayRedemption(e.target.checked)}
+                />
               </div>
 
             </CardContent>
@@ -527,7 +581,6 @@ export default function DistributeVouchersPage() {
                         <TableHead className="text-[10px] uppercase font-black tracking-widest text-gray-400 h-10 px-4 md:px-6 whitespace-nowrap">Date</TableHead>
                         <TableHead className="text-[10px] uppercase font-black tracking-widest text-gray-400 h-10 whitespace-nowrap">Distributor</TableHead>
                         <TableHead className="text-[10px] uppercase font-black tracking-widest text-gray-400 h-10 text-center whitespace-nowrap">Qty</TableHead>
-                        <TableHead className="text-[10px] uppercase font-black tracking-widest text-gray-400 h-10 whitespace-nowrap hidden sm:table-cell">Expiry</TableHead>
                         <TableHead className="text-[10px] uppercase font-black tracking-widest text-gray-400 h-10 text-right whitespace-nowrap">Fee Due</TableHead>
                         <TableHead className="text-[10px] uppercase font-black tracking-widest text-gray-400 h-10 text-right pr-4 md:pr-6 whitespace-nowrap">Action</TableHead>
                       </TableRow>
@@ -536,9 +589,11 @@ export default function DistributeVouchersPage() {
                       {challans.filter(c => c.payment_status === 'pending').map(c => (
                         <TableRow key={c.id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100">
                           <TableCell className="text-[11px] font-bold text-gray-400 uppercase px-4 md:px-6 py-4 whitespace-nowrap">{format(new Date(c.created_at), 'dd MMM yy')}</TableCell>
-                          <TableCell className="font-bold text-xs text-gray-900 py-4 min-w-[120px]">{c.voucher_distributors?.distributor_name}</TableCell>
+                          <TableCell className="py-4 min-w-[120px]">
+                            <span className="font-bold text-xs text-gray-900 block">{c.voucher_distributors?.distributor_name}</span>
+                            {c.is_birthday_redemption && <span className="text-[9px] font-bold text-pink-600 uppercase tracking-widest block mt-0.5">Birthday Rule</span>}
+                          </TableCell>
                           <TableCell className="text-center font-bold text-xs py-4">{c.quantity}</TableCell>
-                          <TableCell className="text-[11px] font-bold text-gray-400 uppercase py-4 hidden sm:table-cell whitespace-nowrap">{format(new Date(c.expiry_date), 'dd MMM yy')}</TableCell>
                           <TableCell className="text-right font-black text-sm text-amber-600 py-4 whitespace-nowrap">₹{c.total_amount.toLocaleString()}</TableCell>
                           <TableCell className="text-right pr-4 md:pr-6 py-4">
                             <div className="flex justify-end gap-2">
@@ -574,7 +629,10 @@ export default function DistributeVouchersPage() {
                       {challans.filter(c => c.payment_status === 'paid').map(c => (
                         <TableRow key={c.id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100">
                           <TableCell className="text-[11px] font-bold text-gray-400 uppercase px-4 md:px-6 py-4 whitespace-nowrap">{c.payment_received_at ? format(new Date(c.payment_received_at), 'dd MMM yy') : '---'}</TableCell>
-                          <TableCell className="font-bold text-xs text-gray-900 py-4 min-w-[120px]">{c.voucher_distributors?.distributor_name}</TableCell>
+                          <TableCell className="py-4 min-w-[120px]">
+                            <span className="font-bold text-xs text-gray-900 block">{c.voucher_distributors?.distributor_name}</span>
+                            {c.is_birthday_redemption && <span className="text-[9px] font-bold text-pink-600 uppercase tracking-widest block mt-0.5">Birthday Rule</span>}
+                          </TableCell>
                           <TableCell className="text-center font-bold text-xs py-4">{c.quantity}</TableCell>
                           <TableCell className="text-right pr-4 md:pr-6 py-4">
                             <div className="flex items-center justify-end gap-3">
@@ -601,22 +659,37 @@ export default function DistributeVouchersPage() {
         </div>
       </main>
 
-      {/* --- NEW: VIEW DETAILS DIALOG --- */}
+      {/* --- VIEW DETAILS DIALOG --- */}
       <Dialog open={!!viewChallan} onOpenChange={(open) => !open && setViewChallan(null)}>
         <DialogContent className="sm:max-w-[450px] p-0 overflow-hidden border-none shadow-2xl">
           <DialogHeader className="bg-gray-50 p-6 border-b border-gray-200">
-            <DialogTitle className="text-lg font-bold text-gray-900 flex items-center gap-2">
-              <FileText className="w-5 h-5 text-indigo-600" />
-              Delivery Challan Record
+            <DialogTitle className="text-lg font-bold text-gray-900 flex items-center justify-between">
+              <span className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-indigo-600" />
+                Delivery Challan
+              </span>
+              <Button size="sm" variant="outline" className="h-8 px-3 text-[10px] font-bold uppercase tracking-widest text-indigo-700 bg-indigo-50 border-indigo-200 hover:bg-indigo-100" onClick={handlePrintChallan}>
+                <Printer className="w-3.5 h-3.5 mr-1.5" /> Print
+              </Button>
             </DialogTitle>
             <DialogDescription className="text-xs font-medium text-gray-500 mt-1">
-              Distribution details and assigned voucher sequence.
+              Ref: {viewChallan?.id?.slice(0, 8).toUpperCase()}
             </DialogDescription>
           </DialogHeader>
 
           {viewChallan && (
             <div className="p-6 space-y-5">
               
+              {viewChallan.is_birthday_redemption && (
+                <div className="bg-pink-50 border border-pink-200 p-3 rounded-lg flex items-center gap-3">
+                  <Gift className="w-6 h-6 text-pink-500 shrink-0" />
+                  <p className="text-[11px] font-medium text-pink-800 leading-snug">
+                    <strong className="block text-xs text-pink-900">Birthday Restricted</strong>
+                    These vouchers can only be redeemed during the registered customer's birth month.
+                  </p>
+                </div>
+              )}
+
               <div className="flex justify-between items-center py-2 border-b border-dashed border-gray-200">
                 <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Distributor</span>
                 <span className="font-bold text-sm text-gray-900">{viewChallan.voucher_distributors?.distributor_name}</span>
@@ -634,7 +707,7 @@ export default function DistributeVouchersPage() {
 
               <div className="flex justify-between items-center py-2 border-b border-dashed border-gray-200">
                 <span className="text-xs font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><User className="w-3.5 h-3.5"/> Agent</span>
-                <span className="font-bold text-sm text-gray-900">{viewChallan.delivery_agent || '---'}</span>
+                <span className="font-bold text-sm text-gray-900">{viewChallan.delivery_agent || 'Self Pickup'}</span>
               </div>
 
               <div className="bg-gray-50 p-3 rounded border border-gray-200 mt-4">
@@ -659,6 +732,117 @@ export default function DistributeVouchersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* --- HIDDEN PRINT TEMPLATE FOR DELIVERY CHALLAN --- */}
+      <div className="hidden">
+        <div ref={printRef} className="bg-white text-black p-10 font-sans" style={{ width: '210mm', minHeight: '297mm', margin: 0, padding: '40px' }}>
+          {viewChallan && companyData && (
+            <>
+              {/* Header */}
+              <div className="flex justify-between items-start border-b-2 border-black pb-6 mb-8">
+                <div>
+                  <h1 className="text-3xl font-black uppercase tracking-widest text-gray-900">{companyData.trade_name || companyData.legal_name || "COMPANY NAME"}</h1>
+                  <p className="text-sm font-medium text-gray-600 mt-1 max-w-sm">{companyData.address_line1 || "Head Office / Central Dispatch"}</p>
+                  <p className="text-sm font-bold text-gray-600 mt-1">GSTIN: {companyData.gstin || "NOT PROVIDED"}</p>
+                </div>
+                <div className="text-right">
+                  <h2 className="text-2xl font-bold uppercase tracking-widest text-gray-400 mb-2">Delivery Challan</h2>
+                  <p className="text-sm font-bold"><span className="text-gray-500 mr-2">CHALLAN NO:</span> {viewChallan.id.slice(0, 8).toUpperCase()}</p>
+                  <p className="text-sm font-bold"><span className="text-gray-500 mr-2">DATE:</span> {format(new Date(viewChallan.created_at), 'dd MMM yyyy')}</p>
+                </div>
+              </div>
+
+              {/* Parties */}
+              <div className="grid grid-cols-2 gap-12 mb-10">
+                <div>
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 border-b border-gray-200 pb-1">Issued To (Distributor)</h3>
+                  <p className="text-lg font-bold text-gray-900">{viewChallan.voucher_distributors?.distributor_name}</p>
+                  <p className="text-sm font-medium text-gray-600 mt-1">{viewChallan.voucher_distributors?.contact_person || ""}</p>
+                  <p className="text-sm font-medium text-gray-600">{viewChallan.voucher_distributors?.phone || "No contact provided"}</p>
+                </div>
+                <div>
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 border-b border-gray-200 pb-1">Delivery Agent</h3>
+                  <p className="text-lg font-bold text-gray-900">{viewChallan.delivery_agent || "Self Pickup"}</p>
+                  <p className="text-sm font-medium text-gray-600 mt-1">Assigned for secure transport.</p>
+                </div>
+              </div>
+
+              {/* Items Table */}
+              <div className="mb-10">
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr className="border-y-2 border-black">
+                      <th className="py-3 px-2 text-left text-xs font-bold uppercase tracking-widest text-gray-500 w-16">Item</th>
+                      <th className="py-3 px-2 text-left text-xs font-bold uppercase tracking-widest text-gray-500">Description</th>
+                      <th className="py-3 px-2 text-center text-xs font-bold uppercase tracking-widest text-gray-500">Qty</th>
+                      <th className="py-3 px-2 text-right text-xs font-bold uppercase tracking-widest text-gray-500">Handling Fee</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-b border-gray-200">
+                      <td className="py-4 px-2 font-bold text-gray-900">01</td>
+                      <td className="py-4 px-2">
+                        <p className="font-bold text-gray-900 text-lg">Physical Vouchers (Gift/Discount Booklets)</p>
+                        <p className="text-sm text-gray-600 mt-1 font-mono">Sequence: {viewSequence?.start} to {viewSequence?.end}</p>
+                        <p className="text-sm text-gray-600 mt-1">Valid Until: {format(new Date(viewChallan.expiry_date), 'dd MMM yyyy')}</p>
+                        {viewChallan.is_birthday_redemption && (
+                          <p className="text-xs font-bold text-pink-600 uppercase tracking-widest mt-2 border border-pink-200 bg-pink-50 inline-block px-2 py-1 rounded">
+                            Restricted: Birthday Month Redemption Only
+                          </p>
+                        )}
+                      </td>
+                      <td className="py-4 px-2 text-center font-black text-xl text-gray-900">{viewChallan.quantity}</td>
+                      <td className="py-4 px-2 text-right font-bold text-lg text-gray-900">₹{viewChallan.total_amount.toLocaleString()}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Total & Terms */}
+              <div className="flex justify-between items-start mb-20">
+                <div className="w-2/3 pr-12">
+                  <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Terms & Conditions</h3>
+                  <p className="text-[10px] text-gray-500 text-justify leading-relaxed">
+                    1. The goods/vouchers listed above are securely handed over to the distributor/agent. <br/>
+                    2. The distributor agrees to safely handle and distribute these sequence-tracked vouchers. <br/>
+                    3. Loss or theft of physical booklets must be immediately reported to HQ to void the sequence. <br/>
+                    4. This challan is for internal stock movement tracking and is not a tax invoice for goods sold.
+                  </p>
+                </div>
+                <div className="w-1/3">
+                  <div className="flex justify-between items-center py-2 border-b-2 border-black">
+                    <span className="font-bold text-gray-600 uppercase tracking-widest">Total Due:</span>
+                    <span className="font-black text-2xl text-gray-900">₹{viewChallan.total_amount.toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between items-center py-2 text-xs">
+                    <span className="font-bold text-gray-500 uppercase tracking-widest">Status:</span>
+                    <span className="font-bold text-gray-900 uppercase">{viewChallan.payment_status}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Signatures */}
+              <div className="grid grid-cols-3 gap-8 mt-auto pt-20 border-t border-gray-200">
+                <div className="text-center">
+                  <div className="h-16 border-b border-gray-300 mb-2"></div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-gray-500">Issuer Signature</p>
+                  <p className="text-[10px] text-gray-400 mt-1">Authorized Store Rep</p>
+                </div>
+                <div className="text-center">
+                  <div className="h-16 border-b border-gray-300 mb-2"></div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-gray-500">Agent Signature</p>
+                  <p className="text-[10px] text-gray-400 mt-1">{viewChallan.delivery_agent || 'N/A'}</p>
+                </div>
+                <div className="text-center">
+                  <div className="h-16 border-b border-gray-300 mb-2"></div>
+                  <p className="text-xs font-bold uppercase tracking-widest text-gray-500">Receiver Signature</p>
+                  <p className="text-[10px] text-gray-400 mt-1">Distributor Stamp / Sign</p>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
 
     </div>
   )

@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { useReactToPrint } from 'react-to-print'
 import { JobBag, JobBagItem } from '../types'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -19,7 +20,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { Trash2, Plus, Save, ListPlus, AlertCircle, Hammer, Wrench, Check, ArrowLeft, Box, LayoutGrid, Loader2 } from 'lucide-react'
+import { 
+  Trash2, Plus, Save, ListPlus, AlertCircle, Hammer, 
+  Wrench, Check, ArrowLeft, Box, LayoutGrid, Loader2, 
+  Printer, CheckSquare, Square
+} from 'lucide-react'
+
+// Adjust import path as needed based on your folder structure
+import { ItemTagPreview } from '@/components/ItemTagPreview'
 
 interface Props {
   job: JobBag
@@ -69,6 +77,15 @@ export default function OverviewTab({ job }: Props) {
   
   const [skuSuggestions, setSkuSuggestions] = useState<string[]>([])
   const [showSkuSuggestions, setShowSkuSuggestions] = useState(false)
+
+  // --- PRINTING STATE & REFS ---
+  const [selectedPrintIds, setSelectedPrintIds] = useState<Set<string>>(new Set())
+  const printRef = useRef<HTMLDivElement>(null)
+
+  const handlePrint = useReactToPrint({
+    contentRef: printRef,
+    documentTitle: `JobBag-Tags-${job.job_bag_number}`,
+  })
 
   useEffect(() => {
     fetchItems()
@@ -196,7 +213,7 @@ export default function OverviewTab({ job }: Props) {
       setIsLoading(true)
       const { data, error } = await supabase
         .from('job_bag_items')
-        .select('*')
+        .select('*, inventory_items(*)')
         .eq('job_bag_id', job.id)
         .order('created_at', { ascending: true })
 
@@ -320,6 +337,31 @@ export default function OverviewTab({ job }: Props) {
       toast({ title: "Error", description: error.message, variant: "destructive" })
     }
   }
+
+  // --- PRINTING LOGIC ---
+  const receivedItems = items.filter(i => i.status === 'received')
+  const isAllReceivedSelected = receivedItems.length > 0 && receivedItems.every(i => selectedPrintIds.has(i.id))
+  
+  const togglePrintSelectAll = () => {
+    if (isAllReceivedSelected) {
+      setSelectedPrintIds(new Set())
+    } else {
+      setSelectedPrintIds(new Set(receivedItems.map(i => i.id)))
+    }
+  }
+
+  const togglePrintSelect = (id: string) => {
+    const newSet = new Set(selectedPrintIds)
+    if (newSet.has(id)) newSet.delete(id)
+    else newSet.add(id)
+    setSelectedPrintIds(newSet)
+  }
+
+  // Get the actual inventory records to print
+  const itemsToPrint = items
+    .filter(i => selectedPrintIds.has(i.id))
+    .map(i => i.inventory_items?.[0]) 
+    .filter(Boolean)
 
   // UI Theme Logic based on active loaded items
   const isCustomLoaded = !!activeCustomOrderId;
@@ -577,8 +619,23 @@ export default function OverviewTab({ job }: Props) {
 
       {/* COMMITTED SKUS LIST */}
       <Card className="shadow-sm border-gray-200/60 rounded-2xl overflow-hidden bg-white">
-        <CardHeader className="py-4 px-5 border-b border-gray-100 bg-white">
+        <CardHeader className="py-4 px-5 border-b border-gray-100 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
           <CardTitle className="text-[13px] font-bold text-gray-800">Committed Job Bag SKUs</CardTitle>
+          
+          {/* PRINT CONTROLS */}
+          <div className="flex items-center gap-3">
+            <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">
+               {selectedPrintIds.size} Tags Selected
+            </span>
+            <Button 
+               onClick={handlePrint} 
+               disabled={selectedPrintIds.size === 0} 
+               size="sm" 
+               className="h-8 px-4 text-xs font-bold uppercase shadow-sm bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+            >
+               <Printer className="w-3.5 h-3.5 mr-1.5" /> Print Tags
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
@@ -596,7 +653,19 @@ export default function OverviewTab({ job }: Props) {
               <Table>
                 <TableHeader className="bg-gray-50/80">
                   <TableRow className="border-gray-200/60 hover:bg-transparent">
-                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 px-5">SKU Reference</TableHead>
+                    {/* CHECKBOX HEADER */}
+                    <TableHead className="w-[50px] text-center px-2">
+                       <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={togglePrintSelectAll} 
+                          disabled={receivedItems.length === 0}
+                          className="h-8 w-8 p-0 text-gray-500 hover:text-blue-600"
+                       >
+                          {isAllReceivedSelected && receivedItems.length > 0 ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4" />}
+                       </Button>
+                    </TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 px-2">SKU Reference</TableHead>
                     <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Category</TableHead>
                     <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Gold</TableHead>
                     <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Dia</TableHead>
@@ -605,57 +674,93 @@ export default function OverviewTab({ job }: Props) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {items.map((item: any) => (
-                    <TableRow key={item.id} className="hover:bg-gray-50/50 border-gray-100 transition-colors">
-                      <TableCell className="px-5 py-3.5">
-                        <div className="font-mono font-bold text-[13px] text-gray-900">{item.sku_reference}</div>
-                      </TableCell>
-                      <TableCell className="py-3.5">
-                        <div className="text-[13px] font-medium text-gray-700">{item.ornament_type || '-'}</div>
-                      </TableCell>
-                      <TableCell className="text-[13px] text-right font-semibold text-gray-700 py-3.5">
-                        {item.expected_gold_weight_g ? `${item.expected_gold_weight_g} g` : '-'}
-                      </TableCell>
-                      <TableCell className="text-[13px] text-right font-semibold text-gray-700 py-3.5">
-                        {item.expected_diamond_weight_cts ? `${item.expected_diamond_weight_cts} cts` : '-'}
-                      </TableCell>
-                      <TableCell className="py-3.5">
-                        <div className="flex flex-wrap gap-1.5">
-                          <Badge variant={item.status === 'pending' ? 'outline' : 'secondary'} className="text-[9px] font-bold uppercase tracking-widest px-2 rounded-md bg-gray-50 text-gray-600 border-gray-200">
-                            {item.status}
-                          </Badge>
-                          {item.custom_order_id && (
-                            <Badge variant="secondary" className="bg-purple-50 text-purple-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
-                              Custom
+                  {items.map((item: any) => {
+                    const isReceived = item.status === 'received';
+                    const isSelectedForPrint = selectedPrintIds.has(item.id);
+
+                    return (
+                      <TableRow key={item.id} className={`${isSelectedForPrint ? 'bg-blue-50/40' : 'hover:bg-gray-50/50'} border-gray-100 transition-colors`}>
+                        {/* CHECKBOX CELL */}
+                        <TableCell className="p-2 text-center align-middle">
+                           {isReceived ? (
+                             <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={() => togglePrintSelect(item.id)} 
+                                className="h-8 w-8 p-0 hover:bg-transparent"
+                             >
+                                {isSelectedForPrint ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4 text-gray-300" />}
+                             </Button>
+                           ) : (
+                             <span title="Item not received yet" className="inline-block px-2 opacity-30"><Square className="w-4 h-4 text-gray-200" /></span>
+                           )}
+                        </TableCell>
+                        
+                        <TableCell className="px-2 py-3.5">
+                          <div className="font-mono font-bold text-[13px] text-gray-900">{item.sku_reference}</div>
+                        </TableCell>
+                        <TableCell className="py-3.5">
+                          <div className="text-[13px] font-medium text-gray-700">{item.ornament_type || '-'}</div>
+                        </TableCell>
+                        <TableCell className="text-[13px] text-right font-semibold text-gray-700 py-3.5">
+                          {item.expected_gold_weight_g ? `${item.expected_gold_weight_g} g` : '-'}
+                        </TableCell>
+                        <TableCell className="text-[13px] text-right font-semibold text-gray-700 py-3.5">
+                          {item.expected_diamond_weight_cts ? `${item.expected_diamond_weight_cts} cts` : '-'}
+                        </TableCell>
+                        <TableCell className="py-3.5">
+                          <div className="flex flex-wrap gap-1.5">
+                            <Badge variant={item.status === 'pending' ? 'outline' : 'secondary'} className={`text-[9px] font-bold uppercase tracking-widest px-2 rounded-md ${item.status === 'received' ? 'bg-emerald-50 text-emerald-700 border-none' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>
+                              {item.status}
                             </Badge>
+                            {item.custom_order_id && (
+                              <Badge variant="secondary" className="bg-purple-50 text-purple-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
+                                Custom
+                              </Badge>
+                            )}
+                            {item.is_repair && (
+                              <Badge variant="secondary" className="bg-amber-50 text-amber-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
+                                Repair
+                              </Badge>
+                            )}
+                            {item.store_restock_id && (
+                              <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
+                                Restock
+                              </Badge>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell className="py-3.5 text-right px-4">
+                          {item.status === 'pending' && (
+                            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors" onClick={() => deleteSavedItem(item.id, item.status)}>
+                              <Trash2 className="w-4 h-4" strokeWidth={1.5} />
+                            </Button>
                           )}
-                          {item.is_repair && (
-                            <Badge variant="secondary" className="bg-amber-50 text-amber-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
-                              Repair
-                            </Badge>
-                          )}
-                          {item.store_restock_id && (
-                            <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
-                              Restock
-                            </Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="py-3.5 text-right px-4">
-                        {item.status === 'pending' && (
-                          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors" onClick={() => deleteSavedItem(item.id, item.status)}>
-                            <Trash2 className="w-4 h-4" strokeWidth={1.5} />
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* HIDDEN PRINT CONTAINER */}
+      <div className="hidden">
+        <div ref={printRef} className="print:p-0 flex flex-col">
+           {itemsToPrint.map((invItem) => (
+             <ItemTagPreview 
+               key={invItem.id} 
+               item={invItem} 
+               isPrintOnly={true} 
+               onClose={() => {}} 
+             />
+           ))}
+        </div>
+      </div>
+
     </div>
   )
 }

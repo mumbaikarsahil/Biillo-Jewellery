@@ -65,7 +65,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const taxableValue = data.taxableValue || Math.max(0, subtotal - totalDiscount)
     const cgstAmount = data.cgstAmount || 0
     const sgstAmount = data.sgstAmount || 0
-    
+    const roundOff = data.roundOff || 0 // <-- NEW: Fetch the roundOff mapping
+
     const exchangeVal = data.exchangeValue || 0
     const voucherVal = data.voucherAmount || 0
 
@@ -342,7 +343,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
                   <div className="flex justify-between border-t border-slate-300 pt-1 mt-1"><span>Taxable Value</span><span>₹ {taxableValue.toLocaleString()}</span></div>
                   
-                  {/* --- NEW: DYNAMIC ESTIMATE CHARGE PRINTING --- */}
                   {chargeType === 'handling' && data.estimateHandlingAmt > 0 && (
                     <div className="flex justify-between text-xs text-slate-600 mt-1">
                        <span>Handling Charges ({data.estimateHandlingPct}%)</span>
@@ -355,6 +355,14 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                       <div className="flex justify-between text-xs text-slate-600 mt-1"><span>CGST (1.5%)</span><span>+ ₹ {cgstAmount.toLocaleString()}</span></div>
                       <div className="flex justify-between text-xs text-slate-600 pb-1"><span>SGST (1.5%)</span><span>+ ₹ {sgstAmount.toLocaleString()}</span></div>
                     </>
+                  )}
+
+                  {/* --- NEW: Round Off Render --- */}
+                  {roundOff !== 0 && (
+                    <div className="flex justify-between text-xs text-slate-600 pb-1 border-b border-slate-100 mb-1">
+                      <span>Round Off</span>
+                      <span>{roundOff > 0 ? '+' : ''} ₹ {Math.abs(roundOff).toFixed(2)}</span>
+                    </div>
                   )}
 
                   <div className="flex justify-between py-1.5 mt-1 border-t border-slate-800 text-xl font-black text-slate-900"><span>Estimated Total</span><span>₹ {data.finalTotal.toLocaleString()}</span></div>
@@ -388,6 +396,14 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
 
+                  {/* --- NEW: Round Off Render --- */}
+                  {roundOff !== 0 && (
+                    <div className="flex justify-between text-xs text-slate-600 pb-1 border-b border-slate-100 mb-1">
+                      <span>Round Off</span>
+                      <span>{roundOff > 0 ? '+' : ''} ₹ {Math.abs(roundOff).toFixed(2)}</span>
+                    </div>
+                  )}
+
                   <div className="flex justify-between py-1.5 mt-1 border-t border-slate-300 text-xl font-black text-slate-900"><span>Net Payable</span><span>₹ {data.finalTotal.toLocaleString()}</span></div>
                 </>
               )}
@@ -409,8 +425,13 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   {(mode === 'repair' || mode === 'return') ? 'Customer Signature' : 'Customer / Receiver Signature'}
                 </div>
               </div>
-              <div className="text-center flex flex-col items-center justify-center -mt-6 z-10">
-                <img src="/pavitram-logo.png" alt="Pavitram" className={`h-14 mx-auto opacity-90 object-contain ${isEstimate ? 'grayscale' : ''}`} onError={(e) => e.currentTarget.style.display = 'none'} />
+              <div className="text-center flex flex-col items-center justify-center -mt-8 z-10">
+                <img 
+                  src="/pavitram-logo.png" 
+                  alt="Pavitram" 
+                  className={`h-20 mx-auto opacity-90 object-contain ${isEstimate ? 'grayscale' : ''}`} 
+                  onError={(e) => e.currentTarget.style.display = 'none'} 
+                />
               </div>
               <div className="text-center px-6">
                 <p className="mb-6 text-[10px] text-slate-800 uppercase tracking-wider font-bold">For OSSAM JEWELS PVT. LTD.</p>

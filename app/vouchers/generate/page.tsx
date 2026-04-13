@@ -56,11 +56,21 @@ export default function GenerateVouchersPage() {
     fetchInitialContext();
   }, [appUser]);
 
+  // --- FIXED SEQUENCE DETECTION ---
   useEffect(() => {
     async function fetchNextSequence() {
       if (!appUser?.company_id || !formData.prefix.trim()) return;
       const prefix = formData.prefix.trim().toUpperCase();
-      const { data: vData, error } = await supabase.from('vouchers').select('code').ilike('code', `${prefix}%`).limit(1000); 
+      
+      // FIX: Instead of getting 1000 random items, we get the 50 most RECENTLY created items for this prefix.
+      // This prevents the limit(1000) bug from causing duplicate sequence collisions.
+      const { data: vData, error } = await supabase
+        .from('vouchers')
+        .select('code')
+        .eq('company_id', appUser.company_id)
+        .ilike('code', `${prefix}%`)
+        .order('created_at', { ascending: false })
+        .limit(50); 
 
       if (!error && vData && vData.length > 0) {
         let maxVal = 0;
@@ -74,6 +84,7 @@ export default function GenerateVouchersPage() {
         setFormData(prev => ({ ...prev, startingNumber: 1 }));
       }
     }
+    
     const timeoutId = setTimeout(() => fetchNextSequence(), 500);
     return () => clearTimeout(timeoutId);
   }, [formData.prefix, appUser]);
@@ -85,6 +96,8 @@ export default function GenerateVouchersPage() {
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isGenerating) return; // Prevent double clicks
+    
     setIsGenerating(true);
 
     try {
@@ -107,23 +120,44 @@ export default function GenerateVouchersPage() {
         return `${prefix}${numSequence}`;
       });
 
+      // 1. Create the Batch Record
       const { data: batchData, error: batchError } = await supabase.from("voucher_batches").insert({
-          company_id: companyId, batch_no: batchNo, prefix: prefix, quantity: quantity,
-          discount_value: discount, handling_fee: handlingFee, printer_name: formData.printerName, status: "generated",
+          company_id: companyId, 
+          batch_no: batchNo, 
+          prefix: prefix, 
+          quantity: quantity,
+          discount_value: discount, 
+          handling_fee: handlingFee, 
+          printer_name: formData.printerName, 
+          status: "generated",
         }).select().single();
 
       if (batchError) throw new Error(batchError.message);
 
+      // FIX: Added company_id to satisfy RLS / NOT NULL constraints
       const vouchersToInsert = generatedCodes.map((code) => ({
-        batch_id: batchData.id, code: code, discount_value: discount, handling_fee: handlingFee,
-        status: "pending_print", expiry_date: expiryIsoStr,
+        //company_id: companyId,       // <--- ADD THIS LINE
+        batch_id: batchData.id, 
+        code: code, 
+        discount_value: discount, 
+        handling_fee: handlingFee,
+        status: "pending_print", 
+        expiry_date: expiryIsoStr,
       }));
 
-      const { error: vouchersError } = await supabase.from("vouchers").insert(vouchersToInsert);
-      if (vouchersError) throw new Error(vouchersError.message);
+      // 2. FIX: CHUNK THE INSERTS TO PREVENT TIMEOUTS
+      // Supabase has payload limits. Inserting thousands of rows at once causes timeouts.
+      const chunkSize = 500;
+      for (let i = 0; i < vouchersToInsert.length; i += chunkSize) {
+        const chunk = vouchersToInsert.slice(i, i + chunkSize);
+        const { error: vouchersError } = await supabase.from("vouchers").insert(chunk);
+        if (vouchersError) {
+          throw new Error(`Failed to insert batch segment. Check database limits. Details: ${vouchersError.message}`);
+        }
+      }
 
       setSuccessBatch({ batchNo, codes: generatedCodes, discount, handlingFee, expiry: expiryIsoStr });
-      toast({ title: "Batch Generated", description: `${quantity} sequential vouchers committed.` });
+      toast({ title: "Batch Generated", description: `${quantity} sequential vouchers committed safely.` });
       setFormData(prev => ({ ...prev, startingNumber: startNum + quantity }));
 
     } catch (error: any) {

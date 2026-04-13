@@ -16,7 +16,31 @@ export function PosModals({
   }: any) {
   
   const printRef = useRef<HTMLDivElement>(null)
-  const handlePrint = useReactToPrint({ contentRef: printRef })
+  
+  // Base trigger function
+  const triggerPrint = useReactToPrint({ 
+    contentRef: printRef 
+  })
+
+  // --- NEW: Wrapper function to hijack document.title for PDF saving ---
+  const handlePrint = () => {
+    if (!lastInvoiceData) return;
+    
+    // Save the original page title
+    const originalTitle = document.title;
+    
+    // Overwrite the title so "Save as PDF" uses this name
+    const docPrefix = mode === 'challan' ? 'Challan' : mode === 'estimate' ? 'Estimate' : 'Invoice';
+    document.title = `${docPrefix}_${lastInvoiceData.invoice_number || 'Doc'}`;
+    
+    // Trigger the print dialog
+    triggerPrint();
+    
+    // Restore the original title after a short delay
+    setTimeout(() => {
+      document.title = originalTitle;
+    }, 2000);
+  };
 
   const modeConfig: Record<string, { bg: string, text: string }> = {
     normal: { bg: 'bg-[#0078D7]', text: 'text-[#0078D7]' },
@@ -110,7 +134,8 @@ export function PosModals({
             </div>
             <div className="w-full flex flex-col sm:flex-row gap-3 pt-2">
               <Button onClick={() => setShowPrintModal(false)} variant="outline" className="w-full sm:flex-1 rounded-sm border-slate-300">Close</Button>
-              <Button onClick={() => handlePrint()} className={`w-full sm:flex-1 rounded-sm text-white ${currentTheme.bg}`}>
+              {/* UPDATED: Calls the new wrapper function */}
+              <Button onClick={handlePrint} className={`w-full sm:flex-1 rounded-sm text-white ${currentTheme.bg}`}>
                 <Printer className="h-4 w-4 mr-2"/> Print
               </Button>
             </div>

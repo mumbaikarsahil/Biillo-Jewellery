@@ -11,13 +11,13 @@ import {
   ArrowRightLeft, 
   Users, 
   Server, 
-  Activity,
   Ticket,
   Settings,
-  Store,
   Wallet,
   Clock,
-  ScanLine
+  ScanLine,
+  Megaphone, // Added for notice
+  X          // Added for close button
 } from "lucide-react"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Button } from "@/components/ui/button" 
@@ -111,6 +111,7 @@ export default function MainDashboard() {
   const { appUser, loading: authLoading } = useAuth()
   const { isHQ } = useStoreLocation() 
   const [greeting, setGreeting] = useState("")
+  const [showNotice, setShowNotice] = useState(true) // Control notice visibility
 
   useEffect(() => {
     const hour = new Date().getHours()
@@ -130,23 +131,20 @@ export default function MainDashboard() {
 
   if (!appUser) return null
 
-  // Automatically filter modules based on the strictly defined roles
   const permittedModules = APP_MODULES.filter(module => 
     module.roles.includes(appUser.role || "sales_person")
   )
 
-  // Get first letter of name for the Avatar
   const initial = appUser.full_name ? appUser.full_name.charAt(0).toUpperCase() : 'U'
 
   return (
     <div className="min-h-screen bg-[#fafafa] pb-24 font-sans selection:bg-indigo-100">
       
-      {/* 1. Vercel / Linear Style Compact Header */}
-      <header className="bg-white border-b border-slate-200 px-4 sm:px-6 py-4 sm:py-5 sticky top-0 z-10">
+      {/* 1. Header */}
+      <header className="bg-white border-b border-slate-200 px-4 sm:px-6 py-4 sm:py-5 sticky top-0 z-20">
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           
           <div className="flex items-center gap-3 sm:gap-4">
-            {/* Standard App Avatar */}
             <div className="h-10 w-10 sm:h-11 sm:w-11 bg-gradient-to-tr from-slate-200 to-slate-100 border border-slate-200 rounded-full flex items-center justify-center text-slate-700 font-semibold shadow-sm shrink-0">
               {initial}
             </div>
@@ -156,7 +154,6 @@ export default function MainDashboard() {
                 <h1 className="text-base sm:text-lg font-semibold text-slate-900 tracking-tight leading-none">
                   {appUser.full_name || 'Team Member'}
                 </h1>
-                {/* Ultra-subtle Vercel-style badge */}
                 <span className="hidden sm:inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-200 uppercase tracking-wider leading-none">
                   {appUser.role?.replace('_', ' ')}
                 </span>
@@ -178,11 +175,33 @@ export default function MainDashboard() {
               </Button>
             </Link>
           </div>
-
         </div>
       </header>
 
-      {/* 2. Quick Action "App" Grid (Retained Original Design) */}
+      {/* 2. SYSTEM NOTICE BAR (Below Header) */}
+      {showNotice && (
+        <div className="bg-indigo-50 border-b border-indigo-100 animate-in slide-in-from-top duration-500">
+          <div className="max-w-5xl mx-auto px-4 sm:px-6 py-2.5 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="bg-indigo-100 p-1.5 rounded-md">
+                <Megaphone className="w-3.5 h-3.5 text-indigo-600" />
+              </div>
+              <p className="text-[11px] sm:text-xs font-medium text-indigo-900 leading-tight">
+                <span className="font-bold uppercase mr-1">Notice:</span> 
+              All systems normal. No issues reported. Currently updation of the claim page and voucher functionality is in progress.
+              </p>
+            </div>
+            <button 
+              onClick={() => setShowNotice(false)}
+              className="text-indigo-400 hover:text-indigo-600 transition-colors p-1"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Quick Action "App" Grid */}
       <main className="px-4 sm:px-5 pt-8 max-w-5xl mx-auto">
         <div className="flex items-center justify-between mb-4 px-1">
           <h3 className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">

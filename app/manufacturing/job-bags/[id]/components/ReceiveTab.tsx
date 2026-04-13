@@ -59,14 +59,15 @@ type ReceiveItem = {
   diamondShape: string
   diamondColor: string
   diamondClarity: string
+  sieve_size: string // ADDED
   custom_order_id: string | null 
   repair_ticket_id: string | null
-  store_restock_id: string | null // NEW: Added support for Restock Requests
   is_repair: boolean
   showCustomMetal: boolean
   showCustomShape: boolean
   showCustomColor: boolean
   showCustomClarity: boolean
+  showCustomSieve: boolean // ADDED
   imageFile: File | null
   imagePreview: string
   isSelected: boolean
@@ -112,6 +113,7 @@ export default function ReceiveTab({
   const DIAMOND_SHAPES = ['Round', 'Princess', 'Oval', 'Marquise', 'Emerald', 'Pear', 'Cushion', 'Radiant', 'Heart', 'Asscher']
   const DIAMOND_COLORS = ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'EF', 'FG', 'GH', 'HI', 'IJ', 'Fancy']
   const DIAMOND_CLARITIES = ['FL', 'IF', 'VVS1', 'VVS2', 'VVS', 'VS1', 'VS2', 'VS', 'SI1', 'SI2', 'SI', 'I1', 'I2', 'I3']
+  const SIEVE_SIZES = ['-2', '+2-6', '+6-11', '+11-14', 'Stars', 'Melee', 'Pointers', 'Solitaires', 'Mixed'] // ADDED
 
   useEffect(() => {
     async function fetchCompanyRates() {
@@ -161,10 +163,18 @@ export default function ReceiveTab({
     fetchKarigarRate()
   }, [jobId])
 
+  const handleKaratChange = (val: string) => {
+    setPurityKarat(val)
+    if (val === '24K') setPurityPercent('99.9')
+    if (val === '22K') setPurityPercent('91.6')
+    if (val === '18K') setPurityPercent('75.0')
+    if (val === '14K') setPurityPercent('58.3')
+  }
+
   const loadJobBagItems = useCallback(async () => {
     setIsLoading(true)
     try {
-      // 1. Calculate EXACT Raw Materials Issued
+      // 1. Calculate EXACT Raw Materials Issued (Converting to FINE GOLD using table join!)
       const { data: gIssues, error: gError } = await supabase
         .from('job_bag_gold_issues')
         .select('issued_weight_g, inventory_gold_batches ( purity_percent )')
@@ -186,7 +196,7 @@ export default function ReceiveTab({
       
       const totalBagDia = issuedDia - returnedDia;
 
-      // 2. Calculate EXACT Consumed
+      // 2. Calculate EXACT Consumed (Convert existing inventory items back to FINE GOLD)
       const { data: invItems } = await supabase.from('inventory_items')
         .select('net_weight_g, wastage_weight_g, purity_percent, total_stone_weight_cts')
         .eq('created_from_job_bag_id', jobId);
@@ -201,11 +211,49 @@ export default function ReceiveTab({
 
       setPoolStats({ issuedFineGold: totalBagFineGold, issuedDiaCts: totalBagDia, consumedFineGold, consumedDiaCts })
 
-      // NEW: Added store_restock_id to the select query
+      // --- AUTO-FILL DEFAULTS FETCHING ---
+      let defShape = ''; let defColor = ''; let defClarity = ''; let defSieve = '';
+      
+      // Get Diamond Defaults
+      const { data: defaultDiamondLots } = await supabase
+        .from('job_bag_diamond_issues')
+        .select(`inventory_diamond_lots ( shape, color, clarity, sieve_size )`)
+        .eq('job_bag_id', jobId)
+        .limit(1);
+
+      if (defaultDiamondLots && defaultDiamondLots.length > 0 && defaultDiamondLots[0].inventory_diamond_lots) {
+        const lot: any = Array.isArray(defaultDiamondLots[0].inventory_diamond_lots) 
+          ? defaultDiamondLots[0].inventory_diamond_lots[0] 
+          : defaultDiamondLots[0].inventory_diamond_lots;
+        if (lot) {
+          defShape = lot.shape || '';
+          defColor = lot.color || '';
+          defClarity = lot.clarity || '';
+          defSieve = lot.sieve_size || '';
+        }
+      }
+
+      // Get Gold Defaults to update global Karat state
+      const { data: defaultGoldBatches } = await supabase
+        .from('job_bag_gold_issues')
+        .select(`inventory_gold_batches ( purity_karat )`)
+        .eq('job_bag_id', jobId)
+        .limit(1);
+
+      if (defaultGoldBatches && defaultGoldBatches.length > 0 && defaultGoldBatches[0].inventory_gold_batches) {
+        const batch: any = Array.isArray(defaultGoldBatches[0].inventory_gold_batches)
+          ? defaultGoldBatches[0].inventory_gold_batches[0]
+          : defaultGoldBatches[0].inventory_gold_batches;
+        if (batch?.purity_karat) {
+          handleKaratChange(batch.purity_karat); // Auto-set the top dropdown
+        }
+      }
+
+      // 3. Fetch Items to Receive
       const { data: items, error } = await supabase
         .from('job_bag_items')
         .select(`
-          id, sku_reference, ornament_type, status, custom_order_id, repair_ticket_id, store_restock_id, is_repair,
+          id, sku_reference, ornament_type, status, custom_order_id, repair_ticket_id, is_repair,
           job_bags ( product_category )
         `)
         .eq('job_bag_id', jobId)
@@ -247,17 +295,18 @@ export default function ReceiveTab({
           huid_code: '',
           item_remarks: '',
           metalColor: 'Yellow Gold',
-          diamondShape: '',
-          diamondColor: '',
-          diamondClarity: '',
+          diamondShape: defShape, // Auto-filled
+          diamondColor: defColor, // Auto-filled
+          diamondClarity: defClarity, // Auto-filled
+          sieve_size: defSieve, // Auto-filled
           custom_order_id: item.custom_order_id || null, 
           repair_ticket_id: item.repair_ticket_id || null, 
-          store_restock_id: item.store_restock_id || null, // NEW: Mapping the restock ID
           is_repair: item.is_repair || false, 
           showCustomMetal: false,
           showCustomShape: false,
           showCustomColor: false,
           showCustomClarity: false,
+          showCustomSieve: false,
           imageFile: null,
           imagePreview: '',
           isSelected: false 
@@ -270,24 +319,16 @@ export default function ReceiveTab({
     } finally {
       setIsLoading(false)
     }
-  }, [jobId])
-
-  const handleKaratChange = (val: string) => {
-    setPurityKarat(val)
-    if (val === '24K') setPurityPercent('99.9')
-    if (val === '22K') setPurityPercent('91.6')
-    if (val === '18K') setPurityPercent('75.0')
-    if (val === '14K') setPurityPercent('58.3')
-  }
+  }, [jobId]) // Removed explicit handleKaratChange dependency to prevent loop
 
   useEffect(() => { loadJobBagItems() }, [loadJobBagItems])
 
   const updateBatchItem = (id: string, field: keyof ReceiveItem, value: any) => {
     setReceiveItems(prev => prev.map(item => {
       if (item.job_bag_item_id !== id) return item;
- 
+  
       const updated = { ...item, [field]: value }
- 
+  
       if (field === 'solitairePieces' || field === 'meleePieces') {
         const solP = parseInt(field === 'solitairePieces' ? value : updated.solitairePieces) || 0;
         const melP = parseInt(field === 'meleePieces' ? value : updated.meleePieces) || 0;
@@ -392,15 +433,18 @@ export default function ReceiveTab({
     const invalidItem = selectedItems.find(i => parseFloat(i.grossWeight) <= 0 || !i.grossWeight)
     if (invalidItem) return toast.error(`Enter a valid Gross Weight for ${invalidItem.sku_reference}.`)
 
+    // 1. Calculate Fine Gold requested by the staged items based on UI Purity Dropdown
     const stagedRawGold = selectedItems.reduce((sum, item) => sum + (parseFloat(item.netWeight) || 0) + (parseFloat(item.lossWeight) || 0), 0)
     const currentPurityPct = Number(purityPercent) / 100 || 1;
     const stagedFineGoldRequired = stagedRawGold * currentPurityPct;
     
     const stagedDiaRequired = selectedItems.reduce((sum, item) => sum + (parseFloat(item.stoneWeight) || 0), 0)
 
+    // 2. Calculate Available Fine Balances
     const pendingFineGold = poolStats.issuedFineGold - poolStats.consumedFineGold;
     const availableDia = poolStats.issuedDiaCts - poolStats.consumedDiaCts;
 
+    // 3. HARD STOP: Check for Negative Reconciliation (0.01g tolerance for float math)
     if (stagedFineGoldRequired > pendingFineGold + 0.01) {
       return toast.error("CRITICAL: Negative Gold Reconciliation Prevented.", {
         description: `You are trying to receive ${stagedFineGoldRequired.toFixed(3)}g of FINE GOLD, but only ${pendingFineGold.toFixed(3)}g is available in this Job Bag. Issue more gold to the artisan first.`,
@@ -451,6 +495,7 @@ export default function ReceiveTab({
         if (item.diamondShape) diamondSpecs.push(item.diamondShape)
         if (item.diamondColor) diamondSpecs.push(`Color: ${item.diamondColor}`)
         if (item.diamondClarity) diamondSpecs.push(`Clarity: ${item.diamondClarity}`)
+        if (item.sieve_size) diamondSpecs.push(`Sieve: ${item.sieve_size}`)
         const formattedDiamondLabel = diamondSpecs.length > 0 ? diamondSpecs.join(' | ') : null;
 
         if (item.is_repair && item.repair_ticket_id) {
@@ -473,14 +518,12 @@ export default function ReceiveTab({
           const solP = Number(item.solitairePieces) || 0;
           const melP = Number(item.meleePieces) || 0;
           
-          // NEW: We inject the store_restock_id safely into the inventory ledger table here.
           const { error: invError } = await supabase.from('inventory_items').insert({
             company_id: companyId,
             warehouse_id: selectedWarehouseId,
             created_from_job_bag_id: jobId,
             created_from_job_bag_item_id: item.job_bag_item_id,
             custom_order_id: item.custom_order_id || null,
-            store_restock_id: item.store_restock_id || null, // FIX IMPLEMENTED HERE
             is_custom_order: !!item.custom_order_id,
             status: 'in_stock',
             metal_type: metalType,
@@ -513,7 +556,8 @@ export default function ReceiveTab({
             metal_color: item.metalColor || null,
             diamond_shape: item.diamondShape || null,
             diamond_color: item.diamondColor || null,
-            diamond_clarity: item.diamondClarity || null
+            diamond_clarity: item.diamondClarity || null,
+            sieve_size: item.sieve_size || null
           })
 
           if (invError) {
@@ -553,11 +597,11 @@ export default function ReceiveTab({
 
   // CALCULATE EXACT RAW LIMITS BASED ON PURITY DROPDOWN
   let pendingFineGold = poolStats.issuedFineGold - poolStats.consumedFineGold;
-  if (Math.abs(pendingFineGold) < 0.005) pendingFineGold = 0; // Float sanitizer
+  if (Math.abs(pendingFineGold) < 0.005) pendingFineGold = 0; 
 
   const currentPurityPct = Number(purityPercent) / 100 || 1;
   let availableRawGold = pendingFineGold / currentPurityPct;
-  if (Math.abs(availableRawGold) < 0.005) availableRawGold = 0; // Float sanitizer
+  if (Math.abs(availableRawGold) < 0.005) availableRawGold = 0; 
 
   let availableDia = poolStats.issuedDiaCts - poolStats.consumedDiaCts;
   if (Math.abs(availableDia) < 0.005) availableDia = 0;
@@ -753,8 +797,6 @@ export default function ReceiveTab({
                             <span className="font-bold text-xs text-slate-900 leading-tight">{item.sku_reference}</span>
                             {item.custom_order_id && <Badge className="bg-purple-100 text-purple-700 text-[8px] uppercase tracking-widest border-purple-200 px-1.5">Custom</Badge>}
                             {item.is_repair && <Badge className="bg-amber-100 text-amber-700 text-[8px] uppercase tracking-widest border-amber-200 px-1.5">Repair</Badge>}
-                            {/* NEW: Display the Restock badge just like the others */}
-                            {item.store_restock_id && <Badge className="bg-blue-100 text-blue-700 text-[8px] uppercase tracking-widest border-blue-200 px-1.5">Restock</Badge>}
                           </div>
                           
                           <div className="space-y-1 mb-2">
@@ -898,7 +940,7 @@ export default function ReceiveTab({
                                 <PopoverContent 
                                   side="left" 
                                   align="start"
-                                  className="w-72 p-4 bg-white/70 backdrop-blur-xl border border-white/50 shadow-[0_8px_30px_rgb(0,0,0,0.12)] rounded-2xl ring-1 ring-black/5 z-50"
+                                  className="w-72 p-4 bg-white/95 backdrop-blur-xl border border-blue-100 shadow-[0_8px_30px_rgb(0,0,0,0.12)] rounded-2xl ring-1 ring-black/5 z-50"
                                 >
                                   <div className="space-y-4">
                                     <div className="flex items-center gap-2 border-b border-slate-200/50 pb-2">
@@ -942,22 +984,43 @@ export default function ReceiveTab({
                               title="Broken Carats"
                             />
 
-                            {!item.showCustomShape ? (
-                               <Select value={item.diamondShape} onValueChange={(v) => {
-                                 if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomShape', true); updateBatchItem(item.job_bag_item_id, 'diamondShape', ''); }
-                                 else { updateBatchItem(item.job_bag_item_id, 'diamondShape', v); }
-                               }}>
-                                 <SelectTrigger className="h-6 w-full text-[10px] bg-white px-2"><SelectValue placeholder="Shape" /></SelectTrigger>
-                                 <SelectContent>
-                                   {DIAMOND_SHAPES.map(s => <SelectItem key={s} value={s} className="text-[10px]">{s}</SelectItem>)}
-                                   <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other (Type)</SelectItem>
-                                 </SelectContent>
-                               </Select>
-                            ) : (
-                               <div className="flex gap-1 h-6">
-                                 <Input className="h-6 w-full text-[10px] px-2 bg-white" placeholder="Custom Shape" value={item.diamondShape} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'showCustomShape', false)}><ArrowLeft className="h-3 w-3" /></Input>
-                               </div>
-                            )}
+                            <div className="flex gap-1.5">
+                               {!item.showCustomShape ? (
+                                  <Select value={item.diamondShape} onValueChange={(v) => {
+                                    if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomShape', true); updateBatchItem(item.job_bag_item_id, 'diamondShape', ''); }
+                                    else { updateBatchItem(item.job_bag_item_id, 'diamondShape', v); }
+                                  }}>
+                                    <SelectTrigger className="h-6 w-1/2 text-[10px] bg-white px-1"><SelectValue placeholder="Shape" /></SelectTrigger>
+                                    <SelectContent>
+                                      {DIAMOND_SHAPES.map(s => <SelectItem key={s} value={s} className="text-[10px]">{s}</SelectItem>)}
+                                      <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                               ) : (
+                                  <div className="flex gap-0.5 w-1/2 h-6">
+                                    <Input className="h-6 w-full text-[10px] px-1 bg-white" placeholder="Shape" value={item.diamondShape} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'diamondShape', e.target.value)}/>
+                                    <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomShape', false)}><ArrowLeft className="h-3 w-3" /></Button>
+                                  </div>
+                               )}
+                               
+                               {!item.showCustomSieve ? (
+                                  <Select value={item.sieve_size} onValueChange={(v) => {
+                                    if (v === 'Other') { updateBatchItem(item.job_bag_item_id, 'showCustomSieve', true); updateBatchItem(item.job_bag_item_id, 'sieve_size', ''); }
+                                    else { updateBatchItem(item.job_bag_item_id, 'sieve_size', v); }
+                                  }}>
+                                    <SelectTrigger className="h-6 w-1/2 text-[10px] bg-white px-1"><SelectValue placeholder="Sieve" /></SelectTrigger>
+                                    <SelectContent>
+                                      {SIEVE_SIZES.map(s => <SelectItem key={s} value={s} className="text-[10px]">{s}</SelectItem>)}
+                                      <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                               ) : (
+                                  <div className="flex gap-0.5 w-1/2 h-6">
+                                    <Input className="h-6 w-full text-[10px] px-1 bg-white" placeholder="Sieve" value={item.sieve_size} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'sieve_size', e.target.value)}/>
+                                    <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0" onClick={() => updateBatchItem(item.job_bag_item_id, 'showCustomSieve', false)}><ArrowLeft className="h-3 w-3" /></Button>
+                                  </div>
+                               )}
+                            </div>
 
                             <div className="flex gap-1.5">
                                {!item.showCustomColor ? (
@@ -1085,12 +1148,10 @@ export default function ReceiveTab({
                         </Button>
                       </td>
                       <td className="p-3 font-medium text-xs text-foreground">
-                        <div className="font-bold flex items-center">
+                        <div className="font-bold">
                           {item.sku_reference}
                           {item.custom_order_id && <Badge className="ml-2 bg-purple-100 text-purple-700 text-[8px] uppercase tracking-widest border-purple-200">Custom</Badge>}
                           {item.is_repair && <Badge className="ml-2 bg-amber-100 text-amber-700 text-[8px] uppercase tracking-widest border-amber-200">Repair</Badge>}
-                          {/* NEW: Unselected Table Restock Badge */}
-                          {item.store_restock_id && <Badge className="ml-2 bg-blue-100 text-blue-700 text-[8px] uppercase tracking-widest border-blue-200">Restock</Badge>}
                         </div>
                         <div className="text-[10px] text-muted-foreground">{item.category}</div>
                       </td>

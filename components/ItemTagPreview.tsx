@@ -13,7 +13,6 @@ import {
   DialogTitle, DialogFooter
 } from "@/components/ui/dialog"
 
-// Flexible interface so it can accept items from Inventory OR Receiving
 export interface TagItemData {
   _type?: 'inventory' | 'repair';
   is_repair_ticket?: boolean;
@@ -24,11 +23,9 @@ export interface TagItemData {
   gross_weight_g?: number | string;
   net_weight_g?: number | string;
   
-  // Standard Totals
   total_stone_pieces?: number | string;
   total_stone_weight_cts?: number | string;
   
-  // Breakdown
   solitaire_weight_cts?: number | string;
   solitaire_pieces?: number | string;
   melee_weight_cts?: number | string;
@@ -41,7 +38,6 @@ export interface TagItemData {
   diamond_color?: string | null;
   diamond_clarity?: string | null;
 
-  // Repair Specific Fields
   mrp?: number | null; 
   origin_name?: string; 
   expected_delivery_date?: string; 
@@ -49,10 +45,11 @@ export interface TagItemData {
 
 interface Props {
   item: TagItemData | null;
-  onClose: () => void;
+  onClose?: () => void;       // Made optional
+  isPrintOnly?: boolean;      // NEW: Flag to bypass the Modal for bulk printing
 }
 
-export function ItemTagPreview({ item, onClose }: Props) {
+export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
   const labelRef = useRef<HTMLDivElement>(null)
 
   const handlePrint = useReactToPrint({
@@ -75,16 +72,118 @@ export function ItemTagPreview({ item, onClose }: Props) {
     }
   }
 
-  // Safety checks for conditional rendering
-  const isRepair = item?._type === 'repair' || item?.is_repair_ticket;
-  const hasSolitaire = Number(item?.solitaire_weight_cts) > 0;
-  const hasMelee = Number(item?.melee_weight_cts) > 0;
-  
-  // Combine diamond attributes if they exist
-  const diamondSpecs = [item?.diamond_shape, item?.diamond_color, item?.diamond_clarity].filter(Boolean).join('/');
+  if (!item) return null;
 
+  const isRepair = item._type === 'repair' || item.is_repair_ticket;
+  const hasSolitaire = Number(item.solitaire_weight_cts) > 0;
+  const hasMelee = Number(item.melee_weight_cts) > 0;
+  const diamondSpecs = [item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join('/');
+
+  // --- EXTRACTED PURE LABEL COMPONENT ---
+  const LabelContent = () => (
+    <div 
+      ref={isPrintOnly ? undefined : labelRef} 
+      className="bg-white text-black flex border border-gray-300 shadow-sm print:border-none print:shadow-none overflow-hidden shrink-0" 
+      style={{ 
+        width: '100mm', 
+        height: '20mm', 
+        fontFamily: 'Arial, sans-serif', 
+        boxSizing: 'border-box',
+        pageBreakAfter: isPrintOnly ? 'always' : 'auto' // Forces printer to advance to next label in bulk printing
+      }}
+    >
+      <style type="text/css" media="print">{`@page { size: 100mm 20mm; margin: 0; } body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }`}</style>
+      
+      <div className="flex w-[70mm] h-full">
+        {/* LEFT: TEXT DETAILS AREA */}
+        <div className="flex flex-col justify-center h-full w-[41mm] pl-[2mm] pr-[1mm]" style={{ fontSize: '10px', lineHeight: '1.25', fontWeight: '800' }}>
+          {isRepair ? (
+            <>
+              <div className="uppercase tracking-tight text-[11px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate text-black">
+                REPAIR: {item.item_category || 'SERVICE'}
+              </div>
+              <div className="truncate">{item.barcode || '---'}</div>
+              <div className="truncate">{item.origin_name || '---'}</div>
+              <div>{item.expected_delivery_date ? new Date(item.expected_delivery_date).toLocaleDateString('en-GB') : '---'}</div>
+              <div>{Number(item.net_weight_g||0).toFixed(3)}g</div>
+              <div>{Number(item.total_stone_weight_cts||0).toFixed(2)}ct</div>
+              <div>₹{Number(item.mrp||0).toLocaleString()}</div>
+            </>
+          ) : (
+            <>
+              <div className="uppercase tracking-tight text-[11px] font-black leading-none mb-[2px] truncate">
+                {item.item_category || 'CATEGORY'} {item.sku_reference ? item.sku_reference : ''}
+              </div>
+              <div className="truncate">
+                {Number(item.gross_weight_g||0).toFixed(3)}g / {Number(item.net_weight_g||0).toFixed(3)}g / {Number(item.total_stone_weight_cts||0).toFixed(2)}ct
+              </div>
+              <div className="truncate">
+                {item.purity_karat || '---'} {item.label_1 ? `| ${item.label_1}` : ''}
+              </div>
+              {(hasSolitaire || hasMelee) && (
+                <div className="truncate text-[9px]">
+                  {hasSolitaire ? `SOL ${Number(item.solitaire_weight_cts||0).toFixed(2)}(${item.solitaire_pieces || 0}) ` : ''}
+                  {hasMelee ? `MEL ${Number(item.melee_weight_cts||0).toFixed(2)}(${item.melee_pieces || 0})` : ''}
+                </div>
+              )}
+              {diamondSpecs && (
+                <div className="truncate">{diamondSpecs}</div>
+              )}
+              {!diamondSpecs && item.label_2 && (
+                <div className="truncate">{item.label_2}</div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* MIDDLE FOLD GAP (5mm) */}
+        <div className="h-full w-[5mm] flex items-center justify-center border-l border-r border-dashed border-gray-200 print:border-none opacity-50 shrink-0">
+          <span className="text-[4px] text-gray-300 print:hidden rotate-90 tracking-widest whitespace-nowrap">FOLD HERE</span>
+        </div>
+
+        {/* RIGHT: QR CODE & BRANDING AREA (24mm) */}
+        <div className="flex h-full w-[24mm] justify-between items-center shrink-0 pr-[1mm]">
+           <div className="h-full w-[5mm] flex items-center justify-center">
+             <span className="font-black text-[7px] tracking-widest" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
+               {item.barcode || 'NO-CODE'}
+             </span>
+           </div>
+           <div className="flex flex-col justify-center items-center w-[14mm]">
+             {item.barcode ? (
+               <QRCode value={item.barcode} size={64} level="M" style={{ height: "14mm", width: "14mm" }} />
+             ) : (
+               <div className="h-[14mm] w-[14mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">N/A</div>
+             )}
+           </div>
+           <div className="h-full w-[4mm] flex items-center justify-center">
+              <div className="bg-black text-white h-full w-full flex items-center justify-center">
+                <h2 className="font-black uppercase tracking-widest text-[7px] leading-none" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
+                  PAVITRAM
+                </h2>
+              </div>
+           </div>
+        </div>
+      </div>
+
+      {/* TAIL AREA (30mm) */}
+      <div className="w-[30mm] h-full bg-gray-50 print:bg-white border-l border-gray-200 print:border-none flex items-center justify-center shrink-0">
+         <span className="text-[5px] text-gray-300 print:hidden rotate-90 tracking-widest">TAIL AREA</span>
+      </div>
+    </div>
+  )
+
+  // --------------------------------------------------------------------------
+  // RENDER LOGIC
+  // --------------------------------------------------------------------------
+  
+  // If bulk printing hidden in background, DO NOT render the Dialog!
+  if (isPrintOnly) {
+    return <LabelContent />
+  }
+
+  // Otherwise, render the standard interactive preview Dialog
   return (
-    <Dialog open={!!item} onOpenChange={(val) => !val && onClose()}>
+    <Dialog open={true} onOpenChange={(val) => !val && onClose && onClose()}>
       <DialogContent className="sm:max-w-[550px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white">
         <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200">
           <DialogTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
@@ -93,115 +192,7 @@ export function ItemTagPreview({ item, onClose }: Props) {
         </DialogHeader>
         
         <div className="flex flex-col items-center justify-center py-10 bg-slate-100/50 min-h-[250px] overflow-x-auto">
-          {/* THERMAL PRINT AREA (100mm x 20mm) */}
-          <div ref={labelRef} className="bg-white text-black flex border border-gray-300 shadow-sm print:border-none print:shadow-none overflow-hidden shrink-0" style={{ width: '100mm', height: '20mm', fontFamily: 'Arial, sans-serif', boxSizing: 'border-box' }}>
-            <style type="text/css" media="print">{`@page { size: 100mm 20mm; margin: 0; } body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }`}</style>
-            
-            <div className="flex w-[70mm] h-full">
-              
-              {/* LEFT: TEXT DETAILS AREA (No Labels, Bigger Font) */}
-              <div className="flex flex-col justify-center h-full w-[41mm] pl-[2mm] pr-[1mm]" style={{ fontSize: '10px', lineHeight: '1.25', fontWeight: '800' }}>
-                
-                {isRepair ? (
-                  /* ================= REPAIR TAG LAYOUT ================= */
-                  <>
-                    <div className="uppercase tracking-tight text-[11px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate text-black">
-                      REPAIR: {item?.item_category || 'SERVICE'}
-                    </div>
-                    <div className="truncate">{item?.barcode || '---'}</div>
-                    <div className="truncate">{item?.origin_name || '---'}</div>
-                    <div>{item?.expected_delivery_date ? new Date(item.expected_delivery_date).toLocaleDateString('en-GB') : '---'}</div>
-                    <div>{Number(item?.net_weight_g||0).toFixed(3)}g</div>
-                    <div>{Number(item?.total_stone_weight_cts||0).toFixed(2)}ct</div>
-                    <div>₹{Number(item?.mrp||0).toLocaleString()}</div>
-                  </>
-                ) : (
-                  /* ================= STANDARD INVENTORY LAYOUT ================= */
-                  <>
-                    {/* Category + Style Number */}
-                    <div className="uppercase tracking-tight text-[11px] font-black leading-none mb-[2px] truncate">
-                      {item?.item_category || 'CATEGORY'} {item?.sku_reference ? item.sku_reference : ''}
-                    </div>
-                    
-                    {/* Gross / Net / Diamond Weight */}
-                    <div className="truncate">
-                      {Number(item?.gross_weight_g||0).toFixed(3)}g / {Number(item?.net_weight_g||0).toFixed(3)}g / {Number(item?.total_stone_weight_cts||0).toFixed(2)}ct
-                    </div>
-                    
-                    {/* Karat / Purity */}
-                    <div className="truncate">
-                      {item?.purity_karat || '---'} {item?.label_1 ? `| ${item.label_1}` : ''}
-                    </div>
-                    
-                    {/* SOL / MEL Format */}
-                    {(hasSolitaire || hasMelee) && (
-                      <div className="truncate text-[9px]">
-                        {hasSolitaire ? `SOL ${Number(item?.solitaire_weight_cts||0).toFixed(2)}(${item?.solitaire_pieces || 0}) ` : ''}
-                        {hasMelee ? `MEL ${Number(item?.melee_weight_cts||0).toFixed(2)}(${item?.melee_pieces || 0})` : ''}
-                      </div>
-                    )}
-                    
-                    {/* Diamond Qualities */}
-                    {diamondSpecs && (
-                      <div className="truncate">{diamondSpecs}</div>
-                    )}
-                    
-                    {/* Fallback if diamond breakdown doesn't exist but label_2 does */}
-                    {!diamondSpecs && item?.label_2 && (
-                      <div className="truncate">{item?.label_2}</div>
-                    )}
-                  </>
-                )}
-
-              </div>
-
-              {/* MIDDLE FOLD GAP (5mm) */}
-              <div className="h-full w-[5mm] flex items-center justify-center border-l border-r border-dashed border-gray-200 print:border-none opacity-50 shrink-0">
-                <span className="text-[4px] text-gray-300 print:hidden rotate-90 tracking-widest whitespace-nowrap">FOLD HERE</span>
-              </div>
-
-              {/* RIGHT: QR CODE & BRANDING AREA (24mm) */}
-              <div className="flex h-full w-[24mm] justify-between items-center shrink-0 pr-[1mm]">
-                 
-                 {/* Vertical Barcode Number */}
-                 <div className="h-full w-[5mm] flex items-center justify-center">
-                   <span 
-                     className="font-black text-[7px] tracking-widest" 
-                     style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
-                   >
-                     {item?.barcode || 'NO-CODE'}
-                   </span>
-                 </div>
-                 
-                 {/* QR Code */}
-                 <div className="flex flex-col justify-center items-center w-[14mm]">
-                   {item?.barcode ? (
-                     <QRCode value={item.barcode} size={64} level="M" style={{ height: "14mm", width: "14mm" }} />
-                   ) : (
-                     <div className="h-[14mm] w-[14mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">N/A</div>
-                   )}
-                 </div>
-
-                 {/* Vertical Branding (Reduced Sideways/Width) */}
-                 <div className="h-full w-[4mm] flex items-center justify-center">
-                    <div className="bg-black text-white h-full w-full flex items-center justify-center">
-                      <h2 
-                        className="font-black uppercase tracking-widest text-[7px] leading-none" 
-                        style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
-                      >
-                        PAVITRAM
-                      </h2>
-                    </div>
-                 </div>
-
-              </div>
-            </div>
-
-            {/* TAIL AREA (30mm - Wraps around the jewelry) */}
-            <div className="w-[30mm] h-full bg-gray-50 print:bg-white border-l border-gray-200 print:border-none flex items-center justify-center shrink-0">
-               <span className="text-[5px] text-gray-300 print:hidden rotate-90 tracking-widest">TAIL AREA</span>
-            </div>
-          </div>
+          <LabelContent />
         </div>
 
         <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 flex-row gap-3">

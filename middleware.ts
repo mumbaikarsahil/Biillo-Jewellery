@@ -76,13 +76,13 @@ export async function middleware(request: NextRequest) {
 
     // Define route groups
     const isMasterRoute = path.startsWith('/master')
+    
+    // --- NEW: Identify the admin override routes ---
+    const isAdminOverrideRoute = path.startsWith('/transfer/direct')
+    
     const isVoucherRoute = path.startsWith('/vouchers')
     const isOpsRoute = path.startsWith('/purchases') || path.startsWith('/manufacturing') || path.startsWith('/inventory') || path.startsWith('/transfer') || path.startsWith('/catalog')
-    
-    // ADDED: /catalog to the allowed routes for Branch/Shadow Managers
     const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/crm') || path.startsWith('/transfer') || path.startsWith('/catalog')
-    
-    // ADDED: /catalog to Sales routes as well so sales staff can show the catalog to customers
     const isSalesRoute = path.startsWith('/discovery') || path.startsWith('/pos') || path.startsWith('/crm') || path.startsWith('/catalog')
     
     // Everyone is allowed on the dashboard
@@ -90,8 +90,9 @@ export async function middleware(request: NextRequest) {
       return supabaseResponse
     }
 
-    // STRICT DENY: No one except Owner/Manager can access Master settings
-    if (isMasterRoute) {
+    // --- UPDATED STRICT DENY ---
+    // No one except Owner/Manager can access Master settings OR Admin Overrides
+    if (isMasterRoute || isAdminOverrideRoute) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
