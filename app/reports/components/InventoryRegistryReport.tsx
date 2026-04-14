@@ -27,7 +27,7 @@ import {
 } from '@/components/ui/table'
 import { Label } from 'recharts'
 
-// --- AI HELPER: DYNAMIC PRICE BRACKETING ---
+// --- AI HELPER: DYNAMIC PRICE BRACKETING (Based on MRP) ---
 const getPriceBracket = (price: number) => {
   if (price <= 25000) return 'Under ₹25k';
   if (price <= 50000) return '₹25k - ₹50k';
@@ -91,7 +91,8 @@ export function InventoryRegistryReport() {
       setData(resData || [])
       
       if (resData && resData.length > 0) {
-        const highest = Math.max(...resData.map(d => Number(d.cost_total) || 0), 100000);
+        // CHANGED: Calibrate max price based on MRP instead of cost_total
+        const highest = Math.max(...resData.map(d => Number(d.mrp) || 0), 100000);
         setMaxPrice(highest);
         setPriceRange([0, highest]);
       }
@@ -118,7 +119,8 @@ export function InventoryRegistryReport() {
       if (filterMetal !== 'all' && item.metal_type !== filterMetal) return false;
       if (filterCategory !== 'all' && item.item_category !== filterCategory) return false;
       
-      const val = Number(item.cost_total) || 0;
+      // CHANGED: Filter uses MRP
+      const val = Number(item.mrp) || 0;
       if (val < priceRange[0] || val > priceRange[1]) return false;
       
       return true;
@@ -131,7 +133,8 @@ export function InventoryRegistryReport() {
       totalItems: acc.totalItems + 1,
       totalGrossWt: acc.totalGrossWt + (Number(curr.gross_weight_g) || 0),
       totalNetWt: acc.totalNetWt + (Number(curr.net_weight_g) || 0),
-      totalValue: acc.totalValue + (Number(curr.cost_total) || 0)
+      // CHANGED: Accumulate MRP instead of cost_total
+      totalValue: acc.totalValue + (Number(curr.mrp) || 0) 
     }), { totalItems: 0, totalGrossWt: 0, totalNetWt: 0, totalValue: 0 })
   }, [filteredData]);
 
@@ -149,7 +152,6 @@ export function InventoryRegistryReport() {
       valStock: number 
     }> = {};
 
-    // For overarching Market Intelligence
     const categoryAgg: Record<string, { sold: number, stock: number }> = {};
     const bracketAgg: Record<string, { sold: number }> = {};
     
@@ -159,7 +161,8 @@ export function InventoryRegistryReport() {
       if (filterMetal !== 'all' && item.metal_type !== filterMetal) return;
       if (filterCategory !== 'all' && item.item_category !== filterCategory) return;
       
-      const price = Number(item.cost_total) || 0;
+      // CHANGED: Analytics uses MRP
+      const price = Number(item.mrp) || 0;
       if (price < priceRange[0] || price > priceRange[1]) return;
 
       const loc = item.warehouses?.name || 'Unassigned Node';
@@ -200,7 +203,6 @@ export function InventoryRegistryReport() {
       }
     }
 
-    // Determine Market Intelligence Winners/Losers
     let bestCategory = { name: 'N/A', sold: 0 };
     let worstCategory = { name: 'N/A', sellThrough: 101, stock: 0 }; 
     let sweetSpot = { name: 'N/A', sold: 0 };
@@ -211,7 +213,7 @@ export function InventoryRegistryReport() {
       }
       
       const totalVolume = stats.sold + stats.stock;
-      if (totalVolume >= 5 && stats.stock > 0) { // Require minimum baseline
+      if (totalVolume >= 5 && stats.stock > 0) { 
         const str = (stats.sold / totalVolume) * 100;
         if (str < worstCategory.sellThrough) {
           worstCategory = { name: cat, sellThrough: str, stock: stats.stock };
@@ -251,7 +253,8 @@ export function InventoryRegistryReport() {
       'Purity': d.purity_karat,
       'Gross Wt (g)': d.gross_weight_g,
       'Net Wt (g)': d.net_weight_g,
-      'Total Value (₹)': d.cost_total,
+      // CHANGED: Export uses MRP
+      'Retail Value (₹)': d.mrp || 0,
       'Status': d.status.replace('_', ' ').toUpperCase(),
       'Location': d.warehouses?.name || '--',
       'Date Added': format(new Date(d.created_at), 'dd-MMM-yyyy')
@@ -387,7 +390,7 @@ export function InventoryRegistryReport() {
             <div className="col-span-2 md:col-span-4 lg:col-span-2 bg-zinc-50/50 p-2 rounded-lg border border-zinc-200">
               <div className="flex justify-between items-center mb-1.5">
                 <Label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
-                  <IndianRupee className="w-3 h-3"/> Cost Range
+                  <IndianRupee className="w-3 h-3"/> Retail Value Range
                 </Label>
                 <span className="text-[10px] font-black text-zinc-700 font-mono tracking-tighter">
                   ₹{(priceRange[0]/1000).toFixed(0)}k - ₹{(priceRange[1]/1000).toFixed(0)}k
@@ -583,12 +586,13 @@ export function InventoryRegistryReport() {
         <Card className="shadow-sm border-zinc-200 bg-zinc-50 rounded-2xl">
           <CardContent className="p-4 sm:p-5">
             <p className="text-[11px] font-semibold text-zinc-600 uppercase tracking-widest mb-1">Filtered Valuation</p>
+            {/* CHANGED: Now displays total MRP value */}
             {loading ? <Skeleton className="h-8 w-32 mt-1" /> : <p className="text-2xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{metrics.totalValue.toLocaleString()}</p>}
           </CardContent>
         </Card>
       </div>
 
-      {/* DATA VIEW (Responsive: List on Mobile, Table on Desktop) */}
+      {/* DATA VIEW */}
       <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl overflow-hidden">
         
         {/* === MOBILE LIST VIEW (Visible only below sm breakpoint) === */}
@@ -632,8 +636,9 @@ export function InventoryRegistryReport() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Cost</p>
-                    <p className="text-sm font-bold text-indigo-600 tracking-tight">₹{item.cost_total?.toLocaleString() || '0'}</p>
+                    <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Retail Price</p>
+                    {/* CHANGED: Display MRP in Mobile List */}
+                    <p className="text-sm font-bold text-indigo-600 tracking-tight">₹{item.mrp?.toLocaleString() || '0'}</p>
                   </div>
                 </div>
               </div>
@@ -652,7 +657,8 @@ export function InventoryRegistryReport() {
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-right">Net</TableHead>
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-center">Status</TableHead>
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Node / Vault</TableHead>
-                <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-right pr-6">Costing</TableHead>
+                {/* CHANGED: Header Title updated */}
+                <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-right pr-6">Retail MRP</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -677,9 +683,9 @@ export function InventoryRegistryReport() {
                 </TableRow>
               ) : (
                 filteredData.map((item) => (
-                  <TableRow key={item.id} className="hover:bg-zinc-50/50 transition-colors border-zinc-100 group">
+                  <TableRow key={item.id} className="hover:bg-zinc-50/50 transition-colors border-zinc-100">
                     <TableCell className="px-4 py-2.5 sm:py-3">
-                      <div className="font-mono text-xs sm:text-[13px] font-bold text-zinc-900 tracking-tight group-hover:text-indigo-600 transition-colors">{item.barcode}</div>
+                      <div className="font-mono text-xs sm:text-[13px] font-bold text-zinc-900 tracking-tight">{item.barcode}</div>
                       <div className="text-[10px] text-zinc-400 font-medium mt-0.5 uppercase tracking-widest">{item.item_category || '--'}</div>
                     </TableCell>
                     <TableCell>
@@ -690,7 +696,8 @@ export function InventoryRegistryReport() {
                     <TableCell className="text-right text-[13px] font-semibold text-zinc-500">{item.net_weight_g}<span className="text-[10px] text-zinc-400 ml-0.5 font-medium">g</span></TableCell>
                     <TableCell className="text-center">{getStatusBadge(item.status)}</TableCell>
                     <TableCell className="text-xs text-zinc-500 font-semibold">{item.warehouses?.name || '--'}</TableCell>
-                    <TableCell className="text-right text-[13px] font-bold text-indigo-700 pr-6">₹{item.cost_total?.toLocaleString() || '0'}</TableCell>
+                    {/* CHANGED: Display MRP in Table */}
+                    <TableCell className="text-right text-[13px] font-bold text-indigo-700 pr-6">₹{item.mrp?.toLocaleString() || '0'}</TableCell>
                   </TableRow>
                 ))
               )}

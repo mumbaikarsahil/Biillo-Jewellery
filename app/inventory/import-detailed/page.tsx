@@ -23,7 +23,7 @@ interface ParsedJewelleryItem {
   temp_id: string; 
   item_category: string;
   barcode: string;
-  sku_reference?: string; // NEW: Holds the auto-generated sequential SKU
+  sku_reference?: string; 
   metal_type: string;
   purity_karat: string;
   quantity: number;
@@ -251,28 +251,12 @@ export default function DetailedImportPage() {
             prefixCounters[prefix] = maxSeq + 1; // Set counter to next available
           }
 
-          // Apply SMART SKUs back to the parsed items so the user sees them
+          // Apply optimistic SKUs back to the parsed items so the user sees them
           for (const prefix of Object.keys(groupedByPrefix)) {
             let currentCounter = prefixCounters[prefix];
-            const seenDesigns: Record<string, string> = {};
-
             for (const item of groupedByPrefix[prefix]) {
-              const safeShape = (item.shape || 'NONE').toUpperCase().trim();
-              const safeClarity = (item.clarity || 'NONE').toUpperCase().trim();
-              const safeColor = (item.color || 'NONE').toUpperCase().trim();
-              const safePcs = item.diamond_pcs || 0;
-
-              // STRICT SIGNATURE: Price + Pcs + Shape + Clarity + Color
-              const designSignature = `${prefix}_${item.total_amount}_${safePcs}_${safeShape}_${safeClarity}_${safeColor}`;
-
-              if (seenDesigns[designSignature]) {
-                item.sku_reference = seenDesigns[designSignature];
-              } else {
-                const freshSku = `${prefix}-${currentCounter}`;
-                item.sku_reference = freshSku;
-                seenDesigns[designSignature] = freshSku;
-                currentCounter++;
-              }
+              item.sku_reference = `${prefix}-${currentCounter}`;
+              currentCounter++;
             }
           }
         } catch (skuError) {
@@ -430,16 +414,25 @@ export default function DetailedImportPage() {
         }
       }
 
-      // 4. Batch insert into Supabase
-      const chunkSize = 100
+      // 4. Batch upsert into Supabase (IGNORE DUPLICATES FIX)
+      const chunkSize = 100;
       for (let i = 0; i < inventoryPayload.length; i += chunkSize) {
-        const chunk = inventoryPayload.slice(i, i + chunkSize)
-        const { error } = await supabase.from('inventory_items').insert(chunk)
-        if (error) throw error
+        const chunk = inventoryPayload.slice(i, i + chunkSize);
+        
+        const { error } = await supabase
+          .from('inventory_items')
+          .upsert(chunk, { 
+            onConflict: 'barcode', 
+            ignoreDuplicates: true // Skips duplicate barcodes instead of crashing
+          });
+          
+        if (error) {
+          throw new Error(`Failed to insert batch ${i}. Error: ${error.message}`);
+        }
       }
 
       setCommitSuccess(true)
-      toast.success(`Successfully committed ${itemsToCommit.length} detailed items with unique SKUs!`)
+      toast.success(`Successfully committed ${itemsToCommit.length} detailed items. Duplicates (if any) were safely skipped!`)
     } catch (err: any) {
       toast.error("Database Error: " + err.message)
     } finally {
@@ -483,7 +476,7 @@ export default function DetailedImportPage() {
             </div>
             <div>
               <h2 className="text-2xl font-black text-emerald-800 tracking-tight">Migration Complete</h2>
-              <p className="text-emerald-600 font-medium mt-1">Successfully ingested {selectedIds.size} detailed inventory assets with auto-generated SKUs.</p>
+              <p className="text-emerald-600 font-medium mt-1">Successfully ingested detailed inventory assets with auto-generated SKUs.</p>
             </div>
             <div className="pt-4 flex justify-center gap-4">
               <Button onClick={() => window.location.reload()} variant="outline" className="border-emerald-200 text-emerald-700 hover:bg-emerald-100">

@@ -308,13 +308,17 @@ export default function InventoryPage() {
       const baseCost = goldCost + diamondCost
       const markupAmount = baseCost * (calcParams.markupPercent / 100)
       const subtotal = baseCost + markupAmount
-      const finalMrp = Math.round(subtotal + calcParams.flatCharge)
+      
+      const exactMrp = subtotal + calcParams.flatCharge
+      
+      // ROUND UP to the nearest 100 (e.g., 140510 -> 140600)
+      const finalMrp = Math.ceil(exactMrp / 100) * 100
+      
       return { ...item, newMrp: finalMrp }
     })
     setPreviewData(previews)
     setCalcStep('preview')
   }
-
   const handleApplyBulkMrp = async () => {
     setIsCalculating(true)
     try {
@@ -983,7 +987,13 @@ export default function InventoryPage() {
 }
 
 // --- HYBRID RENDER TABLE ---
-function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, setTagItem, handleSingleTransfer, setViewItem, canEdit }: any) {
+function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, setTagItem, handleSingleTransfer, setViewItem, canEdit }: any) {
+  
+  // Helper to grab warehouse name
+  const getWarehouseName = (wId: string) => {
+    return warehouses.find((w: any) => w.id === wId)?.name || 'Unknown Vault'
+  }
+
   return (
     <div className="h-full flex flex-col">
       {/* DESKTOP VIEW */}
@@ -1004,7 +1014,7 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Specs</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 text-right px-4">Weights</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Vault Timeline</TableHead>
-              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 text-center">Status</TableHead>
+              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 text-center">Status / Location</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 w-[140px] text-right">Price/Value</TableHead>
               <TableHead className="w-[120px] text-right px-6"></TableHead>
             </TableRow>
@@ -1080,6 +1090,11 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                       item.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-500 border-slate-200")}>
                      {item.status.replace(/_/g, ' ')}
                    </span>
+                   {/* NEW: Display Warehouse Name underneath the status */}
+                   <div className="mt-1 flex items-center justify-center gap-1 text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                     <Store className="w-2.5 h-2.5" />
+                     {getWarehouseName(item.warehouse_id)}
+                   </div>
                 </TableCell>
                 
                 {/* ROLE BASED MRP EDITING */}
@@ -1150,8 +1165,15 @@ function InventoryTable({ data, isSoldTab, selectedIds, setSelectedIds, editingM
                       <span className="text-[11px] text-slate-700 font-semibold">{item.sku_reference || 'NO SKU'}</span>
                    </div>
                    
-                   <div className="flex items-center gap-1 mt-1 text-[10px] text-slate-500 font-mono">
-                     <Clock className="w-3 h-3" /> {formatDateShort(item.last_status_change_at || item.updated_at)}
+                   {/* NEW: Warehouse Location Tag for Mobile */}
+                   <div className="flex items-center gap-2 mt-1">
+                     <div className="flex items-center gap-1 text-[10px] text-slate-500 font-mono">
+                       <Clock className="w-3 h-3" /> {formatDateShort(item.last_status_change_at || item.updated_at)}
+                     </div>
+                     <span className="text-slate-300">|</span>
+                     <div className="flex items-center gap-1 text-[10px] text-slate-500 font-semibold">
+                       <Store className="w-3 h-3" /> {getWarehouseName(item.warehouse_id)}
+                     </div>
                    </div>
 
                    {item.is_custom_order && <span className="block text-[9px] font-bold text-purple-600 uppercase tracking-widest mt-1">Custom: {item.custom_orders?.origin?.name || 'Branch'}</span>}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
+import { format } from 'date-fns'
 
 interface CheckoutConfig {
   appUser: any;
@@ -46,7 +47,14 @@ export function useCheckout({
   
   // Vouchers
   const [voucherCode, setVoucherCode] = useState('')
-  const [activeVoucher, setActiveVoucher] = useState<{ id: string, code: string, amount: number, handling_fee: number } | null>(null)
+  // FIX: Added 'is_birthday_redemption?: boolean' to the type definition
+const [activeVoucher, setActiveVoucher] = useState<{ 
+  id: string, 
+  code: string, 
+  amount: number, 
+  handling_fee: number, 
+  is_birthday_redemption?: boolean 
+} | null>(null)
   const [handlingFee, setHandlingFee] = useState<string>('0')
 
   // Exchange
@@ -123,7 +131,7 @@ export function useCheckout({
   // PHASE 1: VERIFICATION (Just checking the code)
   const handleApplyVoucher = async () => {
     if (appliedKittyAmount > 0 || appliedCreditAmount > 0) {
-      return toast.error("Clubbing Error", { description: "Cannot apply vouchers when Wallet or Kitty balances are in use. Please clear wallet balances first." });
+      return toast.error("Clubbing Error", { description: "Cannot apply vouchers when Wallet or Kitty balances are in use." });
     }
 
     if (!voucherCode.trim()) return;
@@ -133,9 +141,14 @@ export function useCheckout({
     }
     
     try {
+      // CHANGE 1: Added 'valid_from' and 'is_birthday_redemption' to the select query
       const { data: voucher, error } = await supabase
         .from('vouchers')
-        .select(`id, code, discount_value, handling_fee, status, expiry_date, customer_id, scan_count, customers ( id, full_name, phone )`)
+        .select(`
+          id, code, discount_value, handling_fee, status, 
+          valid_from, expiry_date, is_birthday_redemption, 
+          customer_id, scan_count, customers ( id, full_name, phone )
+        `)
         .ilike('code', codeToSearch) 
         .maybeSingle()
       
@@ -143,12 +156,29 @@ export function useCheckout({
       if (!voucher) return toast.error('Invalid Voucher: Code not found.')
       if (voucher.status !== 'registered') return toast.error(`Cannot Apply: Voucher is ${voucher.status.toUpperCase()}.`)
 
-      if (voucher.expiry_date) {
-        const expiryDate = new Date(voucher.expiry_date)
-        expiryDate.setHours(0,0,0,0); const today = new Date(); today.setHours(0,0,0,0);
-        if (expiryDate < today) return toast.error(`Expired: This voucher expired on ${expiryDate.toLocaleDateString()}.`)
+      const today = new Date();
+      today.setHours(0,0,0,0);
+
+      // CHANGE 2: Bulletproof Validation for Birthday Month (Start Date)
+      if (voucher.valid_from) {
+        const validFromDate = new Date(voucher.valid_from);
+        validFromDate.setHours(0,0,0,0);
+        
+        if (today < validFromDate) {
+           return toast.error("Voucher Not Active", { 
+             description: `This is a Birthday Voucher. It will become valid on ${format(validFromDate, 'dd MMM yyyy')}.` 
+           });
+        }
       }
 
+      // Validation for Expiry (End Date)
+      if (voucher.expiry_date) {
+        const expiryDate = new Date(voucher.expiry_date)
+        expiryDate.setHours(0,0,0,0);
+        if (today > expiryDate) return toast.error(`Expired: This voucher expired on ${expiryDate.toLocaleDateString()}.`)
+      }
+
+      // Fraud/Customer check remains the same...
       if (voucher.customer_id && voucher.customers) {
         const rawCust = Array.isArray(voucher.customers) ? voucher.customers[0] : voucher.customers;
         if (selectedCustomer && selectedCustomer.id !== voucher.customer_id) {
@@ -156,9 +186,6 @@ export function useCheckout({
         }
       }
 
-      // --> THIS IS THE METRIC UPDATE <--
-      // We log that an attempt to scan/use this code happened right now.
-      // Notice we do NOT change the status to "redeemed" here.
       await supabase
         .from('vouchers')
         .update({ 
@@ -167,7 +194,15 @@ export function useCheckout({
         })
         .eq('id', voucher.id);
 
-      setActiveVoucher({ id: voucher.id, code: voucher.code, amount: voucher.discount_value, handling_fee: voucher.handling_fee })
+      // CHANGE 3: Pass is_birthday_redemption to the activeVoucher state
+      setActiveVoucher({ 
+        id: voucher.id, 
+        code: voucher.code, 
+        amount: voucher.discount_value, 
+        handling_fee: voucher.handling_fee,
+        is_birthday_redemption: voucher.is_birthday_redemption // Needed for UI Gift Icon
+      })
+
       setHandlingFee(voucher.handling_fee?.toString() || '0') 
       setVoucherCode('')
       toast.success(`Voucher Validated & Applied!`)
