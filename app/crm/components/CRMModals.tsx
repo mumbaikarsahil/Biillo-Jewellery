@@ -36,6 +36,7 @@ interface CRMModalsProps {
   activeAiFilter: string;
   dynamicTemplates: any[]; 
   customers: CRMCustomer[]; 
+  kittyConfigs: any[]; // <-- NEW: Accepting the config array
   
   newCustForm: any; setNewCustForm: (f: any) => void;
   newKittyForm: any; setNewKittyForm: (f: any) => void;
@@ -57,7 +58,7 @@ interface CRMModalsProps {
   handleAddCustomer: () => void;
   handleAddKittyMember: () => void;
   handleUpdateLoyalty: () => void;
-  handleRecordKittyPayment: (c: CRMCustomer) => void;
+  handleRecordKittyPayment: (c: CRMCustomer, planId: string) => void;
   handleUpdateFollowup: () => void;
   handleTemplateChange: (id: string) => void;
   handleSendWhatsApp: () => void;
@@ -70,7 +71,7 @@ export function CRMModals(props: CRMModalsProps) {
     isProfileModalOpen, setIsProfileModalOpen, isLoyaltyModalOpen, setIsLoyaltyModalOpen,
     isAddModalOpen, setIsAddModalOpen, isAddKittyModalOpen, setIsAddKittyModalOpen,
     isFollowupModalOpen, setIsFollowupModalOpen, isWhatsAppModalOpen, setIsWhatsAppModalOpen,
-    importFile, setImportFile, previewData, selectedCustomer, selectedLocation, warehouses, activeAiFilter, dynamicTemplates, customers,
+    importFile, setImportFile, previewData, selectedCustomer, selectedLocation, warehouses, activeAiFilter, dynamicTemplates, customers, kittyConfigs,
     newCustForm, setNewCustForm, newKittyForm, setNewKittyForm, loyaltyForm, setLoyaltyForm,
     waTemplateId, customMessage, setCustomMessage, followupReason, setFollowupReason, followupDate, setFollowupDate,
     interactionNotes, setInteractionNotes, isImporting, isSubmitting,
@@ -79,10 +80,12 @@ export function CRMModals(props: CRMModalsProps) {
     handleUpdateFollowup, handleTemplateChange, handleSendWhatsApp, openWhatsAppModal
   } = props;
 
+  const isKittyMember = selectedCustomer?.kitty_plans && selectedCustomer.kitty_plans.length > 0;
+
   const getCustomerCategory = () => {
     if (!selectedCustomer) return 'Lead'
     if (selectedCustomer.customer_status === 'Purchased') return 'Purchased'
-    if (selectedCustomer.customer_status === 'Kitty Member' || selectedCustomer.kitty_plan_name) return 'Kitty'
+    if (selectedCustomer.customer_status === 'Kitty Member' || isKittyMember) return 'Kitty'
     return 'Lead'
   }
 
@@ -183,9 +186,6 @@ export function CRMModals(props: CRMModalsProps) {
                     <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-12 w-[150px]">Status</TableHead>
                     <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-12 w-[140px]">City</TableHead>
                     <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-12 w-[120px]">Credit(₹)</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-purple-600 bg-purple-50/50 h-12 w-[140px]">Kitty Status</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-purple-600 bg-purple-50/50 h-12 w-[100px]">Mths Paid</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-purple-600 bg-purple-50/50 h-12 w-[120px]">Inst. (₹)</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -220,25 +220,6 @@ export function CRMModals(props: CRMModalsProps) {
                       <TableCell className="p-2">
                         <Input type="number" className="h-10 rounded-xl text-sm font-mono font-bold border-transparent hover:border-gray-200 focus:bg-white focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 px-3 text-emerald-700 bg-emerald-50/50 transition-all" value={row.store_credit_balance} onChange={(e) => updatePreviewRow(index, 'store_credit_balance', e.target.value)} />
                       </TableCell>
-                      <TableCell className="p-2 bg-purple-50/30">
-                        <Select value={row.kitty_plan_status} onValueChange={(val) => updatePreviewRow(index, 'kitty_plan_status', val)}>
-                          <SelectTrigger className="h-10 rounded-xl text-sm font-bold border-transparent hover:border-purple-200 focus:bg-white focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 px-3 text-purple-700 bg-transparent transition-all">
-                            <SelectValue placeholder="None" />
-                          </SelectTrigger>
-                          <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
-                            <SelectItem value=" " className="text-sm font-medium text-gray-400 rounded-lg py-2 cursor-pointer">None</SelectItem>
-                            <SelectItem value="Active" className="text-sm font-bold text-purple-600 rounded-lg py-2 cursor-pointer">Active</SelectItem>
-                            <SelectItem value="Inactive" className="text-sm font-medium text-gray-500 rounded-lg py-2 cursor-pointer">Inactive</SelectItem>
-                            <SelectItem value="Matured" className="text-sm font-bold text-emerald-600 rounded-lg py-2 cursor-pointer">Matured</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </TableCell>
-                      <TableCell className="p-2 bg-purple-50/30">
-                        <Input type="number" className="h-10 rounded-xl text-sm font-mono font-bold border-transparent hover:border-purple-200 focus:bg-white focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 px-3 text-purple-700 transition-all" value={row.kitty_months_paid} onChange={(e) => updatePreviewRow(index, 'kitty_months_paid', e.target.value)} />
-                      </TableCell>
-                      <TableCell className="p-2 bg-purple-50/30">
-                        <Input type="number" className="h-10 rounded-xl text-sm font-mono font-bold border-transparent hover:border-purple-200 focus:bg-white focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 px-3 text-purple-700 transition-all" value={row.kitty_installment_amount} onChange={(e) => updatePreviewRow(index, 'kitty_installment_amount', e.target.value)} />
-                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -258,7 +239,7 @@ export function CRMModals(props: CRMModalsProps) {
 
       {/* 1. CUSTOMER PROFILE MODAL */}
       <Dialog open={isProfileModalOpen} onOpenChange={setIsProfileModalOpen}>
-        <DialogContent className="w-full h-full sm:h-auto sm:max-w-[750px] border-none sm:rounded-[28px] rounded-none bg-white shadow-[0_24px_60px_-15px_rgba(0,0,0,0.15)] p-0 overflow-hidden flex flex-col">
+        <DialogContent className="w-full h-full sm:h-auto sm:max-w-[750px] border-none sm:rounded-[28px] rounded-none bg-white shadow-[0_24px_60px_-15px_rgba(0,0,0,0.15)] p-0 overflow-hidden flex flex-col max-h-[90vh]">
           {selectedCustomer && (
             <>
               <DialogHeader className="bg-gray-50/80 p-5 sm:p-8 border-b border-gray-100 shrink-0 pt-safe">
@@ -273,7 +254,7 @@ export function CRMModals(props: CRMModalsProps) {
                   </div>
                   <Badge variant="outline" className={cn(
                     "uppercase tracking-widest text-[9px] sm:text-[10px] font-bold px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl border-none shadow-sm",
-                    selectedCustomer.customer_status === 'Kitty Member' ? "bg-purple-50 text-purple-700" :
+                    selectedCustomer.customer_status === 'Kitty Member' || isKittyMember ? "bg-purple-50 text-purple-700" :
                     selectedCustomer.customer_status === 'Purchased' ? "bg-emerald-50 text-emerald-700" : 
                     "bg-gray-100 text-gray-600"
                   )}>
@@ -301,7 +282,6 @@ export function CRMModals(props: CRMModalsProps) {
                     <p className="text-3xl sm:text-5xl font-black text-white relative z-10 tracking-tighter">
                       ₹{(selectedCustomer.store_credit_balance || 0).toLocaleString()}
                     </p>
-                    {/* Decorative Background Icon */}
                     <Wallet className="absolute -right-4 -bottom-4 sm:-right-6 sm:-bottom-6 w-24 h-24 sm:w-32 sm:h-32 text-emerald-700 opacity-50 -rotate-12 group-hover:scale-110 group-hover:opacity-40 transition-all duration-500" />
                   </div>
 
@@ -324,134 +304,140 @@ export function CRMModals(props: CRMModalsProps) {
                 </div>
 
                 {/* THE DIAMOND KITTY HARVESTING DASHBOARD */}
-                <div className="bg-white border border-gray-200/60 rounded-[20px] sm:rounded-[24px] shadow-sm overflow-hidden">
+                <div className="bg-white border border-gray-200/60 rounded-[20px] sm:rounded-[24px] shadow-sm overflow-hidden mt-6 sm:mt-8">
                   <div className="bg-gray-50/80 border-b border-gray-100 p-4 sm:p-5 sm:px-6 flex justify-between items-center">
                     <h3 className="text-xs sm:text-[13px] font-black text-gray-900 uppercase tracking-widest flex items-center gap-1.5 sm:gap-2">
-                      <Gem className="w-3.5 sm:w-4 h-3.5 sm:h-4 text-purple-500" strokeWidth={2.5}/> Harvesting Plan
+                      <Gem className="w-3.5 sm:w-4 h-3.5 sm:h-4 text-purple-500" strokeWidth={2.5}/> Harvesting Plans
                     </h3>
-                    <Badge variant="outline" className={cn(
-                      "text-[8px] sm:text-[9px] uppercase tracking-widest font-bold px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md sm:rounded-lg border-none shadow-sm", 
-                      (selectedCustomer.kitty_plan_status === 'Active' || selectedCustomer.customer_status === 'Kitty Member') ? 'bg-purple-50 text-purple-700' : 'bg-gray-100 text-gray-500'
-                    )}>
-                      {selectedCustomer.kitty_plan_status || (selectedCustomer.customer_status === 'Kitty Member' ? 'Active' : 'Inactive')}
-                    </Badge>
+                    
+                    <Button 
+                      variant="outline" size="sm" 
+                      className="h-8 rounded-lg text-[10px] font-bold uppercase tracking-widest border-purple-200 text-purple-600 hover:bg-purple-50"
+                      onClick={() => {
+                        setIsProfileModalOpen(false);
+                        setNewKittyForm({ 
+                          ...newKittyForm, 
+                          full_name: selectedCustomer.full_name || '', 
+                          phone: selectedCustomer.phone || '', 
+                          email: selectedCustomer.email || '',
+                          city: selectedCustomer.city || '',
+                          birth_date: selectedCustomer.birth_date || '',
+                          anniversary_date: selectedCustomer.anniversary_date || ''
+                        });
+                        setTimeout(() => setIsAddKittyModalOpen(true), 300);
+                      }}
+                    >
+                      + New Plan
+                    </Button>
                   </div>
                   
-                  <div className="p-4 sm:p-6 sm:px-8 space-y-6 sm:space-y-8">
-                    {(selectedCustomer.kitty_plan_status === 'Active' || selectedCustomer.customer_status === 'Kitty Member') ? (
-                      <>
-                        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-3 sm:gap-4">
-                          <div>
-                            <p className="text-base sm:text-lg font-black text-gray-900 tracking-tight">{selectedCustomer.kitty_plan_name || 'Pavitram Diamond Kitty'}</p>
-                            <p className="text-[11px] sm:text-[13px] font-medium text-gray-500 mt-0.5 sm:mt-1">12 Months Plan + 1 Month Jeweler Bonus</p>
-                          </div>
-                          <div className="text-left sm:text-right">
-                            <p className="text-[9px] sm:text-[10px] font-bold text-purple-600 uppercase tracking-widest mb-0.5 sm:mb-1">Months Paid</p>
-                            <p className="text-2xl sm:text-3xl font-black text-purple-700 tracking-tighter leading-none">{selectedCustomer.kitty_months_paid || 0} <span className="text-xs sm:text-[15px] text-purple-400 font-bold tracking-normal">/ 12</span></p>
-                          </div>
-                        </div>
+                  <div className="p-4 sm:p-6 sm:px-8 space-y-8 sm:space-y-10">
+                    {selectedCustomer.kitty_plans && selectedCustomer.kitty_plans.length > 0 ? (
+                      selectedCustomer.kitty_plans.map((plan, planIndex) => {
+                        // Dynamic Calculation based on user rules
+                        const inferredBonus = plan.plan_amount >= 3000 ? plan.plan_amount : 0;
+                        const maturedValue = (plan.total_months * plan.plan_amount) + inferredBonus;
 
-                        <div className="w-full bg-gray-100 h-2.5 sm:h-3 rounded-full overflow-hidden shadow-inner">
-                          <div 
-                            className="bg-purple-500 h-full rounded-full transition-all duration-700 ease-out" 
-                            style={{ width: `${Math.min(((selectedCustomer.kitty_months_paid || 0) / 12) * 100, 100)}%` }}
-                          />
-                        </div>
-
-                        <div>
-                          <h4 className="text-[10px] sm:text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-3 sm:mb-4">Installment Tracker</h4>
-                          <div className="grid grid-cols-4 md:grid-cols-6 gap-2 sm:gap-3 md:gap-4">
-                            {Array.from({length: 12}).map((_, i) => {
-                              const monthNum = i + 1;
-                              const monthsPaid = selectedCustomer.kitty_months_paid || 0;
-                              const isPaid = monthNum <= monthsPaid;
-                              const isCurrent = monthNum === monthsPaid + 1;
-
-                              return (
-                                <div key={i} className={cn(
-                                  "rounded-xl sm:rounded-[16px] p-2 sm:p-3 flex flex-col items-center justify-center gap-1.5 sm:gap-2 transition-all relative overflow-hidden h-[60px] sm:h-[72px]",
-                                  isPaid ? "bg-emerald-50 border border-emerald-100" :
-                                  isCurrent ? "bg-white border-2 border-blue-400 shadow-sm" :
-                                  "bg-gray-50 border border-gray-100 opacity-70"
-                                )}>
-                                  <span className={cn("text-[9px] sm:text-[10px] font-black uppercase tracking-widest", isPaid ? "text-emerald-700" : isCurrent ? "text-blue-700" : "text-gray-400")}>
-                                    Mon {monthNum}
-                                  </span>
-                                  {isPaid ? <CheckCircle2 className="w-4 sm:w-5 h-4 sm:h-5 text-emerald-500" strokeWidth={2.5}/> : 
-                                   isCurrent ? <Clock className="w-4 sm:w-5 h-4 sm:h-5 text-blue-500" strokeWidth={2.5}/> : 
-                                   <Lock className="w-3.5 sm:w-4 h-3.5 sm:h-4 text-gray-300" strokeWidth={2}/>}
-                                  
-                                  {isCurrent && (
-                                    <div className="absolute inset-x-0 bottom-0 top-0 flex flex-col">
-                                      <button 
-                                        className="flex-1 bg-blue-600/95 backdrop-blur-sm text-white text-[9px] sm:text-[10px] font-bold tracking-widest uppercase opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center"
-                                        onClick={() => handleRecordKittyPayment(selectedCustomer)}
-                                      >
-                                        Mark Paid
-                                      </button>
-                                      <button 
-                                        className="h-1/3 bg-emerald-500/95 backdrop-blur-sm text-white text-[8px] sm:text-[9px] font-bold tracking-widest uppercase opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center gap-1"
-                                        onClick={() => {
-                                          setIsProfileModalOpen(false);
-                                          setTimeout(() => openWhatsAppModal(selectedCustomer, 'kitty_reminder'), 300);
-                                        }}
-                                      >
-                                        Remind
-                                      </button>
-                                    </div>
-                                  )}
+                        return (
+                          <div key={plan.id} className={cn("relative", planIndex > 0 ? "pt-8 sm:pt-10 border-t border-dashed border-gray-200" : "")}>
+                            
+                            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-3 sm:gap-4 mb-6 sm:mb-8">
+                              <div>
+                                <div className="flex items-center gap-2 mb-1">
+                                  <p className="text-base sm:text-lg font-black text-gray-900 tracking-tight">{plan.plan_name}</p>
+                                  <Badge variant="outline" className={cn(
+                                    "text-[8px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-md border-none shadow-sm", 
+                                    plan.status === 'active' ? 'bg-purple-50 text-purple-700' : 'bg-gray-100 text-gray-500'
+                                  )}>
+                                    {plan.status}
+                                  </Badge>
                                 </div>
-                              )
-                            })}
-                          </div>
-                        </div>
+                                <p className="text-[11px] sm:text-[13px] font-medium text-gray-500">₹{plan.plan_amount.toLocaleString()} / month • {plan.total_months} Months Plan</p>
+                              </div>
+                              <div className="text-left sm:text-right">
+                                <p className="text-[9px] sm:text-[10px] font-bold text-purple-600 uppercase tracking-widest mb-0.5 sm:mb-1">Months Paid</p>
+                                <p className="text-2xl sm:text-3xl font-black text-purple-700 tracking-tighter leading-none">{plan.months_paid} <span className="text-xs sm:text-[15px] text-purple-400 font-bold tracking-normal">/ {plan.total_months}</span></p>
+                              </div>
+                            </div>
 
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 p-4 sm:p-5 md:p-6 bg-gray-50/80 rounded-xl sm:rounded-[20px] border border-gray-200/60 mt-4 sm:mt-6">
-                          <div className="space-y-1 sm:space-y-1.5 flex flex-col sm:block items-center sm:items-start text-center sm:text-left">
-                            <p className="text-[9px] sm:text-[10px] font-bold text-gray-500 uppercase tracking-widest">Total Paid</p>
-                            <p className="text-sm sm:text-[15px] font-black text-gray-900 tracking-tight">
-                              ₹{((selectedCustomer.kitty_months_paid || 0) * (selectedCustomer.kitty_installment_amount || 0)).toLocaleString()}
-                            </p>
+                            <div className="w-full bg-gray-100 h-2.5 sm:h-3 rounded-full overflow-hidden shadow-inner mb-6 sm:mb-8">
+                              <div 
+                                className="bg-purple-500 h-full rounded-full transition-all duration-700 ease-out" 
+                                style={{ width: `${Math.min((plan.months_paid / plan.total_months) * 100, 100)}%` }}
+                              />
+                            </div>
+
+                            <div>
+                              <h4 className="text-[10px] sm:text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-3 sm:mb-4">Installment Tracker</h4>
+                              <div className="grid grid-cols-4 md:grid-cols-6 gap-2 sm:gap-3 md:gap-4">
+                                {Array.from({length: plan.total_months}).map((_, i) => {
+                                  const monthNum = i + 1;
+                                  const isPaid = monthNum <= plan.months_paid;
+                                  const isCurrent = monthNum === plan.months_paid + 1 && plan.status === 'active';
+
+                                  return (
+                                    <div key={i} className={cn(
+                                      "rounded-xl sm:rounded-[16px] p-2 sm:p-3 flex flex-col items-center justify-center gap-1.5 sm:gap-2 transition-all relative overflow-hidden h-[60px] sm:h-[72px]",
+                                      isPaid ? "bg-emerald-50 border border-emerald-100" :
+                                      isCurrent ? "bg-white border-2 border-blue-400 shadow-sm" :
+                                      "bg-gray-50 border border-gray-100 opacity-70"
+                                    )}>
+                                      <span className={cn("text-[9px] sm:text-[10px] font-black uppercase tracking-widest", isPaid ? "text-emerald-700" : isCurrent ? "text-blue-700" : "text-gray-400")}>
+                                        Mon {monthNum}
+                                      </span>
+                                      {isPaid ? <CheckCircle2 className="w-4 sm:w-5 h-4 sm:h-5 text-emerald-500" strokeWidth={2.5}/> : 
+                                       isCurrent ? <Clock className="w-4 sm:w-5 h-4 sm:h-5 text-blue-500" strokeWidth={2.5}/> : 
+                                       <Lock className="w-3.5 sm:w-4 h-3.5 sm:h-4 text-gray-300" strokeWidth={2}/>}
+                                      
+                                      {isCurrent && (
+                                        <div className="absolute inset-x-0 bottom-0 top-0 flex flex-col">
+                                          <button 
+                                            className="flex-1 bg-blue-600/95 backdrop-blur-sm text-white text-[9px] sm:text-[10px] font-bold tracking-widest uppercase opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center"
+                                            onClick={() => handleRecordKittyPayment(selectedCustomer, plan.id)}
+                                          >
+                                            Mark Paid
+                                          </button>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4 p-4 sm:p-5 md:p-6 bg-gray-50/80 rounded-xl sm:rounded-[20px] border border-gray-200/60 mt-4 sm:mt-6">
+                              <div className="space-y-1 sm:space-y-1.5 flex flex-col sm:block items-center sm:items-start text-center sm:text-left">
+                                <p className="text-[9px] sm:text-[10px] font-bold text-gray-500 uppercase tracking-widest">Total Paid</p>
+                                <p className="text-sm sm:text-[15px] font-black text-gray-900 tracking-tight">
+                                  ₹{(plan.months_paid * plan.plan_amount).toLocaleString()}
+                                </p>
+                              </div>
+                              <div className="space-y-1 sm:space-y-1.5 flex flex-col sm:block items-center sm:items-start text-center sm:text-left sm:border-l sm:border-gray-200 sm:pl-4 md:pl-6">
+                                <p className="text-[9px] sm:text-[10px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
+                                  <Gift className="w-3 sm:w-3.5 h-3 sm:h-3.5 text-emerald-500"/> Jeweler Bonus
+                                </p>
+                                <p className="text-sm sm:text-[15px] font-black text-emerald-600 tracking-tight">
+                                  + ₹{inferredBonus.toLocaleString()}
+                                </p>
+                              </div>
+                              <div className="space-y-1 sm:space-y-1.5 flex flex-col sm:block items-center sm:items-start text-center sm:text-left sm:border-l sm:border-gray-200 sm:pl-4 md:pl-6 pt-3 sm:pt-0 border-t border-gray-200 sm:border-t-0 mt-1 sm:mt-0">
+                                <p className="text-[9px] sm:text-[10px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
+                                  <Wallet className="w-3 sm:w-3.5 h-3 sm:h-3.5 text-purple-500"/> Est. Maturity
+                                </p>
+                                <p className="text-lg sm:text-xl font-black text-purple-700 tracking-tighter leading-none pt-0.5">
+                                  ₹{maturedValue.toLocaleString()}
+                                </p>
+                              </div>
+                            </div>
                           </div>
-                          <div className="space-y-1 sm:space-y-1.5 flex flex-col sm:block items-center sm:items-start text-center sm:text-left sm:border-l sm:border-gray-200 sm:pl-4 md:pl-6">
-                            <p className="text-[9px] sm:text-[10px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
-                              <Gift className="w-3 sm:w-3.5 h-3 sm:h-3.5 text-emerald-500"/> Jeweler Bonus
-                            </p>
-                            <p className="text-sm sm:text-[15px] font-black text-emerald-600 tracking-tight">
-                              + ₹{(selectedCustomer.kitty_installment_amount || 0).toLocaleString()}
-                            </p>
-                          </div>
-                          <div className="space-y-1 sm:space-y-1.5 flex flex-col sm:block items-center sm:items-start text-center sm:text-left sm:border-l sm:border-gray-200 sm:pl-4 md:pl-6 pt-3 sm:pt-0 border-t border-gray-200 sm:border-t-0 mt-1 sm:mt-0">
-                            <p className="text-[9px] sm:text-[10px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5">
-                              <Wallet className="w-3 sm:w-3.5 h-3 sm:h-3.5 text-purple-500"/> Est. Maturity
-                            </p>
-                            <p className="text-lg sm:text-xl font-black text-purple-700 tracking-tighter leading-none pt-0.5">
-                              ₹{((12 * (selectedCustomer.kitty_installment_amount || 0)) + (selectedCustomer.kitty_installment_amount || 0)).toLocaleString()}
-                            </p>
-                          </div>
-                        </div>
-                      </>
+                        )
+                      })
                     ) : (
                       <div className="text-center py-6 sm:py-10 px-4">
                         <div className="h-12 sm:h-14 w-12 sm:w-14 rounded-2xl bg-purple-50 flex items-center justify-center mx-auto mb-3 sm:mb-4 border border-purple-100">
                           <Gem className="w-5 sm:w-6 h-5 sm:h-6 text-purple-400" strokeWidth={1.5} />
                         </div>
-                        <p className="text-xs sm:text-[13px] font-semibold text-gray-600">Customer is not currently enrolled in a Kitty Plan.</p>
-                        <Button 
-                          className="mt-4 sm:mt-6 h-10 sm:h-12 px-6 sm:px-8 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-[10px] sm:text-xs uppercase tracking-widest shadow-md shadow-purple-200 transition-all active:scale-95"
-                          onClick={() => {
-                            setIsProfileModalOpen(false);
-                            setNewKittyForm({ 
-                              ...newKittyForm, 
-                              full_name: selectedCustomer.full_name || '', 
-                              phone: selectedCustomer.phone || '', 
-                              city: selectedCustomer.city || '' 
-                            });
-                            setTimeout(() => setIsAddKittyModalOpen(true), 300);
-                          }}
-                        >
-                          <Gem className="w-3.5 sm:w-4 h-3.5 sm:h-4 mr-2" strokeWidth={2}/> Start Kitty Plan Now
-                        </Button>
+                        <p className="text-xs sm:text-[13px] font-semibold text-gray-600">Customer is not currently enrolled in any Kitty Plans.</p>
                       </div>
                     )}
                   </div>
@@ -623,7 +609,7 @@ export function CRMModals(props: CRMModalsProps) {
         </DialogContent>
       </Dialog>
 
-      {/* KITTY REGISTRATION MODAL WITH REFERRAL SYSTEM */}
+      {/* KITTY REGISTRATION MODAL WITH DYNAMIC DROPDOWN */}
       <Dialog open={isAddKittyModalOpen} onOpenChange={setIsAddKittyModalOpen}>
         <DialogContent className="w-full sm:max-w-[550px] border-none sm:rounded-[28px] rounded-t-[28px] rounded-b-none sm:rounded-b-[28px] bg-white shadow-[0_-10px_40px_rgba(0,0,0,0.1)] sm:shadow-[0_24px_60px_-15px_rgba(0,0,0,0.15)] p-0 overflow-hidden flex flex-col mt-auto sm:mt-0 mb-0 sm:mb-auto max-h-[90vh]">
           <DialogHeader className="bg-purple-50/80 p-6 sm:p-8 border-b border-purple-100 shrink-0">
@@ -633,31 +619,51 @@ export function CRMModals(props: CRMModalsProps) {
             <DialogDescription className="text-xs font-medium text-purple-700/70 mt-1.5">Enroll a new member and assign referral bonuses.</DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 p-6 sm:p-8 overflow-y-auto custom-scrollbar bg-white flex-1">
-            <div className="space-y-2 col-span-1 sm:col-span-2">
-              <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Full Name <span className="text-red-500">*</span></label>
-              <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-semibold bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="Member Name" value={newKittyForm.full_name} onChange={(e) => setNewKittyForm({...newKittyForm, full_name: e.target.value})} />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Phone <span className="text-red-500">*</span></label>
-              <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-bold font-mono bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="10 digits" value={newKittyForm.phone} onChange={(e) => setNewKittyForm({...newKittyForm, phone: e.target.value})} />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><Mail className="w-3.5 h-3.5"/> Email (Optional)</label>
-              <Input type="email" className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="email@example.com" value={newKittyForm.email || ''} onChange={(e) => setNewKittyForm({...newKittyForm, email: e.target.value})} />
-            </div>
-            <div className="space-y-2 col-span-1 sm:col-span-2">
-              <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">City</label>
-              <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="Mumbai" value={newKittyForm.city} onChange={(e) => setNewKittyForm({...newKittyForm, city: e.target.value})} />
-            </div>
             
-            <div className="space-y-2">
-              <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5"/> D.O.B <span className="text-red-500">*</span></label>
-              <Input type="date" required className="h-11 sm:h-12 rounded-[14px] text-[13px] font-medium text-gray-700 bg-white border border-gray-200/60 hover:bg-gray-50 focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" value={newKittyForm.birth_date || ''} onChange={(e) => setNewKittyForm({...newKittyForm, birth_date: e.target.value})} />
-            </div>
-            <div className="space-y-2">
-              <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5"/> Anniversary (Optional)</label>
-              <Input type="date" className="h-11 sm:h-12 rounded-[14px] text-[13px] font-medium text-gray-700 bg-white border border-gray-200/60 hover:bg-gray-50 focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" value={newKittyForm.anniversary_date || ''} onChange={(e) => setNewKittyForm({...newKittyForm, anniversary_date: e.target.value})} />
-            </div>
+            {/* ---> NEW: SMART PROFILE LOCK <--- */}
+            {selectedCustomer && newKittyForm.phone === selectedCustomer.phone ? (
+              <div className="col-span-1 sm:col-span-2 bg-gray-50 border border-gray-200/60 rounded-[20px] p-5 mb-2 flex items-center justify-between">
+                <div>
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Enrolling Member</p>
+                  <p className="text-lg font-black text-gray-900 tracking-tight">{newKittyForm.full_name}</p>
+                  <div className="flex items-center gap-3 mt-1 text-sm font-medium text-gray-500">
+                    <span className="font-mono">{newKittyForm.phone}</span>
+                    {newKittyForm.city && <span>• {newKittyForm.city}</span>}
+                  </div>
+                </div>
+                <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-100 border-none shadow-sm uppercase tracking-widest text-[9px] font-bold">
+                  Existing Profile
+                </Badge>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2 col-span-1 sm:col-span-2">
+                  <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Full Name <span className="text-red-500">*</span></label>
+                  <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-semibold bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="Member Name" value={newKittyForm.full_name} onChange={(e) => setNewKittyForm({...newKittyForm, full_name: e.target.value})} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Phone <span className="text-red-500">*</span></label>
+                  <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-bold font-mono bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="10 digits" value={newKittyForm.phone} onChange={(e) => setNewKittyForm({...newKittyForm, phone: e.target.value})} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><Mail className="w-3.5 h-3.5"/> Email (Optional)</label>
+                  <Input type="email" className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="email@example.com" value={newKittyForm.email || ''} onChange={(e) => setNewKittyForm({...newKittyForm, email: e.target.value})} />
+                </div>
+                <div className="space-y-2 col-span-1 sm:col-span-2">
+                  <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">City</label>
+                  <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="Mumbai" value={newKittyForm.city} onChange={(e) => setNewKittyForm({...newKittyForm, city: e.target.value})} />
+                </div>
+                
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5"/> D.O.B <span className="text-red-500">*</span></label>
+                  <Input type="date" required className="h-11 sm:h-12 rounded-[14px] text-[13px] font-medium text-gray-700 bg-white border border-gray-200/60 hover:bg-gray-50 focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" value={newKittyForm.start_date || ''} onChange={(e) => setNewKittyForm({...newKittyForm, start_date: e.target.value})} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5"/> Anniversary (Optional)</label>
+                  <Input type="date" className="h-11 sm:h-12 rounded-[14px] text-[13px] font-medium text-gray-700 bg-white border border-gray-200/60 hover:bg-gray-50 focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" value={newKittyForm.anniversary_date || ''} onChange={(e) => setNewKittyForm({...newKittyForm, anniversary_date: e.target.value})} />
+                </div>
+              </>
+            )}
 
             {/* --- REFERRAL SYSTEM BLOCK --- */}
             <div className="col-span-1 sm:col-span-2 bg-indigo-50/80 p-4 sm:p-5 rounded-[20px] border border-indigo-100 mt-2 space-y-4 sm:space-y-5">
@@ -705,16 +711,20 @@ export function CRMModals(props: CRMModalsProps) {
                </label>
                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-5">
                  <div className="space-y-2">
-                   <label className="text-[10px] font-bold text-purple-700 uppercase tracking-widest">Monthly Amount (₹)</label>
-                   <Select value={newKittyForm.monthly_amount} onValueChange={(val) => setNewKittyForm({...newKittyForm, monthly_amount: val})}>
+                   <label className="text-[10px] font-bold text-purple-700 uppercase tracking-widest">Plan Tier (₹)</label>
+                   
+                   {/* ---> NEW DYNAMIC DROPDOWN <--- */}
+                   <Select value={newKittyForm.config_id} onValueChange={(val) => setNewKittyForm({...newKittyForm, config_id: val})}>
                       <SelectTrigger className="h-11 sm:h-12 bg-white border-purple-200 font-bold text-sm rounded-[14px] shadow-sm focus:ring-4 focus:ring-purple-500/10 px-4">
-                        <SelectValue />
+                        <SelectValue placeholder="Select Plan Tier" />
                       </SelectTrigger>
                       <SelectContent className="rounded-[16px] border-purple-100 shadow-xl p-1">
-                        <SelectItem value="2000" className="text-sm font-medium py-2.5 rounded-lg focus:bg-purple-50">₹ 2,000 / month</SelectItem>
-                        <SelectItem value="3000" className="text-sm font-medium py-2.5 rounded-lg focus:bg-purple-50">₹ 3,000 / month</SelectItem>
-                        <SelectItem value="5000" className="text-sm font-black text-purple-700 py-2.5 rounded-lg bg-purple-50/50 focus:bg-purple-100">₹ 5,000 / month</SelectItem>
-                        <SelectItem value="10000" className="text-sm font-medium py-2.5 rounded-lg focus:bg-purple-50">₹ 10,000 / month</SelectItem>
+                        {kittyConfigs.map(c => (
+                          <SelectItem key={c.id} value={c.id} className="text-sm font-bold text-purple-700 py-2.5 rounded-lg focus:bg-purple-50 cursor-pointer">
+                            ₹ {c.monthly_amount.toLocaleString()} / mo ({c.duration_months} Mths)
+                            {c.bonus_amount > 0 && <span className="ml-1.5 text-[9px] text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded uppercase tracking-wider">+ ₹{c.bonus_amount} Bonus</span>}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                    </Select>
                  </div>
@@ -727,7 +737,7 @@ export function CRMModals(props: CRMModalsProps) {
           </div>
           <DialogFooter className="bg-gray-50/80 p-5 sm:p-6 border-t border-gray-100 flex flex-col sm:flex-row gap-3 shrink-0 pb-safe">
             <Button variant="ghost" className="w-full sm:flex-1 h-12 rounded-[16px] text-xs font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-200 transition-colors px-6" onClick={() => setIsAddKittyModalOpen(false)}>Cancel</Button>
-            <Button disabled={isSubmitting || !newKittyForm.full_name || !newKittyForm.phone || !newKittyForm.birth_date} className="w-full sm:flex-[2] h-12 rounded-[16px] text-xs font-bold uppercase tracking-widest bg-purple-600 hover:bg-purple-700 text-white shadow-md shadow-purple-200 transition-all active:scale-95" onClick={handleAddKittyMember}>
+            <Button disabled={isSubmitting || !newKittyForm.full_name || !newKittyForm.phone} className="w-full sm:flex-[2] h-12 rounded-[16px] text-xs font-bold uppercase tracking-widest bg-purple-600 hover:bg-purple-700 text-white shadow-md shadow-purple-200 transition-all active:scale-95" onClick={handleAddKittyMember}>
               {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Gem className="w-4 h-4 mr-2" strokeWidth={2.5}/>}
               Confirm Enrollment
             </Button>

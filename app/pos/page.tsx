@@ -43,6 +43,10 @@ export default function POSPage() {
   const [showPrintModal, setShowPrintModal] = useState(false)
   const [lastInvoiceData, setLastInvoiceData] = useState<any>(null)
   const [isEstimateCheckout, setIsEstimateCheckout] = useState(false)
+
+  // NEW: Backdate Invoice State
+  const [billingDate, setBillingDate] = useState(new Date().toISOString().split('T')[0])
+  const isAdmin = appUser?.role === 'owner' || appUser?.role === 'manager' || appUser?.role === 'operations_manager';
   
   const [allBranches, setAllBranches] = useState<any[]>([])
 
@@ -149,7 +153,10 @@ export default function POSPage() {
     customOrderDetails,
     repairDetails,     
     returnDetails,    
-    allBranches       
+    allBranches,
+    
+    // NEW: Pass the selected date to the checkout engine
+    customBillingDate: isAdmin ? billingDate : undefined 
   })
 
   const handleWipeSession = () => {
@@ -182,6 +189,11 @@ export default function POSPage() {
         selectedLocation={selectedLocation} setSelectedLocation={setSelectedLocation} 
         onWipeSession={handleWipeSession} 
         onWarehousesLoaded={setAllBranches} 
+        
+        // NEW: Pass the Date Picker props
+        isAdmin={isAdmin}
+        billingDate={billingDate}
+        setBillingDate={setBillingDate}
       />
 
       <ModeTabs mode={mode} setMode={setMode} />

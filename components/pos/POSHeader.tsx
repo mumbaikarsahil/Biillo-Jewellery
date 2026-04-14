@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { format } from 'date-fns'
-import { Building, Trash2 } from 'lucide-react'
+import { Building, Trash2, CalendarDays } from 'lucide-react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/useAuth'
@@ -12,13 +12,27 @@ interface POSHeaderProps {
   selectedLocation: string
   setSelectedLocation: (val: string) => void
   onWipeSession: () => void
-  onWarehousesLoaded?: (warehouses: any[]) => void // <--- NEW: Passes the rich data up to the main page
+  onWarehousesLoaded?: (warehouses: any[]) => void
+  
+  // NEW PROPS FOR CUSTOM BILLING DATE
+  isAdmin?: boolean
+  billingDate?: string
+  setBillingDate?: (date: string) => void
 }
 
-export function POSHeader({ isHQ, isLocked, selectedLocation, setSelectedLocation, onWipeSession, onWarehousesLoaded }: POSHeaderProps) {
+export function POSHeader({ 
+  isHQ, 
+  isLocked, 
+  selectedLocation, 
+  setSelectedLocation, 
+  onWipeSession, 
+  onWarehousesLoaded,
+  isAdmin,
+  billingDate,
+  setBillingDate
+}: POSHeaderProps) {
   const { appUser } = useAuth()
   
-  // Expanded state to hold the new address and contact columns
   const [warehouses, setWarehouses] = useState<{
     id: string, 
     name: string, 
@@ -27,12 +41,10 @@ export function POSHeader({ isHQ, isLocked, selectedLocation, setSelectedLocatio
     gstin?: string
   }[]>([])
 
-  // Fetch branches specific to this company
   useEffect(() => {
     const fetchWarehouses = async () => {
       if (!appUser?.company_id) return
       try {
-        // Now fetching the new columns from the database
         const { data, error } = await supabase
           .from('warehouses')
           .select('id, name, address, contact_number, gstin')
@@ -44,7 +56,6 @@ export function POSHeader({ isHQ, isLocked, selectedLocation, setSelectedLocatio
         
         if (data) {
           setWarehouses(data)
-          // Pass the rich data payload up to the parent component
           if (onWarehousesLoaded) onWarehousesLoaded(data)
         }
 
@@ -56,10 +67,9 @@ export function POSHeader({ isHQ, isLocked, selectedLocation, setSelectedLocatio
   }, [appUser, onWarehousesLoaded])
 
   return (
-    // Height snapped back to h-14 to perfectly align with the sidebar
     <header className="z-40 w-full bg-white border-b border-slate-200 px-4 h-14 flex items-center justify-between shrink-0 sticky top-0 lg:static">
       
-      {/* LEFT SECTION: Branch Selector ONLY */}
+      {/* LEFT SECTION: Branch Selector */}
       <div className="flex items-center gap-2">
         <Building className="w-4 h-4 text-slate-400 hidden sm:block" />
         <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
@@ -73,14 +83,12 @@ export function POSHeader({ isHQ, isLocked, selectedLocation, setSelectedLocatio
               </SelectItem>
             )}
             
-            {/* Dynamically mapped warehouses from Supabase */}
             {warehouses.map((w) => (
               <SelectItem key={w.id} value={w.id} className="text-xs font-medium text-slate-700 uppercase rounded-md focus:bg-slate-50">
                 {w.name}
               </SelectItem>
             ))}
 
-            {/* Fallback while loading */}
             {warehouses.length === 0 && selectedLocation && selectedLocation !== 'ALL' && (
                <SelectItem value={selectedLocation} className="text-xs uppercase font-medium text-slate-500">Loading...</SelectItem>
             )}
@@ -91,11 +99,25 @@ export function POSHeader({ isHQ, isLocked, selectedLocation, setSelectedLocatio
       {/* RIGHT SECTION: Date & Actions */}
       <div className="flex items-center gap-3 sm:gap-6">
         
-        {/* Current Date */}
-        <div className="hidden md:flex flex-col items-end justify-center mt-0.5">
-          <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 leading-tight">Terminal Active</span>
-          <span className="text-xs font-semibold text-slate-700 tracking-tight leading-tight">{format(new Date(), 'EEEE, dd MMM yyyy')}</span>
-        </div>
+        {/* NEW: Conditional Date Picker for Admins vs Static Text for Cashiers */}
+        {isAdmin && setBillingDate && billingDate !== undefined ? (
+          <div className="hidden md:flex flex-col items-end justify-center">
+            <span className="text-[9px] font-bold uppercase tracking-wider text-indigo-500 leading-tight mb-1 flex items-center gap-1">
+              <CalendarDays className="w-3 h-3" /> Backdate Invoice
+            </span>
+            <input 
+              type="date" 
+              value={billingDate}
+              onChange={(e) => setBillingDate(e.target.value)}
+              className="text-xs font-semibold text-slate-700 bg-slate-50 border border-slate-200 rounded-md px-2 py-0.5 outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer h-7"
+            />
+          </div>
+        ) : (
+          <div className="hidden md:flex flex-col items-end justify-center mt-0.5">
+            <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 leading-tight">Terminal Active</span>
+            <span className="text-xs font-semibold text-slate-700 tracking-tight leading-tight">{format(new Date(), 'EEEE, dd MMM yyyy')}</span>
+          </div>
+        )}
 
         {/* Wipe Session Button */}
         <Button 

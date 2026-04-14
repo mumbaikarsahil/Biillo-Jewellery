@@ -17,7 +17,8 @@ interface CustomerSelectorProps {
   appUser?: any 
   selectedLocation?: string
   subtotal?: number 
-  onApplyWallet?: (type: 'credit' | 'kitty', availableAmount: number) => void 
+  // CHANGED: Added planId parameter to the callback
+  onApplyWallet?: (type: 'credit' | 'kitty', availableAmount: number, planId?: string) => void 
 }
 
 export function CustomerSelector({ 
@@ -75,17 +76,18 @@ export function CustomerSelector({
     }
   }
 
-  // --- UPDATED: FLEXIBLE KITTY MATH HELPER ---
-  const handleKittyRedemption = () => {
-    const monthlyAmt = Number(selectedCustomer.kitty_installment_amount) || 0;
-    const monthsPaid = Number(selectedCustomer.kitty_months_paid) || 0;
+  // --- UPDATED: SPECIFIC KITTY PLAN REDEMPTION HELPER ---
+  const handleKittyRedemption = (plan: any) => {
+    const monthlyAmt = Number(plan.plan_amount) || 0;
+    const monthsPaid = Number(plan.months_paid) || 0;
+    const totalMonths = Number(plan.total_months) || 12;
     
     // Base amount is what they actually paid
     let totalRedemptionValue = monthsPaid * monthlyAmt;
     
-    // Add the Jeweler's Bonus ONLY if the plan is fully matured (12 months paid)
+    // Add the Jeweler's Bonus ONLY if the plan is fully matured
     let bonusApplied = false;
-    if (monthsPaid === 12) {
+    if (monthsPaid >= totalMonths) {
       totalRedemptionValue += monthlyAmt; 
       bonusApplied = true;
     }
@@ -100,12 +102,13 @@ export function CustomerSelector({
     }
 
     if (bonusApplied) {
-      toast.success("13-Month Maturity Bonus Applied!");
+      toast.success("Maturity Bonus Applied!");
     } else {
       toast.info(`Early Redemption: Applied ${monthsPaid} months of paid value.`);
     }
 
-    onApplyWallet?.('kitty', totalRedemptionValue);
+    // NEW: Passing the specific plan.id back up to useCheckout
+    onApplyWallet?.('kitty', totalRedemptionValue, plan.id);
   }
 
   // --- UPDATED: STORE CREDIT WITH 20% DEDUCTION ---
@@ -123,6 +126,9 @@ export function CustomerSelector({
 
     onApplyWallet?.('credit', netUsableCredit);
   }
+
+  // Check if they have ANY active plan to show the badge
+  const hasActivePlan = selectedCustomer?.kitty_plans && selectedCustomer.kitty_plans.some((p: any) => p.status === 'active');
 
   return (
     <div className="space-y-1.5 relative">
@@ -142,7 +148,8 @@ export function CustomerSelector({
                 <p className="text-sm font-bold text-slate-900 leading-none">{selectedCustomer.full_name}</p>
                 <p className="text-[10px] font-mono text-slate-500 mt-1">{selectedCustomer.phone}</p>
                 
-                {selectedCustomer.customer_status === 'Kitty Member' && selectedCustomer.kitty_plan_status !== 'Redeemed' && (
+                {/* NEW: Badge logic uses hasActivePlan */}
+                {(selectedCustomer.customer_status === 'Kitty Member' || hasActivePlan) && (
                   <Badge className="bg-purple-50 text-purple-700 border-purple-200 text-[9px] px-1.5 py-0 h-4 rounded-sm flex items-center gap-1 font-bold mt-1.5 w-max">
                     <Gem className="w-2.5 h-2.5" /> Active Kitty Member
                   </Badge>
@@ -160,35 +167,43 @@ export function CustomerSelector({
           </div>
 
           {/* --- INTERACTIVE WALLET REDEMPTION BUTTONS --- */}
-          {(Number(selectedCustomer.store_credit_balance) > 0 || (selectedCustomer.customer_status === 'Kitty Member' && selectedCustomer.kitty_plan_status !== 'Redeemed')) && (
+          {(Number(selectedCustomer.store_credit_balance) > 0 || hasActivePlan) && (
             <div className="flex flex-col gap-1.5 mt-3 pt-3 border-t border-slate-100 w-full">
               
-              {/* 1. Kitty Plan Redeemer */}
-              {selectedCustomer.customer_status === 'Kitty Member' && selectedCustomer.kitty_plan_status !== 'Redeemed' && Number(selectedCustomer.kitty_installment_amount) > 0 && (
-                <div 
-                  onClick={handleKittyRedemption}
-                  className="flex items-center justify-between w-full bg-purple-50 border border-purple-200 rounded-sm p-2 cursor-pointer hover:bg-purple-100 transition-colors group"
-                  title="Redeem Harvesting Plan"
-                >
-                  <div className="flex flex-col gap-0.5 text-purple-700">
-                    <div className="flex items-center gap-1.5">
-                      <Gem className="w-3.5 h-3.5" />
-                      <span className="text-[10px] font-bold uppercase tracking-wider">Harvest Plan</span>
+              {/* 1. Kitty Plan Redeemers (Maps over all active plans) */}
+              {selectedCustomer.kitty_plans?.filter((p: any) => p.status === 'active' && p.months_paid > 0).map((plan: any) => {
+                const isMatured = plan.months_paid >= plan.total_months;
+                const valueToDisplay = isMatured 
+                  ? (plan.total_months * plan.plan_amount) + plan.plan_amount 
+                  : plan.months_paid * plan.plan_amount;
+
+                return (
+                  <div 
+                    key={plan.id}
+                    onClick={() => handleKittyRedemption(plan)}
+                    className="flex items-center justify-between w-full bg-purple-50 border border-purple-200 rounded-sm p-2 cursor-pointer hover:bg-purple-100 transition-colors group"
+                    title="Redeem Harvesting Plan"
+                  >
+                    <div className="flex flex-col gap-0.5 text-purple-700">
+                      <div className="flex items-center gap-1.5">
+                        <Gem className="w-3.5 h-3.5" />
+                        <span className="text-[10px] font-bold uppercase tracking-wider">{plan.plan_name}</span>
+                      </div>
+                      {!isMatured && (
+                         <span className="text-[8px] font-semibold text-purple-500 flex items-center gap-1">
+                           <Info className="w-2.5 h-2.5" /> Early Redemption ({plan.months_paid} Mths)
+                         </span>
+                      )}
                     </div>
-                    {Number(selectedCustomer.kitty_months_paid) < 12 && (
-                       <span className="text-[8px] font-semibold text-purple-500 flex items-center gap-1">
-                         <Info className="w-2.5 h-2.5" /> Early Redemption ({selectedCustomer.kitty_months_paid} Mths)
-                       </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-black text-purple-700 tabular-nums">
+                        ₹{valueToDisplay.toLocaleString()}
+                      </span>
+                      <span className="bg-purple-600 text-white text-[9px] font-bold uppercase px-2 py-0.5 rounded-sm opacity-90 group-hover:opacity-100 group-hover:shadow-sm transition-all">Redeem</span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-black text-purple-700 tabular-nums">
-                      ₹{((Number(selectedCustomer.kitty_months_paid) === 12 ? 13 : Number(selectedCustomer.kitty_months_paid)) * Number(selectedCustomer.kitty_installment_amount)).toLocaleString()}
-                    </span>
-                    <span className="bg-purple-600 text-white text-[9px] font-bold uppercase px-2 py-0.5 rounded-sm opacity-90 group-hover:opacity-100 group-hover:shadow-sm transition-all">Redeem</span>
-                  </div>
-                </div>
-              )}
+                );
+              })}
 
               {/* 2. Store Credit Redeemer */}
               {Number(selectedCustomer.store_credit_balance) > 0 && (
@@ -247,22 +262,26 @@ export function CustomerSelector({
       {searchCustomer && !selectedCustomer && (
         <div className="absolute top-full left-0 w-full bg-white border border-slate-300 shadow-lg z-50 max-h-[250px] overflow-y-auto rounded-sm mt-1 custom-scrollbar">
           {filteredCustomers.length > 0 ? (
-            filteredCustomers.map(c => (
-              <div 
-                key={c.id} 
-                className="p-2.5 border-b border-slate-100 hover:bg-slate-50 cursor-pointer flex justify-between items-center transition-colors" 
-                onClick={() => { setSelectedCustomer(c); setSearchCustomer(''); }}
-              >
-                <div className="flex flex-col">
-                  <span className="font-semibold text-xs text-slate-700">{c.full_name}</span>
-                  <div className="flex gap-1 mt-0.5">
-                    <span className="text-[10px] font-mono text-slate-500">{c.phone}</span>
-                    {Number(c.store_credit_balance) > 0 && <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded-sm ml-1">Credits</span>}
-                    {c.customer_status === 'Kitty Member' && c.kitty_plan_status !== 'Redeemed' && <span className="text-[9px] font-bold text-purple-600 bg-purple-50 px-1 rounded-sm ml-0.5">Kitty</span>}
+            filteredCustomers.map(c => {
+              const cHasActivePlan = c.kitty_plans && c.kitty_plans.some((p: any) => p.status === 'active');
+              
+              return (
+                <div 
+                  key={c.id} 
+                  className="p-2.5 border-b border-slate-100 hover:bg-slate-50 cursor-pointer flex justify-between items-center transition-colors" 
+                  onClick={() => { setSelectedCustomer(c); setSearchCustomer(''); }}
+                >
+                  <div className="flex flex-col">
+                    <span className="font-semibold text-xs text-slate-700">{c.full_name}</span>
+                    <div className="flex gap-1 mt-0.5">
+                      <span className="text-[10px] font-mono text-slate-500">{c.phone}</span>
+                      {Number(c.store_credit_balance) > 0 && <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded-sm ml-1">Credits</span>}
+                      {(c.customer_status === 'Kitty Member' || cHasActivePlan) && <span className="text-[9px] font-bold text-purple-600 bg-purple-50 px-1 rounded-sm ml-0.5">Kitty</span>}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           ) : (
             <div className="p-3 text-center text-xs text-slate-500">No matching records found.</div>
           )}

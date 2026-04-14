@@ -74,7 +74,7 @@ export async function fetchJobBags(companyId: string) {
 export async function fetchCustomers(companyId: string) {
   return await supabase
     .from('customers')
-    .select('*')
+    .select('*, kitty_plans(*)') // <-- CRITICAL: Added Kitty Plans join
     .eq('company_id', companyId)
     .order('full_name')
 }

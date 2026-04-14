@@ -41,6 +41,7 @@ export function CheckoutSidebar({
   
   // WALLET STATES FROM HOOK
   appliedKittyAmount, setAppliedKittyAmount,
+  appliedKittyPlanId, setAppliedKittyPlanId,
   appliedCreditAmount, setAppliedCreditAmount,
 
   estimateChargeType, 
@@ -106,14 +107,15 @@ export function CheckoutSidebar({
   const totalWalletRedemptions = appliedKittyAmount + appliedCreditAmount;
   const customNetEst = Math.max(0, customEstBase - customDiscount - exchangeNum - (activeVoucher?.amount || 0) - totalWalletRedemptions);
 
-  // FORCE RESET if user types a manual discount
+  // --- CHANGED: ONLY clear wallets if an activeVoucher is applied ---
+  // (Manual discounts are now freely allowed to club with wallets)
   useEffect(() => {
-    if ((Number(discountValue) > 0 || activeVoucher) && (appliedKittyAmount > 0 || appliedCreditAmount > 0)) {
+    if (activeVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0)) {
       setAppliedKittyAmount(0);
       setAppliedCreditAmount(0);
-      toast.warning("Discounts Overridden", { description: "Applying a manual discount clears Wallet balances." });
+      toast.warning("Discounts Overridden", { description: "Applying a Voucher clears Wallet/Kitty balances." });
     }
-  }, [discountValue, activeVoucher]);
+  }, [activeVoucher, appliedKittyAmount, appliedCreditAmount, setAppliedKittyAmount, setAppliedCreditAmount]);
 
   const handleFinalize = (isEstimate: boolean) => {
     let finalRef = transactionRef;
@@ -137,6 +139,7 @@ export function CheckoutSidebar({
       transfer_type: finalTransferType,
       
       applied_kitty: appliedKittyAmount,
+      kitty_plan_id: appliedKittyPlanId,
       applied_credit: appliedCreditAmount
     })
   }
@@ -157,10 +160,10 @@ export function CheckoutSidebar({
             appUser={appUser}
             selectedLocation={selectedLocation}
             subtotal={subtotal}
-            onApplyWallet={(type: 'kitty' | 'credit', amount: number) => {
-              // Strict Clubbing check triggered from Selector
-              if (Number(discountValue) > 0 || activeVoucher) {
-                 return toast.error("Clubbing Restricted", { description: "Cannot apply Wallet/Kitty when Manual Discounts or Vouchers are active. Clear them first."});
+            onApplyWallet={(type: 'kitty' | 'credit', amount: number, planId?: string) => {
+              // --- CHANGED: Only block if activeVoucher exists ---
+              if (activeVoucher) {
+                 return toast.error("Clubbing Restricted", { description: "Cannot apply Wallet/Kitty when Vouchers are active. Clear the voucher first."});
               }
 
               if (type === 'kitty') {
@@ -169,6 +172,7 @@ export function CheckoutSidebar({
                   return;
                 }
                 setAppliedKittyAmount(amount);
+                if (planId) setAppliedKittyPlanId(planId); 
               } 
               else if (type === 'credit') {
                 if (subtotal < amount + appliedKittyAmount) {

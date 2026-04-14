@@ -15,10 +15,11 @@ interface CheckoutConfig {
   returnDetails: any; 
   allBranches: any[];
   callRpc: Function;
+  customBillingDate?: string; // <-- NEW: Accepts the date from POSHeader
 }
 
 export function useCheckout({ 
-  appUser, selectedLocation, cart, subtotal, mode, selectedCustomer, customOrderDetails, repairDetails, returnDetails, allBranches, callRpc 
+  appUser, selectedLocation, cart, subtotal, mode, selectedCustomer, customOrderDetails, repairDetails, returnDetails, allBranches, callRpc, customBillingDate 
 }: CheckoutConfig) {
   
   // Payment States
@@ -32,6 +33,7 @@ export function useCheckout({
 
   // --- CENTRALIZED WALLET STATE ---
   const [appliedKittyAmount, setAppliedKittyAmount] = useState(0)
+  const [appliedKittyPlanId, setAppliedKittyPlanId] = useState<string | null>(null) // <-- NEW
   const [appliedCreditAmount, setAppliedCreditAmount] = useState(0)
   
   const currentSplitTotal = 
@@ -47,14 +49,13 @@ export function useCheckout({
   
   // Vouchers
   const [voucherCode, setVoucherCode] = useState('')
-  // FIX: Added 'is_birthday_redemption?: boolean' to the type definition
-const [activeVoucher, setActiveVoucher] = useState<{ 
-  id: string, 
-  code: string, 
-  amount: number, 
-  handling_fee: number, 
-  is_birthday_redemption?: boolean 
-} | null>(null)
+  const [activeVoucher, setActiveVoucher] = useState<{ 
+    id: string, 
+    code: string, 
+    amount: number, 
+    handling_fee: number, 
+    is_birthday_redemption?: boolean 
+  } | null>(null)
   const [handlingFee, setHandlingFee] = useState<string>('0')
 
   // Exchange
@@ -65,19 +66,38 @@ const [activeVoucher, setActiveVoucher] = useState<{
 
 
   // ==============================================================
+  // --- DATE ENGINE ---
+  // ==============================================================
+  const getEffectiveDate = () => {
+    if (!customBillingDate) return new Date();
+    try {
+      // Stitch the custom date with the current precise time
+      const currentTimeString = new Date().toISOString().split('T')[1];
+      return new Date(`${customBillingDate}T${currentTimeString}`);
+    } catch (e) {
+      return new Date();
+    }
+  };
+
+  const effectiveDate = getEffectiveDate();
+  const effectiveDateISO = effectiveDate.toISOString();
+
+
+  // ==============================================================
   // --- CLUBBING VALIDATION OVERRIDES ---
   // ==============================================================
   
   // 1. If Manual Discount or Voucher exists, wipe out Wallet/Kitty
+  // 1. Calculate Manual Discount
   const discountNum = parseFloat(discountValue) || 0
   const standardDiscount = discountType === 'percent' ? (subtotal * discountNum) / 100 : discountNum
-  const hasManualDiscount = standardDiscount > 0
   const hasVoucher = activeVoucher !== null
 
-  if ((hasManualDiscount || hasVoucher) && (appliedKittyAmount > 0 || appliedCreditAmount > 0)) {
+  // ONLY block Vouchers from clubbing with Wallet/Kitty. Manual discounts are now allowed.
+  if (hasVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0)) {
      setAppliedKittyAmount(0);
      setAppliedCreditAmount(0);
-     toast.warning("Clubbing Restricted", { description: "Wallet & Kitty credits cannot be combined with manual discounts or vouchers." });
+     toast.warning("Clubbing Restricted", { description: "Vouchers cannot be combined with Wallet & Kitty credits." });
   }
 
   // ==============================================================
@@ -141,7 +161,6 @@ const [activeVoucher, setActiveVoucher] = useState<{
     }
     
     try {
-      // CHANGE 1: Added 'valid_from' and 'is_birthday_redemption' to the select query
       const { data: voucher, error } = await supabase
         .from('vouchers')
         .select(`
@@ -159,7 +178,6 @@ const [activeVoucher, setActiveVoucher] = useState<{
       const today = new Date();
       today.setHours(0,0,0,0);
 
-      // CHANGE 2: Bulletproof Validation for Birthday Month (Start Date)
       if (voucher.valid_from) {
         const validFromDate = new Date(voucher.valid_from);
         validFromDate.setHours(0,0,0,0);
@@ -171,14 +189,12 @@ const [activeVoucher, setActiveVoucher] = useState<{
         }
       }
 
-      // Validation for Expiry (End Date)
       if (voucher.expiry_date) {
         const expiryDate = new Date(voucher.expiry_date)
         expiryDate.setHours(0,0,0,0);
         if (today > expiryDate) return toast.error(`Expired: This voucher expired on ${expiryDate.toLocaleDateString()}.`)
       }
 
-      // Fraud/Customer check remains the same...
       if (voucher.customer_id && voucher.customers) {
         const rawCust = Array.isArray(voucher.customers) ? voucher.customers[0] : voucher.customers;
         if (selectedCustomer && selectedCustomer.id !== voucher.customer_id) {
@@ -194,13 +210,12 @@ const [activeVoucher, setActiveVoucher] = useState<{
         })
         .eq('id', voucher.id);
 
-      // CHANGE 3: Pass is_birthday_redemption to the activeVoucher state
       setActiveVoucher({ 
         id: voucher.id, 
         code: voucher.code, 
         amount: voucher.discount_value, 
         handling_fee: voucher.handling_fee,
-        is_birthday_redemption: voucher.is_birthday_redemption // Needed for UI Gift Icon
+        is_birthday_redemption: voucher.is_birthday_redemption
       })
 
       setHandlingFee(voucher.handling_fee?.toString() || '0') 
@@ -284,7 +299,7 @@ const [activeVoucher, setActiveVoucher] = useState<{
     return {
       mode: isEstimate ? 'estimate' : mode, 
       invoice_number: draftInvoiceNo,
-      date: new Date(),
+      date: effectiveDate, // <-- NEW: Passes backdated time to the printed receipt
       customer: selectedCustomer,
       branch: activeBranch, 
       items: cart,
@@ -347,6 +362,7 @@ const [activeVoucher, setActiveVoucher] = useState<{
         const totalDeductions = standardDiscount + appliedKittyAmount + appliedCreditAmount;
 
         const invoiceData = {
+            created_at: effectiveDateISO, // <-- NEW: Passes the custom date to the RPC
             customer_id: selectedCustomer?.id, 
             warehouse_id: selectedLocation,
             items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
@@ -357,7 +373,7 @@ const [activeVoucher, setActiveVoucher] = useState<{
             taxable_value: finalTaxableValue,
             cgst_amount: cgstAmount, 
             sgst_amount: sgstAmount, 
-            round_off_amount: roundOffAmount, // <-- SAVES THE ROUND OFF HERE
+            round_off_amount: roundOffAmount,
             final_total: finalPayableGross, 
             advance_adjusted: cartAdvance, 
             
@@ -380,9 +396,6 @@ const [activeVoucher, setActiveVoucher] = useState<{
         
         finalNo = data?.invoice_number || `INV-${Date.now().toString().slice(-6)}`
         
-        // --> THIS IS THE REDEMPTION UPDATE <--
-        // Now that the bill is successfully created, we finally kill the voucher 
-        // so it can never be used again.
         if (activeVoucher) {
           await supabase.from('vouchers').update({ 
             status: 'redeemed', 
@@ -405,15 +418,18 @@ const [activeVoucher, setActiveVoucher] = useState<{
             let shouldUpdateCustomer = false;
 
             if (customTransactionContext?.applied_credit > 0) {
-                const fullRawCreditDeducted = Number(customTransactionContext.applied_credit) / 0.80; 
+                const fullRawCreditDeducted = Number(customTransactionContext.applied_credit) / 0.80; // FIXED TYPO HERE
                 updatePayload.store_credit_balance = Math.max(0, (selectedCustomer.store_credit_balance || 0) - fullRawCreditDeducted);
                 shouldUpdateCustomer = true;
             }
-            if (customTransactionContext?.applied_kitty > 0) {
-                updatePayload.kitty_plan_status = 'Redeemed';
-                updatePayload.kitty_months_paid = 0; 
-                shouldUpdateCustomer = true;
-            }
+            if (customTransactionContext?.applied_kitty > 0 && customTransactionContext?.kitty_plan_id) {
+              // NEW SCHEMA: Update the specific plan record
+              await supabase.from('kitty_plans').update({
+                  status: 'redeemed',
+                  redeemed_at: new Date().toISOString()
+              }).eq('id', customTransactionContext.kitty_plan_id);
+              // No need to set shouldUpdateCustomer = true for kitty anymore
+          }
 
             if (shouldUpdateCustomer) {
                 await supabase.from('customers').update(updatePayload).eq('id', selectedCustomer.id);
@@ -425,6 +441,7 @@ const [activeVoucher, setActiveVoucher] = useState<{
       else if (mode === 'repair') { 
         finalNo = `REP-${Date.now().toString().slice(-6)}`
         const { error } = await supabase.from('repair_tickets').insert({
+          created_at: effectiveDateISO, // <-- NEW
           company_id: appUser?.company_id,
           ticket_number: finalNo,
           customer_id: selectedCustomer?.id,
@@ -446,6 +463,7 @@ const [activeVoucher, setActiveVoucher] = useState<{
       else if (mode === 'return') { 
         finalNo = `RET-${Date.now().toString().slice(-6)}`
         const { error } = await supabase.from('buybacks').insert({
+          created_at: effectiveDateISO, // <-- NEW
           company_id: appUser?.company_id,
           voucher_number: finalNo,
           customer_id: selectedCustomer?.id,
@@ -471,6 +489,7 @@ const [activeVoucher, setActiveVoucher] = useState<{
         if (!selectedCustomer) throw new Error("Please select a customer for this Custom Order.")
         finalNo = `ORD-${Date.now().toString().slice(-6)}`
         const payload = {
+          created_at: effectiveDateISO, // <-- NEW
           company_id: appUser?.company_id,
           origin_warehouse_id: selectedLocation, 
           customer_id: selectedCustomer.id,
@@ -489,11 +508,8 @@ const [activeVoucher, setActiveVoucher] = useState<{
       }
 
       const finalDraftData = generateDraftData(isEstimate);
-      
-      // ALWAY overwrite the DRAFT placeholder with the newly generated real number
       finalDraftData.invoice_number = finalNo;
       
-      // Append wallet/kitty history if available
       if (customTransactionContext) {
           finalDraftData.appliedKitty = customTransactionContext.applied_kitty || 0;
           finalDraftData.appliedCredit = customTransactionContext.applied_credit || 0;
@@ -505,11 +521,12 @@ const [activeVoucher, setActiveVoucher] = useState<{
       toast.error(err.message || 'Checkout failed.'); return { success: false }
     } finally { setIsProcessing(false) }
   }
+  
   const resetCheckoutState = () => {
     setDiscountValue(''); setActiveVoucher(null); setHandlingFee('0'); 
     setExchangeValue(''); setExchangeNotes(''); setExchangeInvoiceNo('');
     setIsExchangeOpen(false); setPaymentMode('cash');
-    setAppliedKittyAmount(0); setAppliedCreditAmount(0); 
+    setAppliedKittyAmount(0); setAppliedKittyPlanId(null); setAppliedCreditAmount(0); 
     setSplitPayments({ cash: '', card: '', upi: '', bank: '', cheque: '' });
   }
 
@@ -523,7 +540,7 @@ const [activeVoucher, setActiveVoucher] = useState<{
     finalPayable: finalPayableNet, 
     exchangeNum,
     
-    appliedKittyAmount, setAppliedKittyAmount, appliedCreditAmount, setAppliedCreditAmount,
+    appliedKittyAmount, setAppliedKittyAmount,appliedKittyPlanId, setAppliedKittyPlanId, appliedCreditAmount, setAppliedCreditAmount,
     estimateChargeType, setEstimateChargeType, estimateHandlingPercent, setEstimateHandlingPercent, 
 
     handleApplyVoucher, handleFetchExchangeItem, generateDraftData, executeCheckout, resetCheckoutState

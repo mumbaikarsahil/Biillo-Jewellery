@@ -14,7 +14,7 @@ import {
   SelectTrigger, SelectValue 
 } from '@/components/ui/select'
 import { supabase } from '@/lib/supabaseClient'
-import { toast } from 'sonner' // <--- FIXED: Using Sonner instead of useToast
+import { toast } from 'sonner'
 import { 
   Users, Search, Store, Gem, FilterX, RefreshCw,
   UserPlus, UploadCloud, Settings
@@ -37,6 +37,7 @@ export default function CRMPage() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [customers, setCustomers] = useState<CRMCustomer[]>([])
   const [dynamicTemplates, setDynamicTemplates] = useState<any[]>([]) 
+  const [kittyConfigs, setKittyConfigs] = useState<any[]>([])
   
   const [isLoading, setIsLoading] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false) 
@@ -67,7 +68,7 @@ export default function CRMPage() {
     birth_date: '', anniversary_date: '', next_followup_date: '', followup_reason: '' 
   })
   const [newKittyForm, setNewKittyForm] = useState({
-    full_name: '', phone: '', city: '', monthly_amount: '5000', start_date: new Date().toISOString().split('T')[0],
+    full_name: '', phone: '', city: '', config_id: '', start_date: new Date().toISOString().split('T')[0],
     referred_by_id: 'none', referral_bonus: '500' 
   })
   
@@ -95,6 +96,20 @@ export default function CRMPage() {
 
       const { data: tplData } = await supabase.from('crm_message_templates').select('*').eq('company_id', appUser.company_id).eq('is_active', true).order('created_at')
       if (tplData) setDynamicTemplates(tplData)
+
+      const { data: kittyData } = await supabase
+        .from('crm_kitty_plans_config')
+        .select('*')
+        .eq('company_id', appUser.company_id)
+        .eq('is_active', true)
+        .order('monthly_amount')
+        
+      if (kittyData) {
+        setKittyConfigs(kittyData)
+        if (kittyData.length > 0 && !newKittyForm.config_id) {
+          setNewKittyForm(prev => ({ ...prev, config_id: kittyData[0].id }))
+        }
+      }
     }
     fetchCoreData()
   }, [appUser])
@@ -103,7 +118,7 @@ export default function CRMPage() {
     if (!appUser || !selectedLocation) return
     setIsLoading(true)
     try {
-      let query = supabase.from('customers').select('*').eq('company_id', appUser.company_id).order('next_followup_date', { ascending: true, nullsFirst: false }) 
+      let query = supabase.from('customers').select('*, kitty_plans(*)').eq('company_id', appUser.company_id).order('next_followup_date', { ascending: true, nullsFirst: false }) 
       if (selectedLocation !== 'ALL') query = query.eq('warehouse_id', selectedLocation)
 
       const { data, error } = await query
@@ -119,7 +134,7 @@ export default function CRMPage() {
   useEffect(() => { fetchCRMData() }, [appUser, selectedLocation])
 
   const handleDownloadSample = () => {
-    const csvContent = "full_name,phone,city,customer_status,birth_date,anniversary_date,store_credit_balance,kitty_plan_status,kitty_months_paid,kitty_installment_amount\nJohn Doe,9876543210,Mumbai,Lead,1990-01-01,2015-05-15,0,,,\nJane Smith,9123456789,Delhi,Purchased,1985-08-20,1200,,,\nRahul Sharma,9988776655,Pune,Kitty Member,,,0,Active,3,5000";
+    const csvContent = "full_name,phone,city,customer_status,birth_date,anniversary_date,store_credit_balance\nJohn Doe,9876543210,Mumbai,Lead,1990-01-01,2015-05-15,0\nJane Smith,9123456789,Delhi,Purchased,1985-08-20,1200\nRahul Sharma,9988776655,Pune,Kitty Member,1992-12-10,2020-11-20,0";
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -150,10 +165,7 @@ export default function CRMPage() {
                customer_status: row.customer_status?.trim() || 'Lead',
                birth_date: row.birth_date?.trim() || '',
                anniversary_date: row.anniversary_date?.trim() || '',
-               store_credit_balance: row.store_credit_balance?.trim() || '0',
-               kitty_plan_status: row.kitty_plan_status?.trim() || '',
-               kitty_months_paid: row.kitty_months_paid?.trim() || '0',
-               kitty_installment_amount: row.kitty_installment_amount?.trim() || '0'
+               store_credit_balance: row.store_credit_balance?.trim() || '0'
             }));
 
           if (mappedData.length === 0) throw new Error("No valid rows found. Ensure 'full_name' and 'phone' exist.");
@@ -188,9 +200,7 @@ export default function CRMPage() {
     try {
       const validPayloads = previewData
         .filter(row => row.full_name && row.phone) 
-        .map(row => {
-          const isKittyActive = row.kitty_plan_status === 'Active' || row.customer_status === 'Kitty Member';
-          return {
+        .map(row => ({
              company_id: appUser.company_id,
              warehouse_id: selectedLocation === 'ALL' ? null : selectedLocation,
              full_name: row.full_name,
@@ -199,13 +209,8 @@ export default function CRMPage() {
              customer_status: row.customer_status || 'Lead',
              birth_date: row.birth_date || null,
              anniversary_date: row.anniversary_date || null,
-             store_credit_balance: Number(row.store_credit_balance) || 0,
-             kitty_plan_status: row.kitty_plan_status || null,
-             kitty_months_paid: Number(row.kitty_months_paid) || 0,
-             kitty_installment_amount: Number(row.kitty_installment_amount) || 0,
-             kitty_plan_name: isKittyActive ? 'Pavitram Diamond Kitty' : null,
-          };
-        });
+             store_credit_balance: Number(row.store_credit_balance) || 0
+        }));
 
       const { error } = await supabase.from('customers').upsert(validPayloads, { onConflict: 'company_id, phone' });
       if (error) throw error;
@@ -263,11 +268,14 @@ export default function CRMPage() {
     }
   }
 
-  // --- UPDATED: KITTY MEMBER WITH REFERRAL LOGIC ---
   const handleAddKittyMember = async () => {
     if (!selectedLocation || selectedLocation === 'ALL') return toast.error('Branch Required', { description: 'Please select a specific store branch from the top menu first.' })
     if (!newKittyForm.full_name || !newKittyForm.phone) return toast.error('Name and Phone are required.');
+    if (!newKittyForm.config_id) return toast.error('Please select a Kitty Plan tier.');
     
+    const selectedConfig = kittyConfigs.find(c => c.id === newKittyForm.config_id);
+    if (!selectedConfig) return toast.error('Selected plan tier is invalid.');
+
     setIsSubmitting(true)
     try {
       const sd = newKittyForm.start_date ? new Date(newKittyForm.start_date) : new Date();
@@ -275,36 +283,44 @@ export default function CRMPage() {
       nextInstallment.setMonth(nextInstallment.getMonth() + 1);
       const cleanPhone = newKittyForm.phone.trim();
 
-      const payload = {
+      const customerPayload = {
         company_id: appUser?.company_id,
         warehouse_id: selectedLocation, 
         full_name: newKittyForm.full_name.trim(),
         phone: cleanPhone,
         city: newKittyForm.city?.trim() || null,
         customer_status: 'Kitty Member',
-        kitty_plan_name: `Pavitram Diamond Kitty`,
-        kitty_plan_status: 'Active',
-        kitty_installment_amount: Number(newKittyForm.monthly_amount) || 5000,
-        kitty_months_paid: 0,
-        kitty_payment_ledger: [], 
         next_followup_date: nextInstallment.toISOString().split('T')[0],
-        followup_reason: `Installment due (₹${newKittyForm.monthly_amount})`,
+        followup_reason: `Installment due (₹${selectedConfig.monthly_amount})`,
         last_interaction: `Joined Diamond Kitty Scheme on ${sd.toLocaleDateString()}`
       };
 
       const { data: existing } = await supabase.from('customers').select('id').eq('company_id', appUser?.company_id).eq('phone', cleanPhone).limit(1).maybeSingle();
 
-      let error;
+      let customerId;
       if (existing) {
-        const res = await supabase.from('customers').update(payload).eq('id', existing.id);
-        error = res.error;
+        await supabase.from('customers').update(customerPayload).eq('id', existing.id);
+        customerId = existing.id;
       } else {
-        const res = await supabase.from('customers').insert([payload]);
-        error = res.error;
+        const { data: newCust, error } = await supabase.from('customers').insert([customerPayload]).select().single();
+        if (error) throw error;
+        customerId = newCust.id;
       }
-      if (error) throw error
 
-      // --- REFERRAL BONUS INJECTION ---
+      const planPayload = {
+        company_id: appUser?.company_id,
+        customer_id: customerId,
+        warehouse_id: selectedLocation,
+        plan_name: `Kitty Plan - ₹${selectedConfig.monthly_amount}/mo`,
+        plan_amount: Number(selectedConfig.monthly_amount),
+        total_months: Number(selectedConfig.duration_months),
+        months_paid: 0,
+        status: 'active',
+        start_date: sd.toISOString().split('T')[0]
+      }
+      const { error: planError } = await supabase.from('kitty_plans').insert([planPayload]);
+      if (planError) throw planError;
+
       if (newKittyForm.referred_by_id !== 'none') {
          const bonusAmount = Number(newKittyForm.referral_bonus) || 500;
          const { data: referrer } = await supabase.from('customers').select('store_credit_balance, full_name').eq('id', newKittyForm.referred_by_id).single();
@@ -322,7 +338,7 @@ export default function CRMPage() {
       toast.success('Customer enrolled in Diamond Kitty.')
       setIsAddKittyModalOpen(false)
       setIsProfileModalOpen(false) 
-      setNewKittyForm({ full_name: '', phone: '', city: '', monthly_amount: '5000', start_date: new Date().toISOString().split('T')[0], referred_by_id: 'none', referral_bonus: '500' })
+      setNewKittyForm(prev => ({ ...prev, full_name: '', phone: '', city: '', start_date: new Date().toISOString().split('T')[0], referred_by_id: 'none', referral_bonus: '500' }))
       await fetchCRMData()
     } catch (err: any) {
       toast.error(`Registration Failed: ${err.message}`);
@@ -375,7 +391,7 @@ export default function CRMPage() {
       const { data, error } = await supabase.from('customers').update({ 
         store_credit_balance: newTotal,
         last_interaction: note
-      }).eq('id', selectedCustomer.id).select().single();
+      }).eq('id', selectedCustomer.id).select('*, kitty_plans(*)').single(); 
       
       if (error) throw error;
 
@@ -391,38 +407,50 @@ export default function CRMPage() {
     }
   }
 
-  const handleRecordKittyPayment = async (customer: CRMCustomer) => {
-    if (!appUser || !customer) return;
-    const currentMonthsPaid = customer.kitty_months_paid || 0;
-    if (currentMonthsPaid >= 12) return toast.error('Plan already matured!');
+  const handleRecordKittyPayment = async (customer: CRMCustomer, planId: string) => {
+    if (!appUser || !customer || !planId) return;
+
+    const plan = customer.kitty_plans?.find(p => p.id === planId);
+    if (!plan) return toast.error('Plan not found.');
+
+    const currentMonthsPaid = plan.months_paid || 0;
+    if (currentMonthsPaid >= plan.total_months) return toast.error('Plan already matured!');
 
     const newMonthsPaid = currentMonthsPaid + 1;
-    const amount = customer.kitty_installment_amount || 0;
-    
-    const receipt = { month: newMonthsPaid, amount: amount, paid_on: new Date().toISOString(), recorded_by: appUser.id };
-    const updatedLedger = [...(customer.kitty_payment_ledger || []), receipt];
-    
-    const nextDue = new Date();
-    nextDue.setMonth(nextDue.getMonth() + 1);
-    const newStatus = newMonthsPaid >= 12 ? 'Matured' : 'Active';
+    const amount = plan.plan_amount || 0;
+    const newStatus = newMonthsPaid >= plan.total_months ? 'matured' : 'active';
 
     try {
-      const { data, error } = await supabase
-        .from('customers')
-        .update({
-          kitty_months_paid: newMonthsPaid,
-          kitty_payment_ledger: updatedLedger,
-          kitty_plan_status: newStatus,
-          next_followup_date: newStatus === 'Matured' ? null : nextDue.toISOString().split('T')[0],
-          followup_reason: newStatus === 'Matured' ? 'Plan Matured! Ready for purchase.' : `Installment ${newMonthsPaid + 1} due (₹${amount})`,
-          last_interaction: `Paid Kitty Installment ${newMonthsPaid} (₹${amount})`
-        })
-        .eq('id', customer.id).select().single();
+      const { error: instError } = await supabase.from('kitty_installments').insert({
+         kitty_plan_id: plan.id,
+         amount_paid: amount,
+         payment_mode: 'cash', 
+         payment_date: new Date().toISOString(),
+      });
+      if (instError) throw instError;
 
-      if (error) throw error;
+      const { error: planError } = await supabase.from('kitty_plans').update({
+         months_paid: newMonthsPaid,
+         status: newStatus
+      }).eq('id', plan.id);
+      if (planError) throw planError;
+
+      const nextDue = new Date();
+      nextDue.setMonth(nextDue.getMonth() + 1);
+
+      await supabase.from('customers').update({
+        next_followup_date: newStatus === 'matured' ? null : nextDue.toISOString().split('T')[0],
+        followup_reason: newStatus === 'matured' ? 'Plan Matured! Ready for purchase.' : `Installment ${newMonthsPaid + 1} due (₹${amount})`,
+        last_interaction: `Paid Kitty Installment ${newMonthsPaid} (₹${amount})`
+      }).eq('id', customer.id);
+
       toast.success(`Month ${newMonthsPaid} Payment Recorded!`);
-      setSelectedCustomer(data); 
-      fetchCRMData(); 
+      
+      fetchCRMData();
+      
+      const { data: updatedCust } = await supabase.from('customers').select('*, kitty_plans(*)').eq('id', customer.id).single();
+      if (updatedCust) setSelectedCustomer(updatedCust);
+
     } catch (err: any) {
       toast.error(`Payment Failed: ${err.message}`);
     }
@@ -432,7 +460,9 @@ export default function CRMPage() {
     setSelectedCustomer(customer)
     let statusKey = 'Lead'
     if (customer.customer_status === 'Purchased') statusKey = 'Purchased'
-    if (customer.customer_status === 'Kitty Member' || customer.kitty_plan_name) statusKey = 'Kitty'
+    
+    const hasActivePlan = customer.kitty_plans && customer.kitty_plans.some(p => p.status === 'active');
+    if (customer.customer_status === 'Kitty Member' || hasActivePlan) statusKey = 'Kitty'
 
     const categoryTemplates = dynamicTemplates.filter(t => t.category === statusKey)
     let defaultTemplateId = forcedTemplateId || (categoryTemplates[0]?.template_id || '')
@@ -496,7 +526,8 @@ export default function CRMPage() {
 
     let baseLeads = customers.filter(c => c.customer_status === 'Lead' || c.customer_status == null)
     let basePurchased = customers.filter(c => c.customer_status === 'Purchased')
-    let baseKitty = customers.filter(c => c.customer_status === 'Kitty Member' || c.kitty_plan_status === 'Active' || (c.kitty_plan_name && c.kitty_plan_name.includes('Kitty')))
+    
+    let baseKitty = customers.filter(c => c.customer_status === 'Kitty Member' || (c.kitty_plans && c.kitty_plans.some(p => p.status === 'active')))
 
     let dueToday = 0; let overdue = 0;
     customers.forEach(l => {
@@ -586,7 +617,12 @@ export default function CRMPage() {
             </Button>
 
             <Button onClick={() => {
-              setNewKittyForm({ full_name: '', phone: '', city: '', monthly_amount: '5000', start_date: new Date().toISOString().split('T')[0], referred_by_id: 'none', referral_bonus: '500' })
+              setNewKittyForm(prev => ({ 
+                ...prev, 
+                full_name: '', phone: '', city: '', 
+                start_date: new Date().toISOString().split('T')[0], 
+                referred_by_id: 'none', referral_bonus: '500' 
+              }))
               setIsAddKittyModalOpen(true)
             }} className="flex-1 md:flex-none bg-purple-600 hover:bg-purple-700 text-white h-10 px-4 text-xs font-bold shadow-sm rounded-lg border border-purple-500 transition-none">
               <Gem className="w-3.5 h-3.5 mr-1.5" /> Start Kitty Plan
@@ -716,6 +752,7 @@ export default function CRMPage() {
         warehouses={warehouses}
         activeAiFilter={activeAiFilter}
         customers={customers} 
+        kittyConfigs={kittyConfigs}
         
         newCustForm={newCustForm} setNewCustForm={setNewCustForm}
         newKittyForm={newKittyForm} setNewKittyForm={setNewKittyForm}
