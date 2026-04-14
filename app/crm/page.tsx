@@ -64,11 +64,11 @@ export default function CRMPage() {
   
   // Forms
   const [newCustForm, setNewCustForm] = useState({ 
-    full_name: '', phone: '', city: '', customer_status: 'Lead', 
+    full_name: '', phone: '', email: '', city: '', customer_status: 'Lead', 
     birth_date: '', anniversary_date: '', next_followup_date: '', followup_reason: '' 
   })
   const [newKittyForm, setNewKittyForm] = useState({
-    full_name: '', phone: '', city: '', config_id: '', start_date: new Date().toISOString().split('T')[0],
+    full_name: '', phone: '', email: '', city: '', config_id: '', start_date: new Date().toISOString().split('T')[0], 
     referred_by_id: 'none', referral_bonus: '500' 
   })
   
@@ -238,6 +238,7 @@ export default function CRMPage() {
         warehouse_id: selectedLocation === 'ALL' ? null : selectedLocation, 
         full_name: newCustForm.full_name.trim(),
         phone: cleanPhone,
+        email: newCustForm.email?.trim() || null, 
         city: newCustForm.city?.trim() || null,
         customer_status: newCustForm.customer_status,
         birth_date: newCustForm.birth_date || null,
@@ -288,6 +289,7 @@ export default function CRMPage() {
         warehouse_id: selectedLocation, 
         full_name: newKittyForm.full_name.trim(),
         phone: cleanPhone,
+        email: newKittyForm.email?.trim() || null, 
         city: newKittyForm.city?.trim() || null,
         customer_status: 'Kitty Member',
         next_followup_date: nextInstallment.toISOString().split('T')[0],
@@ -314,6 +316,7 @@ export default function CRMPage() {
         plan_name: `Kitty Plan - ₹${selectedConfig.monthly_amount}/mo`,
         plan_amount: Number(selectedConfig.monthly_amount),
         total_months: Number(selectedConfig.duration_months),
+        bonus_amount: Number(selectedConfig.bonus_amount) || 0,
         months_paid: 0,
         status: 'active',
         start_date: sd.toISOString().split('T')[0]
@@ -338,7 +341,7 @@ export default function CRMPage() {
       toast.success('Customer enrolled in Diamond Kitty.')
       setIsAddKittyModalOpen(false)
       setIsProfileModalOpen(false) 
-      setNewKittyForm(prev => ({ ...prev, full_name: '', phone: '', city: '', start_date: new Date().toISOString().split('T')[0], referred_by_id: 'none', referral_bonus: '500' }))
+      setNewKittyForm(prev => ({ ...prev, full_name: '', phone: '', email: '', city: '', start_date: new Date().toISOString().split('T')[0], referred_by_id: 'none', referral_bonus: '500' }))
       await fetchCRMData()
     } catch (err: any) {
       toast.error(`Registration Failed: ${err.message}`);
@@ -461,7 +464,8 @@ export default function CRMPage() {
     let statusKey = 'Lead'
     if (customer.customer_status === 'Purchased') statusKey = 'Purchased'
     
-    const hasActivePlan = customer.kitty_plans && customer.kitty_plans.some(p => p.status === 'active');
+    // Check for both active AND matured plans to determine if they are a Kitty Member
+    const hasActivePlan = customer.kitty_plans && customer.kitty_plans.some(p => ['active', 'matured'].includes(p.status));
     if (customer.customer_status === 'Kitty Member' || hasActivePlan) statusKey = 'Kitty'
 
     const categoryTemplates = dynamicTemplates.filter(t => t.category === statusKey)
@@ -527,7 +531,8 @@ export default function CRMPage() {
     let baseLeads = customers.filter(c => c.customer_status === 'Lead' || c.customer_status == null)
     let basePurchased = customers.filter(c => c.customer_status === 'Purchased')
     
-    let baseKitty = customers.filter(c => c.customer_status === 'Kitty Member' || (c.kitty_plans && c.kitty_plans.some(p => p.status === 'active')))
+    // --- FIXED: Make sure matured plans keep the customer in the Kitty tab! ---
+    let baseKitty = customers.filter(c => c.customer_status === 'Kitty Member' || (c.kitty_plans && c.kitty_plans.some(p => ['active', 'matured'].includes(p.status))))
 
     let dueToday = 0; let overdue = 0;
     customers.forEach(l => {
@@ -619,7 +624,7 @@ export default function CRMPage() {
             <Button onClick={() => {
               setNewKittyForm(prev => ({ 
                 ...prev, 
-                full_name: '', phone: '', city: '', 
+                full_name: '', phone: '', email: '', city: '', 
                 start_date: new Date().toISOString().split('T')[0], 
                 referred_by_id: 'none', referral_bonus: '500' 
               }))
@@ -629,7 +634,7 @@ export default function CRMPage() {
             </Button>
             
             <Button onClick={() => {
-              setNewCustForm({ full_name: '', phone: '', city: '', customer_status: 'Lead', birth_date: '', anniversary_date: '', next_followup_date: '', followup_reason: '' })
+              setNewCustForm({ full_name: '', phone: '', email: '', city: '', customer_status: 'Lead', birth_date: '', anniversary_date: '', next_followup_date: '', followup_reason: '' }) 
               setIsAddModalOpen(true)
             }} className="flex-1 md:flex-none bg-slate-900 hover:bg-slate-800 text-white h-10 px-4 text-xs font-bold shadow-sm rounded-lg transition-none">
               <UserPlus className="w-3.5 h-3.5 mr-1.5" /> Add Customer

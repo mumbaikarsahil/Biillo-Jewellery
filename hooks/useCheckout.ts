@@ -15,7 +15,7 @@ interface CheckoutConfig {
   returnDetails: any; 
   allBranches: any[];
   callRpc: Function;
-  customBillingDate?: string; // <-- NEW: Accepts the date from POSHeader
+  customBillingDate?: string; 
 }
 
 export function useCheckout({ 
@@ -33,7 +33,7 @@ export function useCheckout({
 
   // --- CENTRALIZED WALLET STATE ---
   const [appliedKittyAmount, setAppliedKittyAmount] = useState(0)
-  const [appliedKittyPlanId, setAppliedKittyPlanId] = useState<string | null>(null) // <-- NEW
+  const [appliedKittyPlanId, setAppliedKittyPlanId] = useState<string | null>(null)
   const [appliedCreditAmount, setAppliedCreditAmount] = useState(0)
   
   const currentSplitTotal = 
@@ -71,7 +71,6 @@ export function useCheckout({
   const getEffectiveDate = () => {
     if (!customBillingDate) return new Date();
     try {
-      // Stitch the custom date with the current precise time
       const currentTimeString = new Date().toISOString().split('T')[1];
       return new Date(`${customBillingDate}T${currentTimeString}`);
     } catch (e) {
@@ -87,13 +86,10 @@ export function useCheckout({
   // --- CLUBBING VALIDATION OVERRIDES ---
   // ==============================================================
   
-  // 1. If Manual Discount or Voucher exists, wipe out Wallet/Kitty
-  // 1. Calculate Manual Discount
   const discountNum = parseFloat(discountValue) || 0
   const standardDiscount = discountType === 'percent' ? (subtotal * discountNum) / 100 : discountNum
   const hasVoucher = activeVoucher !== null
 
-  // ONLY block Vouchers from clubbing with Wallet/Kitty. Manual discounts are now allowed.
   if (hasVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0)) {
      setAppliedKittyAmount(0);
      setAppliedCreditAmount(0);
@@ -105,15 +101,12 @@ export function useCheckout({
   // ==============================================================
   
   const cartAdvance = cart?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
-
-  // Total Wallet Deductions (Credits are already calculated at 80% usable value from the sidebar before being set in state)
-  const totalWalletRedemptions = appliedKittyAmount + appliedCreditAmount;
-
-  // Deduct all pre-tax discounts
-  let baseTaxable = Math.max(0, subtotal - standardDiscount - totalWalletRedemptions)
   
+  // ACCOUNTING FIX: Kitty and Wallet Credit are now treated as post-tax payments, not pre-tax discounts.
+  // Tax is calculated ONLY after Manual Discount and Exchange value.
   const exchangeNum = parseFloat(exchangeValue) || 0
-  baseTaxable = Math.max(0, baseTaxable - exchangeNum)
+  let baseTaxable = Math.max(0, subtotal - standardDiscount - exchangeNum)
+  
   const handlingAmt = parseFloat(handlingFee) || 0; 
 
   let finalTaxableValue = baseTaxable
@@ -131,24 +124,21 @@ export function useCheckout({
       }
   }
 
-  // Calculate GST on Taxable Value
   const cgstAmount = parseFloat((finalTaxableValue * 0.015).toFixed(2))
   const sgstAmount = parseFloat((finalTaxableValue * 0.015).toFixed(2))
   
-  // Finalize Totals (Gross vs Net)
   const exactFinalPayable = finalTaxableValue + cgstAmount + sgstAmount
   const finalPayableGross = Math.round(exactFinalPayable)
   const roundOffAmount = parseFloat((finalPayableGross - exactFinalPayable).toFixed(2))
 
-  // Net payable is the Invoice Total MINUS the Advance they already paid
-  const finalPayableNet = Math.max(0, finalPayableGross - cartAdvance);
+  // SETTLEMENT CALCULATION: Deduct Kitty/Credit from the final gross total
+  const finalPayableNet = Math.max(0, finalPayableGross - cartAdvance - appliedKittyAmount - appliedCreditAmount);
 
 
   // ==============================================================
   // --- HANDLERS ---
   // ==============================================================
 
-  // PHASE 1: VERIFICATION (Just checking the code)
   const handleApplyVoucher = async () => {
     if (appliedKittyAmount > 0 || appliedCreditAmount > 0) {
       return toast.error("Clubbing Error", { description: "Cannot apply vouchers when Wallet or Kitty balances are in use." });
@@ -299,7 +289,7 @@ export function useCheckout({
     return {
       mode: isEstimate ? 'estimate' : mode, 
       invoice_number: draftInvoiceNo,
-      date: effectiveDate, // <-- NEW: Passes backdated time to the printed receipt
+      date: effectiveDate,
       customer: selectedCustomer,
       branch: activeBranch, 
       items: cart,
@@ -319,6 +309,7 @@ export function useCheckout({
       exchangeValue: exchangeNum, 
       
       appliedKitty: appliedKittyAmount,
+      kittyPlanId: appliedKittyPlanId,
       appliedCredit: appliedCreditAmount,
       
       estimateChargeType, 
@@ -334,14 +325,18 @@ export function useCheckout({
     }
   }
 
-  // PHASE 2: REDEMPTION (The bill is actually made)
   const executeCheckout = async (isEstimate = false, customTransactionContext?: any) => {
     setIsProcessing(true)
     let finalNo = ''
     try {
+      
+      const effectiveKittyAmt = customTransactionContext?.applied_kitty || customTransactionContext?.appliedKitty || appliedKittyAmount;
+      const effectiveKittyPlanId = customTransactionContext?.kitty_plan_id || customTransactionContext?.kittyPlanId || appliedKittyPlanId;
+      const effectiveCreditAmt = customTransactionContext?.applied_credit || customTransactionContext?.appliedCredit || appliedCreditAmount;
+
       if (customTransactionContext) {
-         if (customTransactionContext.applied_kitty) setAppliedKittyAmount(customTransactionContext.applied_kitty);
-         if (customTransactionContext.applied_credit) setAppliedCreditAmount(customTransactionContext.applied_credit);
+         if (effectiveKittyAmt) setAppliedKittyAmount(effectiveKittyAmt);
+         if (effectiveCreditAmt) setAppliedCreditAmount(effectiveCreditAmt);
       }
 
       const requiredTotal = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
@@ -359,17 +354,18 @@ export function useCheckout({
         toast.success("Estimate generated.")
       } 
       else if (mode === 'normal') {
-        const totalDeductions = standardDiscount + appliedKittyAmount + appliedCreditAmount;
+        // Accounting correction: manual discount is the only deduction before tax.
+        const preTaxDeductions = standardDiscount + exchangeNum + appliedVoucherAmount;
 
         const invoiceData = {
-            created_at: effectiveDateISO, // <-- NEW: Passes the custom date to the RPC
+            created_at: effectiveDateISO,
             customer_id: selectedCustomer?.id, 
             warehouse_id: selectedLocation,
             items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
             
             subtotal: subtotal, 
-            discount_amount: totalDeductions, 
-            discounted_total: Math.max(0, subtotal - totalDeductions),
+            discount_amount: standardDiscount, // only manual discount
+            discounted_total: Math.max(0, subtotal - preTaxDeductions),
             taxable_value: finalTaxableValue,
             cgst_amount: cgstAmount, 
             sgst_amount: sgstAmount, 
@@ -417,19 +413,18 @@ export function useCheckout({
             let updatePayload: any = {};
             let shouldUpdateCustomer = false;
 
-            if (customTransactionContext?.applied_credit > 0) {
-                const fullRawCreditDeducted = Number(customTransactionContext.applied_credit) / 0.80; // FIXED TYPO HERE
+            if (effectiveCreditAmt > 0) {
+                const fullRawCreditDeducted = Number(effectiveCreditAmt) / 0.80; 
                 updatePayload.store_credit_balance = Math.max(0, (selectedCustomer.store_credit_balance || 0) - fullRawCreditDeducted);
                 shouldUpdateCustomer = true;
             }
-            if (customTransactionContext?.applied_kitty > 0 && customTransactionContext?.kitty_plan_id) {
-              // NEW SCHEMA: Update the specific plan record
+            
+            if (effectiveKittyAmt > 0 && effectiveKittyPlanId) {
               await supabase.from('kitty_plans').update({
                   status: 'redeemed',
                   redeemed_at: new Date().toISOString()
-              }).eq('id', customTransactionContext.kitty_plan_id);
-              // No need to set shouldUpdateCustomer = true for kitty anymore
-          }
+              }).eq('id', effectiveKittyPlanId);
+            }
 
             if (shouldUpdateCustomer) {
                 await supabase.from('customers').update(updatePayload).eq('id', selectedCustomer.id);
@@ -441,7 +436,7 @@ export function useCheckout({
       else if (mode === 'repair') { 
         finalNo = `REP-${Date.now().toString().slice(-6)}`
         const { error } = await supabase.from('repair_tickets').insert({
-          created_at: effectiveDateISO, // <-- NEW
+          created_at: effectiveDateISO,
           company_id: appUser?.company_id,
           ticket_number: finalNo,
           customer_id: selectedCustomer?.id,
@@ -463,7 +458,7 @@ export function useCheckout({
       else if (mode === 'return') { 
         finalNo = `RET-${Date.now().toString().slice(-6)}`
         const { error } = await supabase.from('buybacks').insert({
-          created_at: effectiveDateISO, // <-- NEW
+          created_at: effectiveDateISO, 
           company_id: appUser?.company_id,
           voucher_number: finalNo,
           customer_id: selectedCustomer?.id,
@@ -489,7 +484,7 @@ export function useCheckout({
         if (!selectedCustomer) throw new Error("Please select a customer for this Custom Order.")
         finalNo = `ORD-${Date.now().toString().slice(-6)}`
         const payload = {
-          created_at: effectiveDateISO, // <-- NEW
+          created_at: effectiveDateISO, 
           company_id: appUser?.company_id,
           origin_warehouse_id: selectedLocation, 
           customer_id: selectedCustomer.id,
@@ -511,8 +506,8 @@ export function useCheckout({
       finalDraftData.invoice_number = finalNo;
       
       if (customTransactionContext) {
-          finalDraftData.appliedKitty = customTransactionContext.applied_kitty || 0;
-          finalDraftData.appliedCredit = customTransactionContext.applied_credit || 0;
+          finalDraftData.appliedKitty = effectiveKittyAmt;
+          finalDraftData.appliedCredit = effectiveCreditAmt;
       }
 
       return { success: true, invoiceNo: finalNo, draftData: finalDraftData }

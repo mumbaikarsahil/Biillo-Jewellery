@@ -12,7 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { 
   UploadCloud, Download, FileSpreadsheet, Loader2, Database, Trash2, 
   Phone, Star, IndianRupee, Edit2, Gem, CheckCircle2, Clock, Lock, 
-  UserPlus, Building2, MapPin, Calendar, MessageCircle, Wallet, Gift, Users, Mail
+  UserPlus, Building2, MapPin, Calendar, MessageCircle, Wallet, Gift, Users, Mail, CheckCircle
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CRMCustomer, Warehouse } from '../types'
@@ -36,7 +36,7 @@ interface CRMModalsProps {
   activeAiFilter: string;
   dynamicTemplates: any[]; 
   customers: CRMCustomer[]; 
-  kittyConfigs: any[]; // <-- NEW: Accepting the config array
+  kittyConfigs: any[]; 
   
   newCustForm: any; setNewCustForm: (f: any) => void;
   newKittyForm: any; setNewKittyForm: (f: any) => void;
@@ -252,14 +252,44 @@ export function CRMModals(props: CRMModalsProps) {
                       <span className="flex items-center gap-1 sm:gap-1.5"><MapPin className="w-3 sm:w-3.5 h-3 sm:h-3.5 text-gray-400"/> {selectedCustomer.city || 'Unknown City'}</span>
                     </div>
                   </div>
-                  <Badge variant="outline" className={cn(
-                    "uppercase tracking-widest text-[9px] sm:text-[10px] font-bold px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl border-none shadow-sm",
-                    selectedCustomer.customer_status === 'Kitty Member' || isKittyMember ? "bg-purple-50 text-purple-700" :
-                    selectedCustomer.customer_status === 'Purchased' ? "bg-emerald-50 text-emerald-700" : 
-                    "bg-gray-100 text-gray-600"
-                  )}>
-                    {selectedCustomer.customer_status || 'Lead'}
-                  </Badge>
+                  
+                  {/* ---> UPDATED: Edit Profile Button added to header <--- */}
+                  <div className="flex items-center gap-2">
+                    <Button 
+                      size="icon" 
+                      variant="ghost" 
+                      className="h-8 w-8 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg shrink-0" 
+                      title="Edit Customer Profile"
+                      onClick={() => {
+                        setIsProfileModalOpen(false);
+                        setNewCustForm({
+                          id: selectedCustomer.id,
+                          full_name: selectedCustomer.full_name || '',
+                          phone: selectedCustomer.phone || '',
+                          email: selectedCustomer.email || '',
+                          city: selectedCustomer.city || '',
+                          address: selectedCustomer.address || '',
+                          pan_no: selectedCustomer.pan_no || '',
+                          customer_status: selectedCustomer.customer_status || 'Lead',
+                          birth_date: selectedCustomer.birth_date ? selectedCustomer.birth_date.split('T')[0] : '',
+                          anniversary_date: selectedCustomer.anniversary_date ? selectedCustomer.anniversary_date.split('T')[0] : '',
+                          next_followup_date: selectedCustomer.next_followup_date ? selectedCustomer.next_followup_date.split('T')[0] : '',
+                          followup_reason: selectedCustomer.followup_reason || ''
+                        });
+                        setTimeout(() => setIsAddModalOpen(true), 300);
+                      }}
+                    >
+                      <Edit2 className="w-4 h-4" />
+                    </Button>
+                    <Badge variant="outline" className={cn(
+                      "uppercase tracking-widest text-[9px] sm:text-[10px] font-bold px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg sm:rounded-xl border-none shadow-sm",
+                      selectedCustomer.customer_status === 'Kitty Member' || isKittyMember ? "bg-purple-50 text-purple-700" :
+                      selectedCustomer.customer_status === 'Purchased' ? "bg-emerald-50 text-emerald-700" : 
+                      "bg-gray-100 text-gray-600"
+                    )}>
+                      {selectedCustomer.customer_status || 'Lead'}
+                    </Badge>
+                  </div>
                 </div>
               </DialogHeader>
 
@@ -321,6 +351,8 @@ export function CRMModals(props: CRMModalsProps) {
                           phone: selectedCustomer.phone || '', 
                           email: selectedCustomer.email || '',
                           city: selectedCustomer.city || '',
+                          address: selectedCustomer.address || '',
+                          pan_no: selectedCustomer.pan_no || '',
                           birth_date: selectedCustomer.birth_date || '',
                           anniversary_date: selectedCustomer.anniversary_date || ''
                         });
@@ -333,11 +365,36 @@ export function CRMModals(props: CRMModalsProps) {
                   
                   <div className="p-4 sm:p-6 sm:px-8 space-y-8 sm:space-y-10">
                     {selectedCustomer.kitty_plans && selectedCustomer.kitty_plans.length > 0 ? (
-                      selectedCustomer.kitty_plans.map((plan, planIndex) => {
-                        // Dynamic Calculation based on user rules
-                        const inferredBonus = plan.plan_amount >= 3000 ? plan.plan_amount : 0;
-                        const maturedValue = (plan.total_months * plan.plan_amount) + inferredBonus;
+                      selectedCustomer.kitty_plans.map((plan: any, planIndex: number) => {
+                        
+                        const dynamicBonus = Number(plan.bonus_amount) || 0;
+                        const maturedValue = (plan.total_months * plan.plan_amount) + dynamicBonus;
+                        const isRedeemed = plan.status?.toLowerCase() === 'redeemed';
 
+                        // --- HISTORICAL REDEEMED PLAN VIEW ---
+                        if (isRedeemed) {
+                          return (
+                            <div key={plan.id} className={cn("relative opacity-80", planIndex > 0 ? "pt-6 sm:pt-8 border-t border-dashed border-gray-200" : "")}>
+                              <div className="bg-gray-50 border border-gray-200 rounded-[16px] p-4 sm:p-5 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                                <div>
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <p className="text-sm font-bold text-gray-500">{plan.plan_name}</p>
+                                    <Badge variant="outline" className="text-[8px] uppercase tracking-widest font-bold px-2 py-0.5 rounded-md border-none bg-gray-200 text-gray-600 shadow-none flex items-center gap-1">
+                                      <CheckCircle className="w-2.5 h-2.5" /> Completed
+                                    </Badge>
+                                  </div>
+                                  <p className="text-[11px] font-medium text-gray-400">Total Contribution: ₹{(plan.total_months * plan.plan_amount).toLocaleString()} + Bonus: ₹{dynamicBonus.toLocaleString()}</p>
+                                </div>
+                                <div className="text-left sm:text-right">
+                                   <p className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mb-0.5">Value Claimed</p>
+                                   <p className="text-xl font-black text-gray-600 tracking-tighter leading-none">₹{maturedValue.toLocaleString()}</p>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        }
+
+                        // --- STANDARD ACTIVE / MATURED PLAN VIEW ---
                         return (
                           <div key={plan.id} className={cn("relative", planIndex > 0 ? "pt-8 sm:pt-10 border-t border-dashed border-gray-200" : "")}>
                             
@@ -417,7 +474,7 @@ export function CRMModals(props: CRMModalsProps) {
                                   <Gift className="w-3 sm:w-3.5 h-3 sm:h-3.5 text-emerald-500"/> Jeweler Bonus
                                 </p>
                                 <p className="text-sm sm:text-[15px] font-black text-emerald-600 tracking-tight">
-                                  + ₹{inferredBonus.toLocaleString()}
+                                  + ₹{dynamicBonus.toLocaleString()}
                                 </p>
                               </div>
                               <div className="space-y-1 sm:space-y-1.5 flex flex-col sm:block items-center sm:items-start text-center sm:text-left sm:border-l sm:border-gray-200 sm:pl-4 md:pl-6 pt-3 sm:pt-0 border-t border-gray-200 sm:border-t-0 mt-1 sm:mt-0">
@@ -483,7 +540,6 @@ export function CRMModals(props: CRMModalsProps) {
               </Select>
             </div>
 
-            {/* Dynamic Inputs based on Action Type */}
             {loyaltyForm.actionType === 'b2p_referral' && (
               <div className="space-y-2 p-4 sm:p-5 bg-emerald-50/50 border border-emerald-100 rounded-2xl animate-in fade-in slide-in-from-top-2">
                 <label className="text-[10px] sm:text-[11px] font-bold text-emerald-800 uppercase tracking-widest">Referred Billed Amount</label>
@@ -552,12 +608,13 @@ export function CRMModals(props: CRMModalsProps) {
         </DialogContent>
       </Dialog>
 
-      {/* ADD LEAD / CUSTOMER REGISTRATION MODAL */}
+      {/* ADD/EDIT CUSTOMER MODAL */}
       <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
         <DialogContent className="w-full sm:max-w-[550px] border-none sm:rounded-[28px] rounded-t-[28px] rounded-b-none sm:rounded-b-[28px] bg-white shadow-[0_-10px_40px_rgba(0,0,0,0.1)] sm:shadow-[0_24px_60px_-15px_rgba(0,0,0,0.15)] p-0 overflow-hidden flex flex-col mt-auto sm:mt-0 mb-0 sm:mb-auto max-h-[90vh]">
           <DialogHeader className="bg-gray-50/80 p-6 sm:p-8 border-b border-gray-100 shrink-0">
             <DialogTitle className="text-xl font-black text-gray-900 flex items-center gap-2.5 tracking-tight">
-              <UserPlus className="w-5 h-5 text-blue-600" strokeWidth={2} /> Add New Customer
+              <UserPlus className="w-5 h-5 text-blue-600" strokeWidth={2} /> 
+              {newCustForm.id ? 'Edit Customer Details' : 'Add New Customer'}
             </DialogTitle>
             <DialogDescription className="text-xs font-medium text-gray-500 mt-1.5">Branch Context: <span className="font-bold text-gray-800">{selectedLocation === 'ALL' ? 'GLOBAL HQ' : warehouses.find(w => w.id === selectedLocation)?.name}</span></DialogDescription>
           </DialogHeader>
@@ -575,12 +632,20 @@ export function CRMModals(props: CRMModalsProps) {
               <Input type="email" className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all shadow-sm px-4" placeholder="email@example.com" value={newCustForm.email || ''} onChange={(e) => setNewCustForm({...newCustForm, email: e.target.value})} />
             </div>
             <div className="space-y-2 col-span-1 sm:col-span-2">
+              <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Address</label>
+              <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all shadow-sm px-4" placeholder="Flat No, Building, Street..." value={newCustForm.address || ''} onChange={(e) => setNewCustForm({...newCustForm, address: e.target.value})} />
+            </div>
+            <div className="space-y-2">
               <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">City</label>
               <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all shadow-sm px-4" placeholder="Mumbai" value={newCustForm.city} onChange={(e) => setNewCustForm({...newCustForm, city: e.target.value})} />
             </div>
             <div className="space-y-2">
+              <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">PAN Number</label>
+              <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all shadow-sm px-4 uppercase" placeholder="ABCDE1234F" value={newCustForm.pan_no || ''} onChange={(e) => setNewCustForm({...newCustForm, pan_no: e.target.value})} />
+            </div>
+            <div className="space-y-2">
               <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5"/> D.O.B <span className="text-red-500">*</span></label>
-              <Input type="date" required className="h-11 sm:h-12 rounded-[14px] text-[13px] font-medium text-gray-700 bg-white border border-gray-200/60 hover:bg-gray-50 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all shadow-sm px-4" value={newCustForm.birth_date} onChange={(e) => setNewCustForm({...newCustForm, birth_date: e.target.value})} />
+              <Input type="date" className="h-11 sm:h-12 rounded-[14px] text-[13px] font-medium text-gray-700 bg-white border border-gray-200/60 hover:bg-gray-50 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all shadow-sm px-4" value={newCustForm.birth_date} onChange={(e) => setNewCustForm({...newCustForm, birth_date: e.target.value})} />
             </div>
             <div className="space-y-2">
               <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5"/> Anniversary (Optional)</label>
@@ -602,7 +667,7 @@ export function CRMModals(props: CRMModalsProps) {
           </div>
           <DialogFooter className="bg-gray-50/80 p-5 sm:p-6 border-t border-gray-100 flex flex-col sm:flex-row gap-3 shrink-0 pb-safe">
             <Button variant="ghost" className="w-full sm:flex-1 h-12 rounded-[16px] text-xs font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-200 transition-colors px-6" onClick={() => setIsAddModalOpen(false)}>Cancel</Button>
-            <Button disabled={isSubmitting || !newCustForm.full_name || !newCustForm.phone || !newCustForm.birth_date} className="w-full sm:flex-[2] h-12 rounded-[16px] text-xs font-bold uppercase tracking-widest bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-200 transition-all active:scale-95" onClick={handleAddCustomer}>
+            <Button disabled={isSubmitting || !newCustForm.full_name || !newCustForm.phone} className="w-full sm:flex-[2] h-12 rounded-[16px] text-xs font-bold uppercase tracking-widest bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-200 transition-all active:scale-95" onClick={handleAddCustomer}>
               {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : 'Save Profile'}
             </Button>
           </DialogFooter>
@@ -649,11 +714,22 @@ export function CRMModals(props: CRMModalsProps) {
                   <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><Mail className="w-3.5 h-3.5"/> Email (Optional)</label>
                   <Input type="email" className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="email@example.com" value={newKittyForm.email || ''} onChange={(e) => setNewKittyForm({...newKittyForm, email: e.target.value})} />
                 </div>
+                
+                {/* ---> NEW: Address and PAN for Kitty Enrollment <--- */}
                 <div className="space-y-2 col-span-1 sm:col-span-2">
+                  <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Address</label>
+                  <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="Flat No, Building, Street..." value={newKittyForm.address || ''} onChange={(e) => setNewKittyForm({...newKittyForm, address: e.target.value})} />
+                </div>
+                <div className="space-y-2">
                   <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">City</label>
                   <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" placeholder="Mumbai" value={newKittyForm.city} onChange={(e) => setNewKittyForm({...newKittyForm, city: e.target.value})} />
                 </div>
-                
+                <div className="space-y-2">
+                  <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">PAN Number</label>
+                  <Input className="h-11 sm:h-12 rounded-[14px] text-sm font-medium bg-gray-50 border border-gray-200/60 hover:bg-gray-100 focus:bg-white focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4 uppercase" placeholder="ABCDE1234F" value={newKittyForm.pan_no || ''} onChange={(e) => setNewKittyForm({...newKittyForm, pan_no: e.target.value})} />
+                </div>
+                {/* ----------------------------------------------------- */}
+
                 <div className="space-y-2">
                   <label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5"/> D.O.B <span className="text-red-500">*</span></label>
                   <Input type="date" required className="h-11 sm:h-12 rounded-[14px] text-[13px] font-medium text-gray-700 bg-white border border-gray-200/60 hover:bg-gray-50 focus:ring-4 focus:ring-purple-500/10 focus:border-purple-500 transition-all shadow-sm px-4" value={newKittyForm.start_date || ''} onChange={(e) => setNewKittyForm({...newKittyForm, start_date: e.target.value})} />
@@ -713,7 +789,6 @@ export function CRMModals(props: CRMModalsProps) {
                  <div className="space-y-2">
                    <label className="text-[10px] font-bold text-purple-700 uppercase tracking-widest">Plan Tier (₹)</label>
                    
-                   {/* ---> NEW DYNAMIC DROPDOWN <--- */}
                    <Select value={newKittyForm.config_id} onValueChange={(val) => setNewKittyForm({...newKittyForm, config_id: val})}>
                       <SelectTrigger className="h-11 sm:h-12 bg-white border-purple-200 font-bold text-sm rounded-[14px] shadow-sm focus:ring-4 focus:ring-purple-500/10 px-4">
                         <SelectValue placeholder="Select Plan Tier" />

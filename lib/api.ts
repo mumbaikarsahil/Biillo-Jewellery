@@ -70,11 +70,12 @@ export async function fetchJobBags(companyId: string) {
     .order('created_at', { ascending: false })
 }
 
-// Fetch customers
+// Fetch customers for the POS
 export async function fetchCustomers(companyId: string) {
   return await supabase
     .from('customers')
-    .select('*, kitty_plans(*)') // <-- CRITICAL: Added Kitty Plans join
+    // Ensure we are fetching the bonus_amount inside the kitty_plans join!
+    .select('*, kitty_plans(id, plan_name, plan_amount, total_months, months_paid, status, start_date, bonus_amount)') 
     .eq('company_id', companyId)
     .order('full_name')
 }

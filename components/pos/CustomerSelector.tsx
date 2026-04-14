@@ -17,7 +17,6 @@ interface CustomerSelectorProps {
   appUser?: any 
   selectedLocation?: string
   subtotal?: number 
-  // CHANGED: Added planId parameter to the callback
   onApplyWallet?: (type: 'credit' | 'kitty', availableAmount: number, planId?: string) => void 
 }
 
@@ -76,11 +75,14 @@ export function CustomerSelector({
     }
   }
 
-  // --- UPDATED: SPECIFIC KITTY PLAN REDEMPTION HELPER ---
   const handleKittyRedemption = (plan: any) => {
     const monthlyAmt = Number(plan.plan_amount) || 0;
     const monthsPaid = Number(plan.months_paid) || 0;
     const totalMonths = Number(plan.total_months) || 12;
+    
+    // Fallback: If DB doesn't return bonus_amount, assume it equals 1 month's installment if >= 3000
+    const rawBonus = Number(plan.bonus_amount);
+    const planBonus = !isNaN(rawBonus) ? rawBonus : (monthlyAmt >= 3000 ? monthlyAmt : 0);
     
     // Base amount is what they actually paid
     let totalRedemptionValue = monthsPaid * monthlyAmt;
@@ -88,7 +90,7 @@ export function CustomerSelector({
     // Add the Jeweler's Bonus ONLY if the plan is fully matured
     let bonusApplied = false;
     if (monthsPaid >= totalMonths) {
-      totalRedemptionValue += monthlyAmt; 
+      totalRedemptionValue += planBonus; 
       bonusApplied = true;
     }
 
@@ -107,11 +109,9 @@ export function CustomerSelector({
       toast.info(`Early Redemption: Applied ${monthsPaid} months of paid value.`);
     }
 
-    // NEW: Passing the specific plan.id back up to useCheckout
     onApplyWallet?.('kitty', totalRedemptionValue, plan.id);
   }
 
-  // --- UPDATED: STORE CREDIT WITH 20% DEDUCTION ---
   const handleCreditRedemption = () => {
     const rawCredit = Number(selectedCustomer.store_credit_balance) || 0;
     if (rawCredit <= 0) return;
@@ -127,8 +127,8 @@ export function CustomerSelector({
     onApplyWallet?.('credit', netUsableCredit);
   }
 
-  // Check if they have ANY active plan to show the badge
-  const hasActivePlan = selectedCustomer?.kitty_plans && selectedCustomer.kitty_plans.some((p: any) => p.status === 'active');
+  // Check if they have ANY active or matured plan to show the badge
+  const hasActivePlan = selectedCustomer?.kitty_plans && selectedCustomer.kitty_plans.some((p: any) => ['active', 'matured'].includes(p.status));
 
   return (
     <div className="space-y-1.5 relative">
@@ -148,7 +148,7 @@ export function CustomerSelector({
                 <p className="text-sm font-bold text-slate-900 leading-none">{selectedCustomer.full_name}</p>
                 <p className="text-[10px] font-mono text-slate-500 mt-1">{selectedCustomer.phone}</p>
                 
-                {/* NEW: Badge logic uses hasActivePlan */}
+                {/* Badge logic uses hasActivePlan */}
                 {(selectedCustomer.customer_status === 'Kitty Member' || hasActivePlan) && (
                   <Badge className="bg-purple-50 text-purple-700 border-purple-200 text-[9px] px-1.5 py-0 h-4 rounded-sm flex items-center gap-1 font-bold mt-1.5 w-max">
                     <Gem className="w-2.5 h-2.5" /> Active Kitty Member
@@ -170,11 +170,16 @@ export function CustomerSelector({
           {(Number(selectedCustomer.store_credit_balance) > 0 || hasActivePlan) && (
             <div className="flex flex-col gap-1.5 mt-3 pt-3 border-t border-slate-100 w-full">
               
-              {/* 1. Kitty Plan Redeemers (Maps over all active plans) */}
-              {selectedCustomer.kitty_plans?.filter((p: any) => p.status === 'active' && p.months_paid > 0).map((plan: any) => {
+              {/* 1. Kitty Plan Redeemers (Maps over active AND matured plans) */}
+              {selectedCustomer.kitty_plans?.filter((p: any) => ['active', 'matured'].includes(p.status) && p.months_paid > 0).map((plan: any) => {
                 const isMatured = plan.months_paid >= plan.total_months;
+                
+                // Fallback: If DB doesn't return bonus_amount, assume it equals 1 month's installment if >= 3000
+                const rawBonus = Number(plan.bonus_amount);
+                const planBonus = !isNaN(rawBonus) ? rawBonus : (plan.plan_amount >= 3000 ? plan.plan_amount : 0);
+                
                 const valueToDisplay = isMatured 
-                  ? (plan.total_months * plan.plan_amount) + plan.plan_amount 
+                  ? (plan.total_months * plan.plan_amount) + planBonus 
                   : plan.months_paid * plan.plan_amount;
 
                 return (
@@ -263,7 +268,7 @@ export function CustomerSelector({
         <div className="absolute top-full left-0 w-full bg-white border border-slate-300 shadow-lg z-50 max-h-[250px] overflow-y-auto rounded-sm mt-1 custom-scrollbar">
           {filteredCustomers.length > 0 ? (
             filteredCustomers.map(c => {
-              const cHasActivePlan = c.kitty_plans && c.kitty_plans.some((p: any) => p.status === 'active');
+              const cHasActivePlan = c.kitty_plans && c.kitty_plans.some((p: any) => ['active', 'matured'].includes(p.status));
               
               return (
                 <div 

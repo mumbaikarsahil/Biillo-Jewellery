@@ -16,6 +16,8 @@ export interface CRMCustomer {
   phone: string
   email?: string | null
   city: string | null
+  address?: string | null  // <-- ADD THIS
+  pan_no?: string | null
   customer_status: string 
   next_followup_date: string | null
   followup_reason: string | null 
