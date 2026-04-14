@@ -1,9 +1,10 @@
 "use client"
 
 import React, { useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation' // NEW: For routing to the registry tab
 import { 
   Store, Calendar, RefreshCw, Printer, 
-  TrendingUp, ArrowRightLeft, Briefcase, Activity, Filter
+  TrendingUp, ArrowRightLeft, Briefcase, Activity, Filter, ExternalLink
 } from 'lucide-react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell,
@@ -12,7 +13,7 @@ import {
 import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabaseClient'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
 
@@ -42,6 +43,7 @@ const COLORS = [
 export function OverviewDashboard() {
   const { appUser } = useAuth()
   const { toast } = useToast()
+  const router = useRouter() // NEW: Navigation router
   
   const [loading, setLoading] = useState(true)
   const [warehouses, setWarehouses] = useState<any[]>([])
@@ -75,27 +77,70 @@ export function OverviewDashboard() {
       safeEndDate.setDate(safeEndDate.getDate() + 1)
       const safeEndDateStr = safeEndDate.toISOString().split('T')[0]
 
+      // 1. Fetch standard small-table data (Sales, Transfers, Jobs)
       let salesQ = supabase.from('invoices')
         .select('created_at, final_total')
         .eq('company_id', appUser.company_id)
         .gte('created_at', startDate)
         .lt('created_at', safeEndDateStr)
+        .limit(10000) 
 
-      let invQ = supabase.from('inventory_items').select('warehouse_id, metal_type, status, warehouses(name)').eq('company_id', appUser.company_id).eq('status', 'in_stock')
-      let trfQ = supabase.from('stock_transfers').select('id, status').eq('company_id', appUser.company_id).in('status', ['draft', 'in_transit'])
-      let jobQ = supabase.from('job_bags').select('id, status').eq('company_id', appUser.company_id).in('status', ['open', 'issued', 'in_progress'])
+      let trfQ = supabase.from('stock_transfers')
+        .select('id, status')
+        .eq('company_id', appUser.company_id)
+        .in('status', ['draft', 'in_transit'])
+        .limit(5000)
+
+      let jobQ = supabase.from('job_bags')
+        .select('id, status')
+        .eq('company_id', appUser.company_id)
+        .in('status', ['open', 'issued', 'in_progress'])
+        .limit(5000)
 
       if (selectedWarehouseId !== 'all') {
         salesQ = salesQ.eq('warehouse_id', selectedWarehouseId)
-        invQ = invQ.eq('warehouse_id', selectedWarehouseId)
         trfQ = trfQ.or(`from_warehouse_id.eq.${selectedWarehouseId},to_warehouse_id.eq.${selectedWarehouseId}`)
       }
 
-      const [salesRes, invRes, trfRes, jobRes] = await Promise.all([salesQ, invQ, trfQ, jobQ])
+      // Execute non-inventory queries in parallel
+      const [salesRes, trfRes, jobRes] = await Promise.all([salesQ, trfQ, jobQ])
 
       if (salesRes.error) throw salesRes.error
-      if (invRes.error) throw invRes.error
 
+      // --- 2. BULLETPROOF PAGINATED INVENTORY FETCH (Bypasses API Limits) ---
+      let allInvData: any[] = [];
+      let isFetchingInv = true;
+      let step = 0;
+      const limit = 1000;
+
+      while (isFetchingInv) {
+        let invQ = supabase.from('inventory_items')
+          .select('id, warehouse_id, metal_type, status, warehouses(name)')
+          .eq('company_id', appUser.company_id)
+          .eq('status', 'in_stock')
+          .order('id', { ascending: true }) // Crucial for stable pagination
+          .range(step * limit, (step + 1) * limit - 1)
+
+        if (selectedWarehouseId !== 'all') {
+          invQ = invQ.eq('warehouse_id', selectedWarehouseId)
+        }
+
+        const { data: chunk, error: invErr } = await invQ;
+        if (invErr) throw invErr;
+
+        if (chunk && chunk.length > 0) {
+          allInvData = [...allInvData, ...chunk];
+          step++;
+          if (chunk.length < limit) isFetchingInv = false;
+        } else {
+          isFetchingInv = false;
+        }
+      }
+
+      // Deduplicate to be absolutely safe
+      const uniqueInvData = Array.from(new Map(allInvData.map(item => [item.id, item])).values());
+
+      // --- 3. PROCESS SALES METRICS ---
       const salesData = salesRes.data || []
       const totalS = salesData.reduce((sum, inv) => sum + (Number(inv.final_total) || 0), 0)
       const daysDiff = Math.max(1, Math.ceil((new Date(endDate).getTime() - new Date(startDate).getTime()) / (1000 * 3600 * 24)))
@@ -107,19 +152,23 @@ export function OverviewDashboard() {
       })
       const trendArr = Object.keys(trendMap).map(k => ({ date: k, amount: trendMap[k] })).slice(-15) 
 
-      const invData = invRes.data || []
+      // --- 4. PROCESS INVENTORY DISTRIBUTION ---
       const distMap: Record<string, number> = {}
       
-      invData.forEach((item: any) => {
-        const key = selectedWarehouseId === 'all' ? (item.warehouses?.name || 'Unknown') : (item.metal_type || 'Unknown Metal')
+      uniqueInvData.forEach((item: any) => {
+        // DEFENSIVE CHECK: Handle cases where the join returns an array instead of an object
+        const whName = Array.isArray(item.warehouses) ? item.warehouses[0]?.name : item.warehouses?.name;
+        
+        const key = selectedWarehouseId === 'all' ? (whName || 'Unknown Vault') : (item.metal_type || 'Unknown Metal')
         distMap[key] = (distMap[key] || 0) + 1
       })
       
-      // Sort descending so the pie chart always looks organized (biggest slices first)
+      // Sort descending so the pie chart always looks organized
       const distArr = Object.keys(distMap)
         .map(k => ({ name: k, value: distMap[k] }))
         .sort((a, b) => b.value - a.value)
 
+      // Set Final States
       setKpis({ totalSales: totalS, avgDailySales: totalS / daysDiff, pendingTransfers: trfRes.data?.length || 0, activeJobBags: jobRes.data?.length || 0 })
       setSalesTrend(trendArr)
       setInventoryDist(distArr)
@@ -272,12 +321,16 @@ export function OverviewDashboard() {
           </CardContent>
         </Card>
 
-        {/* Improved Pie Chart with Color Mapping */}
-        <Card className="shadow-sm border-zinc-200 rounded-2xl overflow-hidden print:border-zinc-300 bg-white flex flex-col">
-          <div className="pt-5 px-5 print:pt-4">
+        {/* CLICKABLE PIE CHART FOR ASSET REGISTRY NAVIGATION */}
+        <Card 
+          className="shadow-sm border-zinc-200 rounded-2xl overflow-hidden print:border-zinc-300 bg-white flex flex-col group cursor-pointer hover:border-indigo-300 hover:ring-1 hover:ring-indigo-100 transition-all"
+          onClick={() => router.push('/reports/registry')} // IMPORTANT: Adjust this path if your tab structure is different
+        >
+          <div className="pt-5 px-5 print:pt-4 flex justify-between items-center">
             <h2 className="text-sm font-semibold tracking-tight text-zinc-900 truncate">
               {selectedWarehouseId === 'all' ? 'Asset Distribution' : 'Asset Breakdown'}
             </h2>
+            <ExternalLink className="w-4 h-4 text-zinc-300 group-hover:text-indigo-500 transition-colors" />
           </div>
           <CardContent className="p-4 sm:p-5 flex-1 flex flex-col justify-center min-h-0">
             {loading ? <Skeleton className="h-[200px] w-full rounded-full" /> : inventoryDist.length === 0 ? (
@@ -292,10 +345,10 @@ export function OverviewDashboard() {
                         cx="50%" cy="50%" 
                         innerRadius="60%" 
                         outerRadius="85%" 
-                        paddingAngle={3} // Adds a tiny gap between slices
+                        paddingAngle={3}
                         dataKey="value" 
                         stroke="none"
-                        cornerRadius={4} // Makes slices slightly rounded
+                        cornerRadius={4}
                       >
                         {inventoryDist.map((_, index) => (
                           <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -309,7 +362,6 @@ export function OverviewDashboard() {
                   </ResponsiveContainer>
                 </div>
                 
-                {/* Clean, pill-shaped legend mapping */}
                 <div className="flex flex-wrap justify-center gap-2 pt-4 w-full">
                    {inventoryDist.map((entry, index) => (
                      <div key={entry.name} className="flex items-center gap-1.5 bg-zinc-50 border border-zinc-100 px-2 py-1 rounded-md">
@@ -317,6 +369,12 @@ export function OverviewDashboard() {
                         <span className="text-[10px] font-medium text-zinc-600 truncate max-w-[80px]" title={entry.name}>{entry.name}</span>
                      </div>
                    ))}
+                </div>
+                
+                <div className="w-full text-center mt-3 pt-3 border-t border-zinc-100">
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-indigo-500 group-hover:text-indigo-600 transition-colors">
+                    Click to view full Asset Registry
+                  </p>
                 </div>
               </div>
             )}

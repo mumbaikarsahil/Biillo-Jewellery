@@ -67,8 +67,8 @@ const masterMenu = [
       { 
         title: "Client Directory", 
         icon: UsersRound, 
-        href: "/master/customer", 
-        description: "Customer KYC, credit ledgers, and trade history." 
+        href: "/crm", 
+        description: "Customer details , credits, and trade history." 
       },
     ]
   }

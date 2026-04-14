@@ -27,7 +27,7 @@ import {
 } from '@/components/ui/table'
 import { Label } from 'recharts'
 
-// --- AI HELPER: DYNAMIC PRICE BRACKETING (Based on MRP) ---
+// --- AI HELPER: DYNAMIC PRICE BRACKETING ---
 const getPriceBracket = (price: number) => {
   if (price <= 25000) return 'Under ₹25k';
   if (price <= 50000) return '₹25k - ₹50k';
@@ -71,28 +71,57 @@ export function InventoryRegistryReport() {
     fetchWarehouses()
   }, [appUser])
 
+  // --- HELPER: LOCAL WAREHOUSE NAME FINDER ---
+  const getWhName = (wId: string) => {
+    return warehouses.find((w: any) => w.id === wId)?.name || 'Global / Unassigned'
+  }
+
+  // --- BULLETPROOF DATA ENGINE ---
+  // --- BULLETPROOF DATA ENGINE ---
   const fetchData = async () => {
     if (!appUser?.company_id) return
     setLoading(true)
 
     try {
-      const { data: resData, error } = await supabase.from('inventory_items')
-        .select(`
-          id, barcode, item_category, metal_type, purity_karat, 
-          gross_weight_g, net_weight_g, cost_total, mrp, status, created_at,
-          warehouse_id, warehouses(name)
-        `)
-        .eq('company_id', appUser.company_id)
-        .order('created_at', { ascending: false })
-        .limit(4000)
+      let allItems: any[] = [];
+      let isFetching = true;
+      let step = 0;
+      const limit = 1000;
 
-      if (error) throw error
+      // Loop to bypass API limits and get 100% of the data
+      while (isFetching) {
+        let query = supabase.from('inventory_items')
+          .select(`id, barcode, item_category, metal_type, purity_karat, gross_weight_g, net_weight_g, cost_total, mrp, status, created_at, warehouse_id, warehouses(name)`)
+          .eq('company_id', appUser.company_id)
+          // FIX 1: Add secondary sort by 'id' to prevent pagination duplicates on bulk-imported items
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: true }) 
+          .range(step * limit, (step + 1) * limit - 1)
 
-      setData(resData || [])
+        if (filterWarehouse !== 'all') {
+          query = query.eq('warehouse_id', filterWarehouse)
+        }
+
+        const { data: chunkData, error } = await query
+
+        if (error) throw error
+
+        if (chunkData && chunkData.length > 0) {
+          allItems = [...allItems, ...chunkData];
+          step++;
+          if (chunkData.length < limit) isFetching = false; 
+        } else {
+          isFetching = false;
+        }
+      }
+
+      // FIX 2: Final frontend safety net to strip any accidental duplicates
+      const uniqueItems = Array.from(new Map(allItems.map(item => [item.id, item])).values());
+
+      setData(uniqueItems)
       
-      if (resData && resData.length > 0) {
-        // CHANGED: Calibrate max price based on MRP instead of cost_total
-        const highest = Math.max(...resData.map(d => Number(d.mrp) || 0), 100000);
+      if (uniqueItems.length > 0) {
+        const highest = Math.max(...uniqueItems.map(d => Number(d.mrp) || 0), 100000);
         setMaxPrice(highest);
         setPriceRange([0, highest]);
       }
@@ -104,28 +133,33 @@ export function InventoryRegistryReport() {
     }
   }
 
-  useEffect(() => { fetchData() }, [appUser])
+  // Re-fetch whenever the warehouse changes, just like InventoryPage
+  useEffect(() => { fetchData() }, [appUser, filterWarehouse])
 
   // --- 1. DYNAMIC FILTER EXTRACTION ---
-  const uniqueCategories = useMemo(() => Array.from(new Set(data.map(d => d.item_category))).filter(Boolean).sort(), [data]);
-  const uniqueMetals = useMemo(() => Array.from(new Set(data.map(d => d.metal_type))).filter(Boolean).sort(), [data]);
+  const uniqueCategories = useMemo(() => Array.from(new Set(data.map(d => d.item_category || 'Uncategorized'))).filter(Boolean).sort(), [data]);
+  const uniqueMetals = useMemo(() => Array.from(new Set(data.map(d => d.metal_type || 'Unknown Metal'))).filter(Boolean).sort(), [data]);
 
   // --- 2. LOCAL FILTERING ENGINE FOR THE TABLE ---
   const filteredData = useMemo(() => {
     return data.filter(item => {
-      if (search && !item.barcode?.toLowerCase().includes(search.toLowerCase()) && !item.item_category?.toLowerCase().includes(search.toLowerCase())) return false;
-      if (filterWarehouse !== 'all' && item.warehouse_id !== filterWarehouse) return false;
-      if (filterStatus !== 'all' && item.status !== filterStatus) return false;
-      if (filterMetal !== 'all' && item.metal_type !== filterMetal) return false;
-      if (filterCategory !== 'all' && item.item_category !== filterCategory) return false;
+      const cat = item.item_category || 'Uncategorized';
+      const met = item.metal_type || 'Unknown Metal';
+      const bar = item.barcode || '';
+      const stat = item.status || 'unknown';
+
+      if (search && !bar.toLowerCase().includes(search.toLowerCase()) && !cat.toLowerCase().includes(search.toLowerCase())) return false;
+      // Note: filterWarehouse is handled by the database now, so we removed it from here.
+      if (filterStatus !== 'all' && stat !== filterStatus) return false;
+      if (filterMetal !== 'all' && met !== filterMetal) return false;
+      if (filterCategory !== 'all' && cat !== filterCategory) return false;
       
-      // CHANGED: Filter uses MRP
       const val = Number(item.mrp) || 0;
       if (val < priceRange[0] || val > priceRange[1]) return false;
       
       return true;
     });
-  }, [data, search, filterWarehouse, filterStatus, filterMetal, filterCategory, priceRange]);
+  }, [data, search, filterStatus, filterMetal, filterCategory, priceRange]);
 
   // --- 3. METRICS ---
   const metrics = useMemo(() => {
@@ -133,7 +167,6 @@ export function InventoryRegistryReport() {
       totalItems: acc.totalItems + 1,
       totalGrossWt: acc.totalGrossWt + (Number(curr.gross_weight_g) || 0),
       totalNetWt: acc.totalNetWt + (Number(curr.net_weight_g) || 0),
-      // CHANGED: Accumulate MRP instead of cost_total
       totalValue: acc.totalValue + (Number(curr.mrp) || 0) 
     }), { totalItems: 0, totalGrossWt: 0, totalNetWt: 0, totalValue: 0 })
   }, [filteredData]);
@@ -156,17 +189,18 @@ export function InventoryRegistryReport() {
     const bracketAgg: Record<string, { sold: number }> = {};
     
     data.forEach(item => {
-      if (search && !item.barcode?.toLowerCase().includes(search.toLowerCase()) && !item.item_category?.toLowerCase().includes(search.toLowerCase())) return;
-      if (filterWarehouse !== 'all' && item.warehouse_id !== filterWarehouse) return;
-      if (filterMetal !== 'all' && item.metal_type !== filterMetal) return;
-      if (filterCategory !== 'all' && item.item_category !== filterCategory) return;
+      const cat = item.item_category || 'Uncategorized';
+      const met = item.metal_type || 'Unknown Metal';
+      const bar = item.barcode || '';
+
+      if (search && !bar.toLowerCase().includes(search.toLowerCase()) && !cat.toLowerCase().includes(search.toLowerCase())) return;
+      if (filterMetal !== 'all' && met !== filterMetal) return;
+      if (filterCategory !== 'all' && cat !== filterCategory) return;
       
-      // CHANGED: Analytics uses MRP
       const price = Number(item.mrp) || 0;
       if (price < priceRange[0] || price > priceRange[1]) return;
 
-      const loc = item.warehouses?.name || 'Unassigned Node';
-      const cat = item.item_category || 'Uncategorized';
+      const loc = getWhName(item.warehouse_id); 
       const bracket = getPriceBracket(price);
       const matrixKey = `${loc}::${cat}::${bracket}`;
 
@@ -207,16 +241,16 @@ export function InventoryRegistryReport() {
     let worstCategory = { name: 'N/A', sellThrough: 101, stock: 0 }; 
     let sweetSpot = { name: 'N/A', sold: 0 };
 
-    for (const [cat, stats] of Object.entries(categoryAgg)) {
+    for (const [catStr, stats] of Object.entries(categoryAgg)) {
       if (stats.sold > bestCategory.sold) {
-        bestCategory = { name: cat, sold: stats.sold };
+        bestCategory = { name: catStr, sold: stats.sold };
       }
       
       const totalVolume = stats.sold + stats.stock;
       if (totalVolume >= 5 && stats.stock > 0) { 
         const str = (stats.sold / totalVolume) * 100;
         if (str < worstCategory.sellThrough) {
-          worstCategory = { name: cat, sellThrough: str, stock: stats.stock };
+          worstCategory = { name: catStr, sellThrough: str, stock: stats.stock };
         }
       }
     }
@@ -236,7 +270,7 @@ export function InventoryRegistryReport() {
         sweetSpot
       }
     };
-  }, [data, search, filterWarehouse, filterMetal, filterCategory, priceRange, showAnalytics]);
+  }, [data, search, filterMetal, filterCategory, priceRange, showAnalytics, warehouses]);
 
 
   const handleExport = () => {
@@ -247,23 +281,43 @@ export function InventoryRegistryReport() {
     setExporting(true)
 
     const formattedData = filteredData.map((d) => ({
-      'Barcode': d.barcode,
-      'Category': d.item_category || '--',
-      'Metal': d.metal_type,
-      'Purity': d.purity_karat,
-      'Gross Wt (g)': d.gross_weight_g,
-      'Net Wt (g)': d.net_weight_g,
-      // CHANGED: Export uses MRP
+      'Barcode': d.barcode || '--',
+      'Category': d.item_category || 'Uncategorized',
+      'Metal': d.metal_type || 'Unknown',
+      'Purity': d.purity_karat || '--',
+      'Gross Wt (g)': d.gross_weight_g || 0,
+      'Net Wt (g)': d.net_weight_g || 0,
       'Retail Value (₹)': d.mrp || 0,
-      'Status': d.status.replace('_', ' ').toUpperCase(),
-      'Location': d.warehouses?.name || '--',
-      'Date Added': format(new Date(d.created_at), 'dd-MMM-yyyy')
+      'Status': (d.status || 'unknown').replace('_', ' ').toUpperCase(),
+      'Location': getWhName(d.warehouse_id),
+      'Date Added': d.created_at ? format(new Date(d.created_at), 'dd-MMM-yyyy') : '--'
     }))
 
     const headers = Object.keys(formattedData[0])
+    
+    // 1. Map regular data rows
+    const dataRows = formattedData.map(row => headers.map(h => `"${(row as any)[h] || ''}"`).join(','))
+    
+    // 2. Create a "Totals" row aligned with the specific columns
+    const totalsRow = [
+      `"TOTAL: ${metrics.totalItems} Items"`, // Under Barcode
+      `""`,                                   // Under Category
+      `""`,                                   // Under Metal
+      `""`,                                   // Under Purity
+      `"${metrics.totalGrossWt.toFixed(3)}"`, // Under Gross Wt (g)
+      `"${metrics.totalNetWt.toFixed(3)}"`,   // Under Net Wt (g)
+      `"${metrics.totalValue.toFixed(2)}"`,   // Under Retail Value (₹)
+      `""`,                                   // Under Status
+      `""`,                                   // Under Location
+      `""`                                    // Under Date Added
+    ].join(',')
+
+    // 3. Assemble CSV: Headers -> Data -> Empty Spacer Row -> Totals Row
     const csvContent = [
       headers.join(','),
-      ...formattedData.map(row => headers.map(h => `"${(row as any)[h] || ''}"`).join(','))
+      ...dataRows,
+      ',,,,,,,,,', // Empty row to create visual separation in Excel
+      totalsRow
     ].join('\n')
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
@@ -280,6 +334,7 @@ export function InventoryRegistryReport() {
   }
 
   const getStatusBadge = (status: string) => {
+    if (!status) return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-zinc-100 text-zinc-500 border border-zinc-200 uppercase tracking-widest">UNKNOWN</span>;
     switch (status) {
       case 'in_stock': return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-600 border border-emerald-200 uppercase tracking-widest">In Stock</span>
       case 'sold': return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-zinc-100 text-zinc-600 border border-zinc-200 uppercase tracking-widest">Sold</span>
@@ -586,7 +641,6 @@ export function InventoryRegistryReport() {
         <Card className="shadow-sm border-zinc-200 bg-zinc-50 rounded-2xl">
           <CardContent className="p-4 sm:p-5">
             <p className="text-[11px] font-semibold text-zinc-600 uppercase tracking-widest mb-1">Filtered Valuation</p>
-            {/* CHANGED: Now displays total MRP value */}
             {loading ? <Skeleton className="h-8 w-32 mt-1" /> : <p className="text-2xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{metrics.totalValue.toLocaleString()}</p>}
           </CardContent>
         </Card>
@@ -595,7 +649,7 @@ export function InventoryRegistryReport() {
       {/* DATA VIEW */}
       <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl overflow-hidden">
         
-        {/* === MOBILE LIST VIEW (Visible only below sm breakpoint) === */}
+        {/* === MOBILE LIST VIEW === */}
         <div className="block sm:hidden divide-y divide-zinc-100">
           {loading ? (
              Array.from({ length: 5 }).map((_, i) => (
@@ -614,11 +668,11 @@ export function InventoryRegistryReport() {
               <div key={item.id} className="p-4 hover:bg-zinc-50 transition-colors">
                 <div className="flex justify-between items-start mb-2.5">
                   <div>
-                    <div className="font-mono text-[13px] font-bold text-zinc-900 tracking-tight">{item.barcode}</div>
+                    <div className="font-mono text-[13px] font-bold text-zinc-900 tracking-tight">{item.barcode || '--'}</div>
                     <div className="text-[11px] font-medium text-zinc-500 mt-0.5 flex items-center gap-1.5">
-                      {item.item_category || '--'} 
+                      {item.item_category || 'Uncategorized'} 
                       <span className="w-1 h-1 rounded-full bg-zinc-300" />
-                      {item.warehouses?.name || 'Global'}
+                      {getWhName(item.warehouse_id)}
                     </div>
                   </div>
                   <div>{getStatusBadge(item.status)}</div>
@@ -628,16 +682,15 @@ export function InventoryRegistryReport() {
                   <div className="flex gap-4">
                     <div>
                       <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Specs</p>
-                      <p className="text-xs font-semibold text-zinc-800">{item.metal_type} <span className="text-[10px] text-zinc-500 font-medium">{item.purity_karat || ''}</span></p>
+                      <p className="text-xs font-semibold text-zinc-800">{item.metal_type || '--'} <span className="text-[10px] text-zinc-500 font-medium">{item.purity_karat || ''}</span></p>
                     </div>
                     <div>
                       <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Weight</p>
-                      <p className="text-xs font-semibold text-zinc-800">{item.gross_weight_g}g <span className="text-[10px] text-zinc-500 font-medium">({item.net_weight_g}g N)</span></p>
+                      <p className="text-xs font-semibold text-zinc-800">{item.gross_weight_g || 0}g <span className="text-[10px] text-zinc-500 font-medium">({item.net_weight_g || 0}g N)</span></p>
                     </div>
                   </div>
                   <div className="text-right">
                     <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Retail Price</p>
-                    {/* CHANGED: Display MRP in Mobile List */}
                     <p className="text-sm font-bold text-indigo-600 tracking-tight">₹{item.mrp?.toLocaleString() || '0'}</p>
                   </div>
                 </div>
@@ -646,7 +699,7 @@ export function InventoryRegistryReport() {
           )}
         </div>
 
-        {/* === DESKTOP TABLE VIEW (Visible only sm and above) === */}
+        {/* === DESKTOP TABLE VIEW === */}
         <div className="hidden sm:block overflow-x-auto max-h-[700px] custom-scrollbar">
           <Table>
             <TableHeader className="bg-zinc-50/90 sticky top-0 backdrop-blur-sm z-10 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
@@ -657,7 +710,6 @@ export function InventoryRegistryReport() {
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-right">Net</TableHead>
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-center">Status</TableHead>
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Node / Vault</TableHead>
-                {/* CHANGED: Header Title updated */}
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-right pr-6">Retail MRP</TableHead>
               </TableRow>
             </TableHeader>
@@ -685,18 +737,17 @@ export function InventoryRegistryReport() {
                 filteredData.map((item) => (
                   <TableRow key={item.id} className="hover:bg-zinc-50/50 transition-colors border-zinc-100">
                     <TableCell className="px-4 py-2.5 sm:py-3">
-                      <div className="font-mono text-xs sm:text-[13px] font-bold text-zinc-900 tracking-tight">{item.barcode}</div>
-                      <div className="text-[10px] text-zinc-400 font-medium mt-0.5 uppercase tracking-widest">{item.item_category || '--'}</div>
+                      <div className="font-mono text-xs sm:text-[13px] font-bold text-zinc-900 tracking-tight">{item.barcode || '--'}</div>
+                      <div className="text-[10px] text-zinc-400 font-medium mt-0.5 uppercase tracking-widest">{item.item_category || 'Uncategorized'}</div>
                     </TableCell>
                     <TableCell>
-                      <div className="text-xs font-bold text-zinc-700">{item.metal_type}</div>
+                      <div className="text-xs font-bold text-zinc-700">{item.metal_type || '--'}</div>
                       <div className="text-[10px] text-zinc-500 font-medium mt-0.5">{item.purity_karat || '--'}</div>
                     </TableCell>
-                    <TableCell className="text-right text-[13px] font-semibold text-zinc-800">{item.gross_weight_g}<span className="text-[10px] text-zinc-400 ml-0.5 font-medium">g</span></TableCell>
-                    <TableCell className="text-right text-[13px] font-semibold text-zinc-500">{item.net_weight_g}<span className="text-[10px] text-zinc-400 ml-0.5 font-medium">g</span></TableCell>
+                    <TableCell className="text-right text-[13px] font-semibold text-zinc-800">{item.gross_weight_g || 0}<span className="text-[10px] text-zinc-400 ml-0.5 font-medium">g</span></TableCell>
+                    <TableCell className="text-right text-[13px] font-semibold text-zinc-500">{item.net_weight_g || 0}<span className="text-[10px] text-zinc-400 ml-0.5 font-medium">g</span></TableCell>
                     <TableCell className="text-center">{getStatusBadge(item.status)}</TableCell>
-                    <TableCell className="text-xs text-zinc-500 font-semibold">{item.warehouses?.name || '--'}</TableCell>
-                    {/* CHANGED: Display MRP in Table */}
+                    <TableCell className="text-xs text-zinc-500 font-semibold">{getWhName(item.warehouse_id)}</TableCell>
                     <TableCell className="text-right text-[13px] font-bold text-indigo-700 pr-6">₹{item.mrp?.toLocaleString() || '0'}</TableCell>
                   </TableRow>
                 ))
