@@ -354,7 +354,34 @@ export function useCheckout({
         toast.success("Estimate generated.")
       } 
       else if (mode === 'normal') {
-        // Accounting correction: manual discount is the only deduction before tax.
+        
+        // --- NEW: SMART PAYMENT MODE LOGIC FOR EXCEL REPORTING ---
+        let dbPaymentMode = paymentMode;
+        let dbSplitPayments: any = paymentMode === 'split' ? { ...splitPayments } : null;
+
+        if (effectiveKittyAmt > 0 || effectiveCreditAmt > 0) {
+            if (requiredTotal === 0) {
+                // Fully paid by pre-paid methods (No cash/card needed)
+                if (effectiveKittyAmt > 0 && effectiveCreditAmt === 0) dbPaymentMode = 'Kitty';
+                else if (effectiveCreditAmt > 0 && effectiveKittyAmt === 0) dbPaymentMode = 'Wallet';
+                else dbPaymentMode = 'Kitty + Wallet';
+            } else {
+                // Mixed payment (e.g. Kitty + Card)
+                dbPaymentMode = 'Split / Combined';
+                
+                // If they didn't explicitly use the "Split" UI, auto-generate the split data
+                if (paymentMode !== 'split') {
+                    dbSplitPayments = {};
+                    dbSplitPayments[paymentMode] = requiredTotal;
+                }
+                
+                // Inject the pre-paid amounts into the split data for perfect Excel exports
+                if (effectiveKittyAmt > 0) dbSplitPayments['kitty'] = effectiveKittyAmt;
+                if (effectiveCreditAmt > 0) dbSplitPayments['wallet'] = effectiveCreditAmt;
+            }
+        }
+        // ---------------------------------------------------------
+
         const preTaxDeductions = standardDiscount + exchangeNum + appliedVoucherAmount;
 
         const invoiceData = {
@@ -364,7 +391,7 @@ export function useCheckout({
             items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
             
             subtotal: subtotal, 
-            discount_amount: standardDiscount, // only manual discount
+            discount_amount: standardDiscount, 
             discounted_total: Math.max(0, subtotal - preTaxDeductions),
             taxable_value: finalTaxableValue,
             cgst_amount: cgstAmount, 
@@ -379,8 +406,14 @@ export function useCheckout({
             exchange_value: exchangeNum, 
             exchange_notes: exchangeNotes, 
             
-            payment_mode: paymentMode,
-            split_payments: paymentMode === 'split' ? splitPayments : null,
+            kitty_payment: effectiveKittyAmt, 
+            wallet_payment: effectiveCreditAmt,
+            
+            // --- UPDATED: Uses our new smart payment variables ---
+            payment_mode: dbPaymentMode,
+            split_payments: dbSplitPayments,
+            // -----------------------------------------------------
+            
             transaction_reference: customTransactionContext?.transaction_reference || null,
             payment_remarks: customTransactionContext?.payment_remarks || null,
             target_bank_account_id: customTransactionContext?.target_bank_account_id || null,
@@ -432,7 +465,7 @@ export function useCheckout({
         }
 
         toast.success("Tax Invoice Generated!")
-      } 
+      }
       else if (mode === 'repair') { 
         finalNo = `REP-${Date.now().toString().slice(-6)}`
         const { error } = await supabase.from('repair_tickets').insert({

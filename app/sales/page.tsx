@@ -224,6 +224,12 @@ export default function AccountsMasterPage() {
         sgstAmount: invData.sgst_amount,
         exchangeValue: invData.exchange_value,
         voucherAmount: invData.voucher_discount,
+        
+        // --- NEW DATA PASSED TO PREVIEW ---
+        kittyPayment: invData.kitty_payment || 0,
+        walletPayment: invData.wallet_payment || 0,
+        // ----------------------------------
+        
         finalTotal: invData.final_total,
         items: safeItems
       }
@@ -309,12 +315,14 @@ export default function AccountsMasterPage() {
     if (activeTab === 'sales_register') {
       if (invoices.length === 0) return toast.error("No sales data to export");
 
+      // --- ADDED NEW COLUMNS TO EXPORT HEADER ---
       const headers = [
         "Date", "Invoice Number", "Branch / Warehouse", "Customer Name", "PAN No", 
         "Items Sold", "Billed By (Name)", "Billed By (Role)", 
         "Subtotal", "Manual Discount", "Voucher Code", "Voucher Discount", "Handling Fee",
         "Exchange Value", "Exchange Notes", 
-        "Taxable Value", "CGST", "SGST", "Discounted Total", "Round Off", "Advance Adjusted", "Final Total",
+        "Taxable Value", "CGST", "SGST", "Discounted Total", "Round Off", 
+        "Kitty Payment", "Wallet Payment", "Advance Adjusted", "Final Total",
         "Payment Mode", "Split Payments JSON", "Transfer Type", "Transaction Reference", "Payment Remarks"
       ];
 
@@ -345,6 +353,10 @@ export default function AccountsMasterPage() {
           inv.sgst_amount || 0,
           inv.discounted_total || 0,
           inv.round_off_amount || 0,
+          
+          inv.kitty_payment || 0,   // NEW EXPORT COLUMN
+          inv.wallet_payment || 0,  // NEW EXPORT COLUMN
+          
           inv.advance_adjusted || 0,
           inv.final_total || 0,
           inv.payment_mode || '',
@@ -635,10 +647,10 @@ export default function AccountsMasterPage() {
                           </div>
 
                           <div className="flex justify-between items-center mt-2 ml-8">
-                             <div className="flex flex-col">
-                               <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Net Final Total</span>
-                               <span className="text-lg font-black text-zinc-900 leading-tight">₹{Number(inv.final_total).toLocaleString()}</span>
-                             </div>
+                              <div className="flex flex-col">
+                                <span className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Net Final Total</span>
+                                <span className="text-lg font-black text-zinc-900 leading-tight">₹{Number(inv.final_total).toLocaleString()}</span>
+                              </div>
                           </div>
                         </div>
                       )
@@ -669,7 +681,12 @@ export default function AccountsMasterPage() {
                         <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-emerald-50/30">CGST</TableHead>
                         <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-emerald-50/30">SGST</TableHead>
                         <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-zinc-50 border-l border-zinc-200">Adv. Adj.</TableHead>
-                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-zinc-50">R.Off</TableHead>
+                        
+                        {/* --- NEW PRE-PAID SETTLEMENT COLUMNS --- */}
+                        <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right bg-purple-50/30 border-l border-zinc-200">Kitty</TableHead>
+                        <TableHead className="h-11 text-[10px] font-bold text-emerald-700 uppercase tracking-wider text-right bg-emerald-50/30">Wallet</TableHead>
+                        
+                        <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-zinc-50 border-l border-zinc-200">R.Off</TableHead>
                         
                         <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-100 border-l border-zinc-200">Final Total</TableHead>
                         
@@ -695,6 +712,10 @@ export default function AccountsMasterPage() {
                         const adv = Number(inv.advance_adjusted) || 0;
                         const rOff = Number(inv.round_off_amount) || 0;
                         const total = Number(inv.final_total) || 0;
+                        
+                        // NEW SETTLEMENT VARIABLES
+                        const kitty = Number(inv.kitty_payment) || 0;
+                        const wallet = Number(inv.wallet_payment) || 0;
 
                         return (
                           <TableRow key={inv.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors group">
@@ -769,7 +790,16 @@ export default function AccountsMasterPage() {
                             <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 bg-emerald-50/30">₹{sgst.toLocaleString(undefined, {minimumFractionDigits: 2})}</TableCell>
                             
                             <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-500 border-l border-zinc-200">{adv > 0 ? `- ₹${adv.toLocaleString()}` : '-'}</TableCell>
-                            <TableCell className="py-2 text-right text-[11px] font-medium text-zinc-500">
+
+                            {/* --- NEW PRE-PAID SETTLEMENT CELLS --- */}
+                            <TableCell className="py-2 text-right text-[12px] font-medium text-purple-600 bg-purple-50/30 border-l border-zinc-200">
+                              {kitty > 0 ? `- ₹${kitty.toLocaleString()}` : '-'}
+                            </TableCell>
+                            <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 bg-emerald-50/30">
+                              {wallet > 0 ? `- ₹${wallet.toLocaleString()}` : '-'}
+                            </TableCell>
+
+                            <TableCell className="py-2 text-right text-[11px] font-medium text-zinc-500 border-l border-zinc-200">
                               {rOff !== 0 ? (rOff > 0 ? '+' : '') + rOff.toFixed(2) : '-'}
                             </TableCell>
                             
@@ -777,7 +807,7 @@ export default function AccountsMasterPage() {
                             
                             <TableCell className="py-2 text-center border-l border-zinc-200">
                               <span className="px-2 py-1 rounded bg-zinc-100 border border-zinc-200 text-zinc-600 text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
-                                {inv.payment_mode.startsWith('SPLIT') ? 'SPLIT' : inv.payment_mode}
+                                {inv.payment_mode?.startsWith('SPLIT') ? 'SPLIT' : inv.payment_mode}
                               </span>
                             </TableCell>
 

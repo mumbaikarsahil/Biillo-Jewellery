@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react'
-import { Loader2, Banknote, CreditCard, QrCode, Building, Split, FileText, ChevronDown, CheckSquare } from 'lucide-react'
+import { 
+  Loader2, Banknote, CreditCard, QrCode, Building, Split, 
+  FileText, ChevronDown, CheckSquare, Gem, Wallet, IndianRupee 
+} from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Label } from '@/components/ui/label'
@@ -94,26 +97,31 @@ export function CheckoutSidebar({
 
   const cartAdvance = cart?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
 
+  // NEW: Calculate the Gross Total (Taxable + GST) before applying pre-paid settlements
+  const invoiceTotalValue = (finalTaxableValue || 0) + (cgstAmount || 0) + (sgstAmount || 0) + (roundOffAmount || 0);
+
+  // Remaining Balance to Pay (finalPayable comes from the hook, already subtracting Advance, Kitty, and Credits)
   const displayTotal = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
                      : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                      : mode === 'return' ? (Number(returnDetails?.refundAmount) || 0) 
-                     : Math.max(0, (finalPayable || 0) - cartAdvance)
+                     : finalPayable;
 
   const splitRemaining = Math.max(0, displayTotal - (currentSplitTotal || 0))
   const isSplitValid = Math.abs((currentSplitTotal || 0) - displayTotal) < 0.1
 
   const customEstBase = Number(customOrderDetails?.estimated_value) || 0;
   const customDiscount = discountType === 'percent' ? (customEstBase * (Number(discountValue) || 0) / 100) : (Number(discountValue) || 0);
-  const totalWalletRedemptions = appliedKittyAmount + appliedCreditAmount;
-  const customNetEst = Math.max(0, customEstBase - customDiscount - exchangeNum - (activeVoucher?.amount || 0) - totalWalletRedemptions);
+  
+  // Custom estimate total calculation adjusted to keep Kitty as a settlement
+  const totalSettlements = appliedKittyAmount + appliedCreditAmount;
+  const customNetEst = Math.max(0, customEstBase - customDiscount - exchangeNum - (activeVoucher?.amount || 0) - totalSettlements);
 
-  // --- CHANGED: ONLY clear wallets if an activeVoucher is applied ---
-  // (Manual discounts are now freely allowed to club with wallets)
+  // ONLY clear wallets if an activeVoucher is applied (Manual discounts are now freely allowed to club)
   useEffect(() => {
     if (activeVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0)) {
       setAppliedKittyAmount(0);
       setAppliedCreditAmount(0);
-      toast.warning("Discounts Overridden", { description: "Applying a Voucher clears Wallet/Kitty balances." });
+      toast.warning("Settlements Reset", { description: "Applying a Voucher clears Wallet/Kitty settlements." });
     }
   }, [activeVoucher, appliedKittyAmount, appliedCreditAmount, setAppliedKittyAmount, setAppliedCreditAmount]);
 
@@ -161,22 +169,22 @@ export function CheckoutSidebar({
             selectedLocation={selectedLocation}
             subtotal={subtotal}
             onApplyWallet={(type: 'kitty' | 'credit', amount: number, planId?: string) => {
-              // --- CHANGED: Only block if activeVoucher exists ---
               if (activeVoucher) {
                  return toast.error("Clubbing Restricted", { description: "Cannot apply Wallet/Kitty when Vouchers are active. Clear the voucher first."});
               }
 
               if (type === 'kitty') {
-                if (subtotal < amount) {
-                  toast.error(`Cannot Redeem: Cart subtotal (₹${subtotal.toLocaleString()}) must be at least the Harvesting value (₹${amount.toLocaleString()}).`);
+                // Validate against the post-tax Total Invoice Value
+                if (invoiceTotalValue < amount) {
+                  toast.error(`Redemption Limit: Kitty value (₹${amount.toLocaleString()}) exceeds the total invoice value.`);
                   return;
                 }
                 setAppliedKittyAmount(amount);
                 if (planId) setAppliedKittyPlanId(planId); 
               } 
               else if (type === 'credit') {
-                if (subtotal < amount + appliedKittyAmount) {
-                   toast.error("Discounts cannot exceed the total cart value.");
+                if (invoiceTotalValue < amount + appliedKittyAmount) {
+                   toast.error("Total settlements cannot exceed the invoice value.");
                    return;
                 }
                 setAppliedCreditAmount(amount);
@@ -223,7 +231,7 @@ export function CheckoutSidebar({
         {(['normal', 'custom', 'repair', 'return'].includes(mode)) && (
           <section className="space-y-3 bg-white p-3 border border-slate-200 rounded-2xl shadow-sm">
             <Label className="text-xs font-bold text-slate-800 uppercase tracking-wider pl-1">
-              {mode === 'return' ? 'Refund Method' : 'Payment Method'}
+              {mode === 'return' ? 'Refund Method' : 'Balance Settlement Method'}
             </Label>
             
             <div className="grid grid-cols-6 gap-2">
@@ -472,7 +480,7 @@ export function CheckoutSidebar({
           <div className="space-y-1.5 text-sm text-slate-500 pb-3 border-b border-slate-100 mb-3">
             
             <div className="flex justify-between items-center">
-              <span>Subtotal</span>
+              <span>Subtotal (MRP)</span>
               <span className="tabular-nums font-medium text-slate-700">
                 ₹{(subtotal || 0).toLocaleString()} 
               </span>
@@ -481,33 +489,19 @@ export function CheckoutSidebar({
             {/* MANUAL DISCOUNTS */}
             {discountAmount > 0 && (
               <div className="flex justify-between items-center text-red-500">
-                <span>Discount</span><span className="tabular-nums">- ₹{discountAmount.toLocaleString()}</span>
-              </div>
-            )}
-            
-            {/* NEW: WALLET REDEMPTIONS ABOVE TAXABLE VALUE */}
-            {appliedKittyAmount > 0 && (
-              <div className="flex justify-between items-center text-purple-600 animate-in fade-in">
-                <span>Harvesting Plan Redemption</span>
-                <span className="tabular-nums">- ₹{appliedKittyAmount.toLocaleString()}</span>
-              </div>
-            )}
-            {appliedCreditAmount > 0 && (
-              <div className="flex justify-between items-center text-emerald-600 animate-in fade-in">
-                <span>Wallet Credit Applied</span>
-                <span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString()}</span>
+                <span>Manual Discount</span><span className="tabular-nums">- ₹{discountAmount.toLocaleString()}</span>
               </div>
             )}
             
             {/* EXCHANGES & VOUCHERS */}
             {exchangeNum > 0 && (
               <div className="flex justify-between items-center text-blue-600">
-                <span>Exchange Credit</span><span className="tabular-nums">- ₹{exchangeNum.toLocaleString()}</span>
+                <span>Old Gold / Exchange</span><span className="tabular-nums">- ₹{exchangeNum.toLocaleString()}</span>
               </div>
             )}
             {activeVoucher && (
               <div className="flex justify-between items-center text-emerald-600">
-                <span>Voucher Auth</span><span className="tabular-nums">- ₹{activeVoucher.amount.toLocaleString()}</span>
+                <span>Voucher Redemption</span><span className="tabular-nums">- ₹{activeVoucher.amount.toLocaleString()}</span>
               </div>
             )}
             
@@ -520,8 +514,37 @@ export function CheckoutSidebar({
             <div className="flex justify-between items-center">
               <span>CGST + SGST (3%)</span><span className="tabular-nums">+ ₹{(cgstAmount + sgstAmount)?.toLocaleString()}</span>
             </div>
+
+            {/* TOTAL INVOICE ROW */}
+            <div className="flex justify-between items-center font-bold text-slate-900 pt-2 border-t border-slate-200">
+              <span>Total Invoice Value</span>
+              <span className="tabular-nums">₹{invoiceTotalValue.toLocaleString()}</span>
+            </div>
+
+            {/* PRE-PAID SETTLEMENTS (Deductions from the Final Total) */}
+            <div className="pt-2 space-y-1">
+              {cartAdvance > 0 && (
+                <div className="flex justify-between items-center text-slate-500 italic">
+                  <span>Less: Advance Received</span>
+                  <span className="tabular-nums">- ₹{cartAdvance.toLocaleString()}</span>
+                </div>
+              )}
+              {appliedKittyAmount > 0 && (
+                <div className="flex justify-between items-center text-purple-600 font-bold animate-in slide-in-from-right-2">
+                  <span className="flex items-center gap-1.5"><Gem className="w-3.5 h-3.5"/> Less: Kitty Payment</span>
+                  <span className="tabular-nums">- ₹{appliedKittyAmount.toLocaleString()}</span>
+                </div>
+              )}
+              {appliedCreditAmount > 0 && (
+                <div className="flex justify-between items-center text-emerald-600 font-bold animate-in slide-in-from-right-2">
+                  <span className="flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5"/> Less: Wallet Payment</span>
+                  <span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+
             {roundOffAmount !== 0 && roundOffAmount !== undefined && (
-              <div className="flex justify-between items-center">
+              <div className="flex justify-between items-center pt-2">
                 <span>Round Off</span>
                 <span className={`tabular-nums ${roundOffAmount > 0 ? "text-emerald-500" : "text-red-400"}`}>
                   {roundOffAmount > 0 ? '+' : ''} ₹{roundOffAmount.toFixed(2)}
@@ -529,12 +552,6 @@ export function CheckoutSidebar({
               </div>
             )}
 
-            {cartAdvance > 0 && (
-              <div className="flex justify-between items-center font-bold text-[#881798] pt-1 border-t border-slate-100 mt-1">
-                <span>Advance Received</span>
-                <span className="tabular-nums">- ₹{cartAdvance.toLocaleString()}</span>
-              </div>
-            )}
           </div>
         )}
 
@@ -555,9 +572,6 @@ export function CheckoutSidebar({
               </div>
             )}
             
-            {appliedKittyAmount > 0 && <div className="flex justify-between items-center text-purple-600 font-bold"><span>Harvesting Plan Redemption</span><span className="tabular-nums">- ₹{appliedKittyAmount.toLocaleString()}</span></div>}
-            {appliedCreditAmount > 0 && <div className="flex justify-between items-center text-emerald-600 font-bold"><span>Store Credit Applied</span><span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString()}</span></div>}
-
             {exchangeNum > 0 && (
               <div className="flex justify-between items-center text-blue-600">
                 <span>Exchange Credit</span>
@@ -570,6 +584,9 @@ export function CheckoutSidebar({
                 <span className="tabular-nums">- ₹{activeVoucher.amount.toLocaleString()}</span>
               </div>
             )}
+            
+            {appliedKittyAmount > 0 && <div className="flex justify-between items-center text-purple-600 font-bold mt-2"><span>Less: Kitty Payment</span><span className="tabular-nums">- ₹{appliedKittyAmount.toLocaleString()}</span></div>}
+            {appliedCreditAmount > 0 && <div className="flex justify-between items-center text-emerald-600 font-bold"><span>Less: Store Credit</span><span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString()}</span></div>}
 
             <div className="flex justify-between items-center text-purple-900 font-bold pt-1.5 mt-1.5 border-t border-purple-200/50">
               <span>Net Est. Payable</span>
@@ -578,9 +595,9 @@ export function CheckoutSidebar({
           </div>
         )}
 
-        <div className="flex justify-between items-end mb-3 mt-4 border-t border-slate-200 pt-3">
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            {mode === 'custom' || mode === 'repair' ? 'Advance Payment' : mode === 'return' ? 'Refund Amount' : mode === 'challan' ? 'Memo Value' : 'Net Payable'}
+        <div className="flex justify-between items-end mb-3 mt-4 border-t-2 border-dashed border-slate-200 pt-3">
+          <p className="text-xs font-black uppercase text-slate-500">
+            {mode === 'custom' || mode === 'repair' ? 'Balance Advance' : mode === 'return' ? 'Refund Amount' : mode === 'challan' ? 'Memo Value' : 'Balance to Pay'}
           </p>
           <p className={`text-4xl font-bold tracking-tight tabular-nums ${theme.text}`}>
              ₹{displayTotal.toLocaleString()}
@@ -652,7 +669,7 @@ export function CheckoutSidebar({
               } 
               className={`${mode === 'normal' ? 'flex-1' : 'w-full'} font-semibold h-12 text-white ${theme.bg} hover:opacity-90 rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed`}
             >
-              {isProcessing ? <Loader2 className="animate-spin w-5 h-5" /> : mode === 'repair' ? 'Generate Ticket' : mode === 'custom' ? 'Submit Order' : mode === 'return' ? 'Process Return' : 'Finalize Invoice'}
+              {isProcessing ? <Loader2 className="animate-spin w-5 h-5" /> : mode === 'repair' ? 'Generate Ticket' : mode === 'custom' ? 'Submit Order' : mode === 'return' ? 'Process Return' : 'Finalize Sale'}
             </Button>
           </div>
         </div>

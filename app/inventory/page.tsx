@@ -438,6 +438,10 @@ export default function InventoryPage() {
           
           <div className="flex items-center gap-2">
             <Button asChild variant="ghost" size="sm" className="h-8 px-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-none border border-transparent hover:border-indigo-200 hidden sm:flex">
+              <Link href="/inventory/import-manual"><Upload className="h-3.5 w-3.5 mr-1.5" /><span className="hidden sm:inline">Add Stock Manual</span></Link>
+            </Button>
+
+            <Button asChild variant="ghost" size="sm" className="h-8 px-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-none border border-transparent hover:border-indigo-200 hidden sm:flex">
               <Link href="/inventory/import"><Upload className="h-3.5 w-3.5 mr-1.5" /><span className="hidden sm:inline">Add Stock</span></Link>
             </Button>
 
