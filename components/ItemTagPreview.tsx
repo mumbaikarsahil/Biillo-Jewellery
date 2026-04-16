@@ -45,8 +45,8 @@ export interface TagItemData {
 
 interface Props {
   item: TagItemData | null;
-  onClose?: () => void;       // Made optional
-  isPrintOnly?: boolean;      // NEW: Flag to bypass the Modal for bulk printing
+  onClose?: () => void;
+  isPrintOnly?: boolean;
 }
 
 export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
@@ -76,8 +76,23 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
 
   const isRepair = item._type === 'repair' || item.is_repair_ticket;
   const hasSolitaire = Number(item.solitaire_weight_cts) > 0;
-  const hasMelee = Number(item.melee_weight_cts) > 0;
-  const diamondSpecs = [item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join('/');
+  
+  // Format variables specifically for the requested layout
+  const categoryStr = item.item_category || 'CATEGORY';
+  const skuStr = item.sku_reference || '';
+  const headerText = `${categoryStr} ${skuStr}`.trim();
+  
+  const ktStr = item.purity_karat || '---';
+  const netWtStr = Number(item.net_weight_g || 0).toFixed(3);
+  
+  const rdPcs = item.melee_pieces || 0;
+  const rdCts = Number(item.melee_weight_cts || 0).toFixed(2);
+  
+  const solPcs = item.solitaire_pieces || 0;
+  const solCts = Number(item.solitaire_weight_cts || 0).toFixed(2);
+  
+  // Assuming shape is not always needed in QLT line based on photo, just Color/Clarity
+  const qltStr = [item.diamond_color, item.diamond_clarity].filter(Boolean).join('/') || '---';
 
   // --- EXTRACTED PURE LABEL COMPONENT ---
   const LabelContent = () => (
@@ -87,19 +102,29 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
       style={{ 
         width: '100mm', 
         height: '20mm', 
-        fontFamily: 'Arial, sans-serif', 
+        fontFamily: 'Arial, Helvetica, sans-serif', 
         boxSizing: 'border-box',
-        pageBreakAfter: isPrintOnly ? 'always' : 'auto' // Forces printer to advance to next label in bulk printing
+        pageBreakAfter: isPrintOnly ? 'always' : 'auto' 
       }}
     >
-      <style type="text/css" media="print">{`@page { size: 100mm 20mm; margin: 0; } body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }`}</style>
+      <style type="text/css" media="print">{`
+        @page { size: 100mm 20mm; margin: 0; } 
+        body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      `}</style>
       
       <div className="flex w-[70mm] h-full">
-        {/* LEFT: TEXT DETAILS AREA */}
-        <div className="flex flex-col justify-center h-full w-[41mm] pl-[2mm] pr-[1mm]" style={{ fontSize: '10px', lineHeight: '1.25', fontWeight: '800' }}>
+        {/* LEFT: TEXT DETAILS AREA (41mm) */}
+        <div 
+          className="flex flex-col justify-center h-full w-[41mm] pl-[2mm] pr-[1mm] tracking-tight text-black font-bold" 
+          style={{ 
+            // Slightly reduce font size and line height if Solitaire is present to fit the extra line
+            fontSize: hasSolitaire ? '8.5px' : '9.5px', 
+            lineHeight: hasSolitaire ? '1.15' : '1.3' 
+          }}
+        >
           {isRepair ? (
             <>
-              <div className="uppercase tracking-tight text-[11px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate text-black">
+              <div className="uppercase text-[11px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate">
                 REPAIR: {item.item_category || 'SERVICE'}
               </div>
               <div className="truncate">{item.barcode || '---'}</div>
@@ -111,27 +136,36 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
             </>
           ) : (
             <>
-              <div className="uppercase tracking-tight text-[11px] font-black leading-none mb-[2px] truncate">
-                {item.item_category || 'CATEGORY'} {item.sku_reference ? item.sku_reference : ''}
+              {/* Header: Gents Ring RNG-981 */}
+              <div className="uppercase truncate" style={{ fontSize: hasSolitaire ? '9.5px' : '10.5px', marginBottom: '1px' }}>
+                {headerText}
               </div>
-              <div className="truncate">
-                {Number(item.gross_weight_g||0).toFixed(3)}g / {Number(item.net_weight_g||0).toFixed(3)}g / {Number(item.total_stone_weight_cts||0).toFixed(2)}ct
+              
+              {/* Line 1: KT/GW : 14k/2.300 */}
+              <div className="truncate uppercase flex">
+                <span className="w-[14mm] inline-block shrink-0">KT/GW</span>
+                <span>: {ktStr}/{netWtStr}</span>
               </div>
-              <div className="truncate">
-                {item.purity_karat || '---'} {item.label_1 ? `| ${item.label_1}` : ''}
+              
+              {/* Line 2: RD : 4/0.23 */}
+              <div className="truncate uppercase flex">
+                <span className="w-[14mm] inline-block shrink-0">RD</span>
+                <span>: {rdPcs}/{rdCts}</span>
               </div>
-              {(hasSolitaire || hasMelee) && (
-                <div className="truncate text-[9px]">
-                  {hasSolitaire ? `SOL ${Number(item.solitaire_weight_cts||0).toFixed(2)}(${item.solitaire_pieces || 0}) ` : ''}
-                  {hasMelee ? `MEL ${Number(item.melee_weight_cts||0).toFixed(2)}(${item.melee_pieces || 0})` : ''}
+              
+              {/* Line 3 (Optional): SOL : 1/0.20 */}
+              {hasSolitaire && (
+                <div className="truncate uppercase flex">
+                  <span className="w-[14mm] inline-block shrink-0">SOL</span>
+                  <span>: {solPcs}/{solCts}</span>
                 </div>
               )}
-              {diamondSpecs && (
-                <div className="truncate">{diamondSpecs}</div>
-              )}
-              {!diamondSpecs && item.label_2 && (
-                <div className="truncate">{item.label_2}</div>
-              )}
+              
+              {/* Line 4: QLT : GH/SI */}
+              <div className="truncate uppercase flex">
+                <span className="w-[14mm] inline-block shrink-0">QLT</span>
+                <span>: {qltStr}</span>
+              </div>
             </>
           )}
         </div>
@@ -176,12 +210,10 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
   // RENDER LOGIC
   // --------------------------------------------------------------------------
   
-  // If bulk printing hidden in background, DO NOT render the Dialog!
   if (isPrintOnly) {
     return <LabelContent />
   }
 
-  // Otherwise, render the standard interactive preview Dialog
   return (
     <Dialog open={true} onOpenChange={(val) => !val && onClose && onClose()}>
       <DialogContent className="sm:max-w-[550px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white">

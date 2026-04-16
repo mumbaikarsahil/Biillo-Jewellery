@@ -65,7 +65,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const taxableValue = data.taxableValue || Math.max(0, subtotal - totalDiscount)
     const cgstAmount = data.cgstAmount || 0
     const sgstAmount = data.sgstAmount || 0
-    const roundOff = data.roundOff || 0 // <-- NEW: Fetch the roundOff mapping
+    const roundOff = data.roundOff || 0 
 
     const exchangeVal = data.exchangeValue || 0
     const voucherVal = data.voucherAmount || 0
@@ -96,6 +96,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
       legalDisclaimer = "BUYBACK VOUCHER: We acknowledge the receipt of the returned item(s) listed above. The valuation is based on standard buyback policies and current market rates. The total refund amount constitutes full and final settlement for the surrendered items. Ownership of the item transfers back to the company."
     }
 
+    // ADJUSTED COLUMN COUNT BACK TO ORIGINAL FOR EMPTY ROW GENERATION
     const tableColCount = mode === 'normal' ? 6 : 5;
     const currentItemCount = data.items?.length || 0;
     const emptyRowsToFill = Math.max(0, 2 - currentItemCount); 
@@ -242,8 +243,11 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     <th className="p-2.5 text-center font-semibold w-12 rounded-tl-md">Sr.</th>
                     <th className="p-2.5 text-left font-semibold">Description</th>
                     {mode === 'normal' && <th className="p-2.5 text-center font-semibold w-20">HSN Code</th>}
+                    
+                    {/* ONLY DISPLAY GOLD WT (MAPPED TO NET WEIGHT) AND DIAMOND WT */}
                     <th className="p-2.5 text-center font-semibold w-24">Gold Wt.</th>
                     <th className="p-2.5 text-center font-semibold w-24">Diamond Wt.</th>
+                    
                     <th className="p-2.5 text-right font-semibold w-32 rounded-tr-md">
                       {mode === 'challan' ? 'Memo Value' : mode === 'estimate' ? 'Est. Amount' : 'Amount'}
                     </th>
@@ -252,8 +256,10 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 <tbody className="align-top border-b border-slate-200"> 
                   {data.items?.map((item: any, idx: number) => {
                     const isRepair = !!item.repair_ticket_id;
-                    const gw = item.gross_weight_g || item.gross_weight || item.gross_wt || item.net_weight_g;
-                    const dw = item.total_stone_weight_cts || item.diamond_weight_cts || item.dia_wt || item.stone_weight;
+                    
+                    const gw = item.gross_weight_g || item.gross_weight || item.gross_wt || 0;
+                    const nw = item.net_weight_g || item.net_weight || item.net_wt || gw; 
+                    const dw = item.total_stone_weight_cts || item.diamond_weight_cts || item.dia_wt || item.stone_weight || 0;
 
                     return (
                       <tr key={idx} className="bg-white border-b border-slate-100">
@@ -265,14 +271,15 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                         </td>
                         {mode === 'normal' && <td className="p-2.5 text-center font-mono text-[11px] font-bold text-slate-600 pt-3">{item.hsn_code || (isRepair ? '9987' : '7113')}</td>}
                         
+                        {/* RENDERS NET WEIGHT DATA UNDER THE "GOLD WT" HEADER */}
                         <td className="p-2.5 text-center font-medium text-slate-700 pt-3">
-                          {gw ? Number(gw).toFixed(3) : '--'} g
+                          {nw ? Number(nw).toFixed(3) : '--'} g
                         </td>
                         <td className="p-2.5 text-center font-medium text-slate-700 pt-3">
                           {dw ? Number(dw).toFixed(2) : '--'} cts
                         </td>
                         
-                        <td className="p-2.5 text-right font-bold text-slate-800 pt-3">₹ {item.mrp.toLocaleString()}</td>
+                        <td className="p-2.5 text-right font-bold text-slate-800 pt-3">₹ {item.mrp?.toLocaleString()}</td>
                       </tr>
                     );
                   })}
@@ -313,7 +320,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
               {mode === 'repair' && repair ? (
                 <>
                   <div className="flex justify-between text-slate-600"><span>Estimated Cost (Approx)</span><span>₹ {Number(repair.estimatedCost || 0).toLocaleString()}</span></div>
-                  <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900"><span>Advance Received</span><span>₹ {data.finalTotal.toLocaleString()}</span></div>
+                  <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900"><span>Advance Received</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
                 </>
               ) : mode === 'return' && returnDetails ? (
                 <>
@@ -321,43 +328,42 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   {Number(returnDetails.deductionAmount) > 0 && (
                     <div className="flex justify-between text-red-600"><span>Deductions</span><span>- ₹ {Number(returnDetails.deductionAmount).toLocaleString()}</span></div>
                   )}
-                  <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900"><span>Net Refund Issued</span><span>₹ {data.finalTotal.toLocaleString()}</span></div>
+                  <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900"><span>Net Refund Issued</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
                 </>
               ) : mode === 'custom' && customOrder ? (
                 <>
                   <div className="flex justify-between text-slate-600"><span>Estimated Value (Approx)</span><span>₹ {Number(customOrder.estimatedValue || 0).toLocaleString()}</span></div>
-                  <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900"><span>Advance Received</span><span>₹ {data.finalTotal.toLocaleString()}</span></div>
+                  <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900"><span>Advance Received</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
                 </>
               ) : mode === 'challan' ? (
-                <div className="flex justify-between py-2 text-xl font-black text-slate-900"><span>Total Memo Value</span><span>₹ {subtotal.toLocaleString()}</span></div>
+                <div className="flex justify-between py-2 text-xl font-black text-slate-900"><span>Total Memo Value</span><span>₹ {subtotal?.toLocaleString()}</span></div>
               ) : mode === 'estimate' ? (
                 <>
-                  <div className="flex justify-between"><span>Sub Total</span><span>₹ {subtotal.toLocaleString()}</span></div>
+                  <div className="flex justify-between"><span>Sub Total</span><span>₹ {subtotal?.toLocaleString()}</span></div>
                   
                   {totalDiscount > 0 && (
                     <div className="flex justify-between text-slate-600">
                       <span>Discount</span>
-                      <span>- ₹ {totalDiscount.toLocaleString()}</span>
+                      <span>- ₹ {totalDiscount?.toLocaleString()}</span>
                     </div>
                   )}
 
-                  <div className="flex justify-between border-t border-slate-300 pt-1 mt-1"><span>Taxable Value</span><span>₹ {taxableValue.toLocaleString()}</span></div>
+                  <div className="flex justify-between border-t border-slate-300 pt-1 mt-1"><span>Taxable Value</span><span>₹ {taxableValue?.toLocaleString()}</span></div>
                   
                   {chargeType === 'handling' && data.estimateHandlingAmt > 0 && (
                     <div className="flex justify-between text-xs text-slate-600 mt-1">
                        <span>Handling Charges ({data.estimateHandlingPct}%)</span>
-                       <span>+ ₹ {data.estimateHandlingAmt.toLocaleString()}</span>
+                       <span>+ ₹ {data.estimateHandlingAmt?.toLocaleString()}</span>
                     </div>
                   )}
 
                   {chargeType === 'tax' && (
                     <>
-                      <div className="flex justify-between text-xs text-slate-600 mt-1"><span>CGST (1.5%)</span><span>+ ₹ {cgstAmount.toLocaleString()}</span></div>
-                      <div className="flex justify-between text-xs text-slate-600 pb-1"><span>SGST (1.5%)</span><span>+ ₹ {sgstAmount.toLocaleString()}</span></div>
+                      <div className="flex justify-between text-xs text-slate-600 mt-1"><span>CGST (1.5%)</span><span>+ ₹ {cgstAmount?.toLocaleString()}</span></div>
+                      <div className="flex justify-between text-xs text-slate-600 pb-1"><span>SGST (1.5%)</span><span>+ ₹ {sgstAmount?.toLocaleString()}</span></div>
                     </>
                   )}
 
-                  {/* --- NEW: Round Off Render --- */}
                   {roundOff !== 0 && (
                     <div className="flex justify-between text-xs text-slate-600 pb-1 border-b border-slate-100 mb-1">
                       <span>Round Off</span>
@@ -365,27 +371,27 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
 
-                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-800 text-xl font-black text-slate-900"><span>Estimated Total</span><span>₹ {data.finalTotal.toLocaleString()}</span></div>
+                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-800 text-xl font-black text-slate-900"><span>Estimated Total</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
                 </>
               ) : (
                 <>
-                  <div className="flex justify-between"><span>Sub Total</span><span>₹ {subtotal.toLocaleString()}</span></div>
+                  <div className="flex justify-between"><span>Sub Total</span><span>₹ {subtotal?.toLocaleString()}</span></div>
                   
                   {totalDiscount > 0 && (
                     <div className="flex justify-between text-[#A85B9D]">
                       <span>Discount</span>
-                      <span>- ₹ {totalDiscount.toLocaleString()}</span>
+                      <span>- ₹ {totalDiscount?.toLocaleString()}</span>
                     </div>
                   )}
                   
-                  <div className="flex justify-between border-t border-slate-300 pt-1 mt-1"><span>Taxable Value</span><span>₹ {taxableValue.toLocaleString()}</span></div>
-                  <div className="flex justify-between text-xs text-slate-600 mt-1"><span>CGST (1.5%)</span><span>+ ₹ {cgstAmount.toLocaleString()}</span></div>
-                  <div className="flex justify-between text-xs text-slate-600 pb-1"><span>SGST (1.5%)</span><span>+ ₹ {sgstAmount.toLocaleString()}</span></div>
+                  <div className="flex justify-between border-t border-slate-300 pt-1 mt-1"><span>Taxable Value</span><span>₹ {taxableValue?.toLocaleString()}</span></div>
+                  <div className="flex justify-between text-xs text-slate-600 mt-1"><span>CGST (1.5%)</span><span>+ ₹ {cgstAmount?.toLocaleString()}</span></div>
+                  <div className="flex justify-between text-xs text-slate-600 pb-1"><span>SGST (1.5%)</span><span>+ ₹ {sgstAmount?.toLocaleString()}</span></div>
                   
                   {(exchangeVal > 0 || voucherVal > 0) && (
                     <div className="space-y-1 py-1 border-t border-slate-200">
-                       {exchangeVal > 0 && <div className="flex justify-between text-[#A85B9D] text-xs"><span>Exchange Credit</span><span>- ₹ {exchangeVal.toLocaleString()}</span></div>}
-                       {voucherVal > 0 && <div className="flex justify-between text-[#A85B9D] text-xs"><span>Voucher Credit</span><span>- ₹ {voucherVal.toLocaleString()}</span></div>}
+                       {exchangeVal > 0 && <div className="flex justify-between text-[#A85B9D] text-xs"><span>Exchange Credit</span><span>- ₹ {exchangeVal?.toLocaleString()}</span></div>}
+                       {voucherVal > 0 && <div className="flex justify-between text-[#A85B9D] text-xs"><span>Voucher Credit</span><span>- ₹ {voucherVal?.toLocaleString()}</span></div>}
                     </div>
                   )}
 
@@ -396,7 +402,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
 
-                  {/* --- NEW: Round Off Render --- */}
                   {roundOff !== 0 && (
                     <div className="flex justify-between text-xs text-slate-600 pb-1 border-b border-slate-100 mb-1">
                       <span>Round Off</span>
@@ -404,7 +409,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
 
-                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-300 text-xl font-black text-slate-900"><span>Net Payable</span><span>₹ {data.finalTotal.toLocaleString()}</span></div>
+                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-300 text-xl font-black text-slate-900"><span>Net Payable</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
                 </>
               )}
             </div>
