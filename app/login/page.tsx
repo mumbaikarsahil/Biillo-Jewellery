@@ -5,17 +5,9 @@ import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
 import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
-import { Gem, Eye, EyeOff, Loader2 } from 'lucide-react'
+import { Gem, Eye, EyeOff, Loader2, ArrowRight, Badge } from 'lucide-react'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -26,7 +18,6 @@ export default function LoginPage() {
   const [isCheckingSession, setIsCheckingSession] = useState(true)
 
   useEffect(() => {
-    // Check if already logged in to prevent flashing the login form
     const checkAuth = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (session) {
@@ -57,71 +48,71 @@ export default function LoginPage() {
       if (error) throw error
 
       toast.success('Logged in successfully')
-      
-      // Smooth client-side transition
-      // We do NOT set loading to false here, so the button stays in the "Redirecting..." state
       router.push('/dashboard')
-      router.refresh() // Refreshes server components to recognize the new session cookies
+      router.refresh() 
       
     } catch (err: any) {
       toast.error(err.message || 'Authentication failed')
-      setLoading(false) // Only stop loading if there was an error
+      setLoading(false) 
     }
   }
 
-  // Prevent UI flash while checking initial session
   if (isCheckingSession) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-muted/40">
-        <Loader2 className="h-8 w-8 animate-spin text-primary opacity-50" />
+      <div className="min-h-[100dvh] flex items-center justify-center bg-white">
+        <Loader2 className="h-8 w-8 animate-spin text-slate-900 opacity-80" />
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-muted/40 p-4 sm:p-8 selection:bg-primary/20">
+    <div className="flex min-h-[100dvh] bg-white font-sans">
       
-      {/* Logo / Branding Header */}
-      <div className="flex items-center gap-3 mb-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary shadow-sm">
-          <Gem className="h-7 w-7 text-primary-foreground" />
-        </div>
-        <div className="flex flex-col">
-          <span className="text-2xl font-bold tracking-tight text-foreground">Biillo</span>
-          <span className="text-sm font-medium text-muted-foreground -mt-1">Jewellery ERP</span>
-        </div>
-      </div>
+      {/* ========================================================= */}
+      {/* LEFT SIDE: FORM AREA (Native App feel on Mobile)          */}
+      {/* ========================================================= */}
+      <div className="flex flex-1 flex-col justify-center px-6 py-12 sm:px-12 lg:flex-none lg:w-[45%] xl:w-[40%] overflow-y-auto z-10">
+        <div className="mx-auto w-full max-w-sm lg:max-w-[380px] animate-in fade-in slide-in-from-bottom-4 duration-700">
+          
+          {/* Header */}
+          <div className="mb-10">
+            <div className="flex items-center gap-2 mb-8">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-900">
+                <Gem className="h-4 w-4 text-white" />
+              </div>
+              <span className="text-lg font-bold tracking-tight text-slate-900">Biillo Jewel</span>
+            </div>
+            <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
+              Sign in to your account
+            </h2>
+            <p className="mt-2 text-sm text-slate-500">
+              Welcome back. Please enter your details.
+            </p>
+          </div>
 
-      <Card className="w-full max-w-md shadow-xl border-muted/60 animate-in fade-in zoom-in-95 duration-500">
-        <CardHeader className="space-y-2 text-center pb-6">
-          <CardTitle className="text-2xl font-semibold tracking-tight">
-            Welcome back
-          </CardTitle>
-          <CardDescription className="text-sm">
-            Enter your credentials to access your ERP
-          </CardDescription>
-        </CardHeader>
-
-        <form onSubmit={handleAuth}>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+          {/* Form */}
+          <form onSubmit={handleAuth} className="space-y-6">
+            <div className="space-y-1.5">
+              <Label htmlFor="email" className="text-sm font-medium text-slate-700">
+                Email
+              </Label>
               <Input
                 id="email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="m@example.com"
+                placeholder="Enter your email"
                 disabled={loading}
                 required
-                className="focus-visible:ring-primary"
+                // text-[16px] is critical to prevent iOS Safari auto-zoom
+                className="h-12 text-[16px] sm:text-sm border-slate-300 focus-visible:border-slate-900 focus-visible:ring-0 rounded-xl transition-all shadow-sm placeholder:text-slate-400"
               />
             </div>
 
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="password">Password</Label>
-              </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="password" className="text-sm font-medium text-slate-700">
+                Password
+              </Label>
               <div className="relative">
                 <Input
                   id="password"
@@ -131,13 +122,13 @@ export default function LoginPage() {
                   placeholder="••••••••"
                   disabled={loading}
                   required
-                  className="pr-10 focus-visible:ring-primary"
+                  className="h-12 text-[16px] sm:text-sm border-slate-300 focus-visible:border-slate-900 focus-visible:ring-0 rounded-xl transition-all pr-12 shadow-sm placeholder:text-slate-400"
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
                   disabled={loading}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none disabled:opacity-50 transition-colors"
+                  className="absolute right-0 top-0 h-full px-4 text-slate-400 hover:text-slate-600 focus:outline-none disabled:opacity-50 transition-colors"
                   tabIndex={-1}
                 >
                   {showPassword ? (
@@ -148,34 +139,70 @@ export default function LoginPage() {
                 </button>
               </div>
             </div>
-          </CardContent>
 
-          <CardFooter className="flex flex-col gap-4 mt-2">
-            <Button
-              type="submit"
-              disabled={loading}
-              className="w-full font-semibold transition-all"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Authenticating...
-                </>
-              ) : (
-                'Sign In'
-              )}
-            </Button>
-            
-            {/* Demo Credentials Alert */}
-            <div className="w-full mt-4 p-4 rounded-lg bg-primary/5 border border-primary/10 text-sm">
-              <p className="font-semibold text-foreground mb-1">Secure Login:</p>
-              <p className="text-muted-foreground text-xs leading-relaxed">
-                Ensure you are using an authorized email that has an active profile in the system.
-              </p>
+            <div className="pt-2">
+              <Button
+                type="submit"
+                disabled={loading}
+                className="w-full h-12 rounded-xl text-[15px] font-semibold bg-slate-900 hover:bg-slate-800 text-white shadow-md transition-all active:scale-[0.98]"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Signing in...
+                  </>
+                ) : (
+                  <>
+                    Sign in <ArrowRight className="ml-2 h-4 w-4" />
+                  </>
+                )}
+              </Button>
             </div>
-          </CardFooter>
-        </form>
-      </Card>
+          </form>
+          
+          <div className="mt-8 text-center">
+            <p className="text-xs text-slate-500">
+              Secured by Biillo Enterprise Identity
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================================= */}
+      {/* RIGHT SIDE: BRANDING/ART AREA (Hidden on Mobile)          */}
+      {/* ========================================================= */}
+      <div className="relative hidden w-0 flex-1 lg:block bg-slate-900 overflow-hidden">
+        
+        {/* Abstract Background Elements */}
+        <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1618403088736-aabbf14a72d4?q=80&w=2574&auto=format&fit=crop')] bg-cover bg-center opacity-40 mix-blend-luminosity"></div>
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent"></div>
+        <div className="absolute -left-1/4 top-0 w-1/2 h-full bg-gradient-to-r from-slate-900 to-transparent"></div>
+
+        {/* Content Overlay */}
+        <div className="absolute bottom-0 left-0 right-0 p-16 xl:p-24 z-10 animate-in fade-in duration-1000 slide-in-from-bottom-8">
+          <Badge className="text-[#dda74f] border-[#dda74f]/30 mb-6 bg-slate-900/50 backdrop-blur-md px-3 py-1 text-xs font-semibold tracking-widest uppercase">
+            Biillo Jewel OS
+          </Badge>
+          <h1 className="text-4xl xl:text-5xl font-serif text-white font-medium leading-[1.1] tracking-wide mb-6">
+            The operating system <br />
+            for modern jewellers.
+          </h1>
+          <p className="text-lg text-slate-300 max-w-xl font-light leading-relaxed mb-8">
+            Manage inventory, orchestrate manufacturing, and streamline retail operations in one unified workspace.
+          </p>
+          
+          {/* Minimalist Tech Specs/Testimonial Area */}
+          <div className="flex items-center gap-4 pt-8 border-t border-white/10">
+            <div className="flex -space-x-3">
+              <div className="w-10 h-10 rounded-full border-2 border-slate-900 bg-slate-800 flex items-center justify-center text-[10px] text-white">B2B</div>
+              <div className="w-10 h-10 rounded-full border-2 border-slate-900 bg-slate-700 flex items-center justify-center text-[10px] text-white">POS</div>
+              <div className="w-10 h-10 rounded-full border-2 border-slate-900 bg-indigo-900 flex items-center justify-center text-[10px] text-white">CRM</div>
+            </div>
+            <p className="text-sm font-medium text-slate-400">Enterprise Ready</p>
+          </div>
+        </div>
+      </div>
+      
     </div>
   )
 }

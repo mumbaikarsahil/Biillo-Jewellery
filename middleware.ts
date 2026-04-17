@@ -36,6 +36,7 @@ export async function middleware(request: NextRequest) {
     path.startsWith('/api') || 
     path.startsWith('/_next') || 
     path.startsWith('/claim') ||
+    path.startsWith('/storelocations') ||
     path.includes('.') // bypasses files like favicon.ico, images, etc.
   ) {
     return supabaseResponse
