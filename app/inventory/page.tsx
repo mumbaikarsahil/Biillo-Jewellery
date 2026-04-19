@@ -1,17 +1,19 @@
 "use client"
 
-import React, { useEffect, useState, useMemo, useRef } from "react"
+import React, { useEffect, useState, useMemo, useRef, useCallback } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { useReactToPrint } from "react-to-print"
+import html2canvas from "html2canvas"
+import QRCode from "react-qr-code"
 import { Badge } from "@/components/ui/badge"
 
 import { 
   Search, Printer, Edit2, Check, X, Store, Truck, 
   RefreshCw, Database, Package, Calculator, Gem, Hammer, 
-  ArrowLeft, Upload, Eye, Image as ImageIcon, CheckCircle2, Box, Layers, Wrench, Clock, CalendarDays,
-  Loader2, Filter, IndianRupee
+  Upload, Eye, Image as ImageIcon, CheckCircle2, Box, Layers, Wrench, Clock, CalendarDays,
+  Loader2, Filter, IndianRupee, UserCircle, CheckSquare, Sparkles, Mic, ChevronDown, Download
 } from "lucide-react"
 
 import { useAuth } from "@/hooks/useAuth"
@@ -38,7 +40,34 @@ import {
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
-import { ItemTagPreview } from "@/components/ItemTagPreview" 
+// ===========================================================================
+// ✨ GLOBAL HELPER: SMART STONE FALLBACK
+// Note: Intentionally NOT exported to satisfy Next.js App Router rules.
+// ===========================================================================
+const getStoneTotals = (item: any) => {
+  if (!item) return { solWt: 0, solPcs: 0, meleeWt: 0, meleePcs: 0, aggWt: 0, aggPcs: 0, stnWt: 0, stnPcs: 0 };
+
+  const solWt = Number(item.solitaire_weight_cts || 0);
+  const solPcs = Number(item.solitaire_pieces || 0);
+  const meleeWt = Number(item.melee_weight_cts || 0);
+  const meleePcs = Number(item.melee_pieces || 0);
+  const fallbackWt = Number(item.total_stone_weight_cts || 0);
+  const fallbackPcs = Number(item.total_stone_pieces || 0);
+
+  // Total aggregate for Tables/Modals (Solitaire + Melee, fallback to Old Total)
+  const aggWt = (solWt > 0 || meleeWt > 0) ? (solWt + meleeWt) : fallbackWt;
+  const aggPcs = (solPcs > 0 || meleePcs > 0) ? (solPcs + meleePcs) : fallbackPcs;
+
+  // STN specific for the Print Tag (Melee, falling back to Old Total if Melee is 0)
+  let stnWt = meleeWt;
+  let stnPcs = meleePcs;
+  if (meleeWt === 0 && meleePcs === 0 && (fallbackWt > 0 || fallbackPcs > 0)) {
+     stnWt = fallbackWt;
+     stnPcs = fallbackPcs;
+  }
+
+  return { solWt, solPcs, meleeWt, meleePcs, aggWt, aggPcs, stnWt, stnPcs };
+}
 
 const formatDateTime = (isoString: string) => {
   if (!isoString) return "Unknown"
@@ -83,13 +112,9 @@ interface InventoryItem {
   is_repair_ticket: boolean
   custom_order_id: string | null
   origin_name?: string
-  custom_orders?: {
-    id: string
-    order_number: string
-    origin?: {
-      name: string
-    }
-  }
+  custom_orders?: { id: string; order_number: string; origin?: { name: string } }
+  karigars?: { full_name: string; karigar_code: string } | null
+  created_from_job_bag?: { karigar_id?: string; karigars?: { full_name: string; karigar_code: string } } | null
   huid_code: string | null
   hsn_code: string | null
   image_url: string | null
@@ -106,9 +131,171 @@ interface InventoryItem {
   created_at: string
   updated_at: string
   last_status_change_at: string
-  expected_delivery_date?: string
+  expected_delivery_date?: string | null // FIX: Added expected_delivery_date
 }
 
+// --- CUSTOM GEMINI LOADER COMPONENT ---
+const GeminiLoader = () => (
+  <div className="absolute inset-0 z-10 bg-white/70 backdrop-blur-sm flex flex-col items-center justify-center animate-in fade-in duration-300">
+    <div className="relative flex items-center justify-center gap-1.5 mb-3">
+      <Sparkles className="w-5 h-5 text-[#4285F4] animate-pulse" style={{ animationDelay: '0ms', animationDuration: '1.5s' }} />
+      <Sparkles className="w-8 h-8 text-[#9b72cb] animate-pulse" style={{ animationDelay: '200ms', animationDuration: '1.5s' }} />
+      <Sparkles className="w-5 h-5 text-[#d96570] animate-pulse" style={{ animationDelay: '400ms', animationDuration: '1.5s' }} />
+      <div className="absolute inset-0 bg-gradient-to-r from-[#4285F4] via-[#9b72cb] to-[#d96570] blur-xl opacity-30 animate-pulse" />
+    </div>
+    <span className="text-[11px] font-black uppercase tracking-[0.2em] text-transparent bg-clip-text bg-gradient-to-r from-[#4285F4] to-[#d96570] animate-pulse">
+      AI Syncing Vault...
+    </span>
+  </div>
+)
+
+// ===========================================================================
+// ✨ ITEM TAG PREVIEW COMPONENT
+// ===========================================================================
+export function ItemTagPreview({ item, onClose, isPrintOnly = false }: { item: InventoryItem | null; onClose?: () => void; isPrintOnly?: boolean; }) {
+  const labelRef = useRef<HTMLDivElement>(null)
+
+  // FIX: Using content: () => labelRef.current for universal react-to-print compatibility
+  const handlePrint = useReactToPrint({
+    contentRef: labelRef,
+    documentTitle: `Jewelry-Tag-${item?.barcode || 'Item'}`,
+    onAfterPrint: () => {
+      toast.success('Sent to Thermal Printer')
+      if (onClose) onClose()
+    },
+  })
+
+  const downloadTagImage = async () => {
+    if (!labelRef.current || !item) return
+    try {
+      const canvas = await html2canvas(labelRef.current, { scale: 4 })
+      const link = document.createElement("a")
+      link.href = canvas.toDataURL("image/png")
+      link.download = `Tag-${item.barcode}.png`
+      link.click()
+      toast.success("Tag image saved")
+    } catch (err) { 
+      toast.error("Failed to generate tag image") 
+    }
+  }
+
+  if (!item) return null;
+
+  const isRepair = item._type === 'repair' || item.is_repair_ticket;
+  
+  // Extract Smart Stone Totals using the global helper
+  const { solWt, solPcs, stnWt, stnPcs } = getStoneTotals(item);
+  const hasSolitaire = solWt > 0;
+
+  const categoryStr = item.item_category || 'CATEGORY';
+  const skuStr = item.sku_reference || '';
+  const headerText = `${categoryStr} ${skuStr}`.trim();
+  
+  const ktStr = item.purity_karat || '---';
+  const netWtStr = Number(item.net_weight_g || 0).toFixed(3);
+  
+  const stnWtStr = stnWt.toFixed(2);
+  const solCtsStr = solWt.toFixed(2);
+  const qltStr = [item.diamond_color, item.diamond_clarity].filter(Boolean).join('/') || '---';
+
+  const LabelContent = () => (
+    <div 
+      ref={isPrintOnly ? undefined : labelRef} 
+      className="bg-white text-black flex border border-gray-300 shadow-sm print:border-none print:shadow-none overflow-hidden shrink-0" 
+      style={{ width: '100mm', height: '20mm', fontFamily: 'Arial, Helvetica, sans-serif', boxSizing: 'border-box', pageBreakAfter: isPrintOnly ? 'always' : 'auto' }}
+    >
+      <style type="text/css" media="print">{`
+        @page { size: 100mm 20mm; margin: 0; } 
+        body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      `}</style>
+      
+      <div className="flex w-[70mm] h-full">
+        {/* LEFT: TEXT DETAILS AREA (43mm) */}
+        <div 
+          className="flex flex-col justify-center h-full w-[43mm] pl-[2mm] pr-[1mm] tracking-tight text-black font-bold" 
+          style={{ fontSize: hasSolitaire ? '8.5px' : '9.5px', lineHeight: hasSolitaire ? '1.15' : '1.3' }}
+        >
+          {isRepair ? (
+            <>
+              <div className="uppercase text-[11px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate">REPAIR: {item.item_category || 'SERVICE'}</div>
+              <div className="truncate">{item.barcode || '---'}</div>
+              <div className="truncate">{item.origin_name || '---'}</div>
+              <div>{item.expected_delivery_date ? new Date(item.expected_delivery_date).toLocaleDateString('en-GB') : '---'}</div>
+              <div>{Number(item.net_weight_g||0).toFixed(3)}g</div>
+              <div>{stnWtStr}ct</div>
+              <div>₹{Number(item.mrp||0).toLocaleString()}</div>
+            </>
+          ) : (
+            <>
+              <div className="uppercase truncate" style={{ fontSize: hasSolitaire ? '9.5px' : '10.5px', marginBottom: '1px' }}>{headerText}</div>
+              <div className="truncate uppercase flex"><span className="w-[14mm] inline-block shrink-0">KT/NW</span><span>: {ktStr}/{netWtStr}</span></div>
+              <div className="truncate uppercase flex"><span className="w-[14mm] inline-block shrink-0">STN</span><span>: {stnPcs}/{stnWtStr}</span></div>
+              {hasSolitaire && <div className="truncate uppercase flex"><span className="w-[14mm] inline-block shrink-0">SOL</span><span>: {solPcs}/{solCtsStr}</span></div>}
+              <div className="truncate uppercase flex"><span className="w-[14mm] inline-block shrink-0">QLT</span><span>: {qltStr}</span></div>
+            </>
+          )}
+        </div>
+
+        {/* MIDDLE FOLD GAP (3mm) */}
+        <div className="h-full w-[3mm] flex items-center justify-center border-l border-r border-dashed border-gray-200 print:border-none opacity-50 shrink-0">
+          <span className="text-[4px] text-gray-300 print:hidden rotate-90 tracking-widest whitespace-nowrap">FOLD</span>
+        </div>
+
+        {/* RIGHT: QR CODE & BRANDING AREA (24mm) */}
+        <div className="flex h-full w-[24mm] justify-between items-center shrink-0 pr-[1mm]">
+           <div className="h-full w-[4mm] flex items-center justify-center">
+             <span className="font-black text-[7px] tracking-widest" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>{item.barcode || 'NO-CODE'}</span>
+           </div>
+           <div className="flex flex-col justify-center items-center w-[15mm]">
+             {item.barcode ? (
+               <div className="bg-white p-[1px] rounded-sm"><QRCode value={item.barcode} size={64} level="M" style={{ height: "13mm", width: "13mm", display: "block" }} /></div>
+             ) : (
+               <div className="h-[13mm] w-[13mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">N/A</div>
+             )}
+           </div>
+           <div className="h-[18mm] w-[4mm] flex items-center justify-center ml-[1mm]">
+              <div className="bg-black text-white h-full w-full flex items-center justify-center rounded-sm">
+                <h2 className="font-black uppercase tracking-widest text-[7px] leading-none" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>PAVITRAM</h2>
+              </div>
+           </div>
+        </div>
+      </div>
+
+      <div className="w-[30mm] h-full bg-gray-50 print:bg-white border-l border-gray-200 print:border-none flex items-center justify-center shrink-0">
+         <span className="text-[5px] text-gray-300 print:hidden rotate-90 tracking-widest">TAIL AREA</span>
+      </div>
+    </div>
+  )
+
+  if (isPrintOnly) return <LabelContent />
+
+  return (
+    <Dialog open={true} onOpenChange={(val) => !val && onClose && onClose()}>
+      <DialogContent className="sm:max-w-[550px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white">
+        <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200">
+          <DialogTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
+             <Printer className="w-4 h-4 text-slate-500" /> Thermal Label Layout {isRepair && "(Repair Tag)"}
+          </DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col items-center justify-center py-10 bg-slate-100/50 min-h-[250px] overflow-x-auto">
+          <LabelContent />
+        </div>
+        <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 flex-row gap-3">
+           <Button variant="outline" className="flex-1 h-10 text-xs font-semibold rounded-lg border-slate-300 text-slate-700 bg-white hover:bg-slate-50" onClick={downloadTagImage}>
+             <Download className="w-4 h-4 mr-2 text-slate-400" /> Save PNG
+           </Button>
+           <Button className="flex-[2] h-10 text-xs font-bold rounded-lg bg-slate-900 hover:bg-slate-800 text-white" onClick={() => handlePrint()}>
+             <Printer className="w-4 h-4 mr-2" /> Print (TSC)
+           </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ===========================================================================
+// MAIN PAGE COMPONENT
+// ===========================================================================
 export default function InventoryPage() {
   const { appUser } = useAuth()
   const router = useRouter()
@@ -128,17 +315,27 @@ export default function InventoryPage() {
   const [tagItem, setTagItem] = useState<InventoryItem | null>(null)
   const [viewItem, setViewItem] = useState<InventoryItem | null>(null)
 
-  // --- ADVANCED FILTER STATES ---
+  // --- SMART FILTER STATES ---
   const [searchTerm, setSearchTerm] = useState('')
-  const [showFilters, setShowFilters] = useState(false)
-  const [filterStatus, setFilterStatus] = useState('all')
-  const [filterCategory, setFilterCategory] = useState('all')
-  const [filterPurity, setFilterPurity] = useState('all')
+  const [debouncedSearch, setDebouncedSearch] = useState('') 
+  const [filterStatus, setFilterStatus] = useState<string[]>([])
+  const [filterCategory, setFilterCategory] = useState<string[]>([])
+  const [filterPurity, setFilterPurity] = useState<string[]>([])
+  const [activeTab, setActiveTab] = useState<string>("active")
   
   const [maxCatalogPrice, setMaxCatalogPrice] = useState(1000000)
   const [priceRange, setPriceRange] = useState<number[]>([0, 1000000])
+  const [debouncedPriceRange, setDebouncedPriceRange] = useState<number[]>([0, 1000000]) 
+  const [isPriceFilterActive, setIsPriceFilterActive] = useState(false)
 
-  // --- MRP CALCULATOR STATES ---
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null)
+
+  // --- GLOBAL FETCH STATES ---
+  const [globalTotalCount, setGlobalTotalCount] = useState<number>(0)
+  const [globalSoldCount, setGlobalSoldCount] = useState<number>(0)
+  const [isFetchingGlobal, setIsFetchingGlobal] = useState(false)
+
+  // --- CALC STATES ---
   const [isCalcModalOpen, setCalcModalOpen] = useState(false)
   const [calcStep, setCalcStep] = useState<'params' | 'preview'>('params')
   const [isCalculating, setIsCalculating] = useState(false)
@@ -148,15 +345,157 @@ export default function InventoryPage() {
   const [isUploadingImage, setIsUploadingImage] = useState(false)
   const [calcParams, setCalcParams] = useState({ diamondRatePerCt: 25000, markupPercent: 80, flatCharge: 8000 })
 
-  // --- PRINTING STATE & REFS ---
   const printRef = useRef<HTMLDivElement>(null)
-  const handleBulkPrint = useReactToPrint({
-    contentRef: printRef,
-    documentTitle: `Bulk-Inventory-Tags`,
+  
+  // FIX: Using content: () => ref.current for the bulk printer too
+  const handleBulkPrint = useReactToPrint({ 
+    contentRef: printRef, 
+    documentTitle: `Bulk-Inventory-Tags` 
   })
-
-  // Get the actual inventory records to print
+  
   const itemsToPrint = items.filter(i => selectedIds.includes(i.id))
+
+  const uniqueCategories = useMemo(() => Array.from(new Set(items.map(c => c.item_category))).filter(Boolean).sort(), [items]);
+  const uniquePurities = useMemo(() => Array.from(new Set(items.map(c => c.purity_karat))).filter(Boolean).sort(), [items]);
+
+  const executeSmartSearch = useCallback(() => {
+    if (!searchTerm.trim()) {
+      setDebouncedSearch('')
+      setFilterCategory([])
+      setFilterStatus([])
+      setFilterPurity([])
+      setIsPriceFilterActive(false)
+      setPriceRange([0, maxCatalogPrice])
+      setActiveTab("active")
+      if (isHQ) setSelectedLocation('ALL') 
+      return
+    }
+
+    let q = searchTerm.toLowerCase()
+    let magicalUpdate = false
+    let isSoldContext = false
+
+    const rangeMatch = q.match(/(?:between|from)?\s*(?:rs\.?|inr|₹)?\s*(\d+)\s*(?:to|-|and)\s*(?:rs\.?|inr|₹)?\s*(\d+)/i)
+    if (rangeMatch) {
+      setPriceRange([parseInt(rangeMatch[1], 10), parseInt(rangeMatch[2], 10)])
+      setIsPriceFilterActive(true); magicalUpdate = true; q = q.replace(rangeMatch[0], '')
+    } else {
+      const underMatch = q.match(/(?:under|below|less than)\s*(?:rs\.?|inr|₹)?\s*(\d+)/i)
+      if (underMatch) {
+        setPriceRange([0, parseInt(underMatch[1], 10)])
+        setIsPriceFilterActive(true); magicalUpdate = true; q = q.replace(underMatch[0], '')
+      } else {
+        const overMatch = q.match(/(?:over|above|more than)\s*(?:rs\.?|inr|₹)?\s*(\d+)/i)
+        if (overMatch) {
+          setPriceRange([parseInt(overMatch[1], 10), maxCatalogPrice])
+          setIsPriceFilterActive(true); magicalUpdate = true; q = q.replace(overMatch[0], '')
+        }
+      }
+    }
+
+    const karatMatch = q.match(/\b(24|22|18|14|10|9)\s*(?:k|karat|ct|carats?|karats?)\b/i)
+    if (karatMatch) {
+      const kVal = karatMatch[1] + "K"
+      setFilterPurity(prev => { if (!prev.includes(kVal)) { magicalUpdate = true; return [...prev, kVal]; } return prev; });
+      q = q.replace(karatMatch[0], '')
+    }
+
+    setFilterStatus(prev => {
+      let updated = [...prev]; let changed = false;
+      const statusMap = [
+        { words: ['in stock', 'available', 'instock'], id: 'in_stock' },
+        { words: ['sold', 'delivered', 'archive'], id: 'sold' },
+        { words: ['repair', 'repairs', 'fixing'], id: 'repairs' },
+        { words: ['exchange', 'exchanged', 'buyback', 'buybacks'], id: 'exchanged' },
+        { words: ['transit', 'in transit'], id: 'transit' }
+      ]
+      for (const s of statusMap) {
+        for (const word of s.words) {
+          const regex = new RegExp(`\\b${word}\\b`, 'gi')
+          if (regex.test(q)) {
+            if (!updated.includes(s.id)) { updated.push(s.id); changed = true; magicalUpdate = true; }
+            if (s.id === 'sold') isSoldContext = true; 
+            q = q.replace(regex, '')
+          }
+        }
+      }
+      return changed ? updated : prev
+    })
+
+    for (const w of warehouses) {
+      const wName = w.name.toLowerCase();
+      const keys = wName.replace(/(branch|main office|jewellers)/g, '').trim().split(' ').filter((k: string) => k.length > 3);
+      if (wName.includes('ghaktopar')) keys.push('ghatkopar');
+      if (wName.includes('dombivali')) keys.push('dombivli');
+      if (wName.includes('andheri')) keys.push('andheri');
+      if (wName.includes('pavitran')) keys.push('pavitram');
+
+      const matchedKey = keys.find((k: string) => new RegExp(`\\b${k}\\b`, 'i').test(q));
+      if (matchedKey) {
+        if (w.id !== selectedLocation) { setSelectedLocation(w.id); magicalUpdate = true; }
+        q = q.replace(new RegExp(`\\b${matchedKey}\\b`, 'gi'), '');
+        break;
+      }
+    }
+
+    setFilterCategory(prev => {
+      let updated = [...prev]; let changed = false;
+      const catMappings: Record<string, string[]> = {
+        'PENDANT': ['pendant', 'pendants'],
+        'BANGLE': ['bangle', 'bangles'],
+        'BRACELET': ['bracelet', 'bracelets'],
+        'TANMANIA': ['tanmania', 'tanmanias'],
+        'NOSEPIN': ['nosepin', 'nosepins', 'nose pin', 'nose pins'],
+        'TOPS': ['top', 'tops', 'earring', 'earrings'],
+        'NECKLACE SET': ['necklace', 'necklaces', 'set', 'sets'],
+        'LADIES RING': ['ring', 'rings', 'ladies ring'],
+        'GENTS RING': ['ring', 'rings', 'gents ring', 'mens ring'],
+        'GENTS STUD': ['stud', 'studs']
+      }
+      for (const [dbCategory, aliases] of Object.entries(catMappings)) {
+        for (const alias of aliases) {
+          const regex = new RegExp(`\\b${alias}\\b`, 'gi')
+          if (regex.test(q)) {
+            if (alias === 'ring' || alias === 'rings') {
+              if (q.includes('gent') || q.includes('men')) { if (!updated.includes('GENTS RING')) { updated.push('GENTS RING'); changed = true; magicalUpdate = true; } }
+              else if (q.includes('lad') || q.includes('women')) { if (!updated.includes('LADIES RING')) { updated.push('LADIES RING'); changed = true; magicalUpdate = true; } }
+              else {
+                if (!updated.includes('GENTS RING')) { updated.push('GENTS RING'); changed = true; magicalUpdate = true; }
+                if (!updated.includes('LADIES RING')) { updated.push('LADIES RING'); changed = true; magicalUpdate = true; }
+              }
+            } else {
+              if (!updated.includes(dbCategory)) { updated.push(dbCategory); changed = true; magicalUpdate = true; }
+            }
+            q = q.replace(regex, '')
+          }
+        }
+      }
+      return changed ? updated : prev
+    })
+
+    if (magicalUpdate) toast.success("✨ AI Search extracted your parameters & applied filters!")
+    if (isSoldContext) setActiveTab("sold")
+
+    const cleanSearch = q.replace(/\b(in|at|from|find|show|me|the|all|branch|store|where|are|with|price|cost|under|over|above|below)\b/gi, '').replace(/\s+/g, ' ').trim()
+    setDebouncedSearch(cleanSearch)
+
+  }, [searchTerm, warehouses, selectedLocation, uniqueCategories, maxCatalogPrice, isHQ])
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault(); executeSmartSearch();
+    }
+  }
+
+  useEffect(() => {
+    const timer = setTimeout(() => { executeSmartSearch() }, 1500)
+    return () => clearTimeout(timer)
+  }, [searchTerm, executeSmartSearch])
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedPriceRange(priceRange), 500)
+    return () => clearTimeout(timer)
+  }, [priceRange])
 
   useEffect(() => {
     const fetchInitialData = async () => {
@@ -166,7 +505,6 @@ export default function InventoryPage() {
         if (profile) setUserRole(profile.role)
 
         const { data: whData } = await supabase.from('warehouses').select('*').eq('company_id', appUser.company_id).eq('is_active', true).order('name')
-
         if (whData && whData.length > 0) {
           setWarehouses(whData)
           if (!selectedLocation && isHQ) setSelectedLocation(whData[0].id)
@@ -182,29 +520,80 @@ export default function InventoryPage() {
     fetchInitialData()
   }, [appUser, isHQ, selectedLocation, setSelectedLocation])
 
+  useEffect(() => {
+    if (!appUser) return;
+    const fetchCounts = async () => {
+      let activeQuery = supabase.from('inventory_items').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id)
+      
+      if (selectedLocation !== 'ALL') activeQuery = activeQuery.eq('warehouse_id', selectedLocation)
+      if (debouncedSearch) activeQuery = activeQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
+      if (filterCategory.length > 0) activeQuery = activeQuery.in('item_category', filterCategory)
+      if (filterPurity.length > 0) activeQuery = activeQuery.in('purity_karat', filterPurity)
+      
+      if (filterStatus.length > 0) {
+        const validStatuses = filterStatus.filter(s => s !== 'repairs' && s !== 'exchanged');
+        let orStrings = [];
+        if (validStatuses.length > 0) orStrings.push(`status.in.(${validStatuses.join(',')})`);
+        if (filterStatus.includes('exchanged')) orStrings.push(`is_exchanged.eq.true`);
+        if (orStrings.length > 0) activeQuery = activeQuery.or(orStrings.join(','));
+      } else {
+        activeQuery = activeQuery.in('status', ['in_stock', 'transit'])
+      }
+
+      if (isPriceFilterActive && debouncedPriceRange[0] > 0) activeQuery = activeQuery.gte('mrp', debouncedPriceRange[0])
+      if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) activeQuery = activeQuery.lte('mrp', debouncedPriceRange[1])
+
+      const { count: activeCount } = await activeQuery
+      if (activeCount !== null) setGlobalTotalCount(activeCount)
+
+      let soldQuery = supabase.from('inventory_items').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id)
+      
+      if (filterStatus.includes('sold')) {
+        soldQuery = soldQuery.in('status', ['sold', 'delivered'])
+      } else {
+        soldQuery = soldQuery.in('status', ['sold', 'delivered'])
+      }
+      
+      if (selectedLocation !== 'ALL') soldQuery = soldQuery.eq('warehouse_id', selectedLocation)
+      if (debouncedSearch) soldQuery = soldQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
+      if (filterCategory.length > 0) soldQuery = soldQuery.in('item_category', filterCategory)
+      if (filterPurity.length > 0) soldQuery = soldQuery.in('purity_karat', filterPurity)
+      if (isPriceFilterActive && debouncedPriceRange[0] > 0) soldQuery = soldQuery.gte('mrp', debouncedPriceRange[0])
+      if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) soldQuery = soldQuery.lte('mrp', debouncedPriceRange[1])
+
+      const { count: soldCount } = await soldQuery
+      if (soldCount !== null) setGlobalSoldCount(soldCount)
+    }
+    fetchCounts()
+  }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, debouncedPriceRange, maxCatalogPrice, isPriceFilterActive])
+
   const fetchItems = async () => {
     if (!appUser || !selectedLocation) return
     setLoading(true)
     try {
-      let invQuery = supabase.from('inventory_items').select(`*, custom_orders (id, order_number, origin:origin_warehouse_id(name))`).eq('company_id', appUser.company_id)
+      let invQuery = supabase.from('inventory_items')
+        .select(`*, custom_orders (id, order_number, origin:origin_warehouse_id(name)), karigars:karigar_id (full_name, karigar_code), created_from_job_bag:job_bags (karigar_id, karigars:karigar_id (full_name, karigar_code))`)
+        .eq('company_id', appUser.company_id).limit(2500)
+      
       if (selectedLocation !== 'ALL') invQuery = invQuery.eq('warehouse_id', selectedLocation)
+      if (debouncedSearch) invQuery = invQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%`)
 
       let repQuery = supabase.from('repair_tickets').select(`*, origin:warehouses!repair_tickets_origin_warehouse_id_fkey(name)`).eq('company_id', appUser.company_id)
-        
+      if (debouncedSearch) repQuery = repQuery.or(`ticket_number.ilike.%${debouncedSearch}%,item_description.ilike.%${debouncedSearch}%`)
+
       const [invRes, repRes] = await Promise.all([invQuery, repQuery])
       if (invRes.error) throw invRes.error
       if (repRes.error) throw repRes.error
 
       const inventoryList = (invRes.data || []).map(item => ({ ...item, _type: 'inventory' as const, is_repair_ticket: false }))
-
       const repairList = (repRes.data || []).map(rep => ({
         id: rep.id, _type: 'repair' as const, barcode: rep.ticket_number, sku_reference: 'REPAIR TICKET', item_category: rep.item_description || 'Repair Service',
         item_size: 'N/A', metal_type: 'Mixed', purity_karat: rep.purity || 'N/A', purity_percent: 0, gross_weight_g: rep.gross_weight_g || 0, 
         net_weight_g: rep.issued_gold_g || 0, total_stone_weight_cts: rep.issued_diamond_cts || 0, total_stone_pieces: 0, solitaire_weight_cts: 0, solitaire_pieces: 0, melee_weight_cts: 0,
         melee_pieces: 0, color_stone_weight_cts: 0, color_stone_pieces: 0, mrp: rep.actual_cost || 0, status: rep.status,
         warehouse_id: rep.status === 'fixed_ready_for_dispatch' && warehouses.find(w => w.name.includes('HQ'))?.id ? warehouses.find(w => w.name.includes('HQ'))?.id || rep.origin_warehouse_id : rep.origin_warehouse_id, 
-        is_exchanged: false, is_custom_order: false, is_repair_ticket: true, custom_order_id: null, origin_name: rep.origin?.name || 'Unknown Branch', huid_code: null,
-        hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: null, diamond_color: null,
+        is_exchanged: false, is_custom_order: false, is_repair_ticket: true, custom_order_id: null, origin_name: rep.origin?.name || 'Unknown Branch', 
+        karigars: null, created_from_job_bag: null, huid_code: null, hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: null, diamond_color: null,
         diamond_clarity: null, cost_metal: 0, cost_stone: 0, cost_making: rep.labor_charges || 0, cost_total: rep.actual_cost || 0, wastage_weight_g: 0,
         created_at: rep.created_at, updated_at: rep.updated_at, expected_delivery_date: rep.expected_delivery_date, last_status_change_at: rep.updated_at
       }))
@@ -214,18 +603,110 @@ export default function InventoryPage() {
 
       setItems(combined)
 
-      // Auto-calibrate Price Slider Max Value
-      const highestPrice = Math.max(...combined.map(c => c.mrp || 0), 100000);
-      setMaxCatalogPrice(highestPrice);
-      setPriceRange([0, highestPrice]);
+      if (!debouncedSearch && filterCategory.length === 0 && filterPurity.length === 0 && !isPriceFilterActive) {
+        const highestPrice = Math.max(...combined.map(c => c.mrp || 0), 100000);
+        setMaxCatalogPrice(highestPrice);
+        setPriceRange([0, highestPrice]);
+      }
 
     } catch (error) { toast.error('Failed to load inventory') } 
     finally { setLoading(false) }
   }
 
-  useEffect(() => { fetchItems() }, [appUser, selectedLocation])
+  useEffect(() => { fetchItems() }, [appUser, selectedLocation, debouncedSearch])
 
-  const handleSaveMrp = async (id: string) => {
+  const handleSelectAllGlobal = async () => {
+    if (!appUser) return;
+    setIsFetchingGlobal(true)
+    try {
+      let allFetchedData: any[] = [];
+      let start = 0; const limit = 1000; let hasMore = true;
+
+      while (hasMore) {
+        let globalQuery = supabase.from('inventory_items')
+          .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged')
+          .eq('company_id', appUser.company_id).range(start, start + limit - 1)
+        
+        if (selectedLocation !== 'ALL') globalQuery = globalQuery.eq('warehouse_id', selectedLocation)
+        if (debouncedSearch) globalQuery = globalQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
+        if (filterCategory.length > 0) globalQuery = globalQuery.in('item_category', filterCategory)
+        if (filterPurity.length > 0) globalQuery = globalQuery.in('purity_karat', filterPurity)
+        
+        if (filterStatus.length > 0) {
+          const validStatuses = filterStatus.filter(s => s !== 'repairs' && s !== 'exchanged');
+          let orStrings = [];
+          if (validStatuses.length > 0) orStrings.push(`status.in.(${validStatuses.join(',')})`);
+          if (filterStatus.includes('exchanged')) orStrings.push(`is_exchanged.eq.true`);
+          if (orStrings.length > 0) globalQuery = globalQuery.or(orStrings.join(','));
+        } else {
+          globalQuery = globalQuery.in('status', ['in_stock', 'transit'])
+        }
+
+        if (isPriceFilterActive && debouncedPriceRange[0] > 0) globalQuery = globalQuery.gte('mrp', debouncedPriceRange[0])
+        if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) globalQuery = globalQuery.lte('mrp', debouncedPriceRange[1])
+
+        const { data, error } = await globalQuery
+        if (error) throw error
+
+        if (data && data.length > 0) allFetchedData = [...allFetchedData, ...data];
+        if (!data || data.length < limit) hasMore = false; else start += limit;
+      }
+
+      const existingIds = new Set(items.map(i => i.id))
+      const newItems = allFetchedData.filter(d => !existingIds.has(d.id)).map(d => ({ ...d, _type: 'inventory' as const, is_repair_ticket: false } as InventoryItem))
+      if (newItems.length > 0) setItems(prev => [...prev, ...newItems])
+      
+      setSelectedIds(allFetchedData.map(item => item.id))
+      toast.success(`Selected all ${allFetchedData.length} items matching your filters.`)
+    } catch (error) {
+      toast.error("Failed to fetch global database items.")
+    } finally {
+      setIsFetchingGlobal(false)
+    }
+  }
+
+  const { activeItemsFiltered, soldItemsFiltered } = useMemo(() => {
+    let active = [], sold = [];
+    for (const item of items) {
+      const isSold = item.status === 'sold' || item.status === 'delivered';
+      
+      if (debouncedSearch) {
+        const q = debouncedSearch.toLowerCase()
+        if (!(item.barcode?.toLowerCase().includes(q) || item.sku_reference?.toLowerCase().includes(q))) continue;
+      }
+
+      if (filterCategory.length > 0 && !filterCategory.includes(item.item_category)) continue;
+      if (filterPurity.length > 0 && !filterPurity.includes(item.purity_karat)) continue;
+      
+      if (filterStatus.length > 0) {
+        let match = false;
+        if (filterStatus.includes('repairs') && item._type === 'repair') match = true;
+        if (filterStatus.includes('exchanged') && item.is_exchanged) match = true;
+        if (filterStatus.includes(item.status)) match = true;
+        if (!match) continue;
+      }
+
+      if (isPriceFilterActive && ((item.mrp || 0) < priceRange[0] || (item.mrp || 0) > priceRange[1])) continue;
+
+      if (isSold) sold.push(item); else active.push(item);
+    }
+    return { activeItemsFiltered: active, soldItemsFiltered: sold }
+  }, [items, debouncedSearch, filterCategory, filterPurity, filterStatus, priceRange, isPriceFilterActive]);
+
+  const toggleArrayItem = (arr: string[], setArr: any, item: string) => {
+    if (arr.includes(item)) setArr(arr.filter((i: string) => i !== item));
+    else setArr([...arr, item]);
+  }
+
+  const clearAllFilters = () => {
+    setFilterCategory([]); setFilterPurity([]); setFilterStatus([]);
+    setIsPriceFilterActive(false); setPriceRange([0, maxCatalogPrice]); 
+    setSearchTerm(""); setDebouncedSearch("");
+    setActiveTab("active");
+    if (isHQ) setSelectedLocation("ALL");
+  }
+
+  const handleSaveMrp = async (id: string) => { 
     if (!canEdit) return toast.error("Unauthorized to edit prices");
     const item = items.find(i => i.id === id);
     if (!item) return;
@@ -243,6 +724,60 @@ export default function InventoryPage() {
     setItems(items.map(i => i.id === id ? { ...i, mrp: newMrp } : i))
     setEditingId(null)
     toast.success('Price updated')
+  }
+  
+  const handleOpenCalc = () => {
+    if (!canEdit) return toast.error("Unauthorized to use bulk calculator");
+    const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
+    if (selectedItems.length === 0) return toast.error("No valid items selected.", { description: "Repairs cannot be bulk-calculated. Select standard inventory." })
+
+    const uniqueKarats = Array.from(new Set(selectedItems.map(i => i.purity_karat || '24K')))
+    const initialRates: Record<string, number> = {}
+    uniqueKarats.forEach(k => {
+      const kNum = parseInt(k.replace(/\D/g, '')) || 24
+      initialRates[k] = Math.round(base24kRate * (kNum / 24))
+    })
+    setGoldRates(initialRates)
+    setCalcStep('params')
+    setCalcModalOpen(true)
+  }
+  
+  const handleGeneratePreview = () => {
+    const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
+    const previews = selectedItems.map(item => {
+      const k = item.purity_karat || '24K'
+      const gRate = goldRates[k] || 0
+      const goldCost = (item.net_weight_g || 0) * gRate
+      const diamondCost = (item.total_stone_weight_cts || 0) * calcParams.diamondRatePerCt
+      const baseCost = goldCost + diamondCost
+      const markupAmount = baseCost * (calcParams.markupPercent / 100)
+      const subtotal = baseCost + markupAmount
+      
+      const exactMrp = subtotal + calcParams.flatCharge
+      const finalMrp = Math.ceil(exactMrp / 100) * 100
+      
+      return { ...item, newMrp: finalMrp }
+    })
+    setPreviewData(previews)
+    setCalcStep('preview')
+  }
+
+  const handleApplyBulkMrp = async () => {
+    setIsCalculating(true)
+    try {
+      await Promise.all(previewData.map(p => supabase.from('inventory_items').update({ mrp: p.newMrp }).eq('id', p.id)))
+      setItems(prev => prev.map(item => {
+        const update = previewData.find(px => px.id === item.id)
+        return update ? { ...item, mrp: update.newMrp } : item
+      }))
+      toast.success(`Successfully applied new MRP to ${previewData.length} items.`)
+      setCalcModalOpen(false)
+      setSelectedIds([]) 
+    } catch (e) {
+      toast.error("Failed to update inventory.")
+    } finally {
+      setIsCalculating(false)
+    }
   }
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, itemId: string, itemType: string) => {
@@ -281,146 +816,25 @@ export default function InventoryPage() {
     }
   }
 
-  // --- MRP CALCULATOR LOGIC ---
-  const handleOpenCalc = () => {
-    if (!canEdit) return toast.error("Unauthorized to use bulk calculator");
-    const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
-    if (selectedItems.length === 0) return toast.error("No valid items selected.", { description: "Repairs cannot be bulk-calculated. Select standard inventory." })
-
-    const uniqueKarats = Array.from(new Set(selectedItems.map(i => i.purity_karat || '24K')))
-    const initialRates: Record<string, number> = {}
-    uniqueKarats.forEach(k => {
-      const kNum = parseInt(k.replace(/\D/g, '')) || 24
-      initialRates[k] = Math.round(base24kRate * (kNum / 24))
-    })
-    setGoldRates(initialRates)
-    setCalcStep('params')
-    setCalcModalOpen(true)
-  }
-
-  const handleGeneratePreview = () => {
-    const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
-    const previews = selectedItems.map(item => {
-      const k = item.purity_karat || '24K'
-      const gRate = goldRates[k] || 0
-      const goldCost = (item.net_weight_g || 0) * gRate
-      const diamondCost = (item.total_stone_weight_cts || 0) * calcParams.diamondRatePerCt
-      const baseCost = goldCost + diamondCost
-      const markupAmount = baseCost * (calcParams.markupPercent / 100)
-      const subtotal = baseCost + markupAmount
-      
-      const exactMrp = subtotal + calcParams.flatCharge
-      
-      // ROUND UP to the nearest 100 (e.g., 140510 -> 140600)
-      const finalMrp = Math.ceil(exactMrp / 100) * 100
-      
-      return { ...item, newMrp: finalMrp }
-    })
-    setPreviewData(previews)
-    setCalcStep('preview')
-  }
-  const handleApplyBulkMrp = async () => {
-    setIsCalculating(true)
-    try {
-      await Promise.all(previewData.map(p => supabase.from('inventory_items').update({ mrp: p.newMrp }).eq('id', p.id)))
-      setItems(prev => prev.map(item => {
-        const update = previewData.find(px => px.id === item.id)
-        return update ? { ...item, mrp: update.newMrp } : item
-      }))
-      toast.success(`Successfully applied new MRP to ${previewData.length} items.`)
-      setCalcModalOpen(false)
-      setSelectedIds([]) 
-    } catch (e) {
-      toast.error("Failed to update inventory.")
-    } finally {
-      setIsCalculating(false)
-    }
-  }
-
-  // --- ADVANCED FILTERING ENGINE ---
-  const uniqueCategories = useMemo(() => Array.from(new Set(items.map(c => c.item_category))).filter(Boolean).sort(), [items]);
-  const uniquePurities = useMemo(() => Array.from(new Set(items.map(c => c.purity_karat))).filter(Boolean).sort(), [items]);
-
-  const { activeItemsFiltered, soldItemsFiltered } = useMemo(() => {
-    let active = []
-    let sold = []
-
-    for (const item of items) {
-      // Base Split
-      const isSold = item.status === 'sold' || item.status === 'delivered';
-      
-      // 1. Text Search
-      let matchesSearch = true;
-      if (searchTerm) {
-        const q = searchTerm.toLowerCase()
-        matchesSearch = !!(item.barcode?.toLowerCase().includes(q) || item.sku_reference?.toLowerCase().includes(q) || item.item_category?.toLowerCase().includes(q));
-      }
-      if (!matchesSearch) continue;
-
-      // 2. Dropdown Filters
-      if (filterCategory !== 'all' && item.item_category !== filterCategory) continue;
-      if (filterPurity !== 'all' && item.purity_karat !== filterPurity) continue;
-      if (filterStatus !== 'all') {
-        if (filterStatus === 'repairs' && item._type !== 'repair') continue;
-        if (filterStatus === 'exchanged' && !item.is_exchanged) continue;
-        if (filterStatus !== 'repairs' && filterStatus !== 'exchanged' && item.status !== filterStatus) continue;
-      }
-
-      // 3. Price Filter
-      const itemMrp = item.mrp || 0;
-      if (itemMrp < priceRange[0] || itemMrp > priceRange[1]) continue;
-
-      if (isSold) {
-        sold.push(item);
-      } else {
-        active.push(item);
-      }
-    }
-
-    return { activeItemsFiltered: active, soldItemsFiltered: sold }
-  }, [items, searchTerm, filterCategory, filterPurity, filterStatus, priceRange]);
-
-  const activeFilterCount = [filterCategory, filterPurity, filterStatus].filter(f => f !== 'all').length + (priceRange[0] > 0 || priceRange[1] < maxCatalogPrice ? 1 : 0);
-
-  const clearFilters = () => {
-    setFilterCategory("all");
-    setFilterPurity("all");
-    setFilterStatus("all");
-    setPriceRange([0, maxCatalogPrice]);
-    setSearchTerm("");
-  }
-
-
   const handleSingleTransfer = (item: InventoryItem) => router.push(`/transfer/new?ids=${item.id}&from=${item.warehouse_id}`)
+  
   const handleBulkTransfer = () => {
     if (selectedIds.length === 0) return
-    const selectedItems = items.filter(i => selectedIds.includes(i.id))
-    const whIds = new Set(selectedItems.map(i => i.warehouse_id))
-    if (whIds.size > 1) return toast.error("Items must be from the same warehouse.")
+    const whIds = new Set(items.filter(i => selectedIds.includes(i.id)).map(i => i.warehouse_id))
+    if (whIds.size > 1) return toast.error("Items must be from same warehouse.")
     router.push(`/transfer/new?ids=${selectedIds.join(',')}&from=${Array.from(whIds)[0]}`)
   }
-
-  const TableSkeleton = () => (
-    <div className="space-y-2 p-4">
-      {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="flex items-center gap-4 h-12 border-b border-slate-100 last:border-0">
-          <Skeleton className="h-4 w-4 rounded" />
-          <Skeleton className="h-4 w-24 rounded" />
-          <Skeleton className="h-4 w-40 rounded" />
-          <Skeleton className="h-4 w-16 rounded" />
-          <Skeleton className="h-4 w-24 rounded" />
-          <div className="flex-1" />
-          <Skeleton className="h-8 w-20 rounded-md" />
-        </div>
-      ))}
-    </div>
-  )
 
   if (!appUser) return null
 
   return (
     <div className="flex flex-col min-h-screen bg-[#fafafa] font-sans selection:bg-indigo-100 pb-20">
       
+      <style dangerouslySetInnerHTML={{__html: `
+        @keyframes geminiGlow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        .gemini-bg { background: linear-gradient(90deg, #4285F4, #9b72cb, #d96570, #4285F4); background-size: 300% 100%; animation: geminiGlow 6s linear infinite; }
+      `}} />
+
       {/* HEADER */}
       <header className="h-14 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center sticky top-0 z-40 shadow-sm box-border">
         <div className="w-full max-w-7xl mx-auto flex justify-between items-center gap-4">
@@ -429,27 +843,9 @@ export default function InventoryPage() {
               <Package className="w-3.5 h-3.5" />
             </div>
             <h1 className="text-sm font-semibold text-slate-900 tracking-tight leading-none hidden sm:block">Vault Inventory</h1>
-            
-            <span className="hidden md:inline-flex items-center px-1.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-50 text-slate-500 border border-slate-200 uppercase tracking-wider leading-none ml-2">
-              <div className="h-1.5 w-1.5 rounded-full bg-emerald-500 mr-1.5 animate-pulse" />
-              Live Sync
-            </span>
           </div>
-          
           <div className="flex items-center gap-2">
-            <Button asChild variant="ghost" size="sm" className="h-8 px-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-none border border-transparent hover:border-indigo-200 hidden sm:flex">
-              <Link href="/inventory/import-manual"><Upload className="h-3.5 w-3.5 mr-1.5" /><span className="hidden sm:inline">Add Stock Manual</span></Link>
-            </Button>
-
-            <Button asChild variant="ghost" size="sm" className="h-8 px-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-none border border-transparent hover:border-indigo-200 hidden sm:flex">
-              <Link href="/inventory/import"><Upload className="h-3.5 w-3.5 mr-1.5" /><span className="hidden sm:inline">Add Stock</span></Link>
-            </Button>
-
-            <Button asChild variant="ghost" size="sm" className="h-8 px-3 text-xs font-semibold text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50 rounded-md transition-none border border-transparent hover:border-indigo-200 hidden sm:flex">
-              <Link href="/inventory/import-detailed"><Upload className="h-3.5 w-3.5 mr-1.5" /><span className="hidden sm:inline">Add Stock detailed</span></Link>
-            </Button>
-            <div className="h-4 w-px bg-slate-200 mx-1 hidden sm:block" />
-            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-none" onClick={fetchItems}>
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900 hover:bg-slate-100" onClick={fetchItems}>
               <RefreshCw className={`h-3.5 w-3.5 sm:mr-1.5 ${loading ? 'animate-spin text-indigo-500' : ''}`} />
               <span className="hidden sm:inline">Refresh</span>
             </Button>
@@ -459,182 +855,260 @@ export default function InventoryPage() {
 
       <main className="p-4 md:p-6 max-w-7xl w-full mx-auto space-y-6 animate-in fade-in duration-300">
         
-        {/* NEW FILTER BAR */}
-        <div className="bg-white p-3 rounded-xl border border-gray-200 shadow-sm flex flex-col gap-3 transition-all">
-          <div className="flex flex-col sm:flex-row justify-between items-center gap-3">
+        {/* GEMINI SEARCH & SMART FILTERS */}
+        <div className="flex flex-col gap-4 w-full">
+          
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 w-full">
             
-            <div className="relative w-full sm:max-w-md flex items-center gap-2">
-              <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            {/* Clean AI Search Bar */}
+            <div className="relative w-full max-w-2xl group">
+              <div className="absolute -inset-[2px] rounded-full bg-gradient-to-r from-[#4285F4] via-[#9b72cb] to-[#d96570] blur-md opacity-0 group-focus-within:opacity-20 transition-opacity duration-500"></div>
+              
+              <div className="relative flex items-center bg-white rounded-full ring-1 ring-slate-200 shadow-sm p-1.5 z-10 transition-all focus-within:ring-0 focus-within:border-transparent">
+                <div className="pl-3 pr-2 text-indigo-500">
+                  <Sparkles className="w-5 h-5" />
+                </div>
                 <Input 
-                  placeholder="Search Barcode or SKU..." 
-                  className="pl-9 h-10 bg-gray-50 border-gray-200 focus-visible:bg-white focus-visible:ring-indigo-500 transition-all font-medium text-sm"
+                  placeholder="Ask Vault... (e.g. 'show me rings from 5000 to 30000 in Andheri')" 
+                  className="flex-1 h-10 border-0 outline-none ring-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0 bg-transparent text-[15px] font-medium placeholder:text-slate-400"
                   value={searchTerm}
                   onChange={e => setSearchTerm(e.target.value)}
+                  onKeyDown={handleSearchKeyDown}
                 />
+                <div className="pr-2 flex items-center gap-2">
+                  {searchTerm && (
+                    <div 
+                      className="p-1.5 text-slate-400 hover:text-rose-500 bg-slate-50 hover:bg-rose-50 rounded-full cursor-pointer transition-colors"
+                      onClick={() => {
+                        setSearchTerm('');
+                        clearAllFilters();
+                      }}
+                      title="Clear Search"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </div>
+                  )}
+
+                  <Mic className="w-4 h-4 cursor-pointer text-slate-400 hover:text-indigo-500 transition-colors mx-1" />
+                  
+                  <Button size="sm" variant="ghost" className="h-8 rounded-full text-indigo-600 bg-indigo-50 font-bold px-3 hidden sm:block hover:bg-indigo-100" onClick={executeSmartSearch}>
+                    Search
+                  </Button>
+                </div>
               </div>
-              <Button 
-                variant={showFilters ? "default" : "outline"} 
-                className={`h-10 px-4 transition-all ${showFilters ? "bg-gray-900 hover:bg-gray-800 text-white" : "text-gray-600 bg-white"}`}
-                onClick={() => setShowFilters(!showFilters)}
-              >
-                <Filter className="w-4 h-4 mr-2" /> 
-                Filters 
-                {activeFilterCount > 0 && (
-                  <span className="ml-2 bg-gray-100 text-gray-900 text-[10px] font-black px-1.5 py-0.5 rounded-full">
-                    {activeFilterCount}
-                  </span>
-                )}
-              </Button>
             </div>
 
-            <div className="flex flex-col items-end w-full sm:w-auto px-2">
-              <span className="text-[10px] font-black uppercase text-gray-400 tracking-widest mb-1">Active Vault Context</span>
+            {/* Vault Context Selector */}
+            <div className="flex flex-col items-end w-full md:w-auto shrink-0 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm">
               <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
-                <SelectTrigger className="h-8 border-none bg-slate-100 shadow-none text-xs font-bold text-slate-700 w-full sm:w-[200px] focus:ring-0">
-                  <Store className="w-3.5 h-3.5 mr-2 text-indigo-500" />
+                <SelectTrigger className="h-10 border-none bg-slate-50 hover:bg-slate-100 transition-colors rounded-xl shadow-none text-xs font-bold text-slate-700 w-full md:w-[220px] focus:ring-0">
+                  <Store className="w-4 h-4 mr-2 text-indigo-500" />
                   <SelectValue placeholder="Select Location..." />
                 </SelectTrigger>
-                <SelectContent className="rounded-md border-slate-200 shadow-lg">
-                  {isHQ && <SelectItem value="ALL" className="text-xs font-bold text-indigo-600">All Branches (HQ)</SelectItem>}
+                <SelectContent className="rounded-xl border-slate-200 shadow-xl">
+                  {isHQ && <SelectItem value="ALL" className="text-xs font-bold text-indigo-600">All Branches (Global)</SelectItem>}
                   {warehouses.map(w => <SelectItem key={w.id} value={w.id} className="text-xs font-medium">{w.name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
           </div>
 
-          {/* COLLAPSIBLE ADVANCED FILTERS */}
-          {showFilters && (
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 pt-3 border-t border-gray-100 animate-in slide-in-from-top-2">
-              
-              <div className="space-y-1.5">
-                <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1"><Package className="w-3 h-3"/> Category</Label>
-                <Select value={filterCategory} onValueChange={setFilterCategory}>
-                  <SelectTrigger className="h-9 text-xs bg-gray-50 border-gray-200"><SelectValue placeholder="All Categories" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Categories</SelectItem>
-                    {uniqueCategories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
+          <div className="flex flex-wrap items-center gap-2 relative z-20">
+            <div className="text-xs font-bold uppercase tracking-widest text-slate-400 mr-2 flex items-center gap-1.5">
+              <Filter className="w-3.5 h-3.5" /> Filter By:
+            </div>
 
-              <div className="space-y-1.5">
-                <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1"><Badge className="w-3 h-3 p-0 bg-transparent text-gray-400 shadow-none hover:bg-transparent">K</Badge> Purity</Label>
-                <Select value={filterPurity} onValueChange={setFilterPurity}>
-                  <SelectTrigger className="h-9 text-xs bg-gray-50 border-gray-200"><SelectValue placeholder="All Purities" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Purities</SelectItem>
-                    {uniquePurities.map(p => <SelectItem key={p} value={p}>{p}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1"><Layers className="w-3 h-3"/> Lifecycle Status</Label>
-                <Select value={filterStatus} onValueChange={setFilterStatus}>
-                  <SelectTrigger className="h-9 text-xs bg-gray-50 border-gray-200"><SelectValue placeholder="All Items" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all" className="text-xs font-bold text-indigo-600">All Items</SelectItem>
-                    <SelectItem value="in_stock" className="text-xs font-medium">Available (In Stock)</SelectItem>
-                    <SelectItem value="transit" className="text-xs font-medium">In Transit</SelectItem>
-                    <SelectItem value="repairs" className="text-xs font-medium text-amber-600">Repairs Only</SelectItem>
-                    <SelectItem value="exchanged" className="text-xs font-medium text-rose-600">Buybacks Only</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* DUAL RANGE SLIDER & INPUTS */}
-              <div className="space-y-3 col-span-2 bg-gray-50/50 p-3 rounded-lg border border-gray-100">
-                <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1">
-                  <IndianRupee className="w-3 h-3"/> Price Range
-                </Label>
-                <div className="flex items-center gap-2">
-                  <div className="relative flex-1">
-                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
-                    <Input 
-                      type="number" 
-                      className="h-8 pl-6 text-xs font-mono font-bold bg-white border-gray-200 shadow-sm" 
-                      value={priceRange[0]} 
-                      onChange={e => setPriceRange([Number(e.target.value), priceRange[1]])} 
-                    />
+            <div className="relative">
+              <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'cat' ? null : 'cat')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", filterCategory.length > 0 || openDropdown === 'cat' ? "bg-indigo-50 text-indigo-700 border-indigo-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
+                Category {filterCategory.length > 0 && <span className="ml-1.5 bg-indigo-600 text-white rounded-full px-1.5 py-0.5 text-[9px]">{filterCategory.length}</span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
+              </Button>
+              {openDropdown === 'cat' && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)}></div>
+                  <div className="absolute top-full left-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 p-2 max-h-64 overflow-y-auto animate-in fade-in slide-in-from-top-2">
+                    {uniqueCategories.length === 0 ? <p className="text-xs text-slate-400 p-2 text-center">No categories found</p> : uniqueCategories.map(c => (
+                      <label key={c} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors">
+                        <Checkbox checked={filterCategory.includes(c)} onCheckedChange={() => toggleArrayItem(filterCategory, setFilterCategory, c)} className="rounded border-slate-300 data-[state=checked]:bg-indigo-600" />
+                        <span className="text-xs font-medium text-slate-700">{c}</span>
+                      </label>
+                    ))}
                   </div>
-                  <span className="text-gray-400 text-xs font-bold">-</span>
-                  <div className="relative flex-1">
-                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">₹</span>
-                    <Input 
-                      type="number" 
-                      className="h-8 pl-6 text-xs font-mono font-bold bg-white border-gray-200 shadow-sm" 
-                      value={priceRange[1]} 
-                      onChange={e => setPriceRange([priceRange[0], Number(e.target.value)])} 
-                    />
-                  </div>
-                </div>
-                <div className="px-2 pt-1 pb-1">
-                  <Slider 
-                    min={0} 
-                    max={maxCatalogPrice} 
-                    step={1000} 
-                    value={priceRange} 
-                    onValueChange={setPriceRange} 
-                    className="mt-1.5"
-                  />
-                </div>
-              </div>
-
-              {/* CLEAR BUTTON */}
-              {(activeFilterCount > 0 || searchTerm) && (
-                <div className="flex items-center justify-end h-full">
-                  <Button variant="ghost" size="sm" onClick={clearFilters} className="h-9 text-xs font-bold text-red-500 hover:bg-red-50 hover:text-red-600 w-full sm:w-auto">
-                    <X className="w-3.5 h-3.5 mr-1" /> Clear All
-                  </Button>
-                </div>
+                </>
               )}
             </div>
-          )}
+
+            <div className="relative">
+              <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'pur' ? null : 'pur')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", filterPurity.length > 0 || openDropdown === 'pur' ? "bg-amber-50 text-amber-700 border-amber-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
+                Purity {filterPurity.length > 0 && <span className="ml-1.5 bg-amber-500 text-white rounded-full px-1.5 py-0.5 text-[9px]">{filterPurity.length}</span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
+              </Button>
+              {openDropdown === 'pur' && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)}></div>
+                  <div className="absolute top-full left-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 p-2 max-h-64 overflow-y-auto animate-in fade-in slide-in-from-top-2">
+                    {uniquePurities.map(p => (
+                      <label key={p} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors">
+                        <Checkbox checked={filterPurity.includes(p)} onCheckedChange={() => toggleArrayItem(filterPurity, setFilterPurity, p)} className="rounded border-slate-300 data-[state=checked]:bg-amber-500" />
+                        <span className="text-xs font-medium text-slate-700">{p}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="relative">
+              <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'stat' ? null : 'stat')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", filterStatus.length > 0 || openDropdown === 'stat' ? "bg-rose-50 text-rose-700 border-rose-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
+                Lifecycle {filterStatus.length > 0 && <span className="ml-1.5 bg-rose-500 text-white rounded-full px-1.5 py-0.5 text-[9px]">{filterStatus.length}</span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
+              </Button>
+              {openDropdown === 'stat' && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)}></div>
+                  <div className="absolute top-full left-0 mt-2 w-56 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 p-2 animate-in fade-in slide-in-from-top-2">
+                    {[
+                      { id: 'in_stock', label: 'Available (In Stock)' },
+                      { id: 'transit', label: 'In Transit' },
+                      { id: 'repairs', label: 'Repairs Only' },
+                      { id: 'exchanged', label: 'Buybacks Only' },
+                      { id: 'sold', label: 'Sold / Delivered' }
+                    ].map(s => (
+                      <label key={s.id} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors">
+                        <Checkbox checked={filterStatus.includes(s.id)} onCheckedChange={() => toggleArrayItem(filterStatus, setFilterStatus, s.id)} className="rounded border-slate-300 data-[state=checked]:bg-rose-500" />
+                        <span className="text-xs font-medium text-slate-700">{s.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="relative">
+              <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'price' ? null : 'price')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", isPriceFilterActive || openDropdown === 'price' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
+                Price Range {isPriceFilterActive && <span className="ml-1.5 w-2 h-2 rounded-full bg-emerald-500 block"></span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
+              </Button>
+              {openDropdown === 'price' && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)}></div>
+                  <div className="absolute top-full left-0 mt-2 w-[320px] bg-white rounded-xl shadow-2xl border border-slate-100 z-50 p-5 animate-in fade-in slide-in-from-top-2">
+                    <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1 mb-4">
+                      <IndianRupee className="w-3 h-3"/> Drag to set range
+                    </Label>
+                    <div className="flex items-center gap-3 mb-5">
+                      <div className="relative flex-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
+                        <Input type="number" className="h-9 pl-6 text-xs font-mono font-bold bg-slate-50 border-slate-200 rounded-lg" value={priceRange[0]} onChange={e => { setPriceRange([Number(e.target.value), priceRange[1]]); setIsPriceFilterActive(true); }} />
+                      </div>
+                      <span className="text-slate-300 font-black">-</span>
+                      <div className="relative flex-1">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-xs font-bold">₹</span>
+                        <Input type="number" className="h-9 pl-6 text-xs font-mono font-bold bg-slate-50 border-slate-200 rounded-lg" value={priceRange[1]} onChange={e => { setPriceRange([priceRange[0], Number(e.target.value)]); setIsPriceFilterActive(true); }} />
+                      </div>
+                    </div>
+                    <Slider min={0} max={maxCatalogPrice} step={1000} value={priceRange} onValueChange={(val) => { setPriceRange(val); setIsPriceFilterActive(true); }} className="mt-2 mb-2" />
+                    <div className="flex justify-end mt-4">
+                      <Button size="sm" variant="ghost" onClick={() => { setIsPriceFilterActive(false); setPriceRange([0, maxCatalogPrice]); setOpenDropdown(null); }} className="h-8 text-[11px] font-bold text-slate-500 hover:text-slate-900">Clear</Button>
+                      <Button size="sm" onClick={() => setOpenDropdown(null)} className="h-8 text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg ml-2">Apply Range</Button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            {(filterCategory.length > 0 || filterPurity.length > 0 || filterStatus.length > 0 || isPriceFilterActive || debouncedSearch) && (
+              <Button variant="ghost" size="sm" onClick={clearAllFilters} className="h-8 rounded-full text-xs font-bold text-slate-400 hover:text-red-600 hover:bg-red-50 ml-auto transition-colors z-10">
+                Clear All
+              </Button>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {filterCategory.map(c => (
+              <Badge key={`cat-${c}`} className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border-indigo-100 rounded-full px-3 py-1 flex items-center gap-1.5 text-[11px] font-semibold transition-all shadow-none">
+                {c} <X className="w-3 h-3 cursor-pointer hover:text-indigo-900" onClick={() => toggleArrayItem(filterCategory, setFilterCategory, c)} />
+              </Badge>
+            ))}
+            {filterPurity.map(p => (
+              <Badge key={`pur-${p}`} className="bg-amber-50 text-amber-700 hover:bg-amber-100 border-amber-100 rounded-full px-3 py-1 flex items-center gap-1.5 text-[11px] font-semibold transition-all shadow-none">
+                {p} <X className="w-3 h-3 cursor-pointer hover:text-amber-900" onClick={() => toggleArrayItem(filterPurity, setFilterPurity, p)} />
+              </Badge>
+            ))}
+            {filterStatus.map(s => (
+              <Badge key={`stat-${s}`} className="bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-100 rounded-full px-3 py-1 flex items-center gap-1.5 text-[11px] font-semibold transition-all shadow-none">
+                {s.replace(/_/g, ' ')} <X className="w-3 h-3 cursor-pointer hover:text-rose-900" onClick={() => toggleArrayItem(filterStatus, setFilterStatus, s)} />
+              </Badge>
+            ))}
+            {isPriceFilterActive && (
+              <Badge className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-100 rounded-full px-3 py-1 flex items-center gap-1.5 text-[11px] font-semibold transition-all shadow-none font-mono">
+                ₹{priceRange[0].toLocaleString()} - ₹{priceRange[1].toLocaleString()} 
+                <X className="w-3 h-3 cursor-pointer hover:text-emerald-900" onClick={() => { setIsPriceFilterActive(false); setPriceRange([0, maxCatalogPrice]); }} />
+              </Badge>
+            )}
+          </div>
+
         </div>
 
         {/* TABS & TABLE CARD */}
-        <Tabs defaultValue="active" className="space-y-4">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
           <TabsList className="bg-transparent border-b border-slate-200 rounded-none h-11 w-full justify-start p-0 gap-6 mb-2">
             <TabsTrigger value="active" className="rounded-none border-b-2 border-transparent data-[state=active]:border-indigo-600 data-[state=active]:text-indigo-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-500 transition-all hover:text-slate-800">
-              Live Stock <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-[9px] text-slate-600">{activeItemsFiltered.length}</span>
+              Live Stock <span className="ml-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-600">{Math.max(globalTotalCount, activeItemsFiltered.length)}</span>
             </TabsTrigger>
             <TabsTrigger value="sold" className="rounded-none border-b-2 border-transparent data-[state=active]:border-slate-800 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600 data-[state=active]:text-slate-800 transition-all">
-              Archive / Sold <span className="ml-1.5 px-1.5 py-0.5 rounded-full bg-slate-100 text-[9px] text-slate-600">{soldItemsFiltered.length}</span>
+              Archive / Sold <span className="ml-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-600">{Math.max(globalSoldCount, soldItemsFiltered.length)}</span>
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="active">
-             <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                {loading ? <TableSkeleton /> : <InventoryTable data={activeItemsFiltered} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />}
+             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative">
+                {loading && <GeminiLoader />}
+                <InventoryTable data={activeItemsFiltered} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />
              </div>
           </TabsContent>
 
           <TabsContent value="sold">
-             <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                {loading ? <TableSkeleton /> : <InventoryTable data={soldItemsFiltered} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />}
+             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative">
+                {loading && <GeminiLoader />}
+                <InventoryTable data={soldItemsFiltered} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />
              </div>
           </TabsContent>
         </Tabs>
 
         {/* FLOATING BULK BAR */}
         {selectedIds.length > 0 && (
-          <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white p-1.5 rounded-2xl shadow-2xl flex items-center gap-2 border border-slate-700/50 animate-in slide-in-from-bottom-8">
-            <div className="flex items-center gap-2 pl-2 pr-3 border-r border-slate-700">
+          <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white p-1.5 rounded-[1.25rem] shadow-2xl flex items-center gap-2 border border-slate-700/50 animate-in slide-in-from-bottom-8">
+            <div className="flex items-center gap-2 pl-3 pr-4 border-r border-slate-700">
               <div className="h-7 w-7 bg-indigo-500 rounded-lg flex items-center justify-center text-[11px] font-bold shadow-inner">
                 {selectedIds.length}
               </div>
               <span className="text-xs font-medium text-slate-300 whitespace-nowrap">Selected</span>
             </div>
-            <div className="flex items-center gap-1">
-              
+            
+            <div className="flex items-center gap-1 pr-1">
+              {globalTotalCount > activeItemsFiltered.length && selectedIds.length === activeItemsFiltered.length ? (
+                <Button 
+                  size="sm" 
+                  onClick={handleSelectAllGlobal} 
+                  disabled={isFetchingGlobal}
+                  className="h-8 px-3 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-sm transition-none"
+                >
+                  {isFetchingGlobal ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Database className="w-3.5 h-3.5 mr-1.5" />}
+                  Select all {globalTotalCount} items in Database
+                </Button>
+              ) : (
+                <Button 
+                  size="sm" 
+                  onClick={() => setSelectedIds(activeItemsFiltered.map(i => i.id))} 
+                  className="h-8 px-3 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-white rounded-xl shadow-sm transition-none hidden sm:flex"
+                >
+                  <CheckSquare className="w-3.5 h-3.5 mr-1.5 text-indigo-400" /> Select Loaded ({activeItemsFiltered.length})
+                </Button>
+              )}
+
               {canEdit && (
                 <>
                   <Button size="sm" onClick={handleOpenCalc} className="h-8 px-4 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-sm transition-none whitespace-nowrap border border-emerald-400/50">
                     <Calculator className="w-3.5 h-3.5 mr-1.5" /> Calc MRP
                   </Button>
                   
-                  {/* NEW BULK PRINT BUTTON */}
                   <Button size="sm" onClick={handleBulkPrint} className="h-8 px-4 text-xs font-semibold bg-blue-500 hover:bg-blue-600 text-white rounded-xl shadow-sm transition-none whitespace-nowrap border border-blue-400/50">
                     <Printer className="w-3.5 h-3.5 mr-1.5" /> Print Tags
                   </Button>
@@ -657,18 +1131,14 @@ export default function InventoryPage() {
       <div className="hidden">
         <div ref={printRef} className="print:p-0 flex flex-col">
            {itemsToPrint.map((invItem) => (
-             <ItemTagPreview 
-               key={invItem.id} 
-               item={invItem} 
-               isPrintOnly={true} 
-             />
+             <ItemTagPreview key={invItem.id} item={invItem} isPrintOnly={true} />
            ))}
         </div>
       </div>
 
       {/* BULK MRP CALCULATOR MODAL */}
       <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
-        <DialogContent className="sm:max-w-[500px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden">
+        <DialogContent className="sm:max-w-[500px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden bg-white">
           <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5">
             <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Calculator className="w-5 h-5 text-indigo-600" />
@@ -801,17 +1271,32 @@ export default function InventoryPage() {
               
               <div className="p-6 overflow-y-auto max-h-[70vh] custom-scrollbar space-y-6">
                 
-                <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 shadow-sm">
-                  <h3 className="text-[10px] font-bold text-indigo-800 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                {/* Manufacturing / Karigar Details Header */}
+                {(viewItem.karigars || viewItem.created_from_job_bag?.karigars) && (
+                  <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 shadow-sm flex justify-between items-center">
+                    <div>
+                      <p className="text-[10px] font-bold text-indigo-800 uppercase tracking-widest flex items-center gap-1.5 mb-1">
+                        <UserCircle className="w-3.5 h-3.5" /> Maker / Karigar
+                      </p>
+                      <p className="text-xs font-semibold text-slate-900">
+                        {(viewItem.karigars || viewItem.created_from_job_bag?.karigars)?.full_name} 
+                        <span className="text-slate-500">({(viewItem.karigars || viewItem.created_from_job_bag?.karigars)?.karigar_code})</span>
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 shadow-sm">
+                  <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3 flex items-center gap-1.5">
                     <Clock className="w-3.5 h-3.5" /> Vault Status & Timeline
                   </h3>
                   <div className="flex gap-8">
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase font-semibold mb-0.5">Manufactured / Added On</p>
+                      <p className="text-[10px] text-slate-400 uppercase font-semibold mb-0.5">Manufactured / Added On</p>
                       <p className="text-xs font-mono font-medium text-slate-900">{formatDateTime(viewItem.created_at)}</p>
                     </div>
                     <div>
-                      <p className="text-[10px] text-slate-500 uppercase font-semibold mb-0.5">Last Moved / Received</p>
+                      <p className="text-[10px] text-slate-400 uppercase font-semibold mb-0.5">Last Moved / Received</p>
                       <div className="flex items-center gap-1.5">
                         <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
                         <p className="text-xs font-mono font-bold text-emerald-700">{formatDateTime(viewItem.last_status_change_at || viewItem.updated_at)}</p>
@@ -822,36 +1307,20 @@ export default function InventoryPage() {
 
                 <div className="flex flex-col md:flex-row gap-6">
                   
-                  {/* INTERACTIVE IMAGE UPLOAD OVERLAY (RBAC Applied) */}
+                  {/* INTERACTIVE IMAGE UPLOAD OVERLAY */}
                   <div className="relative w-full md:w-48 h-48 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-center shrink-0 overflow-hidden shadow-sm group">
-                    {isUploadingImage && (
+                    {isUploadingImage ? (
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/80 z-10">
                         <Loader2 className="w-6 h-6 animate-spin text-indigo-600 mb-2" />
                         <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-600">Uploading...</span>
                       </div>
-                    )}
-                    
-                    {viewItem.image_url ? (
+                    ) : viewItem.image_url ? (
                       <img src={viewItem.image_url} alt="Item" className="w-full h-full object-cover" />
                     ) : (
                       <div className="text-center text-slate-400">
                         <ImageIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
                         <span className="text-[10px] font-bold uppercase tracking-widest">No Image</span>
                       </div>
-                    )}
-
-                    {canEdit && (
-                      <label className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center cursor-pointer transition-opacity text-white z-20">
-                        <Upload className="w-6 h-6 mb-1" />
-                        <span className="text-[10px] font-bold uppercase tracking-widest">Change Image</span>
-                        <input 
-                          type="file" 
-                          accept="image/*" 
-                          className="hidden" 
-                          onChange={(e) => handleImageUpload(e, viewItem.id, viewItem._type)} 
-                          disabled={isUploadingImage}
-                        />
-                      </label>
                     )}
                   </div>
 
@@ -867,22 +1336,22 @@ export default function InventoryPage() {
                         <Gem className="w-3 h-3 text-blue-500"/> Stone Details
                       </Label>
                       <div>
-                         <p className="text-lg font-black text-slate-900 leading-none">{viewItem.total_stone_weight_cts?.toFixed(2)} <span className="text-xs text-slate-500 font-medium">cts</span></p>
-                         <p className="text-xs font-semibold text-slate-500 mt-1">{viewItem.total_stone_pieces} Total Pieces</p>
+                         <p className="text-lg font-black text-slate-900 leading-none">{getStoneTotals(viewItem).aggWt.toFixed(2)} <span className="text-xs text-slate-500 font-medium">cts</span></p>
+                         <p className="text-xs font-semibold text-slate-500 mt-1">{getStoneTotals(viewItem).aggPcs} Total Pieces</p>
                       </div>
                       
-                      {(viewItem.solitaire_weight_cts > 0 || viewItem.melee_weight_cts > 0) && (
+                      {(getStoneTotals(viewItem).solWt > 0 || getStoneTotals(viewItem).meleeWt > 0) && (
                         <div className="pt-3 border-t border-slate-100 flex justify-between">
-                           {viewItem.solitaire_weight_cts > 0 && (
+                           {getStoneTotals(viewItem).solWt > 0 && (
                              <div>
                                <p className="text-[9px] uppercase tracking-widest font-bold text-slate-400">Solitaire</p>
-                               <p className="text-xs font-bold text-slate-700">{viewItem.solitaire_weight_cts}ct <span className="text-[10px] font-normal">({viewItem.solitaire_pieces}p)</span></p>
+                               <p className="text-xs font-bold text-slate-700">{getStoneTotals(viewItem).solWt.toFixed(2)}ct <span className="text-[10px] font-normal">({getStoneTotals(viewItem).solPcs}p)</span></p>
                              </div>
                            )}
-                           {viewItem.melee_weight_cts > 0 && (
+                           {getStoneTotals(viewItem).meleeWt > 0 && (
                              <div className="text-right">
                                <p className="text-[9px] uppercase tracking-widest font-bold text-slate-400">Melee / Side</p>
-                               <p className="text-xs font-bold text-slate-700">{viewItem.melee_weight_cts}ct <span className="text-[10px] font-normal">({viewItem.melee_pieces}p)</span></p>
+                               <p className="text-xs font-bold text-slate-700">{getStoneTotals(viewItem).meleeWt.toFixed(2)}ct <span className="text-[10px] font-normal">({getStoneTotals(viewItem).meleePcs}p)</span></p>
                              </div>
                            )}
                         </div>
@@ -984,6 +1453,7 @@ export default function InventoryPage() {
         </DialogContent>
       </Dialog>
 
+      {/* ✨ ADD THIS MISSING LINE RIGHT HERE ✨ */}
       <ItemTagPreview item={tagItem} onClose={() => setTagItem(null)} />
 
     </div>
@@ -992,11 +1462,27 @@ export default function InventoryPage() {
 
 // --- HYBRID RENDER TABLE ---
 function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, setTagItem, handleSingleTransfer, setViewItem, canEdit }: any) {
+  const [visibleCount, setVisibleCount] = useState(50)
   
-  // Helper to grab warehouse name
-  const getWarehouseName = (wId: string) => {
-    return warehouses.find((w: any) => w.id === wId)?.name || 'Unknown Vault'
-  }
+  const observer = useRef<IntersectionObserver | null>(null)
+  const observerRef = useCallback((node: HTMLDivElement | null) => {
+    if (observer.current) observer.current.disconnect()
+    if (node) {
+      observer.current = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) {
+          setVisibleCount((prev) => prev + 50)
+        }
+      }, { threshold: 0.1 })
+      observer.current.observe(node)
+    }
+  }, [])
+
+  useEffect(() => {
+    setVisibleCount(50)
+  }, [data])
+
+  const getWarehouseName = (wId: string) => warehouses.find((w: any) => w.id === wId)?.name || 'Unknown Vault'
+  const visibleData = data.slice(0, visibleCount)
 
   return (
     <div className="h-full flex flex-col">
@@ -1024,233 +1510,254 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
             </TableRow>
           </TableHeader>
           <TableBody>
-            {data.map((item: any) => (
-              <TableRow key={item.id} className={cn("transition-colors border-b border-slate-100 last:border-0 hover:bg-slate-50/80", selectedIds.includes(item.id) && "bg-indigo-50/30")}>
-                {!isSoldTab && (
-                  <TableCell className="px-4 py-3">
-                    <Checkbox 
-                      checked={selectedIds.includes(item.id)} 
-                      onCheckedChange={() => setSelectedIds((prev: any) => prev.includes(item.id) ? prev.filter((i: any) => i !== item.id) : [...prev, item.id])} 
-                      disabled={item.status === 'sold'} 
-                      className="rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 disabled:opacity-30"
-                    />
+            {visibleData.map((item: any) => {
+              const { aggWt, stnWt, aggPcs } = getStoneTotals(item);
+              const karigar = item.karigars || item.created_from_job_bag?.karigars;
+              
+              return (
+                <TableRow key={item.id} className={cn("transition-colors border-b border-slate-100 last:border-0 hover:bg-slate-50/80", selectedIds.includes(item.id) && "bg-indigo-50/30")}>
+                  {!isSoldTab && (
+                    <TableCell className="px-4 py-3">
+                      <Checkbox 
+                        checked={selectedIds.includes(item.id)} 
+                        onCheckedChange={() => setSelectedIds((prev: any) => prev.includes(item.id) ? prev.filter((i: any) => i !== item.id) : [...prev, item.id])} 
+                        disabled={item.status === 'sold'} 
+                        className="rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 disabled:opacity-30"
+                      />
+                    </TableCell>
+                  )}
+                  <TableCell className="py-3">
+                    <div className="flex flex-col items-start">
+                       <div className="flex items-center gap-1.5 mb-1">
+                          <Package className="w-3 h-3 text-indigo-500" />
+                          <span className="font-mono font-bold text-sm text-indigo-900 tracking-tight leading-tight">{item.barcode}</span>
+                       </div>
+                       <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">SKU:</span>
+                          <span className="text-xs text-slate-700 font-semibold">{item.sku_reference || 'NO SKU'}</span>
+                       </div>
+                       
+                       <div className="flex gap-1 mt-1.5 flex-wrap">
+                         {karigar && <Badge className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4" title={karigar.full_name}>Mkr: {karigar.karigar_code || karigar.full_name}</Badge>}
+                         {item.is_exchanged && <Badge className="bg-rose-100 text-rose-700 border-rose-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Buyback</Badge>}
+                         {item.is_custom_order && <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Custom: {item.custom_orders?.origin?.name || 'Branch'}</Badge>}
+                         {item.is_repair_ticket && <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Repair: {item.origin_name}</Badge>}
+                       </div>
+                    </div>
                   </TableCell>
-                )}
-                <TableCell className="py-3">
-                  <div className="flex flex-col items-start">
-                     <div className="flex items-center gap-1.5 mb-1">
-                        <Package className="w-3 h-3 text-indigo-500" />
-                        <span className="font-mono font-bold text-sm text-indigo-900 tracking-tight leading-tight">{item.barcode}</span>
-                     </div>
-                     <div className="flex items-center gap-1.5">
-                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">SKU:</span>
-                        <span className="text-xs text-slate-700 font-semibold">{item.sku_reference || 'NO SKU'}</span>
-                     </div>
-                     
-                     <div className="flex gap-1 mt-1.5 flex-wrap">
-                       {item.is_exchanged && <Badge className="bg-rose-100 text-rose-700 border-rose-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Buyback</Badge>}
-                       {item.is_custom_order && <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Custom: {item.custom_orders?.origin?.name || 'Branch'}</Badge>}
-                       {item.is_repair_ticket && <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Repair: {item.origin_name}</Badge>}
-                     </div>
-                  </div>
-                </TableCell>
-                <TableCell className="py-3">
-                   <div className="text-xs font-semibold text-slate-900">{item.item_category}</div>
-                   <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</div>
-                </TableCell>
-                <TableCell className="text-right px-4 py-3">
-                   <div className="flex flex-col items-end">
-                      <span className="text-xs font-semibold text-slate-900">
-                        {item.net_weight_g?.toFixed(3)}g 
-                        <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
-                          {item._type === 'repair' ? 'ADDED' : 'NET'}
+                  <TableCell className="py-3">
+                     <div className="text-xs font-semibold text-slate-900">{item.item_category}</div>
+                     <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</div>
+                  </TableCell>
+                  <TableCell className="text-right px-4 py-3">
+                     <div className="flex flex-col items-end">
+                        <span className="text-xs font-semibold text-slate-900">
+                          {item.net_weight_g?.toFixed(3)}g 
+                          <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
+                            {item._type === 'repair' ? 'ADDED' : 'NET'}
+                          </span>
                         </span>
-                      </span>
-                      <span className="text-[10px] text-blue-600 font-semibold uppercase mt-0.5">
-                        {item.total_stone_weight_cts?.toFixed(2)}ct 
-                        <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
-                          {item._type === 'repair' ? 'ADDED' : 'STN'}
+                        <span className="text-[10px] text-blue-600 font-semibold uppercase mt-0.5">
+                          {aggWt.toFixed(2)}ct 
+                          <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
+                            {item._type === 'repair' ? 'ADDED' : 'STN'}
+                          </span>
                         </span>
-                      </span>
-                   </div>
-                </TableCell>
-                
-                <TableCell className="py-3">
-                   <div className="flex flex-col gap-1">
-                      <div className="flex items-center gap-1.5" title="Last Updated / Received in Vault">
-                         <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
-                         <span className="text-[10px] font-mono font-bold text-emerald-700">{formatDateShort(item.last_status_change_at || item.updated_at)}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 opacity-60" title="Manufactured Date">
-                         <CalendarDays className="w-3 h-3 text-slate-400" />
-                         <span className="text-[9px] font-mono text-slate-500">{formatDateShort(item.created_at)}</span>
-                      </div>
-                   </div>
-                </TableCell>
+                     </div>
+                  </TableCell>
+                  
+                  <TableCell className="py-3">
+                     <div className="flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5" title="Last Updated / Received in Vault">
+                           <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+                           <span className="text-[10px] font-mono font-bold text-emerald-700">{formatDateShort(item.last_status_change_at || item.updated_at)}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 opacity-60" title="Manufactured Date">
+                           <CalendarDays className="w-3 h-3 text-slate-400" />
+                           <span className="text-[9px] font-mono text-slate-500">{formatDateShort(item.created_at)}</span>
+                        </div>
+                     </div>
+                  </TableCell>
 
-                <TableCell className="text-center py-3">
-                   <span className={cn("inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border", 
-                      item._type === 'repair' ? "bg-amber-50 text-amber-700 border-amber-200" :
-                      item.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-500 border-slate-200")}>
-                     {item.status.replace(/_/g, ' ')}
-                   </span>
-                   {/* NEW: Display Warehouse Name underneath the status */}
-                   <div className="mt-1 flex items-center justify-center gap-1 text-[9px] font-bold uppercase tracking-widest text-slate-400">
-                     <Store className="w-2.5 h-2.5" />
-                     {getWarehouseName(item.warehouse_id)}
-                   </div>
-                </TableCell>
-                
-                {/* ROLE BASED MRP EDITING */}
-                <TableCell className="text-right py-3 pr-4">
-                   {editingMrpId === item.id && canEdit ? (
-                     <div className="flex items-center justify-end gap-1.5">
-                       <Input className="h-8 w-20 text-xs font-semibold rounded-md border-slate-300 focus-visible:ring-indigo-500" value={editingMrpVal} onChange={e => setEditingMrpVal(e.target.value)} autoFocus />
-                       <Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 rounded-md shadow-sm border border-emerald-100 shrink-0" onClick={() => handleSaveMrp(item.id)}>
-                         <Check className="w-4 h-4" />
-                       </Button>
+                  <TableCell className="text-center py-3">
+                     <span className={cn("inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border", 
+                        item._type === 'repair' ? "bg-amber-50 text-amber-700 border-amber-200" :
+                        item.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-500 border-slate-200")}>
+                       {item.status.replace(/_/g, ' ')}
+                     </span>
+                     <div className="mt-1 flex items-center justify-center gap-1 text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                       <Store className="w-2.5 h-2.5" />
+                       {getWarehouseName(item.warehouse_id)}
                      </div>
-                   ) : (
-                     <div className={`group flex items-center justify-end gap-2 ${canEdit ? 'cursor-pointer' : ''}`} onClick={() => { if(canEdit && !isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
-                       <span className="text-xs font-bold text-slate-900">
-                          {item.mrp ? `₹${item.mrp.toLocaleString()}` : 'TBD'}
-                       </span>
-                       {canEdit && !isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 transition-all" />}
-                     </div>
-                   )}
-                </TableCell>
-                
-                <TableCell className="text-right px-6 py-3">
-                   <div className="flex justify-end gap-1.5">
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => setViewItem(item)} title="View Full Details">
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      
-                      {canEdit && (
-                        <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors" onClick={() => setTagItem(item)} title="Print Label">
-                          <Printer className="h-4 w-4" />
+                  </TableCell>
+                  
+                  <TableCell className="text-right py-3 pr-4">
+                     {editingMrpId === item.id && canEdit ? (
+                       <div className="flex items-center justify-end gap-1.5">
+                         <Input className="h-8 w-20 text-xs font-semibold rounded-md border-slate-300 focus-visible:ring-indigo-500" value={editingMrpVal} onChange={e => setEditingMrpVal(e.target.value)} autoFocus />
+                         <Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 rounded-md shadow-sm border border-emerald-100 shrink-0" onClick={() => handleSaveMrp(item.id)}>
+                           <Check className="w-4 h-4" />
+                         </Button>
+                       </div>
+                     ) : (
+                       <div className={`group flex items-center justify-end gap-2 ${canEdit ? 'cursor-pointer' : ''}`} onClick={() => { if(canEdit && !isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
+                         <span className="text-xs font-bold text-slate-900">
+                            {item.mrp ? `₹${item.mrp.toLocaleString()}` : 'TBD'}
+                         </span>
+                         {canEdit && !isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-100 text-slate-400 hover:text-indigo-600 transition-all" />}
+                       </div>
+                     )}
+                  </TableCell>
+                  
+                  <TableCell className="text-right px-6 py-3">
+                     <div className="flex justify-end gap-1.5">
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => setViewItem(item)} title="View Full Details">
+                          <Eye className="h-4 w-4" />
                         </Button>
-                      )}
-                      
-                      {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
-                         <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => handleSingleTransfer(item)} title="Transfer">
-                        <Truck className="h-4 w-4" />
-                      </Button>
-                      )}
-                   </div>
-                </TableCell>
-              </TableRow>
-            ))}
+                        
+                        {canEdit && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors" onClick={() => setTagItem(item)} title="Print Label">
+                            <Printer className="h-4 w-4" />
+                          </Button>
+                        )}
+                        
+                        {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
+                           <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => handleSingleTransfer(item)} title="Transfer">
+                          <Truck className="h-4 w-4" />
+                        </Button>
+                        )}
+                     </div>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
           </TableBody>
         </Table>
       </div>
 
-      {/* MOBILE VIEW (Stacked Action Cards) */}
+      {/* MOBILE VIEW */}
       <div className="md:hidden flex flex-col gap-3 bg-slate-50/50 p-3 flex-1 overflow-y-auto custom-scrollbar">
-        {data.map((item: any) => (
-          <div key={item.id} className={cn("bg-white border rounded-xl p-4 shadow-sm flex flex-col gap-3", selectedIds.includes(item.id) ? "border-indigo-300 ring-1 ring-indigo-100" : "border-slate-200")}>
-            <div className="flex justify-between items-start">
-               <div className="flex items-start gap-3">
-                 {!isSoldTab && (
-                   <Checkbox 
-                     checked={selectedIds.includes(item.id)} 
-                     onCheckedChange={() => setSelectedIds((prev: any) => prev.includes(item.id) ? prev.filter((i: any) => i !== item.id) : [...prev, item.id])} 
-                     disabled={item.status === 'sold'}
-                     className="mt-1 rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 disabled:opacity-30"
-                   />
-                 )}
-                 <div>
-                   <div className="flex items-center gap-1.5 mb-0.5">
-                      <Package className="w-3 h-3 text-indigo-500" />
-                      <span className="font-mono font-bold text-sm text-indigo-900 tracking-tight leading-tight">{item.barcode}</span>
-                   </div>
-                   <div className="flex items-center gap-1 mb-1">
-                      <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">SKU:</span>
-                      <span className="text-[11px] text-slate-700 font-semibold">{item.sku_reference || 'NO SKU'}</span>
-                   </div>
-                   
-                   {/* NEW: Warehouse Location Tag for Mobile */}
-                   <div className="flex items-center gap-2 mt-1">
-                     <div className="flex items-center gap-1 text-[10px] text-slate-500 font-mono">
-                       <Clock className="w-3 h-3" /> {formatDateShort(item.last_status_change_at || item.updated_at)}
+        {visibleData.map((item: any) => {
+           const { aggWt, stnWt } = getStoneTotals(item);
+           const karigar = item.karigars || item.created_from_job_bag?.karigars;
+           
+           return (
+            <div key={item.id} className={cn("bg-white border rounded-xl p-4 shadow-sm flex flex-col gap-3", selectedIds.includes(item.id) ? "border-indigo-300 ring-1 ring-indigo-100" : "border-slate-200")}>
+              <div className="flex justify-between items-start">
+                 <div className="flex items-start gap-3">
+                   {!isSoldTab && (
+                     <Checkbox 
+                       checked={selectedIds.includes(item.id)} 
+                       onCheckedChange={() => setSelectedIds((prev: any) => prev.includes(item.id) ? prev.filter((i: any) => i !== item.id) : [...prev, item.id])} 
+                       disabled={item.status === 'sold'}
+                       className="mt-1 rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 disabled:opacity-30"
+                     />
+                   )}
+                   <div>
+                     <div className="flex items-center gap-1.5 mb-0.5">
+                        <Package className="w-3 h-3 text-indigo-500" />
+                        <span className="font-mono font-bold text-sm text-indigo-900 tracking-tight leading-tight">{item.barcode}</span>
                      </div>
-                     <span className="text-slate-300">|</span>
-                     <div className="flex items-center gap-1 text-[10px] text-slate-500 font-semibold">
-                       <Store className="w-3 h-3" /> {getWarehouseName(item.warehouse_id)}
+                     <div className="flex items-center gap-1 mb-1">
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">SKU:</span>
+                        <span className="text-[11px] text-slate-700 font-semibold">{item.sku_reference || 'NO SKU'}</span>
                      </div>
-                   </div>
+                     
+                     <div className="flex items-center gap-2 mt-1">
+                       <div className="flex items-center gap-1 text-[10px] text-slate-500 font-mono">
+                         <Clock className="w-3 h-3" /> {formatDateShort(item.last_status_change_at || item.updated_at)}
+                       </div>
+                       <span className="text-slate-300">|</span>
+                       <div className="flex items-center gap-1 text-[10px] text-slate-500 font-semibold">
+                         <Store className="w-3 h-3" /> {getWarehouseName(item.warehouse_id)}
+                       </div>
+                     </div>
 
-                   {item.is_custom_order && <span className="block text-[9px] font-bold text-purple-600 uppercase tracking-widest mt-1">Custom: {item.custom_orders?.origin?.name || 'Branch'}</span>}
-                   {item.is_repair_ticket && <span className="block text-[9px] font-bold text-amber-600 uppercase tracking-widest mt-1">Repair: {item.origin_name}</span>}
+                     {karigar && <span className="block text-[9px] font-bold text-indigo-600 uppercase tracking-widest mt-1.5">Maker: {karigar.full_name}</span>}
+                     {item.is_custom_order && <span className="block text-[9px] font-bold text-purple-600 uppercase tracking-widest mt-1">Custom: {item.custom_orders?.origin?.name || 'Branch'}</span>}
+                     {item.is_repair_ticket && <span className="block text-[9px] font-bold text-amber-600 uppercase tracking-widest mt-1">Repair: {item.origin_name}</span>}
+                   </div>
                  </div>
-               </div>
-               <div className="flex gap-2 items-center">
-                 <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-indigo-600 bg-slate-50" onClick={() => setViewItem(item)}>
-                    <Eye className="h-3.5 w-3.5" />
-                 </Button>
-               </div>
-            </div>
-            
-            <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-100 mt-1">
-               <div>
-                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Specs</p>
-                 <p className="text-xs font-semibold text-slate-900">{item.item_category}</p>
-                 <p className="text-[10px] text-slate-500">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</p>
-               </div>
-               <div className="text-right">
-                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">
-                   {item._type === 'repair' ? 'Materials Added' : 'Weights'}
-                 </p>
-                 <p className="text-xs font-semibold text-slate-900">
-                   {item.net_weight_g?.toFixed(3)}g 
-                   <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
-                     {item._type === 'repair' ? 'ADDED' : 'NET'}
-                   </span>
-                 </p>
-                 <p className="text-[10px] text-blue-600 font-semibold">
-                   {item.total_stone_weight_cts?.toFixed(2)}ct 
-                   <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
-                     {item._type === 'repair' ? 'ADDED' : 'STN'}
-                   </span>
-                 </p>
-               </div>
-            </div>
-
-            <div className="flex justify-between items-end pt-1">
-               <div>
-                 <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Retail Price</p>
-                 {editingMrpId === item.id && canEdit ? (
-                   <div className="flex items-center gap-1.5">
-                     <Input className="h-8 w-24 text-xs font-semibold rounded-md border-slate-300 focus-visible:ring-indigo-500" value={editingMrpVal} onChange={e => setEditingMrpVal(e.target.value)} autoFocus />
-                     <Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 rounded-md shadow-sm border border-emerald-100" onClick={() => handleSaveMrp(item.id)}>
-                       <Check className="w-4 h-4" />
-                     </Button>
-                   </div>
-                 ) : (
-                   <div className={`group flex items-center gap-2 w-max ${canEdit ? 'cursor-pointer' : ''}`} onClick={() => { if(canEdit && !isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
-                     <span className="text-sm font-bold text-slate-900">{item.mrp ? `₹${item.mrp.toLocaleString()}` : 'TBD'}</span>
-                     {canEdit && !isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3.5 h-3.5 text-slate-400" />}
-                   </div>
-                 )}
-               </div>
-               <div className="flex gap-1.5">
                  
-                 {canEdit && (
-                   <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 border-slate-200 bg-white" onClick={() => setTagItem(item)}>
-                     <Printer className="h-3.5 w-3.5" />
+                 <div className="flex gap-2 items-center">
+                   <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-indigo-600 bg-slate-50" onClick={() => setViewItem(item)}>
+                      <Eye className="h-3.5 w-3.5" />
                    </Button>
-                 )}
+                 </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-100 mt-1">
+                 <div>
+                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Specs</p>
+                   <p className="text-xs font-semibold text-slate-900">{item.item_category}</p>
+                   <p className="text-[10px] text-slate-500">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</p>
+                 </div>
+                 <div className="text-right">
+                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">
+                     {item._type === 'repair' ? 'Materials Added' : 'Weights'}
+                   </p>
+                   <p className="text-xs font-semibold text-slate-900">
+                     {item.net_weight_g?.toFixed(3)}g 
+                     <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
+                       {item._type === 'repair' ? 'ADDED' : 'NET'}
+                     </span>
+                   </p>
+                   <p className="text-[10px] text-blue-600 font-semibold">
+                     {aggWt.toFixed(2)}ct 
+                     <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
+                       {item._type === 'repair' ? 'ADDED' : 'STN'}
+                     </span>
+                   </p>
+                 </div>
+              </div>
 
-                 {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
-                   <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
-                  <Truck className="h-3.5 w-3.5" />
-                </Button>
-                 )}
-               </div>
+              <div className="flex justify-between items-end pt-1">
+                 <div>
+                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Retail Price</p>
+                   {editingMrpId === item.id && canEdit ? (
+                     <div className="flex items-center gap-1.5">
+                       <Input className="h-8 w-24 text-xs font-semibold rounded-md border-slate-300 focus-visible:ring-indigo-500" value={editingMrpVal} onChange={e => setEditingMrpVal(e.target.value)} autoFocus />
+                       <Button size="icon" variant="ghost" className="h-8 w-8 text-emerald-600 hover:bg-emerald-50 hover:text-emerald-700 rounded-md shadow-sm border border-emerald-100" onClick={() => handleSaveMrp(item.id)}>
+                         <Check className="w-4 h-4" />
+                       </Button>
+                     </div>
+                   ) : (
+                     <div className={`group flex items-center gap-2 w-max ${canEdit ? 'cursor-pointer' : ''}`} onClick={() => { if(canEdit && !isSoldTab && !item.is_repair_ticket) { setEditingId(item.id); setEditingMrpVal(item.mrp?.toString() || '') }}}>
+                       <span className="text-sm font-bold text-slate-900">{item.mrp ? `₹${item.mrp.toLocaleString()}` : 'TBD'}</span>
+                       {canEdit && !isSoldTab && !item.is_repair_ticket && <Edit2 className="w-3.5 h-3.5 text-slate-400" />}
+                     </div>
+                   )}
+                 </div>
+                 <div className="flex gap-1.5">
+                   
+                   {canEdit && (
+                     <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 border-slate-200 bg-white" onClick={() => setTagItem(item)}>
+                       <Printer className="h-3.5 w-3.5" />
+                     </Button>
+                   )}
+
+                   {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
+                     <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
+                    <Truck className="h-3.5 w-3.5" />
+                  </Button>
+                   )}
+                 </div>
+              </div>
             </div>
-          </div>
-        ))}
+           )
+        })}
       </div>
+
+      {/* GEMINI INFINITE SCROLL TARGET */}
+      {visibleCount < data.length && (
+        <div ref={observerRef} className="h-16 w-full flex items-center justify-center my-4 relative">
+          <div className="flex items-center gap-1.5 opacity-60">
+            <Sparkles className="w-4 h-4 text-[#4285F4] animate-pulse" />
+            <Sparkles className="w-5 h-5 text-[#9b72cb] animate-pulse" style={{ animationDelay: '200ms' }} />
+            <Sparkles className="w-4 h-4 text-[#d96570] animate-pulse" style={{ animationDelay: '400ms' }} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }

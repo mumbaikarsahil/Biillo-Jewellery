@@ -75,9 +75,29 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
   if (!item) return null;
 
   const isRepair = item._type === 'repair' || item.is_repair_ticket;
-  const hasSolitaire = Number(item.solitaire_weight_cts) > 0;
   
-  // Format variables specifically for the requested layout
+  // --- SMART STONE FALLBACK LOGIC ---
+  const solWt = Number(item.solitaire_weight_cts || 0);
+  const solPcs = Number(item.solitaire_pieces || 0);
+  const hasSolitaire = solWt > 0;
+
+  const meleeWt = Number(item.melee_weight_cts || 0);
+  const meleePcs = Number(item.melee_pieces || 0);
+  const fallbackWt = Number(item.total_stone_weight_cts || 0);
+  const fallbackPcs = Number(item.total_stone_pieces || 0);
+
+  // STN line prefers Melee. If Melee is empty, it falls back to Total Stones.
+  let stnWt = meleeWt;
+  let stnPcs = meleePcs;
+  if (meleeWt === 0 && meleePcs === 0 && (fallbackWt > 0 || fallbackPcs > 0)) {
+     stnWt = fallbackWt;
+     stnPcs = fallbackPcs;
+  }
+
+  const stnWtStr = stnWt.toFixed(2);
+  const solCtsStr = solWt.toFixed(2);
+  // -----------------------------------
+  
   const categoryStr = item.item_category || 'CATEGORY';
   const skuStr = item.sku_reference || '';
   const headerText = `${categoryStr} ${skuStr}`.trim();
@@ -85,13 +105,6 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
   const ktStr = item.purity_karat || '---';
   const netWtStr = Number(item.net_weight_g || 0).toFixed(3);
   
-  const rdPcs = item.melee_pieces || 0;
-  const rdCts = Number(item.melee_weight_cts || 0).toFixed(2);
-  
-  const solPcs = item.solitaire_pieces || 0;
-  const solCts = Number(item.solitaire_weight_cts || 0).toFixed(2);
-  
-  // Assuming shape is not always needed in QLT line based on photo, just Color/Clarity
   const qltStr = [item.diamond_color, item.diamond_clarity].filter(Boolean).join('/') || '---';
 
   // --- EXTRACTED PURE LABEL COMPONENT ---
@@ -113,11 +126,10 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
       `}</style>
       
       <div className="flex w-[70mm] h-full">
-        {/* LEFT: TEXT DETAILS AREA (41mm) */}
+        {/* LEFT: TEXT DETAILS AREA (43mm) - Expanded slightly to prevent cutting text */}
         <div 
-          className="flex flex-col justify-center h-full w-[41mm] pl-[2mm] pr-[1mm] tracking-tight text-black font-bold" 
+          className="flex flex-col justify-center h-full w-[43mm] pl-[2mm] pr-[1mm] tracking-tight text-black font-bold" 
           style={{ 
-            // Slightly reduce font size and line height if Solitaire is present to fit the extra line
             fontSize: hasSolitaire ? '8.5px' : '9.5px', 
             lineHeight: hasSolitaire ? '1.15' : '1.3' 
           }}
@@ -131,37 +143,37 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
               <div className="truncate">{item.origin_name || '---'}</div>
               <div>{item.expected_delivery_date ? new Date(item.expected_delivery_date).toLocaleDateString('en-GB') : '---'}</div>
               <div>{Number(item.net_weight_g||0).toFixed(3)}g</div>
-              <div>{Number(item.total_stone_weight_cts||0).toFixed(2)}ct</div>
+              <div>{stnWtStr}ct</div>
               <div>₹{Number(item.mrp||0).toLocaleString()}</div>
             </>
           ) : (
             <>
-              {/* Header: Gents Ring RNG-981 */}
+              {/* Header: GENTS RING RNG-981 */}
               <div className="uppercase truncate" style={{ fontSize: hasSolitaire ? '9.5px' : '10.5px', marginBottom: '1px' }}>
                 {headerText}
               </div>
               
-              {/* Line 1: KT/GW : 14k/2.300 */}
+              {/* Line 1: KT/NW */}
               <div className="truncate uppercase flex">
-                <span className="w-[14mm] inline-block shrink-0">KT/GW</span>
+                <span className="w-[14mm] inline-block shrink-0">KT/NW</span>
                 <span>: {ktStr}/{netWtStr}</span>
               </div>
               
-              {/* Line 2: RD : 4/0.23 */}
+              {/* Line 2: STN (Melee or Fallback Total) */}
               <div className="truncate uppercase flex">
-                <span className="w-[14mm] inline-block shrink-0">RD</span>
-                <span>: {rdPcs}/{rdCts}</span>
+                <span className="w-[14mm] inline-block shrink-0">STN</span>
+                <span>: {stnPcs}/{stnWtStr}</span>
               </div>
               
-              {/* Line 3 (Optional): SOL : 1/0.20 */}
+              {/* Line 3 (Optional): SOL */}
               {hasSolitaire && (
                 <div className="truncate uppercase flex">
                   <span className="w-[14mm] inline-block shrink-0">SOL</span>
-                  <span>: {solPcs}/{solCts}</span>
+                  <span>: {solPcs}/{solCtsStr}</span>
                 </div>
               )}
               
-              {/* Line 4: QLT : GH/SI */}
+              {/* Line 4: QLT */}
               <div className="truncate uppercase flex">
                 <span className="w-[14mm] inline-block shrink-0">QLT</span>
                 <span>: {qltStr}</span>
@@ -170,27 +182,39 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
           )}
         </div>
 
-        {/* MIDDLE FOLD GAP (5mm) */}
-        <div className="h-full w-[5mm] flex items-center justify-center border-l border-r border-dashed border-gray-200 print:border-none opacity-50 shrink-0">
-          <span className="text-[4px] text-gray-300 print:hidden rotate-90 tracking-widest whitespace-nowrap">FOLD HERE</span>
+        {/* MIDDLE FOLD GAP (3mm) */}
+        <div className="h-full w-[3mm] flex items-center justify-center border-l border-r border-dashed border-gray-200 print:border-none opacity-50 shrink-0">
+          <span className="text-[4px] text-gray-300 print:hidden rotate-90 tracking-widest whitespace-nowrap">FOLD</span>
         </div>
 
         {/* RIGHT: QR CODE & BRANDING AREA (24mm) */}
         <div className="flex h-full w-[24mm] justify-between items-center shrink-0 pr-[1mm]">
-           <div className="h-full w-[5mm] flex items-center justify-center">
+           {/* Vertical Barcode Text */}
+           <div className="h-full w-[4mm] flex items-center justify-center">
              <span className="font-black text-[7px] tracking-widest" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
                {item.barcode || 'NO-CODE'}
              </span>
            </div>
-           <div className="flex flex-col justify-center items-center w-[14mm]">
+           
+           {/* STRICT QR CODE QUIET ZONE */}
+           <div className="flex flex-col justify-center items-center w-[15mm]">
              {item.barcode ? (
-               <QRCode value={item.barcode} size={64} level="M" style={{ height: "14mm", width: "14mm" }} />
+               <div className="bg-white p-[1px] rounded-sm">
+                 <QRCode 
+                    value={item.barcode} 
+                    size={64} 
+                    level="M" 
+                    style={{ height: "13mm", width: "13mm", display: "block" }} 
+                 />
+               </div>
              ) : (
-               <div className="h-[14mm] w-[14mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">N/A</div>
+               <div className="h-[13mm] w-[13mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">N/A</div>
              )}
            </div>
-           <div className="h-full w-[4mm] flex items-center justify-center">
-              <div className="bg-black text-white h-full w-full flex items-center justify-center">
+           
+           {/* Safe-Margin Branding */}
+           <div className="h-[18mm] w-[4mm] flex items-center justify-center ml-[1mm]">
+              <div className="bg-black text-white h-full w-full flex items-center justify-center rounded-sm">
                 <h2 className="font-black uppercase tracking-widest text-[7px] leading-none" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
                   PAVITRAM
                 </h2>
