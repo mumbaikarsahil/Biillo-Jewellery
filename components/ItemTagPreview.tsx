@@ -105,7 +105,9 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
   const ktStr = item.purity_karat || '---';
   const netWtStr = Number(item.net_weight_g || 0).toFixed(3);
   
-  const qltStr = [item.diamond_color, item.diamond_clarity].filter(Boolean).join('/') || '---';
+  // --- QUALITY & SHAPE LOGIC ---
+  const colorClarity = [item.diamond_color, item.diamond_clarity].filter(Boolean).join('/');
+  const qltStr = [item.diamond_shape, colorClarity].filter(Boolean).join(' ') || '---';
 
   // --- EXTRACTED PURE LABEL COMPONENT ---
   const LabelContent = () => (
@@ -173,7 +175,7 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
                 </div>
               )}
               
-              {/* Line 4: QLT */}
+              {/* Line 4: QLT & SHAPE */}
               <div className="truncate uppercase flex">
                 <span className="w-[14mm] inline-block shrink-0">QLT</span>
                 <span>: {qltStr}</span>
