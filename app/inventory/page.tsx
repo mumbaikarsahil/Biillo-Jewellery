@@ -26,6 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
+
 import { 
   Table, TableBody, TableCell, TableHead, 
   TableHeader, TableRow 
@@ -196,7 +197,7 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: { item: I
   
   const stnWtStr = stnWt.toFixed(2);
   const solCtsStr = solWt.toFixed(2);
-  const qltStr = [item.diamond_color, item.diamond_clarity].filter(Boolean).join('/') || '---';
+  const qltStr = [item.diamond_color, item.diamond_clarity, item.diamond_shape].filter(Boolean).join('/') || '---';
 
   const LabelContent = () => (
     <div 
@@ -624,7 +625,8 @@ export default function InventoryPage() {
 
       while (hasMore) {
         let globalQuery = supabase.from('inventory_items')
-          .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged')
+          // ✨ ADD THE MISSING FIELDS HERE ✨
+          .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged, diamond_shape, diamond_color, diamond_clarity')
           .eq('company_id', appUser.company_id).range(start, start + limit - 1)
         
         if (selectedLocation !== 'ALL') globalQuery = globalQuery.eq('warehouse_id', selectedLocation)

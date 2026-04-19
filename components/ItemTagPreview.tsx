@@ -106,7 +106,10 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
   const netWtStr = Number(item.net_weight_g || 0).toFixed(3);
   
   // --- QUALITY & SHAPE LOGIC ---
+  // Joins Color and Clarity with a slash (e.g., "GH/SI")
   const colorClarity = [item.diamond_color, item.diamond_clarity].filter(Boolean).join('/');
+  
+  // Combines Shape + (Color/Clarity). If all are missing, falls back to '---' (e.g., "ROUND GH/SI")
   const qltStr = [item.diamond_shape, colorClarity].filter(Boolean).join(' ') || '---';
 
   // --- EXTRACTED PURE LABEL COMPONENT ---
@@ -128,7 +131,7 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
       `}</style>
       
       <div className="flex w-[70mm] h-full">
-        {/* LEFT: TEXT DETAILS AREA (43mm) - Expanded slightly to prevent cutting text */}
+        {/* LEFT: TEXT DETAILS AREA (43mm) */}
         <div 
           className="flex flex-col justify-center h-full w-[43mm] pl-[2mm] pr-[1mm] tracking-tight text-black font-bold" 
           style={{ 
@@ -150,7 +153,7 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
             </>
           ) : (
             <>
-              {/* Header: GENTS RING RNG-981 */}
+              {/* Header */}
               <div className="uppercase truncate" style={{ fontSize: hasSolitaire ? '9.5px' : '10.5px', marginBottom: '1px' }}>
                 {headerText}
               </div>
@@ -161,7 +164,7 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
                 <span>: {ktStr}/{netWtStr}</span>
               </div>
               
-              {/* Line 2: STN (Melee or Fallback Total) */}
+              {/* Line 2: STN */}
               <div className="truncate uppercase flex">
                 <span className="w-[14mm] inline-block shrink-0">STN</span>
                 <span>: {stnPcs}/{stnWtStr}</span>
