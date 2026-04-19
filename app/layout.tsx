@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
+import { Suspense } from 'react'
 import ClientLayout from '@/components/ClientLayout' // Import the wrapper
 import './globals.css'
 
@@ -38,10 +39,14 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geist.variable} ${geistMono.variable}`}>
       <body className="font-sans antialiased bg-gray-50 text-slate-900">
-         {/* All client logic is handled here */}
-         <ClientLayout>
-            {children}
-         </ClientLayout>
+         {/* The Suspense boundary is required here to prevent useSearchParams() 
+           inside ClientLayout from crashing the Next.js static build worker. 
+         */}
+         <Suspense fallback={<div className="min-h-screen bg-[#02040A]" />}>
+           <ClientLayout>
+              {children}
+           </ClientLayout>
+         </Suspense>
       </body>
     </html>
   )
