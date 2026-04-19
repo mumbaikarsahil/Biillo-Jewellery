@@ -1,10 +1,14 @@
+"use client"
+
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Home, AlertCircle } from 'lucide-react'
 
-export default function NotFound() {
+// This catch-all route replaces not-found.tsx to prevent static build errors
+// caused by Supabase auth cookies in the root layout.
+export default function CatchAllNotFound() {
   return (
-    <div className="min-h-screen bg-[#f8f9fb] flex flex-col items-center justify-center p-4 font-sans selection:bg-blue-100">
+    <div className="min-h-[calc(100vh-60px)] bg-[#f8f9fb] flex flex-col items-center justify-center p-4">
       <div className="max-w-md w-full bg-white rounded-[24px] p-8 sm:p-10 text-center shadow-[0_8px_30px_rgba(0,0,0,0.04)] border border-slate-200/60">
         
         <div className="w-16 h-16 bg-blue-50 text-[#0052FF] rounded-2xl flex items-center justify-center mx-auto mb-6 shadow-inner">
