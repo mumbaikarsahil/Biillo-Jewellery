@@ -40,7 +40,7 @@ export interface TagItemData {
 
   mrp?: number | null; 
   origin_name?: string; 
-  expected_delivery_date?: string; 
+  expected_delivery_date?: string | null;
 }
 
 interface Props {

@@ -170,7 +170,7 @@ export function AppLayout({ children, appUser }: { children: React.ReactNode, ap
            <nav className="hidden md:flex items-center h-full border-l border-white/10 pl-2">
               <TopNavLink href="/dashboard" label="Home" icon={Building2} />
               <TopNavLink href="/inventory" label="Inventory" icon={Layers} />
-              <TopNavLink href="/accounts" label="sales+" icon={Wallet} />
+              <TopNavLink href="/sales" label="sales+" icon={Wallet} />
            </nav>
         </div>
 

@@ -13,7 +13,7 @@ import {
   Search, Printer, Edit2, Check, X, Store, Truck, 
   RefreshCw, Database, Package, Calculator, Gem, Hammer, 
   Upload, Eye, Image as ImageIcon, CheckCircle2, Box, Layers, Wrench, Clock, CalendarDays,
-  Loader2, Filter, IndianRupee, UserCircle, CheckSquare, Sparkles, Mic, ChevronDown, Download
+  Loader2, Filter, IndianRupee, UserCircle, CheckSquare, Sparkles, Mic, ChevronDown, Download, FileText, History, ArrowRightLeft
 } from "lucide-react"
 
 import { useAuth } from "@/hooks/useAuth"
@@ -26,7 +26,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Label } from "@/components/ui/label"
 import { Slider } from "@/components/ui/slider"
-
 import { 
   Table, TableBody, TableCell, TableHead, 
   TableHeader, TableRow 
@@ -40,10 +39,10 @@ import {
   SelectTrigger, SelectValue 
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
+import { ItemTagPreview } from "@/components/ItemTagPreview"
 
 // ===========================================================================
 // ✨ GLOBAL HELPER: SMART STONE FALLBACK
-// Note: Intentionally NOT exported to satisfy Next.js App Router rules.
 // ===========================================================================
 const getStoneTotals = (item: any) => {
   if (!item) return { solWt: 0, solPcs: 0, meleeWt: 0, meleePcs: 0, aggWt: 0, aggPcs: 0, stnWt: 0, stnPcs: 0 };
@@ -55,11 +54,9 @@ const getStoneTotals = (item: any) => {
   const fallbackWt = Number(item.total_stone_weight_cts || 0);
   const fallbackPcs = Number(item.total_stone_pieces || 0);
 
-  // Total aggregate for Tables/Modals (Solitaire + Melee, fallback to Old Total)
   const aggWt = (solWt > 0 || meleeWt > 0) ? (solWt + meleeWt) : fallbackWt;
   const aggPcs = (solPcs > 0 || meleePcs > 0) ? (solPcs + meleePcs) : fallbackPcs;
 
-  // STN specific for the Print Tag (Melee, falling back to Old Total if Melee is 0)
   let stnWt = meleeWt;
   let stnPcs = meleePcs;
   if (meleeWt === 0 && meleePcs === 0 && (fallbackWt > 0 || fallbackPcs > 0)) {
@@ -83,6 +80,13 @@ const formatDateShort = (isoString: string) => {
   return new Intl.DateTimeFormat('en-IN', {
     day: '2-digit', month: 'short', year: '2-digit'
   }).format(new Date(isoString))
+}
+
+export interface AuditLogEntry {
+  timestamp: string;
+  user_name: string;
+  reason: string;
+  changes: string;
 }
 
 interface InventoryItem {
@@ -120,6 +124,7 @@ interface InventoryItem {
   hsn_code: string | null
   image_url: string | null
   remarks: string | null
+  audit_history?: AuditLogEntry[] | null 
   metal_color: string | null
   diamond_shape: string | null
   diamond_color: string | null
@@ -132,10 +137,9 @@ interface InventoryItem {
   created_at: string
   updated_at: string
   last_status_change_at: string
-  expected_delivery_date?: string | null // FIX: Added expected_delivery_date
+  expected_delivery_date?: string | null;
 }
 
-// --- CUSTOM GEMINI LOADER COMPONENT ---
 const GeminiLoader = () => (
   <div className="absolute inset-0 z-10 bg-white/70 backdrop-blur-sm flex flex-col items-center justify-center animate-in fade-in duration-300">
     <div className="relative flex items-center justify-center gap-1.5 mb-3">
@@ -149,150 +153,6 @@ const GeminiLoader = () => (
     </span>
   </div>
 )
-
-// ===========================================================================
-// ✨ ITEM TAG PREVIEW COMPONENT
-// ===========================================================================
-export function ItemTagPreview({ item, onClose, isPrintOnly = false }: { item: InventoryItem | null; onClose?: () => void; isPrintOnly?: boolean; }) {
-  const labelRef = useRef<HTMLDivElement>(null)
-
-  // FIX: Using content: () => labelRef.current for universal react-to-print compatibility
-  const handlePrint = useReactToPrint({
-    contentRef: labelRef,
-    documentTitle: `Jewelry-Tag-${item?.barcode || 'Item'}`,
-    onAfterPrint: () => {
-      toast.success('Sent to Thermal Printer')
-      if (onClose) onClose()
-    },
-  })
-
-  const downloadTagImage = async () => {
-    if (!labelRef.current || !item) return
-    try {
-      const canvas = await html2canvas(labelRef.current, { scale: 4 })
-      const link = document.createElement("a")
-      link.href = canvas.toDataURL("image/png")
-      link.download = `Tag-${item.barcode}.png`
-      link.click()
-      toast.success("Tag image saved")
-    } catch (err) { 
-      toast.error("Failed to generate tag image") 
-    }
-  }
-
-  if (!item) return null;
-
-  const isRepair = item._type === 'repair' || item.is_repair_ticket;
-  
-  // Extract Smart Stone Totals using the global helper
-  const { solWt, solPcs, stnWt, stnPcs } = getStoneTotals(item);
-  const hasSolitaire = solWt > 0;
-
-  const categoryStr = item.item_category || 'CATEGORY';
-  const skuStr = item.sku_reference || '';
-  const headerText = `${categoryStr} ${skuStr}`.trim();
-  
-  const ktStr = item.purity_karat || '---';
-  const netWtStr = Number(item.net_weight_g || 0).toFixed(3);
-  
-  const stnWtStr = stnWt.toFixed(2);
-  const solCtsStr = solWt.toFixed(2);
-  const qltStr = [item.diamond_color, item.diamond_clarity, item.diamond_shape].filter(Boolean).join('/') || '---';
-
-  const LabelContent = () => (
-    <div 
-      ref={isPrintOnly ? undefined : labelRef} 
-      className="bg-white text-black flex border border-gray-300 shadow-sm print:border-none print:shadow-none overflow-hidden shrink-0" 
-      style={{ width: '100mm', height: '20mm', fontFamily: 'Arial, Helvetica, sans-serif', boxSizing: 'border-box', pageBreakAfter: isPrintOnly ? 'always' : 'auto' }}
-    >
-      <style type="text/css" media="print">{`
-        @page { size: 100mm 20mm; margin: 0; } 
-        body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-      `}</style>
-      
-      <div className="flex w-[70mm] h-full">
-        {/* LEFT: TEXT DETAILS AREA (43mm) */}
-        <div 
-          className="flex flex-col justify-center h-full w-[43mm] pl-[2mm] pr-[1mm] tracking-tight text-black font-bold" 
-          style={{ fontSize: hasSolitaire ? '8.5px' : '9.5px', lineHeight: hasSolitaire ? '1.15' : '1.3' }}
-        >
-          {isRepair ? (
-            <>
-              <div className="uppercase text-[11px] leading-none mb-[1.5px] border-b border-black/50 pb-[1.5px] truncate">REPAIR: {item.item_category || 'SERVICE'}</div>
-              <div className="truncate">{item.barcode || '---'}</div>
-              <div className="truncate">{item.origin_name || '---'}</div>
-              <div>{item.expected_delivery_date ? new Date(item.expected_delivery_date).toLocaleDateString('en-GB') : '---'}</div>
-              <div>{Number(item.net_weight_g||0).toFixed(3)}g</div>
-              <div>{stnWtStr}ct</div>
-              <div>₹{Number(item.mrp||0).toLocaleString()}</div>
-            </>
-          ) : (
-            <>
-              <div className="uppercase truncate" style={{ fontSize: hasSolitaire ? '9.5px' : '10.5px', marginBottom: '1px' }}>{headerText}</div>
-              <div className="truncate uppercase flex"><span className="w-[14mm] inline-block shrink-0">KT/NW</span><span>: {ktStr}/{netWtStr}</span></div>
-              <div className="truncate uppercase flex"><span className="w-[14mm] inline-block shrink-0">STN</span><span>: {stnPcs}/{stnWtStr}</span></div>
-              {hasSolitaire && <div className="truncate uppercase flex"><span className="w-[14mm] inline-block shrink-0">SOL</span><span>: {solPcs}/{solCtsStr}</span></div>}
-              <div className="truncate uppercase flex"><span className="w-[14mm] inline-block shrink-0">QLT</span><span>: {qltStr}</span></div>
-            </>
-          )}
-        </div>
-
-        {/* MIDDLE FOLD GAP (3mm) */}
-        <div className="h-full w-[3mm] flex items-center justify-center border-l border-r border-dashed border-gray-200 print:border-none opacity-50 shrink-0">
-          <span className="text-[4px] text-gray-300 print:hidden rotate-90 tracking-widest whitespace-nowrap">FOLD</span>
-        </div>
-
-        {/* RIGHT: QR CODE & BRANDING AREA (24mm) */}
-        <div className="flex h-full w-[24mm] justify-between items-center shrink-0 pr-[1mm]">
-           <div className="h-full w-[4mm] flex items-center justify-center">
-             <span className="font-black text-[7px] tracking-widest" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>{item.barcode || 'NO-CODE'}</span>
-           </div>
-           <div className="flex flex-col justify-center items-center w-[15mm]">
-             {item.barcode ? (
-               <div className="bg-white p-[1px] rounded-sm"><QRCode value={item.barcode} size={64} level="M" style={{ height: "13mm", width: "13mm", display: "block" }} /></div>
-             ) : (
-               <div className="h-[13mm] w-[13mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">N/A</div>
-             )}
-           </div>
-           <div className="h-[18mm] w-[4mm] flex items-center justify-center ml-[1mm]">
-              <div className="bg-black text-white h-full w-full flex items-center justify-center rounded-sm">
-                <h2 className="font-black uppercase tracking-widest text-[7px] leading-none" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>PAVITRAM</h2>
-              </div>
-           </div>
-        </div>
-      </div>
-
-      <div className="w-[30mm] h-full bg-gray-50 print:bg-white border-l border-gray-200 print:border-none flex items-center justify-center shrink-0">
-         <span className="text-[5px] text-gray-300 print:hidden rotate-90 tracking-widest">TAIL AREA</span>
-      </div>
-    </div>
-  )
-
-  if (isPrintOnly) return <LabelContent />
-
-  return (
-    <Dialog open={true} onOpenChange={(val) => !val && onClose && onClose()}>
-      <DialogContent className="sm:max-w-[550px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white">
-        <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200">
-          <DialogTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
-             <Printer className="w-4 h-4 text-slate-500" /> Thermal Label Layout {isRepair && "(Repair Tag)"}
-          </DialogTitle>
-        </DialogHeader>
-        <div className="flex flex-col items-center justify-center py-10 bg-slate-100/50 min-h-[250px] overflow-x-auto">
-          <LabelContent />
-        </div>
-        <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 flex-row gap-3">
-           <Button variant="outline" className="flex-1 h-10 text-xs font-semibold rounded-lg border-slate-300 text-slate-700 bg-white hover:bg-slate-50" onClick={downloadTagImage}>
-             <Download className="w-4 h-4 mr-2 text-slate-400" /> Save PNG
-           </Button>
-           <Button className="flex-[2] h-10 text-xs font-bold rounded-lg bg-slate-900 hover:bg-slate-800 text-white" onClick={() => handlePrint()}>
-             <Printer className="w-4 h-4 mr-2" /> Print (TSC)
-           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 // ===========================================================================
 // MAIN PAGE COMPONENT
@@ -313,10 +173,13 @@ export default function InventoryPage() {
   const [editingMrpId, setEditingId] = useState<string | null>(null)
   const [editingMrpVal, setEditingMrpVal] = useState<string>('')
   
+  const [editWeightItem, setEditWeightItem] = useState<InventoryItem | null>(null)
+  const [weightForm, setWeightForm] = useState({ gross: '', net: '', stone: '', reason: '' })
+  const [isSavingWeights, setIsSavingWeights] = useState(false)
+
   const [tagItem, setTagItem] = useState<InventoryItem | null>(null)
   const [viewItem, setViewItem] = useState<InventoryItem | null>(null)
 
-  // --- SMART FILTER STATES ---
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('') 
   const [filterStatus, setFilterStatus] = useState<string[]>([])
@@ -331,12 +194,10 @@ export default function InventoryPage() {
 
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
 
-  // --- GLOBAL FETCH STATES ---
   const [globalTotalCount, setGlobalTotalCount] = useState<number>(0)
   const [globalSoldCount, setGlobalSoldCount] = useState<number>(0)
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false)
 
-  // --- CALC STATES ---
   const [isCalcModalOpen, setCalcModalOpen] = useState(false)
   const [calcStep, setCalcStep] = useState<'params' | 'preview'>('params')
   const [isCalculating, setIsCalculating] = useState(false)
@@ -348,7 +209,6 @@ export default function InventoryPage() {
 
   const printRef = useRef<HTMLDivElement>(null)
   
-  // FIX: Using content: () => ref.current for the bulk printer too
   const handleBulkPrint = useReactToPrint({ 
     contentRef: printRef, 
     documentTitle: `Bulk-Inventory-Tags` 
@@ -361,14 +221,8 @@ export default function InventoryPage() {
 
   const executeSmartSearch = useCallback(() => {
     if (!searchTerm.trim()) {
+      // 🐛 FIX: Only clear the text search string, do NOT wipe out user's explicit location or manual filters
       setDebouncedSearch('')
-      setFilterCategory([])
-      setFilterStatus([])
-      setFilterPurity([])
-      setIsPriceFilterActive(false)
-      setPriceRange([0, maxCatalogPrice])
-      setActiveTab("active")
-      if (isHQ) setSelectedLocation('ALL') 
       return
     }
 
@@ -480,7 +334,7 @@ export default function InventoryPage() {
     const cleanSearch = q.replace(/\b(in|at|from|find|show|me|the|all|branch|store|where|are|with|price|cost|under|over|above|below)\b/gi, '').replace(/\s+/g, ' ').trim()
     setDebouncedSearch(cleanSearch)
 
-  }, [searchTerm, warehouses, selectedLocation, uniqueCategories, maxCatalogPrice, isHQ])
+  }, [searchTerm, warehouses, selectedLocation, uniqueCategories, maxCatalogPrice, isHQ, setSelectedLocation])
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -594,9 +448,10 @@ export default function InventoryPage() {
         melee_pieces: 0, color_stone_weight_cts: 0, color_stone_pieces: 0, mrp: rep.actual_cost || 0, status: rep.status,
         warehouse_id: rep.status === 'fixed_ready_for_dispatch' && warehouses.find(w => w.name.includes('HQ'))?.id ? warehouses.find(w => w.name.includes('HQ'))?.id || rep.origin_warehouse_id : rep.origin_warehouse_id, 
         is_exchanged: false, is_custom_order: false, is_repair_ticket: true, custom_order_id: null, origin_name: rep.origin?.name || 'Unknown Branch', 
-        karigars: null, created_from_job_bag: null, huid_code: null, hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: null, diamond_color: null,
+        karigars: null, created_from_job_bag: null, huid_code: null, hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: rep.stone_shape || null, diamond_color: null,
         diamond_clarity: null, cost_metal: 0, cost_stone: 0, cost_making: rep.labor_charges || 0, cost_total: rep.actual_cost || 0, wastage_weight_g: 0,
-        created_at: rep.created_at, updated_at: rep.updated_at, expected_delivery_date: rep.expected_delivery_date, last_status_change_at: rep.updated_at
+        created_at: rep.created_at, updated_at: rep.updated_at, expected_delivery_date: rep.expected_delivery_date, last_status_change_at: rep.updated_at,
+        audit_history: null 
       }))
 
       const filteredRepairs = selectedLocation === 'ALL' ? repairList : repairList.filter(r => r.warehouse_id === selectedLocation || (r.status === 'fixed_ready_for_dispatch' && isHQ));
@@ -625,8 +480,7 @@ export default function InventoryPage() {
 
       while (hasMore) {
         let globalQuery = supabase.from('inventory_items')
-          // ✨ ADD THE MISSING FIELDS HERE ✨
-          .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged, diamond_shape, diamond_color, diamond_clarity')
+          .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged, diamond_shape, diamond_color, diamond_clarity, audit_history')
           .eq('company_id', appUser.company_id).range(start, start + limit - 1)
         
         if (selectedLocation !== 'ALL') globalQuery = globalQuery.eq('warehouse_id', selectedLocation)
@@ -705,7 +559,7 @@ export default function InventoryPage() {
     setIsPriceFilterActive(false); setPriceRange([0, maxCatalogPrice]); 
     setSearchTerm(""); setDebouncedSearch("");
     setActiveTab("active");
-    if (isHQ) setSelectedLocation("ALL");
+    // 🐛 FIX: Removed location reset here so it stays persistent
   }
 
   const handleSaveMrp = async (id: string) => { 
@@ -726,6 +580,84 @@ export default function InventoryPage() {
     setItems(items.map(i => i.id === id ? { ...i, mrp: newMrp } : i))
     setEditingId(null)
     toast.success('Price updated')
+  }
+
+  const handleOpenWeightEdit = (item: InventoryItem) => {
+    if (!canEdit) return toast.error("Unauthorized to edit master weights");
+    setEditWeightItem(item);
+    
+    const { aggWt } = getStoneTotals(item);
+    
+    setWeightForm({
+      gross: item.gross_weight_g?.toString() || '0',
+      net: item.net_weight_g?.toString() || '0',
+      stone: aggWt.toString() || '0',
+      reason: ''
+    });
+  }
+
+  const handleSaveWeights = async () => {
+    if (!editWeightItem || !appUser) return;
+    if (!weightForm.reason.trim()) return toast.error("Reason is required for the audit log.");
+
+    const newGross = parseFloat(weightForm.gross);
+    const newNet = parseFloat(weightForm.net);
+    const newStone = parseFloat(weightForm.stone);
+
+    if (isNaN(newGross) || isNaN(newNet) || isNaN(newStone)) return toast.error("Invalid weight values entered.");
+    if (newNet <= 0 || newGross <= 0) return toast.error("Gross and Net weights must be greater than 0.");
+    if (newGross < newNet) return toast.error("Gross weight cannot be less than Net weight.");
+
+    setIsSavingWeights(true);
+
+    try {
+      const currentStone = getStoneTotals(editWeightItem).aggWt;
+
+      const newLogEntry: AuditLogEntry = {
+        timestamp: new Date().toISOString(),
+        user_name: appUser.full_name || 'System User',
+        reason: weightForm.reason.trim(),
+        changes: `Gross: ${editWeightItem.gross_weight_g}g ➝ ${newGross}g | Net: ${editWeightItem.net_weight_g}g ➝ ${newNet}g | Stone: ${currentStone}ct ➝ ${newStone}ct`
+      };
+
+      const currentHistory = Array.isArray(editWeightItem.audit_history) ? editWeightItem.audit_history : [];
+      const updatedHistory = [newLogEntry, ...currentHistory];
+
+      if (editWeightItem._type === 'repair') {
+         toast.error("Weight editing for repairs is not supported in this view.");
+         setIsSavingWeights(false);
+         return;
+      }
+
+      const { error } = await supabase.from('inventory_items').update({
+        gross_weight_g: newGross,
+        net_weight_g: newNet,
+        total_stone_weight_cts: newStone,
+        solitaire_weight_cts: 0, 
+        melee_weight_cts: 0,
+        audit_history: updatedHistory,
+        updated_by: appUser.user_id || appUser.id
+      }).eq('id', editWeightItem.id);
+
+      if (error) throw error;
+
+      setItems(items.map(i => i.id === editWeightItem.id ? { 
+        ...i, 
+        gross_weight_g: newGross, 
+        net_weight_g: newNet, 
+        total_stone_weight_cts: newStone,
+        solitaire_weight_cts: 0,
+        melee_weight_cts: 0,
+        audit_history: updatedHistory
+      } : i));
+
+      toast.success("Weights & Audit Log updated successfully");
+      setEditWeightItem(null);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to update weights");
+    } finally {
+      setIsSavingWeights(false);
+    }
   }
   
   const handleOpenCalc = () => {
@@ -847,6 +779,25 @@ export default function InventoryPage() {
             <h1 className="text-sm font-semibold text-slate-900 tracking-tight leading-none hidden sm:block">Vault Inventory</h1>
           </div>
           <div className="flex items-center gap-2">
+            {/* ✨ NEW: Admin Buttons */}
+            {canEdit && (
+              <>
+                <Link href="/inventory/import-manual">
+                  <Button variant="outline" size="sm" className="h-8 px-3 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border-slate-200 shadow-sm hidden md:flex">
+                    <Upload className="w-3.5 h-3.5 mr-1.5 text-slate-500" />
+                    Import Manual
+                  </Button>
+                </Link>
+                <Link href="/transfer/direct">
+                  <Button size="sm" className="h-8 px-3 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 shadow-sm hidden md:flex">
+                    <ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />
+                    Direct Transfer
+                  </Button>
+                </Link>
+                <div className="w-px h-4 bg-slate-200 mx-1 hidden md:block" />
+              </>
+            )}
+
             <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900 hover:bg-slate-100" onClick={fetchItems}>
               <RefreshCw className={`h-3.5 w-3.5 sm:mr-1.5 ${loading ? 'animate-spin text-indigo-500' : ''}`} />
               <span className="hidden sm:inline">Refresh</span>
@@ -883,7 +834,7 @@ export default function InventoryPage() {
                       className="p-1.5 text-slate-400 hover:text-rose-500 bg-slate-50 hover:bg-rose-50 rounded-full cursor-pointer transition-colors"
                       onClick={() => {
                         setSearchTerm('');
-                        clearAllFilters();
+                        setDebouncedSearch('');
                       }}
                       title="Clear Search"
                     >
@@ -1062,14 +1013,14 @@ export default function InventoryPage() {
           <TabsContent value="active">
              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative">
                 {loading && <GeminiLoader />}
-                <InventoryTable data={activeItemsFiltered} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />
+                <InventoryTable data={activeItemsFiltered} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} handleOpenWeightEdit={handleOpenWeightEdit} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />
              </div>
           </TabsContent>
 
           <TabsContent value="sold">
              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative">
                 {loading && <GeminiLoader />}
-                <InventoryTable data={soldItemsFiltered} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />
+                <InventoryTable data={soldItemsFiltered} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} handleOpenWeightEdit={()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />
              </div>
           </TabsContent>
         </Tabs>
@@ -1137,6 +1088,82 @@ export default function InventoryPage() {
            ))}
         </div>
       </div>
+
+      {/* ✨ EDIT WEIGHTS MODAL ✨ */}
+      <Dialog open={!!editWeightItem} onOpenChange={(val) => !val && setEditWeightItem(null)}>
+        <DialogContent className="sm:max-w-[450px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden bg-white">
+          <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5">
+            <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <Edit2 className="w-5 h-5 text-indigo-600" />
+              Edit Master Weights
+            </DialogTitle>
+            <DialogDescription className="text-xs mt-1">
+              Adjust physical attributes for <strong className="text-slate-700">{editWeightItem?.barcode}</strong>. All changes are logged permanently.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="p-5 space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Gross Weight (g)</Label>
+                <Input 
+                  type="number" 
+                  step="0.001"
+                  className="font-mono font-bold border-slate-300"
+                  value={weightForm.gross}
+                  onChange={(e) => setWeightForm({...weightForm, gross: e.target.value})}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Net Weight (g)</Label>
+                <Input 
+                  type="number" 
+                  step="0.001"
+                  className="font-mono font-bold border-emerald-300 bg-emerald-50 text-emerald-900 focus-visible:ring-emerald-500"
+                  value={weightForm.net}
+                  onChange={(e) => setWeightForm({...weightForm, net: e.target.value})}
+                />
+              </div>
+              <div className="space-y-1.5 col-span-2">
+                <Label className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Total Stone Weight (cts)</Label>
+                <Input 
+                  type="number" 
+                  step="0.001"
+                  className="font-mono font-bold border-blue-300 bg-blue-50 text-blue-900 focus-visible:ring-blue-500"
+                  value={weightForm.stone}
+                  onChange={(e) => setWeightForm({...weightForm, stone: e.target.value})}
+                />
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-slate-100">
+              <Label className="text-[10px] font-bold text-rose-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+                <FileText className="w-3 h-3" /> Reason for Update (Required)
+              </Label>
+              <textarea 
+                className="w-full min-h-[80px] p-3 text-sm rounded-md border border-rose-200 bg-rose-50/50 focus:outline-none focus:ring-2 focus:ring-rose-500 transition-shadow resize-none"
+                placeholder="e.g., Typo in original entry, Recalculated after stone replacement..."
+                value={weightForm.reason}
+                onChange={(e) => setWeightForm({...weightForm, reason: e.target.value})}
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="bg-slate-50 p-4 border-t border-slate-100 flex gap-2">
+            <Button variant="outline" className="flex-1 rounded-xl h-11 font-bold text-slate-500 hover:text-slate-800" onClick={() => setEditWeightItem(null)}>
+              Cancel
+            </Button>
+            <Button 
+              className="flex-1 rounded-xl h-11 font-bold bg-indigo-600 hover:bg-indigo-700 text-white" 
+              onClick={handleSaveWeights}
+              disabled={isSavingWeights || !weightForm.reason.trim()}
+            >
+              {isSavingWeights ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+              Save & Log Audit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* BULK MRP CALCULATOR MODAL */}
       <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
@@ -1410,12 +1437,36 @@ export default function InventoryPage() {
                     </div>
                   </div>
                   {viewItem.remarks && (
-                    <div className="p-4 pt-0">
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Remarks / Internal Notes</p>
-                      <p className="text-xs text-slate-700 mt-1 bg-slate-50 p-2 rounded border border-slate-100">{viewItem.remarks}</p>
+                    <div className="p-4 pt-0 border-t border-slate-100 mt-2">
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mb-2 mt-3">General Remarks</p>
+                      <div className="text-xs text-slate-700 bg-slate-50 p-3 rounded-md border border-slate-200">
+                        {viewItem.remarks}
+                      </div>
                     </div>
                   )}
                 </div>
+
+                {/* ✨ DEDICATED AUDIT HISTORY TIMELINE ✨ */}
+                {viewItem.audit_history && viewItem.audit_history.length > 0 && (
+                  <div className="bg-white border border-rose-200 rounded-xl overflow-hidden shadow-sm">
+                    <div className="bg-rose-50 border-b border-rose-200 px-4 py-2 flex items-center gap-2">
+                      <History className="w-3.5 h-3.5 text-rose-600" />
+                      <h3 className="text-xs font-bold text-rose-800 uppercase tracking-widest">Weight Audit History</h3>
+                    </div>
+                    <div className="p-4 space-y-3">
+                      {viewItem.audit_history.map((log, idx) => (
+                        <div key={idx} className="bg-rose-50/30 border border-rose-100 p-3 rounded-lg text-xs">
+                          <div className="flex justify-between items-center mb-2 border-b border-rose-100 pb-2">
+                            <span className="font-bold text-slate-800">{log.user_name}</span>
+                            <span className="text-[10px] font-mono text-slate-500">{log.timestamp}</span>
+                          </div>
+                          <p className="font-medium text-slate-700 mb-1">Reason: <span className="font-normal">{log.reason}</span></p>
+                          <p className="font-mono text-[10px] text-slate-500 bg-white p-2 rounded border border-slate-100">{log.changes}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                   <div className="bg-slate-50 border-b border-slate-200 px-4 py-2">
@@ -1455,7 +1506,7 @@ export default function InventoryPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ✨ ADD THIS MISSING LINE RIGHT HERE ✨ */}
+      {/* ITEM TAG PRINT PREVIEW */}
       <ItemTagPreview item={tagItem} onClose={() => setTagItem(null)} />
 
     </div>
@@ -1463,7 +1514,7 @@ export default function InventoryPage() {
 }
 
 // --- HYBRID RENDER TABLE ---
-function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, setTagItem, handleSingleTransfer, setViewItem, canEdit }: any) {
+function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, handleOpenWeightEdit, setTagItem, handleSingleTransfer, setViewItem, canEdit }: any) {
   const [visibleCount, setVisibleCount] = useState(50)
   
   const observer = useRef<IntersectionObserver | null>(null)
@@ -1504,7 +1555,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
               )}
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Item Code / Design SKU</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Specs</TableHead>
-              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 text-right px-4">Weights</TableHead>
+              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 text-right px-4 w-[160px]">Weights</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Vault Timeline</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 text-center">Status / Location</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 w-[140px] text-right">Price/Value</TableHead>
@@ -1551,8 +1602,9 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                      <div className="text-xs font-semibold text-slate-900">{item.item_category}</div>
                      <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</div>
                   </TableCell>
+
                   <TableCell className="text-right px-4 py-3">
-                     <div className="flex flex-col items-end">
+                     <div className="flex flex-col items-end group relative pr-2">
                         <span className="text-xs font-semibold text-slate-900">
                           {item.net_weight_g?.toFixed(3)}g 
                           <span className={cn("text-[9px] font-bold ml-1", item._type === 'repair' ? "text-amber-500" : "text-slate-400")}>
@@ -1565,6 +1617,16 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                             {item._type === 'repair' ? 'ADDED' : 'STN'}
                           </span>
                         </span>
+
+                        {canEdit && !isSoldTab && !item.is_repair_ticket && (
+                           <button 
+                             onClick={() => handleOpenWeightEdit(item)}
+                             className="absolute -right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-all"
+                             title="Edit Master Weights"
+                           >
+                             <Edit2 className="w-3.5 h-3.5" />
+                           </button>
+                        )}
                      </div>
                   </TableCell>
                   
@@ -1694,9 +1756,11 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                    <p className="text-xs font-semibold text-slate-900">{item.item_category}</p>
                    <p className="text-[10px] text-slate-500">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</p>
                  </div>
-                 <div className="text-right">
-                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">
+
+                 <div className="text-right group relative pr-2" onClick={() => { if(canEdit && !isSoldTab && !item.is_repair_ticket) handleOpenWeightEdit(item) }}>
+                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 flex justify-end items-center gap-1">
                      {item._type === 'repair' ? 'Materials Added' : 'Weights'}
+                     {canEdit && !isSoldTab && !item.is_repair_ticket && <Edit2 className="w-2.5 h-2.5 text-slate-300 group-hover:text-indigo-500" />}
                    </p>
                    <p className="text-xs font-semibold text-slate-900">
                      {item.net_weight_g?.toFixed(3)}g 
