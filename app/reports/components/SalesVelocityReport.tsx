@@ -2,11 +2,10 @@
 
 import React, { useEffect, useState, useMemo } from 'react'
 import { format } from 'date-fns'
-import * as XLSX from 'xlsx'
 import { 
   Download, Loader2, Search, RefreshCw, 
   TrendingUp, Calendar, Store, CreditCard, Receipt,
-  Sparkles, Trophy, User, Target, BarChart3, CheckCircle2
+  Sparkles, Trophy, User, Target, BarChart3, CheckCircle2, AlertOctagon
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -73,12 +72,16 @@ export function SalesVelocityReport() {
       safeEndDate.setDate(safeEndDate.getDate() + 1)
       const safeEndDateStr = safeEndDate.toISOString().split('T')[0]
 
-      // Fetching user_id and joining the profiles table to get the actual staff name
+      // ✨ UPGRADED QUERY: Added status, cancellation fields, and item details for the CSV
       let q = supabase.from('invoices')
         .select(`
           id, invoice_number, created_at, final_total, payment_mode, warehouse_id, user_id,
-          customers(full_name, phone),
-          profiles(full_name) 
+          status, cancellation_reason, cancelled_at, subtotal, discount_amount,
+          customers(full_name, phone, pan_no),
+          profiles(full_name, role),
+          invoice_items(
+            inventory_items(item_category, purity_karat, barcode, gross_weight_g, net_weight_g, total_stone_weight_cts, huid_code)
+          )
         `)
         .eq('company_id', appUser.company_id)
         .gte('created_at', startDate)
@@ -95,10 +98,15 @@ export function SalesVelocityReport() {
       setData(resData || [])
 
       let totalRev = 0
+      let validInvoiceCount = 0
       const paymentCounts: Record<string, number> = {}
       
       resData?.forEach(inv => {
+        // ✨ CORE FIX: Ignore cancelled invoices for revenue KPI calculations
+        if (inv.status === 'CANCELLED') return;
+
         totalRev += (Number(inv.final_total) || 0)
+        validInvoiceCount += 1
         const mode = inv.payment_mode || 'Unknown'
         paymentCounts[mode] = (paymentCounts[mode] || 0) + 1
       })
@@ -111,8 +119,8 @@ export function SalesVelocityReport() {
 
       setMetrics({
         totalRevenue: totalRev,
-        invoiceCount: resData?.length || 0,
-        avgOrderValue: resData?.length ? totalRev / resData.length : 0,
+        invoiceCount: validInvoiceCount, // Only count valid bills
+        avgOrderValue: validInvoiceCount ? totalRev / validInvoiceCount : 0,
         topPaymentMode: topMode.toUpperCase()
       })
 
@@ -137,20 +145,17 @@ export function SalesVelocityReport() {
     const staffStats: Record<string, { name: string, revenue: number, count: number }> = {};
 
     data.forEach(inv => {
-      // Resolve Warehouse Name
+      // ✨ CORE FIX: Do not give staff/branches credit for cancelled invoices
+      if (inv.status === 'CANCELLED') return;
+
       const wName = warehouses.find(w => w.id === inv.warehouse_id)?.name || 'Unknown Branch';
-      
-      // Resolve Staff Name safely from the profiles join
       const staffName = inv.profiles?.full_name || (inv.user_id ? `Staff (${inv.user_id.substring(0, 5).toUpperCase()})` : 'System / Admin');
-      
       const rev = Number(inv.final_total) || 0;
 
-      // Aggregate Branch
       if (!branchStats[wName]) branchStats[wName] = { name: wName, revenue: 0, count: 0 };
       branchStats[wName].revenue += rev;
       branchStats[wName].count += 1;
 
-      // Aggregate Staff
       if (!staffStats[staffName]) staffStats[staffName] = { name: staffName, revenue: 0, count: 0 };
       staffStats[staffName].revenue += rev;
       staffStats[staffName].count += 1;
@@ -159,11 +164,9 @@ export function SalesVelocityReport() {
     const branchLeaderboard = Object.values(branchStats).sort((a, b) => b.revenue - a.revenue);
     const staffLeaderboard = Object.values(staffStats).sort((a, b) => b.revenue - a.revenue);
 
-    // Find highest absolute revenue
     const maxBranchRev = branchLeaderboard[0]?.revenue || 1;
     const maxStaffRev = staffLeaderboard[0]?.revenue || 1;
 
-    // Find highest Average Order Value (AOV) for branch
     const topAovBranch = [...branchLeaderboard].sort((a, b) => (b.revenue / b.count) - (a.revenue / a.count))[0];
 
     return {
@@ -178,37 +181,70 @@ export function SalesVelocityReport() {
   }, [data, showAnalytics, warehouses]);
 
 
+  // ✨ UPGRADED CSV EXPORT (Matches AccountsMasterPage)
+  const downloadBlob = (headers: string[], rows: any[][], filename: string) => {
+    const csvContent = [
+      headers.join(","),
+      ...rows.map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(","))
+    ].join("\n");
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }
+
   const handleExport = () => {
     if (data.length === 0) {
-      toast({ title: "Empty Data", description: "No records to export.", variant: "destructive" })
-      return
+      return toast({ title: "Empty Data", description: "No records to export.", variant: "destructive" })
     }
     setExporting(true)
 
-    const formattedData = data.map((d) => {
-      const wName = warehouses.find(w => w.id === d.warehouse_id)?.name || '--'
-      const staffName = d.profiles?.full_name || d.user_id || 'System'
+    const headers = [
+      "Date", "Invoice Number", "Status", "Branch", "Customer Name", "PAN No", 
+      "Item Barcodes", "Item Categories", "Total Gross Wt (g)", "Total Net Wt (g)", "Total Stone Wt (cts)", "HUIDs",
+      "Billed By (Name)", "Billed By (Role)", 
+      "Subtotal", "Manual Discount", "Final Total", "Payment Mode", "Cancellation Reason"
+    ];
 
-      return {
-        'Invoice No': d.invoice_number,
-        'Date & Time': format(new Date(d.created_at), 'dd-MMM-yyyy HH:mm'),
-        'Customer Name': d.customers?.full_name || 'Walk-in Customer',
-        'Customer Phone': d.customers?.phone || '--',
-        'Location': wName,
-        'Billed By': staffName,
-        'Payment Mode': (d.payment_mode || 'CASH').toUpperCase(),
-        'Invoice Total (₹)': d.final_total
-      }
-    })
+    const csvRows = data.map(inv => {
+      const barcodes = inv.invoice_items?.map((i:any) => i.inventory_items?.barcode).filter(Boolean).join(', ') || '';
+      const categories = inv.invoice_items?.map((i:any) => i.inventory_items?.item_category).filter(Boolean).join(', ') || '';
+      const totalGross = inv.invoice_items?.reduce((sum:number, i:any) => sum + (Number(i.inventory_items?.gross_weight_g) || 0), 0) || 0;
+      const totalNet = inv.invoice_items?.reduce((sum:number, i:any) => sum + (Number(i.inventory_items?.net_weight_g) || 0), 0) || 0;
+      const totalStone = inv.invoice_items?.reduce((sum:number, i:any) => sum + (Number(i.inventory_items?.total_stone_weight_cts) || 0), 0) || 0;
+      const huids = inv.invoice_items?.map((i:any) => i.inventory_items?.huid_code).filter(Boolean).join(', ') || '';
 
-    const worksheet = XLSX.utils.json_to_sheet(formattedData)
-    const workbook = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Sales_Ledger")
+      return [
+        format(new Date(inv.created_at), 'yyyy-MM-dd HH:mm:ss'),
+        inv.invoice_number,
+        inv.status || 'VALID',
+        warehouses.find(w => w.id === inv.warehouse_id)?.name || 'Unknown',
+        inv.customers?.full_name || 'Walk-in',
+        inv.customers?.pan_no || '',
+        barcodes,
+        categories,
+        totalGross.toFixed(3),
+        totalNet.toFixed(3),
+        totalStone.toFixed(2),
+        huids,
+        inv.profiles?.full_name || 'System',
+        inv.profiles?.role || 'N/A',
+        inv.subtotal || 0,
+        inv.discount_amount || 0,
+        inv.final_total || 0,
+        inv.payment_mode || '',
+        inv.cancellation_reason || ''
+      ];
+    });
 
-    XLSX.writeFile(workbook, `Sales_Velocity_Report_${startDate}_to_${endDate}.xlsx`)
-    
+    downloadBlob(headers, csvRows, `Sales_Velocity_Report_${startDate}_to_${endDate}.csv`);
     setExporting(false)
-    toast({ title: "Export Complete", description: "Sales Ledger downloaded securely." })
+    toast({ title: "Export Complete", description: "Sales Matrix downloaded securely." })
   }
 
   return (
@@ -298,7 +334,7 @@ export function SalesVelocityReport() {
                 <div className="min-w-0">
                   <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Top Branch</p>
                   <p className="text-lg font-black text-emerald-900 leading-tight mt-0.5 truncate">{analytics.topBranch?.name || 'N/A'}</p>
-                  <p className="text-[10px] font-medium text-emerald-700 mt-1">₹{analytics.topBranch?.revenue.toLocaleString() || '0'} from {analytics.topBranch?.count || 0} invoices</p>
+                  <p className="text-[10px] font-medium text-emerald-700 mt-1">₹{analytics.topBranch?.revenue.toLocaleString() || '0'} from {analytics.topBranch?.count || 0} valid invoices</p>
                 </div>
               </CardContent>
             </Card>
@@ -334,30 +370,30 @@ export function SalesVelocityReport() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             
             {/* Branch Leaderboard */}
-            <Card className="bg-white border-zinc-200 shadow-sm rounded-2xl overflow-hidden">
-              <CardHeader className="p-4 pb-2 border-b border-zinc-100 bg-zinc-50/50">
-                <CardTitle className="text-xs font-black uppercase tracking-widest text-zinc-600 flex items-center gap-2">
-                  <BarChart3 className="w-4 h-4 text-zinc-400" /> Branch Leaderboard
+            <Card className="bg-white border-gray-200 shadow-sm rounded-2xl overflow-hidden">
+              <CardHeader className="p-4 pb-2 border-b border-gray-100 bg-gray-50/50">
+                <CardTitle className="text-xs font-black uppercase tracking-widest text-gray-600 flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-gray-400" /> Branch Leaderboard
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 {analytics.branchLeaderboard.length === 0 ? (
-                  <div className="text-center py-6 text-zinc-400 text-xs font-medium">No sales data available.</div>
+                  <div className="text-center py-6 text-gray-400 text-xs font-medium">No valid sales data available.</div>
                 ) : (
-                  <div className="divide-y divide-zinc-100 max-h-[220px] overflow-y-auto custom-scrollbar">
+                  <div className="divide-y divide-gray-100 max-h-[220px] overflow-y-auto custom-scrollbar">
                     {analytics.branchLeaderboard.map((b, i) => (
-                      <div key={i} className="p-3 hover:bg-zinc-50 transition-colors">
+                      <div key={i} className="p-3 hover:bg-gray-50 transition-colors">
                         <div className="flex justify-between items-end mb-1.5">
-                          <span className="text-xs font-bold text-zinc-800">{b.name}</span>
+                          <span className="text-xs font-bold text-gray-800">{b.name}</span>
                           <span className="text-xs font-black text-emerald-600">₹{b.revenue.toLocaleString()}</span>
                         </div>
-                        <div className="w-full bg-zinc-100 h-1.5 rounded-full overflow-hidden">
+                        <div className="w-full bg-gray-100 h-1.5 rounded-full overflow-hidden">
                           <div 
                             className="bg-emerald-500 h-full rounded-full transition-all" 
                             style={{ width: `${(b.revenue / analytics.maxBranchRev) * 100}%` }}
                           />
                         </div>
-                        <p className="text-[9px] font-medium text-zinc-400 mt-1.5 text-right">{b.count} invoices</p>
+                        <p className="text-[9px] font-medium text-gray-400 mt-1.5 text-right">{b.count} valid invoices</p>
                       </div>
                     ))}
                   </div>
@@ -366,30 +402,30 @@ export function SalesVelocityReport() {
             </Card>
 
             {/* Staff Leaderboard */}
-            <Card className="bg-white border-zinc-200 shadow-sm rounded-2xl overflow-hidden">
-              <CardHeader className="p-4 pb-2 border-b border-zinc-100 bg-zinc-50/50">
-                <CardTitle className="text-xs font-black uppercase tracking-widest text-zinc-600 flex items-center gap-2">
-                  <Trophy className="w-4 h-4 text-zinc-400" /> Rainmaker Leaderboard
+            <Card className="bg-white border-gray-200 shadow-sm rounded-2xl overflow-hidden">
+              <CardHeader className="p-4 pb-2 border-b border-gray-100 bg-gray-50/50">
+                <CardTitle className="text-xs font-black uppercase tracking-widest text-gray-600 flex items-center gap-2">
+                  <Trophy className="w-4 h-4 text-gray-400" /> Rainmaker Leaderboard
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 {analytics.staffLeaderboard.length === 0 ? (
-                  <div className="text-center py-6 text-zinc-400 text-xs font-medium">No billing data available.</div>
+                  <div className="text-center py-6 text-gray-400 text-xs font-medium">No valid billing data available.</div>
                 ) : (
-                  <div className="divide-y divide-zinc-100 max-h-[220px] overflow-y-auto custom-scrollbar">
+                  <div className="divide-y divide-gray-100 max-h-[220px] overflow-y-auto custom-scrollbar">
                     {analytics.staffLeaderboard.map((s, i) => (
-                      <div key={i} className="p-3 hover:bg-zinc-50 transition-colors">
+                      <div key={i} className="p-3 hover:bg-gray-50 transition-colors">
                         <div className="flex justify-between items-end mb-1.5">
-                          <span className="text-xs font-bold text-zinc-800">{s.name}</span>
+                          <span className="text-xs font-bold text-gray-800">{s.name}</span>
                           <span className="text-xs font-black text-indigo-600">₹{s.revenue.toLocaleString()}</span>
                         </div>
-                        <div className="w-full bg-zinc-100 h-1.5 rounded-full overflow-hidden">
+                        <div className="w-full bg-gray-100 h-1.5 rounded-full overflow-hidden">
                           <div 
                             className="bg-indigo-500 h-full rounded-full transition-all" 
                             style={{ width: `${(s.revenue / analytics.maxStaffRev) * 100}%` }}
                           />
                         </div>
-                        <p className="text-[9px] font-medium text-zinc-400 mt-1.5 text-right">{s.count} transactions</p>
+                        <p className="text-[9px] font-medium text-gray-400 mt-1.5 text-right">{s.count} valid transactions</p>
                       </div>
                     ))}
                   </div>
@@ -406,7 +442,7 @@ export function SalesVelocityReport() {
         <Card className="shadow-none border-gray-200 bg-white rounded-xl">
           <CardContent className="p-3 sm:p-4">
             <p className="text-[9px] sm:text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1 flex items-center gap-1">
-              <TrendingUp className="h-3 w-3 text-emerald-500 shrink-0" /> <span className="truncate">Gross Revenue</span>
+              <TrendingUp className="h-3 w-3 text-emerald-500 shrink-0" /> <span className="truncate">Valid Revenue</span>
             </p>
             {loading ? <Skeleton className="h-6 w-20" /> : <p className="text-lg sm:text-xl font-black text-gray-900 truncate">₹{metrics.totalRevenue.toLocaleString()}</p>}
           </CardContent>
@@ -415,7 +451,7 @@ export function SalesVelocityReport() {
         <Card className="shadow-none border-gray-200 bg-white rounded-xl">
           <CardContent className="p-3 sm:p-4">
             <p className="text-[9px] sm:text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1 flex items-center gap-1">
-              <Receipt className="h-3 w-3 text-blue-500 shrink-0" /> <span className="truncate">Invoices</span>
+              <Receipt className="h-3 w-3 text-blue-500 shrink-0" /> <span className="truncate">Valid Invoices</span>
             </p>
             {loading ? <Skeleton className="h-6 w-12" /> : <p className="text-lg sm:text-xl font-black text-gray-900 truncate">{metrics.invoiceCount}</p>}
           </CardContent>
@@ -477,11 +513,15 @@ export function SalesVelocityReport() {
                 data.map((inv) => {
                   const wName = warehouses.find(w => w.id === inv.warehouse_id)?.name || '--'
                   const staffName = inv.profiles?.full_name || (inv.user_id ? `Staff (${inv.user_id.substring(0, 5).toUpperCase()})` : 'System / Admin')
+                  const isCancelled = inv.status === 'CANCELLED'
 
                   return (
-                    <TableRow key={inv.id} className="hover:bg-gray-50/50 transition-colors border-gray-100">
+                    <TableRow key={inv.id} className={`hover:bg-gray-50/50 transition-colors border-gray-100 ${isCancelled ? 'opacity-60 bg-red-50/20 hover:bg-red-50/40' : ''}`}>
                       <TableCell className="px-4 py-2.5 sm:py-3">
-                        <div className="font-mono text-[13px] font-black text-gray-900">{inv.invoice_number}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-[13px] font-black text-gray-900">{inv.invoice_number}</span>
+                          {isCancelled && <Badge variant="outline" className="h-4 px-1 text-[9px] bg-red-100 text-red-600 border-red-200 uppercase tracking-widest">Voided</Badge>}
+                        </div>
                         <div className="text-[10px] text-gray-400 font-bold tracking-tighter">{format(new Date(inv.created_at), 'dd MMM yy, HH:mm')}</div>
                       </TableCell>
                       <TableCell>
@@ -502,7 +542,7 @@ export function SalesVelocityReport() {
                           {inv.payment_mode || 'Cash'}
                         </span>
                       </TableCell>
-                      <TableCell className="text-right font-black text-emerald-600 pr-4 sm:pr-6 text-[13px] sm:text-sm">
+                      <TableCell className={`text-right font-black pr-4 sm:pr-6 text-[13px] sm:text-sm ${isCancelled ? 'text-gray-400 line-through' : 'text-emerald-600'}`}>
                         ₹{inv.final_total?.toLocaleString() || '0'}
                       </TableCell>
                     </TableRow>

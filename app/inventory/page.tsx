@@ -174,7 +174,11 @@ export default function InventoryPage() {
   const [editingMrpVal, setEditingMrpVal] = useState<string>('')
   
   const [editWeightItem, setEditWeightItem] = useState<InventoryItem | null>(null)
-  const [weightForm, setWeightForm] = useState({ gross: '', net: '', stone: '', reason: '' })
+  const [weightForm, setWeightForm] = useState({ 
+    gross: '', net: '', stone: '', 
+    diamond_clarity: '', diamond_color: '', diamond_shape: '',
+    reason: '' 
+  })
   const [isSavingWeights, setIsSavingWeights] = useState(false)
 
   const [tagItem, setTagItem] = useState<InventoryItem | null>(null)
@@ -185,6 +189,7 @@ export default function InventoryPage() {
   const [filterStatus, setFilterStatus] = useState<string[]>([])
   const [filterCategory, setFilterCategory] = useState<string[]>([])
   const [filterPurity, setFilterPurity] = useState<string[]>([])
+  const [filterClarity, setFilterClarity] = useState<string[]>([])
   const [activeTab, setActiveTab] = useState<string>("active")
   
   const [maxCatalogPrice, setMaxCatalogPrice] = useState(1000000)
@@ -198,6 +203,8 @@ export default function InventoryPage() {
   const [globalSoldCount, setGlobalSoldCount] = useState<number>(0)
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false)
 
+  const [diamondRates, setDiamondRates] = useState<Record<string, number>>({})
+
   const [isCalcModalOpen, setCalcModalOpen] = useState(false)
   const [calcStep, setCalcStep] = useState<'params' | 'preview'>('params')
   const [isCalculating, setIsCalculating] = useState(false)
@@ -205,7 +212,7 @@ export default function InventoryPage() {
   const [goldRates, setGoldRates] = useState<Record<string, number>>({}) 
   const [previewData, setPreviewData] = useState<any[]>([])
   const [isUploadingImage, setIsUploadingImage] = useState(false)
-  const [calcParams, setCalcParams] = useState({ diamondRatePerCt: 25000, markupPercent: 80, flatCharge: 8000 })
+  const [calcParams, setCalcParams] = useState({ diamondRatePerCt: 25000, markupPercent: 80, flatCharge: 8000, roundUpTo: 50 })
 
   const printRef = useRef<HTMLDivElement>(null)
   
@@ -218,7 +225,7 @@ export default function InventoryPage() {
 
   const uniqueCategories = useMemo(() => Array.from(new Set(items.map(c => c.item_category))).filter(Boolean).sort(), [items]);
   const uniquePurities = useMemo(() => Array.from(new Set(items.map(c => c.purity_karat))).filter(Boolean).sort(), [items]);
-
+  const uniqueClaritiesFilter = useMemo(() => Array.from(new Set(items.map(c => c.diamond_clarity))).filter((c): c is string => Boolean(c)).sort(), [items]);
   const executeSmartSearch = useCallback(() => {
     if (!searchTerm.trim()) {
       // 🐛 FIX: Only clear the text search string, do NOT wipe out user's explicit location or manual filters
@@ -253,6 +260,13 @@ export default function InventoryPage() {
       const kVal = karatMatch[1] + "K"
       setFilterPurity(prev => { if (!prev.includes(kVal)) { magicalUpdate = true; return [...prev, kVal]; } return prev; });
       q = q.replace(karatMatch[0], '')
+    }
+
+    const clarityMatch = q.match(/\b(VVS|VS|VVS-VS|VVS1|VVS2|VS1|VS2|SI|SI1|SI2|I1|I2|I3)\b/i)
+    if (clarityMatch) {
+      const cVal = clarityMatch[1].toUpperCase()
+      setFilterClarity(prev => { if (!prev.includes(cVal)) { magicalUpdate = true; return [...prev, cVal]; } return prev; });
+      q = q.replace(clarityMatch[0], '')
     }
 
     setFilterStatus(prev => {
@@ -384,6 +398,7 @@ export default function InventoryPage() {
       if (debouncedSearch) activeQuery = activeQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
       if (filterCategory.length > 0) activeQuery = activeQuery.in('item_category', filterCategory)
       if (filterPurity.length > 0) activeQuery = activeQuery.in('purity_karat', filterPurity)
+      if (filterClarity.length > 0) activeQuery = activeQuery.in('diamond_clarity', filterClarity)
       
       if (filterStatus.length > 0) {
         const validStatuses = filterStatus.filter(s => s !== 'repairs' && s !== 'exchanged');
@@ -533,6 +548,7 @@ export default function InventoryPage() {
 
       if (filterCategory.length > 0 && !filterCategory.includes(item.item_category)) continue;
       if (filterPurity.length > 0 && !filterPurity.includes(item.purity_karat)) continue;
+      if (filterClarity.length > 0 && (!item.diamond_clarity || !filterClarity.includes(item.diamond_clarity))) continue;
       
       if (filterStatus.length > 0) {
         let match = false;
@@ -555,7 +571,7 @@ export default function InventoryPage() {
   }
 
   const clearAllFilters = () => {
-    setFilterCategory([]); setFilterPurity([]); setFilterStatus([]);
+    setFilterCategory([]); setFilterPurity([]); setFilterStatus([]);setFilterClarity([]);
     setIsPriceFilterActive(false); setPriceRange([0, maxCatalogPrice]); 
     setSearchTerm(""); setDebouncedSearch("");
     setActiveTab("active");
@@ -592,6 +608,10 @@ export default function InventoryPage() {
       gross: item.gross_weight_g?.toString() || '0',
       net: item.net_weight_g?.toString() || '0',
       stone: aggWt.toString() || '0',
+      // ✨ ADDED: Load existing diamond details
+      diamond_clarity: item.diamond_clarity || '',
+      diamond_color: item.diamond_color || '',
+      diamond_shape: item.diamond_shape || '',
       reason: ''
     });
   }
@@ -612,12 +632,18 @@ export default function InventoryPage() {
 
     try {
       const currentStone = getStoneTotals(editWeightItem).aggWt;
+      
+      // ✨ NEW: Clean the diamond inputs
+      const dClarity = weightForm.diamond_clarity.trim() || null;
+      const dColor = weightForm.diamond_color.trim() || null;
+      const dShape = weightForm.diamond_shape.trim() || null;
 
       const newLogEntry: AuditLogEntry = {
         timestamp: new Date().toISOString(),
         user_name: appUser.full_name || 'System User',
         reason: weightForm.reason.trim(),
-        changes: `Gross: ${editWeightItem.gross_weight_g}g ➝ ${newGross}g | Net: ${editWeightItem.net_weight_g}g ➝ ${newNet}g | Stone: ${currentStone}ct ➝ ${newStone}ct`
+        // ✨ NEW: Audit log now tracks diamond clarity changes
+        changes: `Gross: ${editWeightItem.gross_weight_g}g ➝ ${newGross}g | Net: ${editWeightItem.net_weight_g}g ➝ ${newNet}g | Stone: ${currentStone}ct ➝ ${newStone}ct | Clarity: ${editWeightItem.diamond_clarity || 'None'} ➝ ${dClarity || 'None'}`
       };
 
       const currentHistory = Array.isArray(editWeightItem.audit_history) ? editWeightItem.audit_history : [];
@@ -635,6 +661,10 @@ export default function InventoryPage() {
         total_stone_weight_cts: newStone,
         solitaire_weight_cts: 0, 
         melee_weight_cts: 0,
+        // ✨ NEW: Save diamond specs to DB
+        diamond_clarity: dClarity,
+        diamond_color: dColor,
+        diamond_shape: dShape,
         audit_history: updatedHistory,
         updated_by: appUser.user_id || appUser.id
       }).eq('id', editWeightItem.id);
@@ -648,13 +678,17 @@ export default function InventoryPage() {
         total_stone_weight_cts: newStone,
         solitaire_weight_cts: 0,
         melee_weight_cts: 0,
+        // ✨ NEW: Update Local UI State
+        diamond_clarity: dClarity,
+        diamond_color: dColor,
+        diamond_shape: dShape,
         audit_history: updatedHistory
       } : i));
 
-      toast.success("Weights & Audit Log updated successfully");
+      toast.success("Details & Audit Log updated successfully");
       setEditWeightItem(null);
     } catch (e: any) {
-      toast.error(e.message || "Failed to update weights");
+      toast.error(e.message || "Failed to update item details");
     } finally {
       setIsSavingWeights(false);
     }
@@ -672,6 +706,19 @@ export default function InventoryPage() {
       initialRates[k] = Math.round(base24kRate * (kNum / 24))
     })
     setGoldRates(initialRates)
+
+    // ✨ FIX: Strip spaces and standardize to uppercase to prevent duplicate 'SI' keys
+    const rawClarities = selectedItems.map(i => i.diamond_clarity);
+    const uniqueClarities = Array.from(new Set(
+      rawClarities.map(c => (c ? c.trim().toUpperCase() : 'DEFAULT'))
+    ));
+    
+    const initialDiamondRates: Record<string, number> = {}
+    uniqueClarities.forEach(clarity => {
+      initialDiamondRates[clarity] = calcParams.diamondRatePerCt 
+    })
+    setDiamondRates(initialDiamondRates)
+
     setCalcStep('params')
     setCalcModalOpen(true)
   }
@@ -682,13 +729,22 @@ export default function InventoryPage() {
       const k = item.purity_karat || '24K'
       const gRate = goldRates[k] || 0
       const goldCost = (item.net_weight_g || 0) * gRate
-      const diamondCost = (item.total_stone_weight_cts || 0) * calcParams.diamondRatePerCt
+      
+      // ✨ NEW: Apply specific diamond rate
+      const dClarity = item.diamond_clarity || 'Default'
+      const dRate = diamondRates[dClarity] || calcParams.diamondRatePerCt
+      const diamondCost = (item.total_stone_weight_cts || 0) * dRate
+
       const baseCost = goldCost + diamondCost
       const markupAmount = baseCost * (calcParams.markupPercent / 100)
       const subtotal = baseCost + markupAmount
       
       const exactMrp = subtotal + calcParams.flatCharge
-      const finalMrp = Math.ceil(exactMrp / 100) * 100
+      
+      // ✨ NEW: Round UP to the nearest target (e.g., nearest 50). Never subtracts.
+      // e.g., 11512 / 50 = 230.24 -> ceil(230.24) = 231 -> 231 * 50 = 11550
+      const roundTarget = calcParams.roundUpTo || 10;
+      const finalMrp = Math.ceil(exactMrp / roundTarget) * roundTarget;
       
       return { ...item, newMrp: finalMrp }
     })
@@ -934,6 +990,26 @@ export default function InventoryPage() {
               )}
             </div>
 
+            {/* ✨ NEW CLARITY DROPDOWN */}
+            <div className="relative">
+              <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'clarity' ? null : 'clarity')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", filterClarity.length > 0 || openDropdown === 'clarity' ? "bg-cyan-50 text-cyan-700 border-cyan-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
+                Clarity {filterClarity.length > 0 && <span className="ml-1.5 bg-cyan-500 text-white rounded-full px-1.5 py-0.5 text-[9px]">{filterClarity.length}</span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
+              </Button>
+              {openDropdown === 'clarity' && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)}></div>
+                  <div className="absolute top-full left-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 p-2 max-h-64 overflow-y-auto animate-in fade-in slide-in-from-top-2">
+                    {uniqueClaritiesFilter.map(c => (
+                      <label key={c} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors">
+                        <Checkbox checked={filterClarity.includes(c)} onCheckedChange={() => toggleArrayItem(filterClarity, setFilterClarity, c)} className="rounded border-slate-300 data-[state=checked]:bg-cyan-500" />
+                        <span className="text-xs font-medium text-slate-700">{c}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
             <div className="relative">
               <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'price' ? null : 'price')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", isPriceFilterActive || openDropdown === 'price' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
                 Price Range {isPriceFilterActive && <span className="ml-1.5 w-2 h-2 rounded-full bg-emerald-500 block"></span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
@@ -984,6 +1060,7 @@ export default function InventoryPage() {
                 {p} <X className="w-3 h-3 cursor-pointer hover:text-amber-900" onClick={() => toggleArrayItem(filterPurity, setFilterPurity, p)} />
               </Badge>
             ))}
+            
             {filterStatus.map(s => (
               <Badge key={`stat-${s}`} className="bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-100 rounded-full px-3 py-1 flex items-center gap-1.5 text-[11px] font-semibold transition-all shadow-none">
                 {s.replace(/_/g, ' ')} <X className="w-3 h-3 cursor-pointer hover:text-rose-900" onClick={() => toggleArrayItem(filterStatus, setFilterStatus, s)} />
@@ -1134,9 +1211,45 @@ export default function InventoryPage() {
                   onChange={(e) => setWeightForm({...weightForm, stone: e.target.value})}
                 />
               </div>
+
+              {/* ✨ NEW: Diamond Specifications Fields */}
+              <div className="col-span-2 border-t border-slate-100 pt-3 mt-1 space-y-3">
+                <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                  <Gem className="w-3 h-3 text-slate-400" /> Diamond Specifications
+                </Label>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-bold text-slate-500 uppercase">Clarity</Label>
+                    <Input 
+                      className="border-slate-300 h-8 text-xs font-semibold uppercase"
+                      placeholder="VVS-VS"
+                      value={weightForm.diamond_clarity}
+                      onChange={(e) => setWeightForm({...weightForm, diamond_clarity: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-bold text-slate-500 uppercase">Color</Label>
+                    <Input 
+                      className="border-slate-300 h-8 text-xs font-semibold uppercase"
+                      placeholder="E-F"
+                      value={weightForm.diamond_color}
+                      onChange={(e) => setWeightForm({...weightForm, diamond_color: e.target.value})}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[9px] font-bold text-slate-500 uppercase">Shape</Label>
+                    <Input 
+                      className="border-slate-300 h-8 text-xs font-semibold"
+                      placeholder="Round"
+                      value={weightForm.diamond_shape}
+                      onChange={(e) => setWeightForm({...weightForm, diamond_shape: e.target.value})}
+                    />
+                  </div>
+                </div>
+              </div>
             </div>
 
-            <div className="pt-2 border-t border-slate-100">
+            <div className="pt-3 border-t border-slate-100">
               <Label className="text-[10px] font-bold text-rose-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
                 <FileText className="w-3 h-3" /> Reason for Update (Required)
               </Label>
@@ -1167,7 +1280,8 @@ export default function InventoryPage() {
 
       {/* BULK MRP CALCULATOR MODAL */}
       <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
-        <DialogContent className="sm:max-w-[500px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden bg-white">
+        {/* ✨ FIX: Widened to 800px */}
+        <DialogContent className="sm:max-w-[800px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden bg-white">
           <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5">
             <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Calculator className="w-5 h-5 text-indigo-600" />
@@ -1179,49 +1293,69 @@ export default function InventoryPage() {
           </DialogHeader>
 
           {calcStep === 'params' ? (
-            <div className="space-y-5 p-5">
-              <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Base Metal Rates (Per Gram)</Label>
-                {Object.keys(goldRates).map(k => (
-                  <div key={k} className="flex items-center gap-3">
-                    <span className="w-12 text-sm font-semibold">{k}</span>
-                    <Input 
-                      type="number" 
-                      value={goldRates[k]} 
-                      onChange={e => setGoldRates({...goldRates, [k]: Number(e.target.value)})}
-                      className="h-9 bg-white"
-                    />
-                  </div>
-                ))}
+            <div className="space-y-5 p-5 bg-slate-50/50">
+              {/* ✨ FIX: Side-by-side grid with internal scrolling (max-h-[35vh]) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+                
+                {/* Gold Section */}
+                <div className="space-y-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm max-h-[35vh] overflow-y-auto custom-scrollbar">
+                  <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest sticky top-0 bg-white z-10 pb-2 block">Gold Rates (Per Gram)</Label>
+                  {Object.keys(goldRates).map(k => (
+                    <div key={k} className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-semibold text-slate-700">{k}</span>
+                      <Input 
+                        type="number" 
+                        value={goldRates[k]} 
+                        onChange={e => setGoldRates({...goldRates, [k]: Number(e.target.value)})}
+                        className="h-9 w-28 bg-slate-50 text-right font-mono font-bold"
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Diamond Section */}
+                <div className="space-y-3 bg-blue-50/30 p-4 rounded-xl border border-blue-100 shadow-sm max-h-[35vh] overflow-y-auto custom-scrollbar">
+                  <Label className="text-[10px] font-bold text-blue-500 uppercase tracking-widest sticky top-0 bg-blue-50/90 backdrop-blur-sm z-10 pb-2 block">Diamond Rates (Per Ct)</Label>
+                  {Object.keys(diamondRates).map(clarity => (
+                    <div key={clarity} className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-slate-700 truncate max-w-[100px]">{clarity}</span>
+                      <Input 
+                        type="number" 
+                        value={diamondRates[clarity]} 
+                        onChange={e => setDiamondRates({...diamondRates, [clarity]: Number(e.target.value)})}
+                        className="h-9 w-28 bg-white text-right border-blue-200 font-mono font-bold"
+                      />
+                    </div>
+                  ))}
+                </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Diamond Rate (Per Ct)</Label>
-                  <Input 
-                    type="number" 
-                    value={calcParams.diamondRatePerCt} 
-                    onChange={e => setCalcParams({...calcParams, diamondRatePerCt: Number(e.target.value)})}
-                  />
-                </div>
+              {/* Bottom Params */}
+              <div className="grid grid-cols-3 gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                 <div className="space-y-1.5">
                   <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Markup (%)</Label>
-                  <Input 
-                    type="number" 
-                    value={calcParams.markupPercent} 
-                    onChange={e => setCalcParams({...calcParams, markupPercent: Number(e.target.value)})}
-                  />
+                  <Input type="number" className="font-mono font-bold" value={calcParams.markupPercent} onChange={e => setCalcParams({...calcParams, markupPercent: Number(e.target.value)})} />
                 </div>
-                <div className="space-y-1.5 col-span-2">
-                  <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Flat Add-on Charge (₹)</Label>
-                  <Input 
-                    type="number" 
-                    value={calcParams.flatCharge} 
-                    onChange={e => setCalcParams({...calcParams, flatCharge: Number(e.target.value)})}
-                  />
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Flat Add-on (₹)</Label>
+                  <Input type="number" className="font-mono font-bold" value={calcParams.flatCharge} onChange={e => setCalcParams({...calcParams, flatCharge: Number(e.target.value)})} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Round Up To</Label>
+                  <Select value={calcParams.roundUpTo.toString()} onValueChange={(val) => setCalcParams({...calcParams, roundUpTo: Number(val)})}>
+                    <SelectTrigger className="h-10 bg-emerald-50 border-emerald-200 text-emerald-700 font-bold focus:ring-emerald-500">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="10">Next ₹10</SelectItem>
+                      <SelectItem value="50">Next ₹50</SelectItem>
+                      <SelectItem value="100">Next ₹100</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
-              <Button onClick={handleGeneratePreview} className="w-full h-11 rounded-xl font-bold bg-indigo-600 hover:bg-indigo-700 text-white uppercase tracking-widest text-xs">
+
+              <Button onClick={handleGeneratePreview} className="w-full h-11 rounded-xl font-bold bg-indigo-600 hover:bg-indigo-700 text-white uppercase tracking-widest text-xs shadow-md">
                 Generate Preview
               </Button>
             </div>
@@ -1601,6 +1735,16 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                   <TableCell className="py-3">
                      <div className="text-xs font-semibold text-slate-900">{item.item_category}</div>
                      <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</div>
+                     
+                     {/* ✨ NEW: Diamond Specs Display */}
+                     {(item.diamond_shape || item.diamond_color || item.diamond_clarity) && (
+                       <div className="text-[9px] text-blue-600 font-bold uppercase tracking-widest mt-1.5 flex items-center gap-1">
+                         <Gem className="w-2.5 h-2.5 shrink-0" />
+                         <span className="truncate max-w-[120px]" title={[item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' • ')}>
+                           {[item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' • ')}
+                         </span>
+                       </div>
+                     )}
                   </TableCell>
 
                   <TableCell className="text-right px-4 py-3">
@@ -1751,10 +1895,20 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
               </div>
               
               <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-lg border border-slate-100 mt-1">
-                 <div>
+              <div>
                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5">Specs</p>
                    <p className="text-xs font-semibold text-slate-900">{item.item_category}</p>
                    <p className="text-[10px] text-slate-500">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</p>
+                   
+                   {/* ✨ NEW: Diamond Specs Display */}
+                   {(item.diamond_shape || item.diamond_color || item.diamond_clarity) && (
+                     <div className="text-[9px] text-blue-600 font-bold uppercase tracking-widest mt-1.5 flex items-center gap-1">
+                       <Gem className="w-2.5 h-2.5 shrink-0" />
+                       <span className="truncate max-w-[120px]" title={[item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' • ')}>
+                         {[item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' • ')}
+                       </span>
+                     </div>
+                   )}
                  </div>
 
                  <div className="text-right group relative pr-2" onClick={() => { if(canEdit && !isSoldTab && !item.is_repair_ticket) handleOpenWeightEdit(item) }}>
