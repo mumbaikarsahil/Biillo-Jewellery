@@ -1,18 +1,20 @@
 import React, { useState, useEffect } from 'react'
-import { Undo2, ScanLine, Keyboard, Loader2 } from 'lucide-react'
+import { Undo2, ScanLine, Keyboard, Loader2, CheckCircle2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
-import { supabase } from '@/lib/supabaseClient' // Make sure this path matches your setup
+import { supabase } from '@/lib/supabaseClient' 
 
 interface ReturnIntakeFormProps {
   details: any
   setDetails: (details: any) => void
-  appUser: any // <-- Added this so we can securely fetch by company_id
+  appUser: any 
+  // ✨ NEW: Function to push the final value to the parent checkout sidebar
+  onApplyReturn?: (refundValue: number, originalInvoice: string) => void 
 }
 
-export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeFormProps) {
+export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }: ReturnIntakeFormProps) {
   const [entryMode, setEntryMode] = useState<'auto' | 'manual'>('manual')
   const [isFetching, setIsFetching] = useState(false)
   
@@ -21,7 +23,6 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
   const [discountApplied, setDiscountApplied] = useState('0')
   const [returnPercent, setReturnPercent] = useState('70')
 
-  // --- NEW: Database Fetch Logic ---
   const handleFetchInvoice = async () => {
     if (!details.invoiceNo?.trim()) {
       return toast.error('Please enter an invoice number first.')
@@ -34,7 +35,6 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
     try {
       const { data, error } = await supabase
         .from('invoices')
-        // We grab subtotal (pre-discount article cost) and discount_amount
         .select('subtotal, discount_amount') 
         .ilike('invoice_number', details.invoiceNo.trim())
         .eq('company_id', appUser.company_id)
@@ -43,7 +43,6 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
       if (error) throw error
       if (!data) return toast.error('Invoice not found in the system.')
 
-      // Update the local state with the fetched database values
       setArticleCost(data.subtotal?.toString() || '0')
       setDiscountApplied(data.discount_amount?.toString() || '0')
       toast.success('Invoice data retrieved successfully.')
@@ -73,6 +72,20 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
       calculatedRefund: refundValue
     })
   }, [articleCost, discountApplied, returnPercent])
+
+  // ✨ NEW: Handler to push to sidebar
+  const handleApplyToBill = () => {
+    if (!details.calculatedRefund || details.calculatedRefund <= 0) {
+      return toast.error('Refund value must be greater than zero.');
+    }
+    
+    if (onApplyReturn) {
+      onApplyReturn(details.calculatedRefund, details.invoiceNo || 'Manual Return');
+      toast.success('Return value applied to sidebar.');
+    } else {
+      toast.error('Parent component is not listening for this update.');
+    }
+  }
 
   return (
     <div className="flex-1 overflow-y-auto p-4 sm:p-6 custom-scrollbar bg-slate-50">
@@ -137,8 +150,20 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
           </div>
           <div className="space-y-1">
             <Label className="text-xs font-bold text-[#E30000]">Final Refund Value (₹)</Label>
-            <Input type="number" readOnly className="h-10 text-base font-bold rounded-sm border-[#E30000] bg-white focus-visible:ring-[#E30000]" value={details.calculatedRefund || 0} />
+            <Input type="number" readOnly className="h-10 text-base font-bold rounded-sm border-[#E30000] bg-white focus-visible:ring-[#E30000]" value={details.calculatedRefund?.toFixed(2) || 0} />
           </div>
+        </div>
+
+        {/* ✨ NEW: Action Button */}
+        <div className="pt-4 border-t border-slate-200 flex justify-end">
+          <Button 
+            className="h-11 px-8 bg-[#E30000] hover:bg-red-700 text-white font-bold rounded-sm"
+            onClick={handleApplyToBill}
+            disabled={!details.calculatedRefund || details.calculatedRefund <= 0}
+          >
+            <CheckCircle2 className="w-5 h-5 mr-2" />
+            Apply Return to Bill
+          </Button>
         </div>
 
       </div>

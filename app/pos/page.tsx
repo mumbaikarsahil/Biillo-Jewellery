@@ -232,12 +232,16 @@ export default function POSPage() {
                }}
              />
           ) : mode === 'return' ? (
-             <ReturnIntakeForm 
-               details={returnDetails} 
-               setDetails={setReturnDetails}
-               appUser={appUser} 
-             />
-            ) : mode === 'repair' ? (
+            <ReturnIntakeForm 
+              details={returnDetails} 
+              setDetails={setReturnDetails}
+              appUser={appUser} 
+              // ✨ FIX: Added the callback so the button successfully completes the action
+              onApplyReturn={(refundValue) => {
+                toast.success(`₹${refundValue.toLocaleString()} refund verified! Please select a Refund Method (e.g. Cash, UPI) on the right sidebar to finalize.`);
+              }}
+            />
+           ) : mode === 'repair' ? (
               <RepairIntakeForm 
                 details={repairDetails} 
                 setDetails={setRepairDetails} 

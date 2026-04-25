@@ -98,13 +98,15 @@ export function CheckoutSidebar({
   const cartAdvance = cart?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
 
   // NEW: Calculate the Gross Total (Taxable + GST) before applying pre-paid settlements
+  // NEW: Calculate the Gross Total (Taxable + GST) before applying pre-paid settlements
   const invoiceTotalValue = (finalTaxableValue || 0) + (cgstAmount || 0) + (sgstAmount || 0) + (roundOffAmount || 0);
 
   // Remaining Balance to Pay (finalPayable comes from the hook, already subtracting Advance, Kitty, and Credits)
   const displayTotal = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
-                     : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
-                     : mode === 'return' ? (Number(returnDetails?.refundAmount) || 0) 
-                     : finalPayable;
+                       : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
+                       // ✨ FIX: Changed 'refundAmount' to 'calculatedRefund'
+                       : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
+                       : finalPayable;
 
   const splitRemaining = Math.max(0, displayTotal - (currentSplitTotal || 0))
   const isSplitValid = Math.abs((currentSplitTotal || 0) - displayTotal) < 0.1
