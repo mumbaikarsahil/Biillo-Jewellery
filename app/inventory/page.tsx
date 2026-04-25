@@ -225,7 +225,13 @@ export default function InventoryPage() {
 
   const uniqueCategories = useMemo(() => Array.from(new Set(items.map(c => c.item_category))).filter(Boolean).sort(), [items]);
   const uniquePurities = useMemo(() => Array.from(new Set(items.map(c => c.purity_karat))).filter(Boolean).sort(), [items]);
-  const uniqueClaritiesFilter = useMemo(() => Array.from(new Set(items.map(c => c.diamond_clarity))).filter((c): c is string => Boolean(c)).sort(), [items]);
+  // ✨ FIX: Standardizes everything to uppercase and removes stray spaces
+  // ✨ FIX: Standardizes everything to uppercase and removes stray spaces
+  const uniqueClaritiesFilter = useMemo(() => {
+    const rawClarities = items.map(c => c.diamond_clarity).filter(Boolean) as string[];
+    const cleanClarities = rawClarities.map(c => c.trim().toUpperCase());
+    return Array.from(new Set(cleanClarities)).sort();
+  }, [items]);
   const executeSmartSearch = useCallback(() => {
     if (!searchTerm.trim()) {
       // 🐛 FIX: Only clear the text search string, do NOT wipe out user's explicit location or manual filters
@@ -548,7 +554,14 @@ export default function InventoryPage() {
 
       if (filterCategory.length > 0 && !filterCategory.includes(item.item_category)) continue;
       if (filterPurity.length > 0 && !filterPurity.includes(item.purity_karat)) continue;
-      if (filterClarity.length > 0 && (!item.diamond_clarity || !filterClarity.includes(item.diamond_clarity))) continue;
+      
+      // ✨ BULLETPROOF CLARITY FILTER
+      if (filterClarity.length > 0) {
+        const itemClarity = item.diamond_clarity ? item.diamond_clarity.trim().toUpperCase() : "";
+        if (!itemClarity || !filterClarity.includes(itemClarity)) {
+          continue; // Skip this item if it doesn't match the selected clarities
+        }
+      }
       
       if (filterStatus.length > 0) {
         let match = false;
@@ -563,8 +576,10 @@ export default function InventoryPage() {
       if (isSold) sold.push(item); else active.push(item);
     }
     return { activeItemsFiltered: active, soldItemsFiltered: sold }
-  }, [items, debouncedSearch, filterCategory, filterPurity, filterStatus, priceRange, isPriceFilterActive]);
-
+    
+  // ✨ CRITICAL FIX: filterClarity MUST be in this array below for React to update the table instantly
+  }, [items, debouncedSearch, filterCategory, filterPurity, filterStatus, priceRange, isPriceFilterActive, filterClarity]);
+  
   const toggleArrayItem = (arr: string[], setArr: any, item: string) => {
     if (arr.includes(item)) setArr(arr.filter((i: string) => i !== item));
     else setArr([...arr, item]);
@@ -848,6 +863,12 @@ export default function InventoryPage() {
                   <Button size="sm" className="h-8 px-3 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 shadow-sm hidden md:flex">
                     <ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />
                     Direct Transfer
+                  </Button>
+                </Link>
+                <Link href="/inventory/returns">
+                  <Button size="sm" className="h-8 px-3 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 shadow-sm hidden md:flex">
+                    <ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />
+                    Returns & Buybacks items
                   </Button>
                 </Link>
                 <div className="w-px h-4 bg-slate-200 mx-1 hidden md:block" />
