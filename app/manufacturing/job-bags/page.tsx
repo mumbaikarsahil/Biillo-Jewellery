@@ -7,7 +7,8 @@ import { format } from "date-fns";
 import { 
   Plus, Search, ChevronRight, ArrowLeft, LayoutDashboard, 
   RefreshCw, Database, Loader2, Briefcase, User, CheckCircle2,
-  Package, Info, Filter, Wand2, SortDesc, CalendarDays, Bell, Hammer, Wrench
+  Package, Info, Filter, Wand2, SortDesc, CalendarDays, Bell, Hammer, Wrench,
+  Check
 } from "lucide-react";
 import { toast } from "sonner";
 

@@ -444,19 +444,19 @@ export default function ReceiveTab({
     const pendingFineGold = poolStats.issuedFineGold - poolStats.consumedFineGold;
     const availableDia = poolStats.issuedDiaCts - poolStats.consumedDiaCts;
 
-    // 3. HARD STOP: Check for Negative Reconciliation (0.01g tolerance for float math)
+    // 3. WARNING GATE: Check for Negative Reconciliation (0.01g tolerance for float math)
     if (stagedFineGoldRequired > pendingFineGold + 0.01) {
-      return toast.error("CRITICAL: Negative Gold Reconciliation Prevented.", {
-        description: `You are trying to receive ${stagedFineGoldRequired.toFixed(3)}g of FINE GOLD, but only ${pendingFineGold.toFixed(3)}g is available in this Job Bag. Issue more gold to the artisan first.`,
-        duration: 8000
-      });
+      const proceed = window.confirm(
+        `⚠️ WARNING: Negative Gold Reconciliation.\n\nYou are trying to receive ${stagedFineGoldRequired.toFixed(3)}g of FINE GOLD, but only ${pendingFineGold.toFixed(3)}g is available in this Job Bag.\n\nDo you want to FORCE RECEIVE anyway?`
+      );
+      if (!proceed) return;
     }
 
     if (stagedDiaRequired > availableDia + 0.01) {
-      return toast.error("CRITICAL: Negative Diamond Reconciliation Prevented.", {
-        description: `You are attempting to receive ${stagedDiaRequired.toFixed(2)}ct of diamonds, but only ${availableDia.toFixed(2)}ct is available. Issue more diamonds first.`,
-        duration: 8000
-      });
+      const proceed = window.confirm(
+        `⚠️ WARNING: Negative Diamond Reconciliation.\n\nYou are attempting to receive ${stagedDiaRequired.toFixed(2)}ct of diamonds, but only ${availableDia.toFixed(2)}ct is available.\n\nDo you want to FORCE RECEIVE anyway?`
+      );
+      if (!proceed) return;
     }
 
     setIsProcessing(true)
@@ -672,10 +672,12 @@ export default function ReceiveTab({
               size="sm" 
               onClick={receiveSelectedBatch} 
               disabled={isProcessing || selectedItems.length === 0}
-              className={cn("h-8 px-4 text-xs font-bold uppercase shadow-md transition-all active:scale-[0.98]", (isGoldOverdraft || isDiaOverdraft) ? "bg-red-600 hover:bg-red-700 text-white cursor-not-allowed" : "bg-foreground text-background hover:bg-foreground/90")}
+              // ✨ FIX: Removed 'cursor-not-allowed' so the user knows it is clickable
+              className={cn("h-8 px-4 text-xs font-bold uppercase shadow-md transition-all active:scale-[0.98]", (isGoldOverdraft || isDiaOverdraft) ? "bg-red-600 hover:bg-red-700 text-white" : "bg-foreground text-background hover:bg-foreground/90")}
             >
               {isProcessing ? <RefreshCw className="w-3 h-3 mr-2 animate-spin" /> : <Save className="w-3 h-3 mr-2" />}
-              {(isGoldOverdraft || isDiaOverdraft) ? "Insufficient Materials" : `Receive Selected (${selectedItems.length})`}
+              {/* ✨ FIX: Updated the label to indicate they are forcing an overdraft */}
+              {(isGoldOverdraft || isDiaOverdraft) ? `Force Receive Overdraft (${selectedItems.length})` : `Receive Selected (${selectedItems.length})`}
             </Button>
           </div>
         </CardHeader>
@@ -907,73 +909,75 @@ export default function ReceiveTab({
                         <td className="p-3 bg-blue-50/10 align-top border-l border-blue-100/50 min-w-[200px]">
                           <div className="space-y-2">
                             
-                            <div className="flex gap-1 items-center relative">
-                              <Input 
-                                type="number" className="h-6 w-[40%] text-[10px] px-2 bg-white" 
-                                placeholder="Pcs" 
-                                value={item.stonePieces} 
-                                onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stonePieces', e.target.value)} 
-                              />
-                              <Input 
-                                type="number" step="0.01" className="h-6 w-[40%] text-[10px] px-2 bg-white font-bold" 
-                                placeholder="Cts" 
-                                value={item.stoneWeight} 
-                                onChange={(e) => updateBatchItem(item.job_bag_item_id, 'stoneWeight', e.target.value)} 
-                              />
-                              
-                              <Popover>
-                                <PopoverTrigger asChild>
+                            <Popover>
+                              <PopoverTrigger asChild>
+                                {/* The clickable trigger area */}
+                                <div className="flex gap-1 items-center relative cursor-pointer group" title="Click to enter Solitaire/Melee breakup">
+                                  <Input 
+                                    readOnly
+                                    className="h-6 w-[40%] text-[10px] px-2 bg-white cursor-pointer pointer-events-none group-hover:border-blue-300 transition-colors" 
+                                    placeholder="Pcs" 
+                                    value={item.stonePieces} 
+                                  />
+                                  <Input 
+                                    readOnly
+                                    className="h-6 w-[40%] text-[10px] px-2 bg-white font-bold cursor-pointer pointer-events-none group-hover:border-blue-300 text-blue-700 transition-colors" 
+                                    placeholder="Cts" 
+                                    value={item.stoneWeight} 
+                                  />
+                                  
                                   <Button 
                                     variant="outline" 
                                     size="icon" 
+                                    tabIndex={-1}
                                     className={cn(
-                                      "h-6 w-[20%] transition-all", 
+                                      "h-6 w-[20%] transition-all pointer-events-none", 
                                       (Number(item.solitaireWeight) > 0 || Number(item.meleeWeight) > 0) 
-                                        ? "bg-blue-600 text-white border-blue-700 hover:bg-blue-700 shadow-inner" 
-                                        : "bg-white text-blue-600 border-blue-200 hover:bg-blue-50"
+                                        ? "bg-blue-600 text-white border-blue-700 shadow-inner" 
+                                        : "bg-white text-blue-600 border-blue-200 group-hover:bg-blue-50"
                                     )}
-                                    title="Advanced Diamond Breakup"
                                   >
                                     <Layers className="w-3 h-3" />
                                   </Button>
-                                </PopoverTrigger>
-                                <PopoverContent 
-                                  side="left" 
-                                  align="start"
-                                  className="w-72 p-4 bg-white/95 backdrop-blur-xl border border-blue-100 shadow-[0_8px_30px_rgb(0,0,0,0.12)] rounded-2xl ring-1 ring-black/5 z-50"
-                                >
-                                  <div className="space-y-4">
-                                    <div className="flex items-center gap-2 border-b border-slate-200/50 pb-2">
-                                      <Gem className="w-4 h-4 text-blue-600" />
-                                      <h4 className="text-xs font-black uppercase tracking-widest text-slate-800">Stone Breakup</h4>
-                                    </div>
-                                    
-                                    <div className="space-y-1.5">
-                                      <Label className="text-[10px] font-bold text-slate-500 uppercase">Solitaire / Center Stone</Label>
-                                      <div className="flex gap-2">
-                                        <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.solitairePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitairePieces', e.target.value)} />
-                                        <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.solitaireWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitaireWeight', e.target.value)} />
-                                      </div>
-                                    </div>
-
-                                    <div className="space-y-1.5">
-                                      <Label className="text-[10px] font-bold text-slate-500 uppercase">Melee / Side Stones</Label>
-                                      <div className="flex gap-2">
-                                        <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.meleePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleePieces', e.target.value)} />
-                                        <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.meleeWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleeWeight', e.target.value)} />
-                                      </div>
-                                    </div>
-
-                                    <div className="pt-2 border-t border-slate-200/50 flex justify-between items-center">
-                                      <span className="text-[10px] font-medium text-slate-500">Auto-calculates main totals.</span>
-                                      <Badge variant="secondary" className="bg-blue-100 text-blue-700 hover:bg-blue-100 border-none font-mono text-[10px]">
-                                        {item.stoneWeight || "0.00"} ct
-                                      </Badge>
+                                </div>
+                              </PopoverTrigger>
+                              
+                              <PopoverContent 
+                                side="left" 
+                                align="start"
+                                className="w-72 p-4 bg-white/95 backdrop-blur-xl border border-blue-100 shadow-[0_8px_30px_rgb(0,0,0,0.12)] rounded-2xl ring-1 ring-black/5 z-50"
+                              >
+                                <div className="space-y-4">
+                                  <div className="flex items-center gap-2 border-b border-slate-200/50 pb-2">
+                                    <Gem className="w-4 h-4 text-blue-600" />
+                                    <h4 className="text-xs font-black uppercase tracking-widest text-slate-800">Stone Breakup Required</h4>
+                                  </div>
+                                  
+                                  <div className="space-y-1.5">
+                                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Solitaire / Center Stone</Label>
+                                    <div className="flex gap-2">
+                                      <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.solitairePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitairePieces', e.target.value)} />
+                                      <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.solitaireWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitaireWeight', e.target.value)} />
                                     </div>
                                   </div>
-                                </PopoverContent>
-                              </Popover>
-                            </div>
+
+                                  <div className="space-y-1.5">
+                                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Melee / Side Stones</Label>
+                                    <div className="flex gap-2">
+                                      <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.meleePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleePieces', e.target.value)} />
+                                      <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.meleeWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleeWeight', e.target.value)} />
+                                    </div>
+                                  </div>
+
+                                  <div className="pt-2 border-t border-slate-200/50 flex justify-between items-center">
+                                    <span className="text-[10px] font-medium text-slate-500">Auto-calculates main totals.</span>
+                                    <Badge variant="secondary" className="bg-blue-100 text-blue-700 hover:bg-blue-100 border-none font-mono text-[10px]">
+                                      {item.stoneWeight || "0.00"} ct
+                                    </Badge>
+                                  </div>
+                                </div>
+                              </PopoverContent>
+                            </Popover>
 
                             <Input 
                               type="number" step="0.01" 
