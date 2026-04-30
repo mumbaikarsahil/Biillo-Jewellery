@@ -105,8 +105,14 @@ export function useCheckout({
   
   // ACCOUNTING FIX: Kitty and Wallet Credit are now treated as post-tax payments, not pre-tax discounts.
   // Tax is calculated ONLY after Manual Discount and Exchange value.
-  const exchangeNum = parseFloat(exchangeValue) || 0
-  let baseTaxable = Math.max(0, subtotal - standardDiscount - exchangeNum)
+  // ✨ FIX: Use estimated value for Custom Orders so vouchers don't drop to 0!
+  let effectiveSubtotal = subtotal;
+  if (mode === 'custom') {
+      effectiveSubtotal = Number(customOrderDetails?.estimated_value) || 0;
+  }
+
+  const exchangeNum = parseFloat(exchangeValue) || 0;
+  let baseTaxable = Math.max(0, effectiveSubtotal - standardDiscount - exchangeNum);
   
   const handlingAmt = parseFloat(handlingFee) || 0; 
 
@@ -563,11 +569,13 @@ export function useCheckout({
           customer_id: selectedCustomer.id,
           order_number: finalNo,
           design_reference: customOrderDetails.design_reference,
+
           item_category: customOrderDetails.item_category,
           expected_gold_g: Number(customOrderDetails.expected_gold_g) || null,
           expected_diamond_cts: Number(customOrderDetails.expected_diamond_cts) || null,
           estimated_value: Number(customOrderDetails.estimated_value) || 0,
-          advance_paid: Number(customOrderDetails.advance_paid) || 0,
+          advance_paid: (Number(customOrderDetails.advance_paid) || 0) + appliedVoucherAmount,
+          
           status: 'pending_manufacturing' 
         }
         const { error } = await supabase.from('custom_orders').insert(payload)

@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState } from 'react'
-import { Hammer, X, Search, Package, AlertCircle, CheckCircle2, Loader2, IndianRupee, Store } from 'lucide-react'
+import { Hammer, X, Search, Package, AlertCircle, CheckCircle2, Loader2, IndianRupee, Store, Ticket } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -27,9 +27,10 @@ interface CustomOrderFormProps {
   setDetails: (details: any) => void
   currentLocationId?: string 
   onAddToBill?: (finalItemData: any) => void 
+  voucherAmount?: number // ✨ NEW: We will pass the active voucher here!
 }
 
-export function CustomOrderForm({ details, setDetails, currentLocationId, onAddToBill }: CustomOrderFormProps) {
+export function CustomOrderForm({ details, setDetails, currentLocationId, onAddToBill, voucherAmount = 0 }: CustomOrderFormProps) {
   const [activeTab, setActiveTab] = useState<'new' | 'pickup'>('new')
   const [isCustomCategory, setIsCustomCategory] = useState(false)
 
@@ -81,6 +82,12 @@ export function CustomOrderForm({ details, setDetails, currentLocationId, onAddT
       setIsSearching(false)
     }
   }
+
+  // ✨ NEW: Real-time Math Engine for the UI
+  const estValue = Number(details?.estimated_value) || 0;
+  const customerAdvance = Number(details?.advance_paid) || 0;
+  const totalAdvanceCredited = customerAdvance + voucherAmount;
+  const estimatedBalance = Math.max(0, estValue - totalAdvanceCredited);
 
   return (
     <div className="flex-1 p-3 sm:p-4 custom-scrollbar flex flex-col h-full bg-slate-50/50">
@@ -201,33 +208,59 @@ export function CustomOrderForm({ details, setDetails, currentLocationId, onAddT
               </div>
             </div>
 
-            {/* FINANCIALS */}
+            {/* FINANCIALS & MATH UI */}
             <div className="mt-4 bg-slate-50 border border-slate-200 rounded-lg p-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                 <div className="space-y-1.5">
                   <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Estimated Value (₹)</Label>
                   <Input 
                     name="estimated_value"
                     type="number" 
                     placeholder="0" 
-                    className="h-9 text-sm border-slate-300 font-semibold" 
+                    className="h-9 text-sm border-slate-300 font-semibold bg-white" 
                     value={details?.estimated_value || ''} 
                     onChange={handleInputChange} 
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-bold text-[#881798] uppercase tracking-wide">Advance Received (₹) *</Label>
+                  <Label className="text-xs font-bold text-[#881798] uppercase tracking-wide">Customer Advance (₹) *</Label>
                   <Input 
                     name="advance_paid"
                     type="number" 
                     placeholder="0" 
-                    className="h-9 text-sm border-[#881798] ring-1 ring-[#881798]/20 focus-visible:ring-[#881798] font-bold text-[#881798]" 
+                    className="h-9 text-sm border-[#881798] ring-1 ring-[#881798]/20 focus-visible:ring-[#881798] font-bold text-[#881798] bg-white" 
                     value={details?.advance_paid || ''} 
                     onChange={handleInputChange} 
                   />
                 </div>
               </div>
+
+              {/* ✨ NEW: Transparent Math Breakdown */}
+              <div className="bg-white border border-slate-200 rounded-md p-3 space-y-1.5 shadow-sm">
+                <div className="flex justify-between text-xs text-slate-600">
+                  <span>Advance Received:</span>
+                  <span>₹ {customerAdvance.toLocaleString()}</span>
+                </div>
+                
+                {voucherAmount > 0 && (
+                  <div className="flex justify-between text-xs text-emerald-600 font-medium">
+                    <span className="flex items-center gap-1"><Ticket className="w-3.5 h-3.5" /> Voucher Credit:</span>
+                    <span>+ ₹ {voucherAmount.toLocaleString()}</span>
+                  </div>
+                )}
+                
+                <div className="flex justify-between text-xs font-bold text-slate-800 border-t border-slate-100 pt-2 mt-1">
+                  <span>Total Advance Logged:</span>
+                  <span>₹ {totalAdvanceCredited.toLocaleString()}</span>
+                </div>
+                
+                <div className="flex justify-between text-sm font-black text-[#881798] border-t border-slate-200 pt-2 mt-1.5">
+                  <span>Estimated Balance on Pickup:</span>
+                  <span>₹ {estimatedBalance.toLocaleString()}</span>
+                </div>
+              </div>
             </div>
+
           </div>
         )}
 
@@ -308,14 +341,14 @@ export function CustomOrderForm({ details, setDetails, currentLocationId, onAddT
                           <span className="font-semibold text-slate-900">₹{((foundOrder.inventory.mrp || 0) * 0.03).toLocaleString()}</span>
                         </div>
                         <div className="flex justify-between items-center text-xs text-emerald-600 font-medium">
-                          <span>Advance Paid</span>
+                          <span>Total Advance Logged</span>
                           <span>- ₹{(foundOrder.advance_paid || 0).toLocaleString()}</span>
                         </div>
                         
                         <div className="border-t border-slate-200 pt-2 mt-2 flex justify-between items-center">
                           <span className="text-xs font-bold text-[#881798]">Balance Payable</span>
                           <span className="text-base font-black text-[#881798]">
-                            ₹{(((foundOrder.inventory.mrp || 0) * 1.03) - (foundOrder.advance_paid || 0)).toLocaleString()}
+                            ₹{Math.max(0, (((foundOrder.inventory.mrp || 0) * 1.03) - (foundOrder.advance_paid || 0))).toLocaleString()}
                           </span>
                         </div>
                       </div>
@@ -331,7 +364,6 @@ export function CustomOrderForm({ details, setDetails, currentLocationId, onAddT
                               mrp: foundOrder.inventory.mrp,
                               advance_paid: foundOrder.advance_paid,
                               custom_order_id: foundOrder.id,
-                              // --- ADD THESE MISSING SPECS ---
                               net_weight_g: foundOrder.inventory.net_weight_g,
                               gross_weight_g: foundOrder.inventory.gross_weight_g,
                               total_stone_weight_cts: foundOrder.inventory.total_stone_weight_cts,

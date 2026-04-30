@@ -112,7 +112,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
     return (
       <div ref={ref} className="w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
-        {/* ✨ FIX: Added print:min-h-0 print:h-max to prevent mobile Safari/Chrome from printing 4 blank pages */}
         
         {isEstimate && <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5 z-0"><span className="text-[130px] font-black -rotate-45 whitespace-nowrap text-slate-800 tracking-widest">ESTIMATE ONLY</span></div>}
         {mode === 'challan' && <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.03] z-0"><span className="text-[100px] font-black -rotate-45 whitespace-nowrap text-[#B254A3] tracking-widest">DELIVERY CHALLAN</span></div>}
@@ -313,7 +312,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 <div className="text-[11px] font-bold text-slate-600 uppercase space-y-1 tracking-wider">
                    <p>PAN NO. : {branchPan}</p>
                    <p>GST TIN NO.: {branchGstin}</p>
-                   {/* ✨ Added the specific payment mode right here! */}
                    {data.paymentMode && (
                      <p className="text-slate-800 mt-2">PAYMENT MODE: {formatPaymentMode(data.paymentMode)}</p>
                    )}
@@ -330,8 +328,13 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
               <div className={`mt-4 p-3 rounded-lg flex items-center shadow-sm ${isEstimate ? 'bg-white border border-slate-200' : 'bg-white'}`}>
                 <span className="text-[10px] font-bold text-slate-800 uppercase mr-3 shrink-0">Amt. In Words :</span> 
+                {/* ✨ FIX: Dynamic Amt In Words calculation for Custom orders to include Vouchers */}
                 <span className="text-[11px] font-bold text-slate-800 uppercase leading-tight tracking-wide">
-                  {numberToWords(mode === 'return' ? Number(returnDetails?.calculatedRefund || data.finalTotal || 0) : Number(data.finalTotal || 0))}
+                  {numberToWords(
+                    mode === 'custom' ? (Number(customOrder?.advancePayment || 0) + voucherVal) :
+                    mode === 'return' ? Number(returnDetails?.calculatedRefund || data.finalTotal || 0) : 
+                    Number(data.finalTotal || 0)
+                  )}
                 </span>
               </div>
             </div>
@@ -363,8 +366,32 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
               </>
               ) : mode === 'custom' && customOrder ? (
                 <>
-                  <div className="flex justify-between text-slate-600"><span>Estimated Value (Approx)</span><span>₹ {Number(customOrder.estimatedValue || 0).toLocaleString()}</span></div>
-                  <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900"><span>Advance Received</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
+                  <div className="flex justify-between text-slate-600 mb-1">
+                    <span>Estimated Value (Approx)</span>
+                    <span>₹ {Number(customOrder.estimatedValue || 0).toLocaleString()}</span>
+                  </div>
+                  
+                  <div className="flex justify-between text-slate-600">
+                    <span>Customer Advance (Cash/Bank)</span>
+                    <span>₹ {Number(customOrder.advancePayment || 0).toLocaleString()}</span>
+                  </div>
+                  
+                  {voucherVal > 0 && (
+                    <div className="flex justify-between text-[#A85B9D]">
+                      <span>Voucher Credit {data.handlingFee > 0 ? `(Post ₹${data.handlingFee} Fee)` : ''}</span>
+                      <span>+ ₹ {voucherVal.toLocaleString()}</span>
+                    </div>
+                  )}
+                  
+                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-300 text-lg font-black text-slate-900">
+                    <span>Total Advance Logged</span>
+                    <span>₹ {(Number(customOrder.advancePayment || 0) + voucherVal).toLocaleString()}</span>
+                  </div>
+                  
+                  <div className="flex justify-between pt-1 text-sm font-bold text-[#881798]">
+                    <span>Est. Balance on Pickup</span>
+                    <span>₹ {Math.max(0, Number(customOrder.estimatedValue || 0) - (Number(customOrder.advancePayment || 0) + voucherVal)).toLocaleString()}</span>
+                  </div>
                 </>
               ) : mode === 'challan' ? (
                 <div className="flex justify-between py-2 text-xl font-black text-slate-900"><span>Total Memo Value</span><span>₹ {subtotal?.toLocaleString()}</span></div>

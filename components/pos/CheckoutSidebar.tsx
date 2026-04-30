@@ -560,41 +560,61 @@ export function CheckoutSidebar({
         )}
 
         {/* CUSTOM ORDER ESTIMATE LEDGER */}
-        {mode === 'custom' && customEstBase > 0 && (
+        {mode === 'custom' && Number(customEstBase) > 0 && (
           <div className="space-y-1.5 text-sm text-slate-500 pb-3 border-b border-slate-100 mb-3 bg-purple-50/30 p-3 rounded-lg border border-purple-100 animate-in fade-in">
             <div className="flex justify-between items-center mb-1">
               <span className="text-[10px] font-bold uppercase tracking-widest text-purple-800">Est. Final Calculation</span>
             </div>
+            
             <div className="flex justify-between items-center">
               <span>Estimated Value</span>
-              <span className="tabular-nums font-medium text-slate-700">₹{customEstBase.toLocaleString()}</span>
+              <span className="tabular-nums font-medium text-slate-700">
+                ₹{(Number(customEstBase) || 0).toLocaleString()}
+              </span>
             </div>
-            {customDiscount > 0 && (
+            
+            {Number(customDiscount) > 0 && (
               <div className="flex justify-between items-center text-red-500">
                 <span>Discount Applied</span>
-                <span className="tabular-nums">- ₹{customDiscount.toLocaleString()}</span>
+                <span className="tabular-nums">- ₹{(Number(customDiscount) || 0).toLocaleString()}</span>
               </div>
             )}
             
-            {exchangeNum > 0 && (
+            {Number(exchangeNum) > 0 && (
               <div className="flex justify-between items-center text-blue-600">
                 <span>Exchange Credit</span>
-                <span className="tabular-nums">- ₹{exchangeNum.toLocaleString()}</span>
-              </div>
-            )}
-            {activeVoucher && (
-              <div className="flex justify-between items-center text-emerald-600">
-                <span>Voucher Auth</span>
-                <span className="tabular-nums">- ₹{activeVoucher.amount.toLocaleString()}</span>
+                <span className="tabular-nums">- ₹{(Number(exchangeNum) || 0).toLocaleString()}</span>
               </div>
             )}
             
-            {appliedKittyAmount > 0 && <div className="flex justify-between items-center text-purple-600 font-bold mt-2"><span>Less: Kitty Payment</span><span className="tabular-nums">- ₹{appliedKittyAmount.toLocaleString()}</span></div>}
-            {appliedCreditAmount > 0 && <div className="flex justify-between items-center text-emerald-600 font-bold"><span>Less: Store Credit</span><span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString()}</span></div>}
+            {/* ✨ FIX: Transparent Voucher Math with Handling Fee built-in! */}
+            {activeVoucher && (
+              <div className="flex justify-between items-center text-emerald-600 font-medium">
+                <span>Voucher Auth {Number(activeVoucher.handling_fee) > 0 ? `(Post ₹${activeVoucher.handling_fee} Fee)` : ''}</span>
+                <span className="tabular-nums">
+                  - ₹{Math.max(0, Number(activeVoucher.amount) - Number(activeVoucher.handling_fee || 0)).toLocaleString()}
+                </span>
+              </div>
+            )}
+            
+            {Number(appliedKittyAmount) > 0 && (
+              <div className="flex justify-between items-center text-purple-600 font-bold mt-2">
+                <span>Less: Kitty Payment</span>
+                <span className="tabular-nums">- ₹{(Number(appliedKittyAmount) || 0).toLocaleString()}</span>
+              </div>
+            )}
+            
+            {Number(appliedCreditAmount) > 0 && (
+              <div className="flex justify-between items-center text-emerald-600 font-bold">
+                <span>Less: Store Credit</span>
+                <span className="tabular-nums">- ₹{(Number(appliedCreditAmount) || 0).toLocaleString()}</span>
+              </div>
+            )}
 
+            {/* ✨ FIX: NaN Protection Applied */}
             <div className="flex justify-between items-center text-purple-900 font-bold pt-1.5 mt-1.5 border-t border-purple-200/50">
               <span>Net Est. Payable</span>
-              <span className="tabular-nums">₹{customNetEst.toLocaleString()}</span>
+              <span className="tabular-nums">₹{(Number(customNetEst) || 0).toLocaleString()}</span>
             </div>
           </div>
         )}

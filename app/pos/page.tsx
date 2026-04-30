@@ -205,6 +205,7 @@ export default function POSPage() {
                details={customOrderDetails} 
                setDetails={setCustomOrderDetails} 
                currentLocationId={selectedLocation}
+               voucherAmount={checkoutHook.appliedVoucherAmount}
                onAddToBill={(finalItemData: any) => {
                  setMode('normal');
                  clearCart();
