@@ -865,7 +865,7 @@ export default function InventoryPage() {
                     Direct Transfer
                   </Button>
                 </Link>
-                <Link href="/inventory/returns">
+                <Link href="/triage">
                   <Button size="sm" className="h-8 px-3 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 shadow-sm hidden md:flex">
                     <ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />
                     Returns & Buybacks items

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Undo2, Search, Keyboard, Loader2, CheckCircle2, Package, Scale, Gem, AlertCircle, CheckCircle } from 'lucide-react'
+import { Undo2, Search, Keyboard, Loader2, Package, Scale, Gem, AlertCircle, CheckCircle, ArrowLeft } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
@@ -14,13 +14,17 @@ interface ReturnIntakeFormProps {
   details: any
   setDetails: (details: any) => void
   appUser: any 
-  onApplyReturn?: (refundValue: number, originalInvoice: string, physicalDetails: any) => void 
 }
 
 type FlowState = 'search' | 'found' | 'manual'
 
-export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }: ReturnIntakeFormProps) {
-  // ✨ NEW: Wizard flow state instead of tabs
+// Pre-defined Catalog Options
+const CATEGORIES = ['Ring', 'Necklace', 'Earrings', 'Bangle', 'Bracelet', 'Pendant', 'Chain', 'Scrap', 'Coins/Bars']
+const DIAMOND_SHAPES = ['Round', 'Princess', 'Oval', 'Marquise', 'Emerald', 'Pear', 'Cushion', 'Radiant', 'Heart', 'Asscher']
+const DIAMOND_COLORS = ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'EF', 'FG', 'GH', 'HI', 'IJ', 'Fancy']
+const DIAMOND_CLARITIES = ['FL', 'IF', 'VVS1', 'VVS2', 'VVS', 'VS1', 'VS2', 'VS', 'SI1', 'SI2', 'SI', 'I1', 'I2', 'I3']
+
+export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeFormProps) {
   const [flowState, setFlowState] = useState<FlowState>('search')
   const [isFetching, setIsFetching] = useState(false)
   
@@ -41,6 +45,12 @@ export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }
   const [diamondClarity, setDiamondClarity] = useState('')
   const [diamondColor, setDiamondColor] = useState('')
   const [diamondShape, setDiamondShape] = useState('')
+
+  // Custom Input Toggle States
+  const [showCustomCategory, setShowCustomCategory] = useState(false)
+  const [showCustomClarity, setShowCustomClarity] = useState(false)
+  const [showCustomColor, setShowCustomColor] = useState(false)
+  const [showCustomShape, setShowCustomShape] = useState(false)
 
   const handleFetchInvoice = async () => {
     if (!details.invoiceNo?.trim()) {
@@ -87,25 +97,6 @@ export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }
     setReturnPercent('70')
   }
 
-  // Math Engine for Return
-  useEffect(() => {
-    const cost = parseFloat(articleCost) || 0
-    const discount = parseFloat(discountApplied) || 0
-    const percent = parseFloat(returnPercent) || 70
-
-    const paidValue = cost - discount
-    const refundValue = paidValue * (percent / 100)
-
-    setDetails({
-      ...details,
-      articleCost: cost,
-      discountApplied: discount,
-      paidValue: paidValue,
-      returnPercent: percent,
-      calculatedRefund: refundValue
-    })
-  }, [articleCost, discountApplied, returnPercent])
-
   // Purity Auto-Mapper for Database Constraints
   const getPurityPercent = (karat: string) => {
     switch (karat) {
@@ -118,41 +109,44 @@ export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }
     }
   }
 
-  const handleApplyToBill = () => {
-    if (!details.calculatedRefund || details.calculatedRefund <= 0) {
-      return toast.error('Refund value must be greater than zero.');
-    }
+  // Real-time Math & State Sync Engine
+  useEffect(() => {
+    const cost = parseFloat(articleCost) || 0
+    const discount = parseFloat(discountApplied) || 0
+    const percent = parseFloat(returnPercent) || 70
 
-    if (flowState === 'manual') {
-      if (!itemCategory.trim()) return toast.error("Item Category is required for manual entry.");
-      const gw = parseFloat(grossWeight);
-      const nw = parseFloat(netWeight);
-      if (isNaN(gw) || gw <= 0) return toast.error("Valid Gross Weight is required.");
-      if (isNaN(nw) || nw <= 0) return toast.error("Valid Net Weight is required.");
-      if (nw > gw) return toast.error("Net weight cannot exceed Gross weight.");
-    }
+    const paidValue = cost - discount
+    const refundValue = paidValue * (percent / 100)
+
+    const physicalDetails = flowState === 'manual' ? {
+      is_external_item: true,
+      item_category: itemCategory,
+      metal_type: metalType,
+      purity_karat: purityKarat,
+      purity_percent: getPurityPercent(purityKarat),
+      gross_weight_g: parseFloat(grossWeight) || 0,
+      net_weight_g: parseFloat(netWeight) || 0,
+      total_stone_weight_cts: parseFloat(stoneWeight) || 0,
+      diamond_clarity: diamondClarity.trim() || null,
+      diamond_color: diamondColor.trim() || null,
+      diamond_shape: diamondShape.trim() || null,
+    } : { is_external_item: false };
+
+    setDetails((prev: any) => ({
+      ...prev,
+      articleCost: cost,
+      discountApplied: discount,
+      paidValue: paidValue,
+      returnPercent: percent,
+      calculatedRefund: refundValue,
+      physicalDetails: physicalDetails 
+    }))
     
-    if (onApplyReturn) {
-      const physicalDetails = flowState === 'manual' ? {
-        is_external_item: true,
-        item_category: itemCategory,
-        metal_type: metalType,
-        purity_karat: purityKarat,
-        purity_percent: getPurityPercent(purityKarat),
-        gross_weight_g: parseFloat(grossWeight),
-        net_weight_g: parseFloat(netWeight),
-        total_stone_weight_cts: parseFloat(stoneWeight) || 0,
-        diamond_clarity: diamondClarity.trim() || null,
-        diamond_color: diamondColor.trim() || null,
-        diamond_shape: diamondShape.trim() || null,
-      } : { is_external_item: false };
-
-      onApplyReturn(details.calculatedRefund, details.invoiceNo || 'Manual Return', physicalDetails);
-      toast.success('Return value applied to checkout.');
-    } else {
-      toast.error('Parent component is not listening for this update.');
-    }
-  }
+  }, [
+    articleCost, discountApplied, returnPercent, flowState,
+    itemCategory, metalType, purityKarat, grossWeight, netWeight,
+    stoneWeight, diamondClarity, diamondColor, diamondShape, setDetails
+  ])
 
   return (
     <div className="flex-1 overflow-y-auto p-3 sm:p-6 custom-scrollbar bg-slate-50">
@@ -231,21 +225,41 @@ export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }
 
             {/* Physical Details (Only in Manual Mode) */}
             {flowState === 'manual' && (
-              <div className="space-y-4 bg-slate-50/50 p-3 sm:p-4 rounded-xl border border-slate-200">
+              <div className="space-y-4 bg-slate-50/50 p-4 sm:p-5 rounded-xl border border-slate-200">
                 <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5 mb-1">
                   <Package className="w-3.5 h-3.5" /> Physical Specifications
                 </Label>
                 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  
                   <div className="space-y-1.5 sm:col-span-1">
                     <Label className="text-[11px] font-semibold text-slate-700">Category</Label>
-                    <Input placeholder="e.g. Ring, Scrap" className="h-10 bg-white" value={itemCategory} onChange={e => setItemCategory(e.target.value)} />
+                    {!showCustomCategory ? (
+                      <Select value={itemCategory} onValueChange={(v) => {
+                        if (v === 'Other') { setShowCustomCategory(true); setItemCategory(''); }
+                        else { setItemCategory(v); }
+                      }}>
+                        <SelectTrigger className="h-11 bg-white border-slate-300"><SelectValue placeholder="Select..."/></SelectTrigger>
+                        <SelectContent>
+                          {CATEGORIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                          <SelectItem value="Other" className="font-bold text-indigo-600">Other (Type)</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <div className="flex gap-1 items-center">
+                        <Input placeholder="Type Category" className="h-11 bg-white border-slate-300 flex-1" value={itemCategory} onChange={e => setItemCategory(e.target.value)} autoFocus />
+                        <Button variant="ghost" size="icon" className="h-11 w-11 shrink-0 text-slate-400 hover:bg-slate-200" onClick={() => setShowCustomCategory(false)}>
+                          <ArrowLeft className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    )}
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-2 gap-3 sm:col-span-2">
+
+                  <div className="grid grid-cols-2 gap-3 sm:gap-4 sm:col-span-2">
                     <div className="space-y-1.5">
                       <Label className="text-[11px] font-semibold text-slate-700">Metal</Label>
                       <Select value={metalType} onValueChange={setMetalType}>
-                        <SelectTrigger className="h-10 bg-white"><SelectValue/></SelectTrigger>
+                        <SelectTrigger className="h-11 bg-white border-slate-300"><SelectValue/></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="Gold">Gold</SelectItem>
                           <SelectItem value="Silver">Silver</SelectItem>
@@ -256,7 +270,7 @@ export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }
                     <div className="space-y-1.5">
                       <Label className="text-[11px] font-semibold text-slate-700">Purity</Label>
                       <Select value={purityKarat} onValueChange={setPurityKarat}>
-                        <SelectTrigger className="h-10 bg-amber-50 text-amber-800 border-amber-200 font-bold"><SelectValue/></SelectTrigger>
+                        <SelectTrigger className="h-11 bg-amber-50 text-amber-800 border-amber-200 font-bold"><SelectValue/></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="24K">24K</SelectItem>
                           <SelectItem value="22K">22K</SelectItem>
@@ -268,35 +282,93 @@ export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }
                   </div>
                 </div>
 
-                <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                <div className="grid grid-cols-3 gap-3 sm:gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-[10px] text-slate-500 uppercase font-bold flex items-center gap-1"><Scale className="w-3 h-3 hidden sm:block"/> Gross (g)</Label>
-                    <Input type="number" inputMode="decimal" step="0.001" className="h-10 font-mono text-sm bg-white" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} />
+                    <Input type="number" inputMode="decimal" step="0.001" className="h-11 font-mono text-sm bg-white border-slate-300" value={grossWeight} onChange={e => setGrossWeight(e.target.value)} />
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-[10px] text-emerald-600 uppercase font-bold flex items-center gap-1"><Scale className="w-3 h-3 hidden sm:block"/> Net (g)</Label>
-                    <Input type="number" inputMode="decimal" step="0.001" className="h-10 font-mono text-sm bg-emerald-50 border-emerald-200 text-emerald-700" value={netWeight} onChange={e => setNetWeight(e.target.value)} />
+                    <Input type="number" inputMode="decimal" step="0.001" className="h-11 font-mono text-sm bg-emerald-50 border-emerald-200 text-emerald-700" value={netWeight} onChange={e => setNetWeight(e.target.value)} />
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-[10px] text-blue-600 uppercase font-bold flex items-center gap-1"><Gem className="w-3 h-3 hidden sm:block"/> Stone (ct)</Label>
-                    <Input type="number" inputMode="decimal" step="0.001" className="h-10 font-mono text-sm bg-blue-50 border-blue-200 text-blue-700" value={stoneWeight} onChange={e => setStoneWeight(e.target.value)} />
+                    <Input type="number" inputMode="decimal" step="0.001" className="h-11 font-mono text-sm bg-blue-50 border-blue-200 text-blue-700" value={stoneWeight} onChange={e => setStoneWeight(e.target.value)} />
                   </div>
                 </div>
 
                 {parseFloat(stoneWeight) > 0 && (
-                  <div className="grid grid-cols-3 gap-2 sm:gap-3 animate-in fade-in slide-in-from-top-1 pt-2 border-t border-slate-200">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 animate-in fade-in slide-in-from-top-1 pt-4 border-t border-slate-200">
+                    
                     <div className="space-y-1.5">
-                      <Label className="text-[9px] text-slate-500 uppercase">Clarity</Label>
-                      <Input placeholder="VVS" className="h-9 text-xs uppercase bg-white" value={diamondClarity} onChange={e => setDiamondClarity(e.target.value)} />
+                      <Label className="text-[9px] text-slate-500 uppercase font-bold">Clarity</Label>
+                      {!showCustomClarity ? (
+                        <Select value={diamondClarity} onValueChange={(v) => {
+                          if (v === 'Other') { setShowCustomClarity(true); setDiamondClarity(''); }
+                          else { setDiamondClarity(v); }
+                        }}>
+                          <SelectTrigger className="h-10 bg-white border-slate-300 text-xs"><SelectValue placeholder="Select..."/></SelectTrigger>
+                          <SelectContent>
+                            {DIAMOND_CLARITIES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                            <SelectItem value="Other" className="font-bold text-indigo-600">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <div className="flex gap-1 items-center">
+                          <Input placeholder="Type Clarity" className="h-10 text-xs uppercase bg-white border-slate-300 flex-1" value={diamondClarity} onChange={e => setDiamondClarity(e.target.value)} autoFocus />
+                          <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0 text-slate-400 hover:bg-slate-200" onClick={() => setShowCustomClarity(false)}>
+                            <ArrowLeft className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      )}
                     </div>
+
                     <div className="space-y-1.5">
-                      <Label className="text-[9px] text-slate-500 uppercase">Color</Label>
-                      <Input placeholder="E-F" className="h-9 text-xs uppercase bg-white" value={diamondColor} onChange={e => setDiamondColor(e.target.value)} />
+                      <Label className="text-[9px] text-slate-500 uppercase font-bold">Color</Label>
+                      {!showCustomColor ? (
+                        <Select value={diamondColor} onValueChange={(v) => {
+                          if (v === 'Other') { setShowCustomColor(true); setDiamondColor(''); }
+                          else { setDiamondColor(v); }
+                        }}>
+                          <SelectTrigger className="h-10 bg-white border-slate-300 text-xs"><SelectValue placeholder="Select..."/></SelectTrigger>
+                          <SelectContent>
+                            {DIAMOND_COLORS.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                            <SelectItem value="Other" className="font-bold text-indigo-600">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <div className="flex gap-1 items-center">
+                          <Input placeholder="Type Color" className="h-10 text-xs uppercase bg-white border-slate-300 flex-1" value={diamondColor} onChange={e => setDiamondColor(e.target.value)} autoFocus />
+                          <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0 text-slate-400 hover:bg-slate-200" onClick={() => setShowCustomColor(false)}>
+                            <ArrowLeft className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      )}
                     </div>
+
                     <div className="space-y-1.5">
-                      <Label className="text-[9px] text-slate-500 uppercase">Shape</Label>
-                      <Input placeholder="Round" className="h-9 text-xs bg-white" value={diamondShape} onChange={e => setDiamondShape(e.target.value)} />
+                      <Label className="text-[9px] text-slate-500 uppercase font-bold">Shape</Label>
+                      {!showCustomShape ? (
+                        <Select value={diamondShape} onValueChange={(v) => {
+                          if (v === 'Other') { setShowCustomShape(true); setDiamondShape(''); }
+                          else { setDiamondShape(v); }
+                        }}>
+                          <SelectTrigger className="h-10 bg-white border-slate-300 text-xs"><SelectValue placeholder="Select..."/></SelectTrigger>
+                          <SelectContent>
+                            {DIAMOND_SHAPES.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                            <SelectItem value="Other" className="font-bold text-indigo-600">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <div className="flex gap-1 items-center">
+                          <Input placeholder="Type Shape" className="h-10 text-xs bg-white border-slate-300 flex-1" value={diamondShape} onChange={e => setDiamondShape(e.target.value)} autoFocus />
+                          <Button variant="ghost" size="icon" className="h-10 w-10 shrink-0 text-slate-400 hover:bg-slate-200" onClick={() => setShowCustomShape(false)}>
+                            <ArrowLeft className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      )}
                     </div>
+
                   </div>
                 )}
               </div>
@@ -306,7 +378,7 @@ export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }
             <div className="space-y-4">
               <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Financial Calculation</Label>
               
-              <div className="grid grid-cols-2 gap-3 sm:gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-1.5">
                   <Label className="text-[11px] font-semibold text-slate-700">Article Value (Pre-GST) ₹</Label>
                   <Input 
@@ -331,7 +403,7 @@ export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4 bg-rose-50/30 p-3 sm:p-4 border border-rose-100 rounded-xl">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-rose-50/30 p-4 border border-rose-100 rounded-xl">
                 <div className="space-y-1.5 flex flex-col justify-center">
                   <Label className="text-xs font-bold text-slate-800">Buyback Policy (%)</Label>
                   <Input 
@@ -349,7 +421,7 @@ export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-rose-600 font-bold text-xl">₹</span>
                     <Input 
                       readOnly 
-                      className="h-14 pl-8 text-2xl font-black rounded-lg border-rose-300 bg-white text-rose-700 shadow-inner" 
+                      className="h-14 pl-8 text-2xl font-black rounded-lg border-rose-300 bg-white text-rose-700 shadow-inner pointer-events-none" 
                       value={details.calculatedRefund?.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) || "0.00"} 
                     />
                   </div>
@@ -357,17 +429,6 @@ export function ReturnIntakeForm({ details, setDetails, appUser, onApplyReturn }
               </div>
             </div>
 
-            {/* Action Button */}
-            <div className="pt-2 flex justify-end">
-              <Button 
-                className="h-12 w-full sm:w-auto px-8 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl shadow-md transition-all active:scale-95"
-                onClick={handleApplyToBill}
-                disabled={!details.calculatedRefund || details.calculatedRefund <= 0}
-              >
-                <CheckCircle2 className="w-5 h-5 mr-2" />
-                Apply Return to Bill
-              </Button>
-            </div>
           </div>
         )}
       </div>

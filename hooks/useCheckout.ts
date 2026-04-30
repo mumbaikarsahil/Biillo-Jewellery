@@ -63,6 +63,7 @@ export function useCheckout({
   const [exchangeInvoiceNo, setExchangeInvoiceNo] = useState<string>('')
   const [exchangeValue, setExchangeValue] = useState<string>('')
   const [exchangeNotes, setExchangeNotes] = useState<string>('')
+  const [exchangePhysicalDetails, setExchangePhysicalDetails] = useState<any>(null)
 
 
   // ==============================================================
@@ -318,7 +319,7 @@ export function useCheckout({
       
       finalTotal: mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
                 : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
-                : mode === 'return' ? (Number(returnDetails?.refundAmount) || 0) 
+                : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
                 : isEstimate && mode === 'normal' ? printFinalTotal 
                 : finalPayableGross, 
       paymentMode: formattedPaymentMode
@@ -341,7 +342,7 @@ export function useCheckout({
 
       const requiredTotal = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
                           : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
-                          : mode === 'return' ? (Number(returnDetails?.refundAmount) || 0) 
+                          : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
                           : finalPayableNet; 
 
       if (paymentMode === 'split' && Math.abs(currentSplitTotal - requiredTotal) > 0.1) {
@@ -355,70 +356,62 @@ export function useCheckout({
       } 
       else if (mode === 'normal') {
         
-        // --- NEW: SMART PAYMENT MODE LOGIC FOR EXCEL REPORTING ---
         let dbPaymentMode = paymentMode;
         let dbSplitPayments: any = paymentMode === 'split' ? { ...splitPayments } : null;
 
         if (effectiveKittyAmt > 0 || effectiveCreditAmt > 0) {
             if (requiredTotal === 0) {
-                // Fully paid by pre-paid methods (No cash/card needed)
                 if (effectiveKittyAmt > 0 && effectiveCreditAmt === 0) dbPaymentMode = 'Kitty';
                 else if (effectiveCreditAmt > 0 && effectiveKittyAmt === 0) dbPaymentMode = 'Wallet';
                 else dbPaymentMode = 'Kitty + Wallet';
             } else {
-                // Mixed payment (e.g. Kitty + Card)
                 dbPaymentMode = 'Split / Combined';
-                
-                // If they didn't explicitly use the "Split" UI, auto-generate the split data
                 if (paymentMode !== 'split') {
                     dbSplitPayments = {};
                     dbSplitPayments[paymentMode] = requiredTotal;
                 }
-                
-                // Inject the pre-paid amounts into the split data for perfect Excel exports
                 if (effectiveKittyAmt > 0) dbSplitPayments['kitty'] = effectiveKittyAmt;
                 if (effectiveCreditAmt > 0) dbSplitPayments['wallet'] = effectiveCreditAmt;
             }
         }
-        // ---------------------------------------------------------
 
         const preTaxDeductions = standardDiscount + exchangeNum + appliedVoucherAmount;
 
         const invoiceData = {
-            created_at: effectiveDateISO,
-            customer_id: selectedCustomer?.id, 
-            warehouse_id: selectedLocation,
-            items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
-            
-            subtotal: subtotal, 
-            discount_amount: standardDiscount, 
-            discounted_total: Math.max(0, subtotal - preTaxDeductions),
-            taxable_value: finalTaxableValue,
-            cgst_amount: cgstAmount, 
-            sgst_amount: sgstAmount, 
-            round_off_amount: roundOffAmount,
-            final_total: finalPayableGross, 
-            advance_adjusted: cartAdvance, 
-            
-            voucher_code: activeVoucher?.code || null,
-            voucher_discount: appliedVoucherAmount, 
-            Voucher_handling_fee: handlingAmt,
-            exchange_value: exchangeNum, 
-            exchange_notes: exchangeNotes, 
-            
-            kitty_payment: effectiveKittyAmt, 
-            wallet_payment: effectiveCreditAmt,
-            
-            // --- UPDATED: Uses our new smart payment variables ---
-            payment_mode: dbPaymentMode,
-            split_payments: dbSplitPayments,
-            // -----------------------------------------------------
-            
-            transaction_reference: customTransactionContext?.transaction_reference || null,
-            payment_remarks: customTransactionContext?.payment_remarks || null,
-            target_bank_account_id: customTransactionContext?.target_bank_account_id || null,
-            transfer_type: customTransactionContext?.transfer_type || null
-        }
+          created_at: effectiveDateISO,
+          customer_id: selectedCustomer?.id, 
+          warehouse_id: selectedLocation,
+          items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
+          
+          subtotal: subtotal, 
+          discount_amount: standardDiscount, 
+          discounted_total: Math.max(0, subtotal - preTaxDeductions),
+          taxable_value: finalTaxableValue,
+          cgst_amount: cgstAmount, 
+          sgst_amount: sgstAmount, 
+          round_off_amount: roundOffAmount,
+          final_total: finalPayableGross, 
+          advance_adjusted: cartAdvance, 
+          
+          voucher_code: activeVoucher?.code || null,
+          voucher_discount: appliedVoucherAmount, 
+          Voucher_handling_fee: handlingAmt,
+          exchange_value: exchangeNum, 
+          exchange_notes: exchangeNotes, 
+          exchange_physical_details: exchangePhysicalDetails,
+          
+          kitty_payment: effectiveKittyAmt, 
+          wallet_payment: effectiveCreditAmt,
+          
+          payment_mode: dbPaymentMode,
+          split_payments: dbSplitPayments,
+          
+          transaction_reference: customTransactionContext?.transaction_reference || null,
+          payment_remarks: customTransactionContext?.payment_remarks || null,
+          billing_remarks: customTransactionContext?.billing_remarks || null,
+          target_bank_account_id: customTransactionContext?.target_bank_account_id || null,
+          transfer_type: customTransactionContext?.transfer_type || null
+      }
         
         const { data, error } = await callRpc('pos_confirm_sale', { p_invoice_json: invoiceData, p_user_id: appUser?.user_id })
         if (error) throw error
@@ -490,23 +483,70 @@ export function useCheckout({
       }
       else if (mode === 'return') { 
         finalNo = `RET-${Date.now().toString().slice(-6)}`
-        const { error } = await supabase.from('buybacks').insert({
+        
+        // 1. Insert the Buyback Ledger Entry
+        const { data: buybackData, error: buybackErr } = await supabase.from('buybacks').insert({
           created_at: effectiveDateISO, 
           company_id: appUser?.company_id,
-          voucher_number: finalNo,
+          reference_invoice_number: returnDetails.invoiceNo || null,
           customer_id: selectedCustomer?.id,
           warehouse_id: selectedLocation,
-          original_invoice_no: returnDetails.originalInvoiceNo || null,
-          item_description: returnDetails.itemDescription,
-          purity: returnDetails.purity,
-          gross_weight_g: Number(returnDetails.grossWeight),
-          gross_value: Number(returnDetails.grossValue) || 0,
-          deduction_amount: Number(returnDetails.deductionAmount) || 0,
-          net_refund: Number(returnDetails.refundAmount) || 0,
-          refund_mode: paymentMode === 'split' ? JSON.stringify(splitPayments) : paymentMode,
-        })
-        if (error) throw error
-        toast.success("Buyback processed & Refund logged!")
+          
+          is_external_item: returnDetails.physicalDetails?.is_external_item || false,
+          item_category: returnDetails.physicalDetails?.item_category || null,
+          metal_type: returnDetails.physicalDetails?.metal_type || null,
+          purity_karat: returnDetails.physicalDetails?.purity_karat || null,
+          purity_percent: returnDetails.physicalDetails?.purity_percent || null,
+          gross_weight_g: returnDetails.physicalDetails?.gross_weight_g || 0,
+          net_weight_g: returnDetails.physicalDetails?.net_weight_g || 0,
+          total_stone_weight_cts: returnDetails.physicalDetails?.total_stone_weight_cts || 0,
+          diamond_shape: returnDetails.physicalDetails?.diamond_shape || null,
+          diamond_color: returnDetails.physicalDetails?.diamond_color || null,
+          diamond_clarity: returnDetails.physicalDetails?.diamond_clarity || null,
+          
+          gross_value: Number(returnDetails.articleCost) || 0,
+          deduction_amount: Number(returnDetails.discountApplied) || 0,
+          buyback_percent: Number(returnDetails.returnPercent) || 100,
+          net_refund: Number(returnDetails.calculatedRefund) || 0,
+          
+          status: 'received',
+          created_by: appUser?.user_id
+        }).select('id').single()
+        
+        if (buybackErr) throw buybackErr
+
+       // 2. ✨ NEW: Immediately create the physical item in the Vault
+       // 2. ✨ NEW: Immediately create the physical item in the Vault
+       const uniqueRef = `RTN-${Date.now().toString().slice(-6)}`;
+        
+       // Satisfy DB constraints: weight must be > 0
+       const grossWt = Number(returnDetails.physicalDetails?.gross_weight_g) || 0.001;
+       const netWt = Number(returnDetails.physicalDetails?.net_weight_g) || grossWt;
+
+       const { error: invError } = await supabase.from('inventory_items').insert({
+         company_id: appUser?.company_id,
+         warehouse_id: selectedLocation,
+         sku: uniqueRef,
+         barcode: uniqueRef, // ✨ REQUIRED: Cannot be null
+         item_category: returnDetails.physicalDetails?.item_category || 'Old Gold',
+         metal_type: returnDetails.physicalDetails?.metal_type || 'Gold',
+         
+         purity_karat: returnDetails.physicalDetails?.purity_karat || '22K', // ✨ FIXED name
+         purity_percent: returnDetails.physicalDetails?.purity_percent || 91.60, // ✨ REQUIRED: Cannot be null
+         
+         gross_weight_g: grossWt,
+         net_weight_g: netWt,
+         
+         acquisition_method: 'buyback',
+         is_for_sale: false, 
+         status: 'in_vault', 
+         source_buyback_id: buybackData.id, 
+         cost_price: Number(returnDetails.calculatedRefund) || 0 
+       })
+       
+       if (invError) throw invError
+        
+        toast.success("Buyback processed & Item added to Vault!")
       }
       else if (mode === 'challan') {
         finalNo = `CHL-${Date.now().toString().slice(-6)}`
@@ -564,9 +604,8 @@ export function useCheckout({
     voucherCode, setVoucherCode, activeVoucher, setActiveVoucher, handlingFee,
     isExchangeOpen, setIsExchangeOpen, exchangeInvoiceNo, setExchangeInvoiceNo, exchangeValue, setExchangeValue, exchangeNotes, setExchangeNotes,
     discountAmount: standardDiscount, appliedVoucherAmount, handlingAmt, finalTaxableValue, cgstAmount, sgstAmount, exactFinalPayable, roundOffAmount, 
-    
+    setExchangePhysicalDetails, // Add this to the returned exports
     finalPayable: finalPayableNet, 
-    exchangeNum,
     
     appliedKittyAmount, setAppliedKittyAmount,appliedKittyPlanId, setAppliedKittyPlanId, appliedCreditAmount, setAppliedCreditAmount,
     estimateChargeType, setEstimateChargeType, estimateHandlingPercent, setEstimateHandlingPercent, 

@@ -31,7 +31,7 @@ export function CheckoutSidebar({
   isExchangeOpen, setIsExchangeOpen, exchangeMode, setExchangeMode, 
   exchangeInvoiceNo, setExchangeInvoiceNo, exchangeValue, setExchangeValue, exchangeNotes, setExchangeNotes,
   handleFetchExchangeItem, exchangeNum, paymentMode, setPaymentMode,
-  
+  setExchangePhysicalDetails,
   // Split Payment Props
   splitPayments, setSplitPayments, currentSplitTotal, 
   
@@ -145,6 +145,7 @@ export function CheckoutSidebar({
     onPreviewRequest(isEstimate, {
       transaction_reference: finalRef,
       payment_remarks: paymentRemarks,
+      billing_remarks: paymentRemarks,
       target_bank_account_id: selectedBankId !== 'none' ? selectedBankId : null,
       transfer_type: finalTransferType,
       
@@ -207,6 +208,7 @@ export function CheckoutSidebar({
                isExchangeOpen={isExchangeOpen} setIsExchangeOpen={setIsExchangeOpen} exchangeMode={exchangeMode} setExchangeMode={setExchangeMode}
                exchangeInvoiceNo={exchangeInvoiceNo} setExchangeInvoiceNo={setExchangeInvoiceNo} exchangeValue={exchangeValue} setExchangeValue={setExchangeValue}
                exchangeNotes={exchangeNotes} setExchangeNotes={setExchangeNotes} handleFetchExchangeItem={handleFetchExchangeItem} exchangeNum={exchangeNum}
+               setExchangePhysicalDetails={setExchangePhysicalDetails}
              />
            </section>
         )}

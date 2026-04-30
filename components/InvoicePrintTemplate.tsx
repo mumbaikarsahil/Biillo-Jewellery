@@ -31,6 +31,13 @@ const formatDate = (dateString: string | Date) => {
   });
 }
 
+const formatPaymentMode = (pm: string) => {
+  if (!pm) return '';
+  const str = String(pm).toUpperCase();
+  if (str.startsWith('SPLIT:')) return 'SPLIT PAYMENT';
+  return str;
+}
+
 interface InvoicePrintTemplateProps {
   data: any;
   copyLabel?: string; 
@@ -96,7 +103,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
       legalDisclaimer = "BUYBACK VOUCHER: We acknowledge the receipt of the returned item(s) listed above. The valuation is based on standard buyback policies and current market rates. The total refund amount constitutes full and final settlement for the surrendered items. Ownership of the item transfers back to the company."
     }
 
-    // ADJUSTED COLUMN COUNT BACK TO ORIGINAL FOR EMPTY ROW GENERATION
     const tableColCount = mode === 'normal' ? 6 : 5;
     const currentItemCount = data.items?.length || 0;
     const emptyRowsToFill = Math.max(0, 2 - currentItemCount); 
@@ -105,7 +111,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const branchPan = branchGstin.length >= 12 ? branchGstin.substring(2, 12) : 'AAOPM1004A';
 
     return (
-      <div ref={ref} className="w-[210mm] min-h-[297mm] bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
+      <div ref={ref} className="w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
+        {/* ✨ FIX: Added print:min-h-0 print:h-max to prevent mobile Safari/Chrome from printing 4 blank pages */}
         
         {isEstimate && <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5 z-0"><span className="text-[130px] font-black -rotate-45 whitespace-nowrap text-slate-800 tracking-widest">ESTIMATE ONLY</span></div>}
         {mode === 'challan' && <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.03] z-0"><span className="text-[100px] font-black -rotate-45 whitespace-nowrap text-[#B254A3] tracking-widest">DELIVERY CHALLAN</span></div>}
@@ -216,26 +223,34 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   </tbody>
                 </table>
               </div>
-            ) : mode === 'return' && returnDetails ? (
-              <table className="w-full text-sm">
-                <thead className={isEstimate ? "bg-slate-800 text-white" : "bg-[#E8A5D8] text-white"}>
-                  <tr>
-                    <th className="p-2.5 text-left font-semibold rounded-tl-md">Returned Item Description</th>
-                    <th className="p-2.5 text-center font-semibold w-32">Gross Wt.</th>
-                    <th className="p-2.5 text-center font-semibold w-32 rounded-tr-md">Purity</th>
-                  </tr>
-                </thead>
-                <tbody className="border-b border-slate-200">
-                  <tr className="h-16 text-center bg-white border-x border-slate-200">
-                    <td className="p-2.5 text-left">
-                      <span className="font-bold text-[13px] block text-slate-800">[{returnDetails.purity || '22K'}] Gold Diamond Jewellery</span>
-                      <span className="text-[10px] text-slate-500 uppercase block mt-1 tracking-wide">{returnDetails.itemDescription}</span>
-                    </td>
-                    <td className="p-2.5 font-bold text-lg text-slate-800">{Number(returnDetails.grossWeight || 0).toFixed(3)} g</td>
-                    <td className="p-2.5 font-semibold text-slate-700 uppercase">{returnDetails.purity || '-'}</td>
-                  </tr>
-                </tbody>
-              </table>
+           ) : mode === 'return' && returnDetails ? (
+            <table className="w-full text-sm">
+              <thead className={isEstimate ? "bg-slate-800 text-white" : "bg-[#E8A5D8] text-white"}>
+                <tr>
+                  <th className="p-2.5 text-left font-semibold rounded-tl-md">Returned Item Description</th>
+                  <th className="p-2.5 text-center font-semibold w-32">Gross Wt.</th>
+                  <th className="p-2.5 text-center font-semibold w-32 rounded-tr-md">Purity</th>
+                </tr>
+              </thead>
+              <tbody className="border-b border-slate-200">
+                <tr className="h-16 text-center bg-white border-x border-slate-200">
+                  <td className="p-2.5 text-left">
+                    <span className="font-bold text-[13px] block text-slate-800">
+                      [{returnDetails.physicalDetails?.purity_karat || returnDetails.purity || '22K'}] Gold Diamond Jewellery
+                    </span>
+                    <span className="text-[10px] text-slate-500 uppercase block mt-1 tracking-wide">
+                      {returnDetails.physicalDetails?.item_category || returnDetails.itemDescription || 'Old Gold Exchange'}
+                    </span>
+                  </td>
+                  <td className="p-2.5 font-bold text-lg text-slate-800">
+                    {Number(returnDetails.physicalDetails?.gross_weight_g || returnDetails.grossWeight || 0).toFixed(3)} g
+                  </td>
+                  <td className="p-2.5 font-semibold text-slate-700 uppercase">
+                    {returnDetails.physicalDetails?.purity_karat || returnDetails.purity || '-'}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
             ) : (
               <table className="w-full text-sm">
                 <thead className={isEstimate ? "bg-slate-800 text-white" : "bg-[#E8A5D8] text-white"}>
@@ -244,7 +259,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     <th className="p-2.5 text-left font-semibold">Description</th>
                     {mode === 'normal' && <th className="p-2.5 text-center font-semibold w-20">HSN Code</th>}
                     
-                    {/* ONLY DISPLAY GOLD WT (MAPPED TO NET WEIGHT) AND DIAMOND WT */}
                     <th className="p-2.5 text-center font-semibold w-24">Gold Wt.</th>
                     <th className="p-2.5 text-center font-semibold w-24">Diamond Wt.</th>
                     
@@ -271,7 +285,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                         </td>
                         {mode === 'normal' && <td className="p-2.5 text-center font-mono text-[11px] font-bold text-slate-600 pt-3">{item.hsn_code || (isRepair ? '9987' : '7113')}</td>}
                         
-                        {/* RENDERS NET WEIGHT DATA UNDER THE "GOLD WT" HEADER */}
                         <td className="p-2.5 text-center font-medium text-slate-700 pt-3">
                           {nw ? Number(nw).toFixed(3) : '--'} g
                         </td>
@@ -300,18 +313,25 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 <div className="text-[11px] font-bold text-slate-600 uppercase space-y-1 tracking-wider">
                    <p>PAN NO. : {branchPan}</p>
                    <p>GST TIN NO.: {branchGstin}</p>
+                   {/* ✨ Added the specific payment mode right here! */}
+                   {data.paymentMode && (
+                     <p className="text-slate-800 mt-2">PAYMENT MODE: {formatPaymentMode(data.paymentMode)}</p>
+                   )}
                 </div>
               ) : (
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider space-y-1">
                    <p>Not a Tax Invoice</p>
                    <p>For Internal / Estimation Use Only</p>
+                   {data.paymentMode && (
+                     <p className="text-slate-500 mt-2">MODE: {formatPaymentMode(data.paymentMode)}</p>
+                   )}
                 </div>
               )}
 
               <div className={`mt-4 p-3 rounded-lg flex items-center shadow-sm ${isEstimate ? 'bg-white border border-slate-200' : 'bg-white'}`}>
                 <span className="text-[10px] font-bold text-slate-800 uppercase mr-3 shrink-0">Amt. In Words :</span> 
                 <span className="text-[11px] font-bold text-slate-800 uppercase leading-tight tracking-wide">
-                  {numberToWords(data.finalTotal)}
+                  {numberToWords(mode === 'return' ? Number(returnDetails?.calculatedRefund || data.finalTotal || 0) : Number(data.finalTotal || 0))}
                 </span>
               </div>
             </div>
@@ -322,14 +342,25 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   <div className="flex justify-between text-slate-600"><span>Estimated Cost (Approx)</span><span>₹ {Number(repair.estimatedCost || 0).toLocaleString()}</span></div>
                   <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900"><span>Advance Received</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
                 </>
-              ) : mode === 'return' && returnDetails ? (
-                <>
-                  <div className="flex justify-between text-slate-600"><span>Gross Valuation</span><span>₹ {Number(returnDetails.grossValue || 0).toLocaleString()}</span></div>
-                  {Number(returnDetails.deductionAmount) > 0 && (
-                    <div className="flex justify-between text-red-600"><span>Deductions</span><span>- ₹ {Number(returnDetails.deductionAmount).toLocaleString()}</span></div>
-                  )}
-                  <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900"><span>Net Refund Issued</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
-                </>
+             ) : mode === 'return' && returnDetails ? (
+              <>
+                <div className="flex justify-between text-slate-600">
+                  <span>Gross Valuation</span>
+                  <span>₹ {Number(returnDetails.articleCost || returnDetails.grossValue || 0).toLocaleString()}</span>
+                </div>
+                
+                {Number(returnDetails.discountApplied || returnDetails.deductionAmount) > 0 && (
+                  <div className="flex justify-between  text-red-600">
+                    <span>Deductions</span>
+                    <span>- ₹ {Number(returnDetails.discountApplied || returnDetails.deductionAmount).toLocaleString()}</span>
+                  </div>
+                )}
+                
+                <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900">
+                  <span>Net Refund Issued</span>
+                  <span>₹ {Number(returnDetails.calculatedRefund || data.finalTotal || 0).toLocaleString()}</span>
+                </div>
+              </>
               ) : mode === 'custom' && customOrder ? (
                 <>
                   <div className="flex justify-between text-slate-600"><span>Estimated Value (Approx)</span><span>₹ {Number(customOrder.estimatedValue || 0).toLocaleString()}</span></div>
