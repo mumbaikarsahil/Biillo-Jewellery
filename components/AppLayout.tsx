@@ -41,8 +41,18 @@ export function AppLayout({ children, appUser }: { children: React.ReactNode, ap
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isCollapsed, setIsCollapsed] = useState(false) 
 
-  if (pathname?.startsWith('/claim') || pathname?.startsWith('/login') || pathname?.startsWith('/storelocations')) {
-    return <div className="min-h-screen bg-white">{children}</div>
+  // ✨ FIX: Convert path to lowercase to prevent case-sensitive URL bugs from showing the Admin Layout!
+  const normalizedPath = pathname?.toLowerCase() || ''
+  const isPublicPage = 
+    normalizedPath.startsWith('/claim') || 
+    normalizedPath.startsWith('/login') || 
+    normalizedPath.startsWith('/storelocations') || 
+    normalizedPath.startsWith('/event')
+
+  if (isPublicPage) {
+    // ✨ FIX: Return children cleanly. This removes the white background wrapper and allows 
+    // your event/claim pages to display their own logos and backgrounds without interference!
+    return <>{children}</>
   }
 
   const userRole = appUser?.role || 'sales_person'

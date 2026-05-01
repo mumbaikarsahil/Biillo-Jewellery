@@ -7,13 +7,16 @@ import QRCode from "react-qr-code";
 import { useReactToPrint } from "react-to-print";
 import { 
   Loader2, CheckCircle2, PlusCircle, ArrowLeft, ChevronRight, 
-  RefreshCw, Database, Printer, Ticket, FileSpreadsheet, Info, Share2
+  RefreshCw, Database, Printer, Ticket, FileSpreadsheet, Info, Share2,
+  MonitorSmartphone, QrCode, ArrowRight // ✨ Added ArrowRight
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+// ✨ NEW: Imported Dialog Components for the Success Modal
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"; 
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -29,6 +32,9 @@ export default function GenerateVouchersPage() {
     batchNo: string; codes: string[]; discount: number; handlingFee: number; expiry: string 
   } | null>(null);
 
+  // ✨ NEW: State to control the Success Modal
+  const [showSuccessModal, setShowSuccessModal] = useState(false);
+
   const [formData, setFormData] = useState({
     prefix: "A",
     startingNumber: 1,
@@ -38,10 +44,11 @@ export default function GenerateVouchersPage() {
     printerName: "",
   });
 
+  const [intendedUse, setIntendedUse] = useState<'physical' | 'digital'>('physical');
+
   const printRef = useRef<HTMLDivElement>(null);
   const handlePrint = useReactToPrint({ contentRef: printRef });
 
-  // Fetch domain from Environment Variables (fallback to localhost if missing)
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
 
   useEffect(() => {
@@ -56,30 +63,29 @@ export default function GenerateVouchersPage() {
     fetchInitialContext();
   }, [appUser]);
 
-  // --- FIXED SEQUENCE DETECTION ---
+  // --- BULLETPROOF SEQUENCE DETECTION ---
   useEffect(() => {
     async function fetchNextSequence() {
-      if (!appUser?.company_id || !formData.prefix.trim()) return;
+      if (!formData.prefix.trim()) return;
       const prefix = formData.prefix.trim().toUpperCase();
       
-      // FIX: Instead of getting 1000 random items, we get the 50 most RECENTLY created items for this prefix.
-      // This prevents the limit(1000) bug from causing duplicate sequence collisions.
       const { data: vData, error } = await supabase
         .from('vouchers')
         .select('code')
-        .eq('company_id', appUser.company_id)
         .ilike('code', `${prefix}%`)
-        .order('created_at', { ascending: false })
-        .limit(50); 
+        .order('code', { ascending: false }) 
+        .limit(1); 
 
       if (!error && vData && vData.length > 0) {
-        let maxVal = 0;
-        vData.forEach(v => {
-          const numStr = v.code.substring(prefix.length);
-          const parsed = parseInt(numStr, 10);
-          if (!isNaN(parsed) && parsed > maxVal) maxVal = parsed;
-        });
-        setFormData(prev => ({ ...prev, startingNumber: maxVal + 1 }));
+        const highestCode = vData[0].code;
+        const numStr = highestCode.substring(prefix.length);
+        const parsed = parseInt(numStr, 10);
+        
+        if (!isNaN(parsed)) {
+          setFormData(prev => ({ ...prev, startingNumber: parsed + 1 }));
+        } else {
+          setFormData(prev => ({ ...prev, startingNumber: 1 }));
+        }
       } else {
         setFormData(prev => ({ ...prev, startingNumber: 1 }));
       }
@@ -87,7 +93,7 @@ export default function GenerateVouchersPage() {
     
     const timeoutId = setTimeout(() => fetchNextSequence(), 500);
     return () => clearTimeout(timeoutId);
-  }, [formData.prefix, appUser]);
+  }, [formData.prefix]);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -96,7 +102,7 @@ export default function GenerateVouchersPage() {
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isGenerating) return; // Prevent double clicks
+    if (isGenerating) return; 
     
     setIsGenerating(true);
 
@@ -120,7 +126,6 @@ export default function GenerateVouchersPage() {
         return `${prefix}${numSequence}`;
       });
 
-      // 1. Create the Batch Record
       const { data: batchData, error: batchError } = await supabase.from("voucher_batches").insert({
           company_id: companyId, 
           batch_no: batchNo, 
@@ -128,15 +133,13 @@ export default function GenerateVouchersPage() {
           quantity: quantity,
           discount_value: discount, 
           handling_fee: handlingFee, 
-          printer_name: formData.printerName, 
+          printer_name: intendedUse === 'digital' ? 'DIGITAL_EVENT_POOL' : formData.printerName, 
           status: "generated",
         }).select().single();
 
       if (batchError) throw new Error(batchError.message);
 
-      // FIX: Added company_id to satisfy RLS / NOT NULL constraints
       const vouchersToInsert = generatedCodes.map((code) => ({
-        //company_id: companyId,       // <--- ADD THIS LINE
         batch_id: batchData.id, 
         code: code, 
         discount_value: discount, 
@@ -145,8 +148,6 @@ export default function GenerateVouchersPage() {
         expiry_date: expiryIsoStr,
       }));
 
-      // 2. FIX: CHUNK THE INSERTS TO PREVENT TIMEOUTS
-      // Supabase has payload limits. Inserting thousands of rows at once causes timeouts.
       const chunkSize = 500;
       for (let i = 0; i < vouchersToInsert.length; i += chunkSize) {
         const chunk = vouchersToInsert.slice(i, i + chunkSize);
@@ -157,8 +158,10 @@ export default function GenerateVouchersPage() {
       }
 
       setSuccessBatch({ batchNo, codes: generatedCodes, discount, handlingFee, expiry: expiryIsoStr });
-      toast({ title: "Batch Generated", description: `${quantity} sequential vouchers committed safely.` });
       setFormData(prev => ({ ...prev, startingNumber: startNum + quantity }));
+      
+      // ✨ NEW: Trigger the Success Popup immediately!
+      setShowSuccessModal(true);
 
     } catch (error: any) {
       toast({ title: "Process Failed", description: error.message, variant: "destructive" });
@@ -183,7 +186,6 @@ export default function GenerateVouchersPage() {
   const shareExcel = async () => {
     if (!successBatch) return;
     
-    // 1. Prepare the data (same as download)
     const exportData = successBatch.codes.map((code, index) => ({
       "Sr No": index + 1, "Voucher Code": code, "Credit Value (₹)": successBatch.discount,
       "Handling Fee (₹)": successBatch.handlingFee, "Initial Expiry": successBatch.expiry,
@@ -194,13 +196,11 @@ export default function GenerateVouchersPage() {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Vouchers");
 
-    // 2. Convert to a File Object instead of triggering a download
     const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
     const file = new File([excelBuffer], `Vouchers_${successBatch.batchNo}.xlsx`, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     });
 
-    // 3. Trigger Native Share Menu
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({
@@ -209,13 +209,11 @@ export default function GenerateVouchersPage() {
           text: `Here is the Excel manifest for voucher batch ${successBatch.batchNo}.`,
         });
       } catch (error: any) {
-        // If the user simply closes the share menu, it throws an AbortError. We ignore that.
         if (error.name !== 'AbortError') {
           toast({ title: "Sharing Failed", description: "Could not share the file.", variant: "destructive" });
         }
       }
     } else {
-      // Fallback for older browsers (like older desktop Chrome)
       toast({ 
         title: "Not Supported", 
         description: "Your device/browser does not support direct file sharing. Please use the Download button instead.", 
@@ -227,7 +225,7 @@ export default function GenerateVouchersPage() {
   return (
     <div className="flex flex-col min-h-screen bg-[#fafafa] font-sans">
       
-      {/* --- COMPACT IDE-STYLE TOOLBAR HEADER (Matches Batches Page) --- */}
+      {/* --- COMPACT IDE-STYLE TOOLBAR HEADER --- */}
       <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-md border-b border-gray-200 px-4 h-12 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 overflow-hidden">
           <Link href="/vouchers">
@@ -276,6 +274,28 @@ export default function GenerateVouchersPage() {
             <CardContent className="pt-6 pb-6">
               <form onSubmit={handleGenerate} className="space-y-6">
                 
+                <div className="space-y-3 pb-5 border-b border-gray-100">
+                  <Label className="text-xs font-bold text-gray-500 uppercase tracking-tight">Intended Format</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Button 
+                      type="button"
+                      variant={intendedUse === 'physical' ? 'default' : 'outline'}
+                      className={`h-11 shadow-sm ${intendedUse === 'physical' ? 'bg-slate-900 text-white' : 'text-slate-500 border-gray-200'}`}
+                      onClick={() => setIntendedUse('physical')}
+                    >
+                      <Printer className="w-4 h-4 mr-2" /> Physical Booklets
+                    </Button>
+                    <Button 
+                      type="button"
+                      variant={intendedUse === 'digital' ? 'default' : 'outline'}
+                      className={`h-11 shadow-sm ${intendedUse === 'digital' ? 'bg-indigo-600 text-white hover:bg-indigo-700' : 'text-slate-500 border-gray-200'}`}
+                      onClick={() => setIntendedUse('digital')}
+                    >
+                      <MonitorSmartphone className="w-4 h-4 mr-2" /> Digital Event Pool
+                    </Button>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-5">
                   <div className="space-y-2">
                     <Label htmlFor="prefix" className="text-xs font-bold text-gray-500 uppercase tracking-tight">Code Prefix</Label>
@@ -314,10 +334,12 @@ export default function GenerateVouchersPage() {
                   </div>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="printerName" className="text-xs font-bold text-gray-500 uppercase tracking-tight">Printer / Vendor ID (Optional)</Label>
-                  <Input id="printerName" name="printerName" placeholder="Identify the printing press..." className="h-10 text-sm border-gray-200 focus-visible:ring-primary rounded-md bg-gray-50" value={formData.printerName} onChange={handleInputChange} />
-                </div>
+                {intendedUse === 'physical' && (
+                  <div className="space-y-2">
+                    <Label htmlFor="printerName" className="text-xs font-bold text-gray-500 uppercase tracking-tight">Printer / Vendor ID (Optional)</Label>
+                    <Input id="printerName" name="printerName" placeholder="Identify the printing press..." className="h-10 text-sm border-gray-200 focus-visible:ring-primary rounded-md bg-gray-50" value={formData.printerName} onChange={handleInputChange} />
+                  </div>
+                )}
 
                 <Button type="submit" className="w-full h-12 font-bold text-sm uppercase tracking-widest rounded-lg mt-6 shadow-md hover:shadow-lg transition-all" disabled={isGenerating}>
                   {isGenerating ? <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Commiting to Ledger...</> : "Generate Sequential Batch"}
@@ -331,8 +353,8 @@ export default function GenerateVouchersPage() {
             <Card className={`shadow-sm border-gray-200/60 overflow-hidden rounded-lg transition-all duration-500 ${successBatch ? 'bg-white' : 'bg-gray-50/50 opacity-80'}`}>
               <CardHeader className="bg-gray-50/50 py-3 px-4 border-b border-gray-200/60">
                 <div className="flex items-center gap-2">
-                  <Printer className="h-4 w-4 text-gray-400" />
-                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-tight">Print Assets</h3>
+                  {intendedUse === 'digital' ? <QrCode className="h-4 w-4 text-indigo-400" /> : <Printer className="h-4 w-4 text-gray-400" />}
+                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-tight">Post-Generation Actions</h3>
                 </div>
               </CardHeader>
               <CardContent className="pt-6 pb-6 text-center">
@@ -359,13 +381,27 @@ export default function GenerateVouchersPage() {
                         </Button>
                         <Button onClick={shareExcel} variant="outline" className="flex-1 h-11 text-[11px] font-semibold bg-background border-border rounded-lg shadow-sm transition-all text-blue-600 hover:text-blue-700 hover:bg-blue-500/5">
                           <Share2 className="mr-1.5 h-4 w-4" />
-                          Share App
+                          Share List
                         </Button>
                       </div>
-                      <Button onClick={handlePrint} className="w-full h-11 text-xs font-semibold rounded-lg shadow-sm transition-all">
-                        <Printer className="mr-2 h-4 w-4" />
-                        Print Quick Strips
-                      </Button>
+                      
+                      {intendedUse === 'physical' ? (
+                        <Button onClick={handlePrint} className="w-full h-11 text-xs font-semibold rounded-lg shadow-sm transition-all bg-slate-900 hover:bg-slate-800 text-white">
+                          <Printer className="mr-2 h-4 w-4" />
+                          Print Quick Strips
+                        </Button>
+                      ) : (
+                        <div className="space-y-2 mt-2">
+                          <p className="text-[10px] text-gray-500 font-medium leading-tight">These codes are completely digital. Proceed to distribution to activate the Event QR.</p>
+                          <Link href="/vouchers" className="w-full block">
+                            <Button className="w-full h-11 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all">
+                              <QrCode className="mr-2 h-4 w-4" />
+                              Proceed to Event Allocation
+                            </Button>
+                          </Link>
+                        </div>
+                      )}
+
                     </div>
                   </div>
                 ) : (
@@ -391,6 +427,45 @@ export default function GenerateVouchersPage() {
           </div>
         </div>
       </main>
+
+      {/* ✨ NEW: Success Celebration Modal */}
+      <Dialog open={showSuccessModal} onOpenChange={setShowSuccessModal}>
+        <DialogContent className="sm:max-w-md text-center flex flex-col items-center border-none shadow-2xl p-6 rounded-2xl">
+          <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-2 shadow-sm border border-emerald-200">
+            <CheckCircle2 className="w-8 h-8" />
+          </div>
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-black text-slate-900 text-center tracking-tight">Batch Generated!</DialogTitle>
+            <DialogDescription className="text-center text-slate-500 mt-2 font-medium">
+              Successfully created <strong className="text-slate-800">{successBatch?.codes.length}</strong> sequential vouchers for batch <strong className="text-slate-800">{successBatch?.batchNo}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl mt-4 mb-2 text-left space-y-3 shadow-inner">
+            <div className="flex justify-between text-sm">
+              <span className="text-slate-500 font-bold uppercase tracking-wider text-[10px]">Format Type</span>
+              <span className="font-bold text-slate-800 flex items-center gap-1.5 text-xs">
+                {intendedUse === 'physical' ? <><Printer className="w-3.5 h-3.5 text-slate-400"/> Physical Booklets</> : <><QrCode className="w-3.5 h-3.5 text-indigo-500"/> Digital Event Pool</>}
+              </span>
+            </div>
+            <div className="flex justify-between text-sm border-t border-slate-200 pt-3">
+              <span className="text-slate-500 font-bold uppercase tracking-wider text-[10px]">Sequence Series</span>
+              <span className="font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 text-xs">
+                {successBatch?.codes[0]} <span className="text-slate-400 mx-1">→</span> {successBatch?.codes[(successBatch?.codes.length || 1) - 1]}
+              </span>
+            </div>
+          </div>
+
+          <DialogFooter className="w-full sm:justify-center flex-col sm:flex-col gap-2 mt-4">
+            <Button 
+              className={`w-full text-white font-bold h-12 text-sm rounded-xl shadow-md transition-all ${intendedUse === 'physical' ? 'bg-slate-900 hover:bg-slate-800' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+              onClick={() => setShowSuccessModal(false)}
+            >
+              Continue to Actions <ArrowRight className="w-4 h-4 ml-2" />
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* --- HIDDEN PRINT AREA (13cm x 3.5cm Strips) --- */}
       <div className="hidden">

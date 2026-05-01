@@ -46,8 +46,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       if (sessionError || !session) {
         setAppUser(null)
-        if (pathname && !['/login', '/register', '/forgot-password', '/claim'].includes(pathname)) {
-             router.push('/login')
+        
+        // ✨ FIX: Robust check for public routes, including dynamic ones like /event/A
+        const isPublicRoute = pathname && (
+          ['/login', '/register', '/forgot-password', '/claim'].includes(pathname) ||
+          pathname.startsWith('/storelocations') ||
+          pathname.startsWith('/event')
+        );
+
+        if (!isPublicRoute) {
+          router.push('/login')
         }
         return 
       }
@@ -107,7 +115,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
         setAppUser(null)
-        router.push('/login')
+        // Ensure they are not pushed to login if they just signed out from a public page
+        const isPublicRoute = pathname && (
+          ['/login', '/register', '/forgot-password', '/claim'].includes(pathname) ||
+          pathname.startsWith('/storelocations') ||
+          pathname.startsWith('/event')
+        );
+        if (!isPublicRoute) router.push('/login')
       } else if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
         fetchUser()
       }

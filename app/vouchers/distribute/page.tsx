@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabaseClient'
 import { useAuth } from '@/hooks/useAuth'
 import { useReactToPrint } from 'react-to-print'
+import QRCode from 'react-qr-code' // ✨ NEW: Import QR Code generator
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,7 +21,7 @@ import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { 
   Loader2, FileText, CheckCircle2, CalendarDays, IndianRupee, Send, 
-  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer 
+  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer, QrCode, Download
 } from 'lucide-react'
 import { addMonths, format } from 'date-fns'
 
@@ -40,6 +41,7 @@ export default function DistributeVouchersPage() {
   const [companyData, setCompanyData] = useState<any>(null)
   
   // Form States
+  const [allocationType, setAllocationType] = useState<'vendor' | 'event'>('vendor')
   const [distributorId, setDistributorId] = useState('')
   const [selectedBatch, setSelectedBatch] = useState('')
   const [quantity, setQuantity] = useState('')
@@ -47,7 +49,7 @@ export default function DistributeVouchersPage() {
   const [customExpiry, setCustomExpiry] = useState('')
   const [totalFee, setTotalFee] = useState('')
   const [deliveryAgent, setDeliveryAgent] = useState('')
-  const [isBirthdayRedemption, setIsBirthdayRedemption] = useState(false) // NEW: Birthday state
+  const [isBirthdayRedemption, setIsBirthdayRedemption] = useState(false) 
   
   // Sequence Tracking States
   const [availableVouchers, setAvailableVouchers] = useState<VoucherCode[]>([]);
@@ -60,6 +62,9 @@ export default function DistributeVouchersPage() {
   const [viewSequence, setViewSequence] = useState<{start: string, end: string} | null>(null)
   const [isLoadingSequence, setIsLoadingSequence] = useState(false)
   
+  // ✨ NEW: Event QR Modal State
+  const [eventQrData, setEventQrData] = useState<{ url: string, prefix: string, count: number } | null>(null)
+
   const printRef = useRef<HTMLDivElement>(null)
   const handlePrintChallan = useReactToPrint({ 
     contentRef: printRef,
@@ -70,37 +75,18 @@ export default function DistributeVouchersPage() {
     if (!appUser?.company_id) return
     setIsLoading(true)
     try {
-      // Fetch Company details for the print template
       const { data: comp } = await supabase.from('companies').select('*').eq('id', appUser.company_id).single()
       if (comp) setCompanyData(comp)
 
-      // 1. Fetch Distributors
-      const { data: dists } = await supabase
-        .from('voucher_distributors')
-        .select('*')
-        .eq('company_id', appUser.company_id)
-        .order('distributor_name')
+      const { data: dists } = await supabase.from('voucher_distributors').select('*').eq('company_id', appUser.company_id).order('distributor_name')
       if (dists) setDistributors(dists)
 
-      // 2. Fetch Delivery Agents
-      const { data: agentData } = await supabase
-        .from('delivery_agents')
-        .select('*')
-        .eq('company_id', appUser.company_id)
-        .order('name')
+      const { data: agentData } = await supabase.from('delivery_agents').select('*').eq('company_id', appUser.company_id).order('name')
       if (agentData) setAgents(agentData)
 
-      // 3. Fetch Batches
       const { data: batchData } = await supabase
         .from("voucher_batches")
-        .select(`
-          id, 
-          batch_no, 
-          discount_value,
-          handling_fee,
-          status,
-          vouchers ( status )
-        `)
+        .select(`id, batch_no, discount_value, handling_fee, status, vouchers ( status )`)
         .eq('company_id', appUser.company_id)
         .order('created_at', { ascending: false }); 
 
@@ -121,7 +107,6 @@ export default function DistributeVouchersPage() {
         setBatches(formattedBatches);
       }
 
-      // 4. Fetch Distribution Challans
       const { data: records } = await supabase
         .from('voucher_distributions')
         .select('*, voucher_distributors(*)')
@@ -201,11 +186,14 @@ export default function DistributeVouchersPage() {
     };
   }, [quantity, availableVouchers]);
 
-  const handleGenerateChallan = async () => {
-    if (!distributorId) return toast.error("Select a distributor")
+  const handleProcessAllocation = async () => {
     if (!selectedBatch) return toast.error("Select a source batch")
     if (!isValidQuantity) return toast.error(`Please enter a valid quantity between 1 and ${availableVouchers.length}.`)
-    if (!totalFee || parseFloat(totalFee) < 0) return toast.error("Enter a valid total handling fee")
+
+    if (allocationType === 'vendor') {
+      if (!distributorId) return toast.error("Select a distributor")
+      if (!totalFee || parseFloat(totalFee) < 0) return toast.error("Enter a valid total handling fee")
+    }
 
     let finalExpiryDate = ''
     if (validityMonths === 'custom') {
@@ -220,47 +208,74 @@ export default function DistributeVouchersPage() {
     try {
       const voucherIds = vouchersToUpdate.map(v => v.id);
 
-      // 1. Insert Challan (Includes Birthday Rule)
-      const { data: challan, error: challanErr } = await supabase
-        .from('voucher_distributions')
-        .insert({
-          company_id: appUser?.company_id,
-          distributor_id: distributorId,
-          quantity: numQuantity,
-          total_amount: parseFloat(totalFee),
-          payment_status: 'pending',
-          expiry_date: finalExpiryDate,
-          delivery_agent: (deliveryAgent && deliveryAgent !== 'none') ? deliveryAgent : null,
-          is_birthday_redemption: isBirthdayRedemption
+      if (allocationType === 'vendor') {
+        // --- 1. PHYSICAL VENDOR LOGIC ---
+        const { data: challan, error: challanErr } = await supabase
+          .from('voucher_distributions')
+          .insert({
+            company_id: appUser?.company_id,
+            distributor_id: distributorId,
+            quantity: numQuantity,
+            total_amount: parseFloat(totalFee),
+            payment_status: 'pending',
+            expiry_date: finalExpiryDate,
+            delivery_agent: (deliveryAgent && deliveryAgent !== 'none') ? deliveryAgent : null,
+            is_birthday_redemption: isBirthdayRedemption
+          })
+          .select('*, voucher_distributors(*)')
+          .single()
+
+        if (challanErr) throw challanErr
+
+        const { error: updateErr } = await supabase
+          .from('vouchers')
+          .update({
+            status: 'distributed',
+            distributor_id: distributorId,
+            distribution_id: challan.id, 
+            expiry_date: finalExpiryDate,
+            distributed_at: new Date().toISOString(),
+            is_birthday_redemption: isBirthdayRedemption
+          })
+          .in('id', voucherIds)
+
+        if (updateErr) throw updateErr
+
+        toast.success("Delivery Challan Generated!", {
+          description: `Successfully issued ${numQuantity} vouchers (${startCode} to ${endCode}).`
         })
-        .select('*, voucher_distributors(*)')
-        .single()
+        
+        setViewChallan(challan)
+        setViewSequence({ start: startCode, end: endCode })
+        
+      } else {
+        // --- 2. DIGITAL EVENT (QR) LOGIC ---
+        const { error: updateErr } = await supabase
+          .from('vouchers')
+          .update({
+            status: 'unclaimed', 
+            expiry_date: finalExpiryDate,
+            is_birthday_redemption: isBirthdayRedemption
+          })
+          .in('id', voucherIds)
 
-      if (challanErr) throw challanErr
+        if (updateErr) throw updateErr
 
-      // 2. Update Vouchers (Locks them to Birthday Rule)
-      const { error: updateErr } = await supabase
-        .from('vouchers')
-        .update({
-          status: 'distributed',
-          distributor_id: distributorId,
-          distribution_id: challan.id, 
-          expiry_date: finalExpiryDate,
-          distributed_at: new Date().toISOString(),
-          is_birthday_redemption: isBirthdayRedemption
+        const detectedPrefix = startCode.replace(/[0-9]/g, '') || startCode.substring(0, 1);
+        const eventUrl = `${window.location.origin}/event/${detectedPrefix}`;
+
+        toast.success("Allocated to Digital Event Pool!", {
+          description: `${numQuantity} vouchers are now live for QR claims.`
         })
-        .in('id', voucherIds)
 
-      if (updateErr) throw updateErr
+        // ✨ Trigger the QR Modal!
+        setEventQrData({
+          url: eventUrl,
+          prefix: detectedPrefix,
+          count: numQuantity
+        })
+      }
 
-      toast.success("Delivery Challan Generated!", {
-        description: `Successfully issued ${numQuantity} vouchers (${startCode} to ${endCode}).`
-      })
-      
-      // Auto-open print modal for the new challan
-      setViewChallan(challan)
-      setViewSequence({ start: startCode, end: endCode })
-      
       // Reset Form
       setQuantity('')
       setTotalFee('')
@@ -271,11 +286,42 @@ export default function DistributeVouchersPage() {
       fetchData()
 
     } catch (err: any) {
-      toast.error(err.message || "Failed to process distribution")
+      toast.error(err.message || "Failed to process allocation")
     } finally {
       setIsSubmitting(false)
     }
   }
+
+  // ✨ NEW: Convert SVG QR code to a downloadable PNG file
+  const handleDownloadQr = () => {
+    const svg = document.getElementById("event-qr-code");
+    if (!svg) return;
+
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    const img = new Image();
+    
+    img.onload = () => {
+      // Add a white padding border so the QR scans easily when printed
+      const padding = 24; 
+      canvas.width = img.width + (padding * 2);
+      canvas.height = img.height + (padding * 2);
+      
+      if(ctx) {
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, padding, padding);
+      }
+      
+      const pngFile = canvas.toDataURL("image/png");
+      const downloadLink = document.createElement("a");
+      downloadLink.download = `Ossam_Event_QR_${eventQrData?.prefix}.png`;
+      downloadLink.href = pngFile;
+      downloadLink.click();
+    };
+    img.src = `data:image/svg+xml;base64,${btoa(svgData)}`;
+  };
 
   const handleMarkPaid = async (challanId: string) => {
     try {
@@ -295,7 +341,6 @@ export default function DistributeVouchersPage() {
     }
   }
 
-  // --- FETCH SEQUENCE FOR VIEW MODAL ---
   const handleViewChallan = async (challan: any) => {
     setViewChallan(challan);
     setViewSequence(null);
@@ -377,31 +422,51 @@ export default function DistributeVouchersPage() {
           {/* LEFT: ALLOCATION & SEQUENCE FORM               */}
           {/* ============================================== */}
           <Card className="lg:col-span-5 xl:col-span-4 border-gray-200/60 shadow-sm bg-white lg:sticky lg:top-16 flex flex-col h-auto lg:max-h-[calc(100vh-5rem)] overflow-hidden">
+            
             <CardHeader className="bg-gray-50/50 border-b border-gray-100 p-4 shrink-0">
-              <CardTitle className="text-sm font-bold flex items-center gap-2 text-gray-900">
-                <Send className="w-4 h-4 text-indigo-600" /> New Allocation
-              </CardTitle>
+              <Tabs value={allocationType} onValueChange={(v: any) => setAllocationType(v)} className="w-full">
+                <TabsList className="w-full grid grid-cols-2 bg-gray-200/50 p-1">
+                  <TabsTrigger value="vendor" className="text-xs font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">
+                    <Store className="w-3.5 h-3.5 mr-1.5" /> Vendor
+                  </TabsTrigger>
+                  <TabsTrigger value="event" className="text-xs font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">
+                    <QrCode className="w-3.5 h-3.5 mr-1.5" /> Event (QR)
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
             </CardHeader>
             
             <CardContent className="p-4 space-y-4 overflow-y-auto custom-scrollbar flex-1 pb-6">
               
-              <div className="space-y-1.5">
-                <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Distributor</Label>
-                <Select value={distributorId} onValueChange={setDistributorId}>
-                  <SelectTrigger className="h-10 text-sm bg-gray-50 border-gray-200"><SelectValue placeholder="Select partner..." /></SelectTrigger>
-                  <SelectContent className="border-gray-200 max-h-[300px]">
-                    {distributors.map(d => (
-                      <SelectItem key={d.id} value={d.id}>
-                        <div className="flex items-center gap-2 font-medium">
-                          <Store className="w-3.5 h-3.5 text-gray-400" /> {d.distributor_name}
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {allocationType === 'vendor' && (
+                <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2">
+                  <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Distributor</Label>
+                  <Select value={distributorId} onValueChange={setDistributorId}>
+                    <SelectTrigger className="h-10 text-sm bg-gray-50 border-gray-200"><SelectValue placeholder="Select partner..." /></SelectTrigger>
+                    <SelectContent className="border-gray-200 max-h-[300px]">
+                      {distributors.map(d => (
+                        <SelectItem key={d.id} value={d.id}>
+                          <div className="flex items-center gap-2 font-medium">
+                            <Store className="w-3.5 h-3.5 text-gray-400" /> {d.distributor_name}
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
-              <div className="space-y-1.5">
+              {allocationType === 'event' && (
+                <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-lg flex items-start gap-2.5 animate-in fade-in slide-in-from-top-2">
+                  <QrCode className="w-4 h-4 text-indigo-500 mt-0.5 shrink-0" />
+                  <p className="text-[11px] font-medium text-indigo-800 leading-snug">
+                    <strong className="block text-xs text-indigo-900 mb-0.5">Digital Event Pool</strong>
+                    These vouchers will bypass physical delivery and instantly become available for customers to claim themselves via the public QR code.
+                  </p>
+                </div>
+              )}
+
+              <div className="space-y-1.5 pt-1">
                 <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Source Batch</Label>
                 <Select value={selectedBatch} onValueChange={setSelectedBatch}>
                   <SelectTrigger className="h-10 text-sm bg-gray-50 border-gray-200"><SelectValue placeholder="Choose batch from stock..." /></SelectTrigger>
@@ -459,16 +524,16 @@ export default function DistributeVouchersPage() {
                       {endCode}
                     </div>
                   </div>
-                  {isValidQuantity && (
-                    <p className="text-[10px] text-indigo-600 mt-2 font-medium flex items-start gap-1.5 leading-tight bg-indigo-50/50 p-1.5 rounded border border-indigo-100">
-                      <Info className="w-3 h-3 shrink-0" />
-                      Auto-skips voided codes. Match physical booklet to this range.
+                  
+                  {isValidQuantity && allocationType === 'event' && (
+                    <p className="text-[10px] text-emerald-600 mt-2 font-bold uppercase tracking-widest text-center pt-1 border-t border-gray-200">
+                      Auto-Prefix URL: /event/{startCode.replace(/[0-9]/g, '') || startCode.substring(0, 1)}
                     </p>
                   )}
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-3 border-t border-gray-100">
+              <div className={`grid grid-cols-1 gap-4 pt-3 border-t border-gray-100 ${allocationType === 'vendor' ? 'sm:grid-cols-2' : ''}`}>
                 <div className="space-y-1.5">
                   <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
                     <CalendarDays className="w-3.5 h-3.5" /> Validity
@@ -488,41 +553,44 @@ export default function DistributeVouchersPage() {
                   )}
                 </div>
 
-                <div className="space-y-1.5">
+                {allocationType === 'vendor' && (
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
+                      <IndianRupee className="w-3.5 h-3.5" /> Handover Fee
+                    </Label>
+                    <Input 
+                      type="number" placeholder="Total (₹)" 
+                      value={totalFee} onChange={e => setTotalFee(e.target.value)}
+                      className="h-10 text-sm font-bold text-gray-900 bg-white border-gray-200"
+                    />
+                  </div>
+                )}
+              </div>
+
+              {allocationType === 'vendor' && (
+                <div className="space-y-1.5 pt-3 border-t border-gray-100">
                   <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
-                    <IndianRupee className="w-3.5 h-3.5" /> Handover Fee
+                    <Truck className="w-3.5 h-3.5" /> Delivery Agent / Courier
                   </Label>
-                  <Input 
-                    type="number" placeholder="Total (₹)" 
-                    value={totalFee} onChange={e => setTotalFee(e.target.value)}
-                    className="h-10 text-sm font-bold text-gray-900 bg-white border-gray-200"
-                  />
+                  <Select value={deliveryAgent} onValueChange={setDeliveryAgent}>
+                    <SelectTrigger className="h-10 text-sm bg-white border-gray-200">
+                      <SelectValue placeholder="Assign delivery personnel (Optional)" />
+                    </SelectTrigger>
+                    <SelectContent className="border-gray-200 max-h-[300px]">
+                      <SelectItem value="none" className="text-gray-500 italic">Self Pickup / No Agent</SelectItem>
+                      {agents.map(a => (
+                        <SelectItem key={a.id} value={a.name}>
+                          <div className="flex items-center gap-2 font-medium text-gray-900">
+                            <User className="w-3.5 h-3.5 text-gray-400" /> 
+                            {a.name} <span className="text-[10px] text-gray-400 font-normal">{a.agency_details ? `(${a.agency_details})` : ''}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-              </div>
+              )}
 
-              <div className="space-y-1.5 pt-3 border-t border-gray-100">
-                <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1.5">
-                  <Truck className="w-3.5 h-3.5" /> Delivery Agent / Courier
-                </Label>
-                <Select value={deliveryAgent} onValueChange={setDeliveryAgent}>
-                  <SelectTrigger className="h-10 text-sm bg-white border-gray-200">
-                    <SelectValue placeholder="Assign delivery personnel (Optional)" />
-                  </SelectTrigger>
-                  <SelectContent className="border-gray-200 max-h-[300px]">
-                    <SelectItem value="none" className="text-gray-500 italic">Self Pickup / No Agent</SelectItem>
-                    {agents.map(a => (
-                      <SelectItem key={a.id} value={a.name}>
-                        <div className="flex items-center gap-2 font-medium text-gray-900">
-                          <User className="w-3.5 h-3.5 text-gray-400" /> 
-                          {a.name} <span className="text-[10px] text-gray-400 font-normal">{a.agency_details ? `(${a.agency_details})` : ''}</span>
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* NEW: Birthday Month Rule Toggle */}
               <div className="space-y-1.5 pt-3 border-t border-gray-100 flex items-center justify-between">
                 <div className="space-y-0.5">
                   <Label className="text-[11px] font-bold text-gray-700 uppercase tracking-widest flex items-center gap-1.5 cursor-pointer" htmlFor="birthday-toggle">
@@ -545,12 +613,12 @@ export default function DistributeVouchersPage() {
 
             <div className="p-4 border-t border-gray-100 bg-white shrink-0">
               <Button 
-                className="w-full h-11 font-bold uppercase tracking-widest text-[11px] bg-gray-900 hover:bg-gray-800 shadow-md text-white transition-all shrink-0" 
-                onClick={handleGenerateChallan}
+                className={`w-full h-11 font-bold uppercase tracking-widest text-[11px] shadow-md text-white transition-all shrink-0 ${allocationType === 'vendor' ? 'bg-gray-900 hover:bg-gray-800' : 'bg-indigo-600 hover:bg-indigo-700'}`}
+                onClick={handleProcessAllocation}
                 disabled={isSubmitting || !isValidQuantity}
               >
-                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <FileText className="w-4 h-4 mr-2" />}
-                Generate Delivery Challan
+                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : (allocationType === 'vendor' ? <FileText className="w-4 h-4 mr-2" /> : <QrCode className="w-4 h-4 mr-2" />)}
+                {allocationType === 'vendor' ? 'Generate Delivery Challan' : 'Push to Live QR Pool'}
               </Button>
             </div>
           </Card>
@@ -658,6 +726,40 @@ export default function DistributeVouchersPage() {
           </Card>
         </div>
       </main>
+
+      {/* --- EVENT QR DOWNLOAD MODAL --- */}
+      <Dialog open={!!eventQrData} onOpenChange={(open) => !open && setEventQrData(null)}>
+        <DialogContent className="sm:max-w-sm text-center flex flex-col items-center bg-white shadow-2xl rounded-2xl overflow-hidden p-0 border-none">
+          <div className="w-full bg-indigo-600 p-6 flex flex-col items-center relative overflow-hidden">
+            <div className="absolute inset-0 bg-[url('/noise.png')] opacity-10 mix-blend-overlay"></div>
+            <QrCode className="w-10 h-10 text-white mb-2 relative z-10" />
+            <DialogTitle className="text-xl font-bold text-white relative z-10">Event QR Code Ready!</DialogTitle>
+            <DialogDescription className="text-indigo-100 mt-1 relative z-10">
+              {eventQrData?.count} vouchers allocated to series <strong className="text-white">{eventQrData?.prefix}</strong>.
+            </DialogDescription>
+          </div>
+          
+          <div className="p-6 flex flex-col items-center w-full">
+            <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm mb-4">
+              <QRCode id="event-qr-code" value={eventQrData?.url || ''} size={180} level="Q" />
+            </div>
+            
+            <div className="w-full bg-gray-50 border border-gray-200 rounded-lg p-3 mb-6">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 text-left">Claim URL</p>
+              <p className="text-xs font-mono text-indigo-600 text-left truncate select-all">
+                {eventQrData?.url}
+              </p>
+            </div>
+            
+            <div className="w-full flex gap-3">
+              <Button variant="outline" className="flex-1 border-gray-200" onClick={() => setEventQrData(null)}>Close</Button>
+              <Button className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white shadow-md" onClick={handleDownloadQr}>
+                <Download className="w-4 h-4 mr-2" /> Download
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* --- VIEW DETAILS DIALOG --- */}
       <Dialog open={!!viewChallan} onOpenChange={(open) => !open && setViewChallan(null)}>

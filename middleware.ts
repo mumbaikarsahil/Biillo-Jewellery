@@ -31,12 +31,13 @@ export async function middleware(request: NextRequest) {
 
   const path = request.nextUrl.pathname
 
-  // Allow public assets and API routes to bypass the middleware
+  // ✨ ALLOW PUBLIC PAGES TO BYPASS AUTHENTICATION
   if (
     path.startsWith('/api') || 
     path.startsWith('/_next') || 
     path.startsWith('/claim') ||
     path.startsWith('/storelocations') ||
+    path.startsWith('/event') || // ✨ NEW: Allows /event/A, /event/B, etc.
     path.includes('.') // bypasses files like favicon.ico, images, etc.
   ) {
     return supabaseResponse
