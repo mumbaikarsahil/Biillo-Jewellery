@@ -13,7 +13,7 @@ A complete Next.js + Supabase enterprise resource planning system for managing s
 ### 📦 Inventory Management
 - **Serialized Item Tracking**: Every ornament has unique barcode/RFID
 - **Gold Batches**: Track precious metal inventory by purity and weight
-- **Diamond Lots**: Manage stone inventory with certification tracking
+- **Diamond Lots**: Manage stone inventory with cerxxxxtification tracking
 - **Job Bags**: Manufacturing workflow with material issue and consumption
 - **Stock Status Tracking**: in_stock, transit, sold, missing states
 
