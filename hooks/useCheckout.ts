@@ -103,9 +103,6 @@ export function useCheckout({
   
   const cartAdvance = cart?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
   
-  // ACCOUNTING FIX: Kitty and Wallet Credit are now treated as post-tax payments, not pre-tax discounts.
-  // Tax is calculated ONLY after Manual Discount and Exchange value.
-  // ✨ FIX: Use estimated value for Custom Orders so vouchers don't drop to 0!
   let effectiveSubtotal = subtotal;
   if (mode === 'custom') {
       effectiveSubtotal = Number(customOrderDetails?.estimated_value) || 0;
@@ -138,7 +135,6 @@ export function useCheckout({
   const finalPayableGross = Math.round(exactFinalPayable)
   const roundOffAmount = parseFloat((finalPayableGross - exactFinalPayable).toFixed(2))
 
-  // SETTLEMENT CALCULATION: Deduct Kitty/Credit from the final gross total
   const finalPayableNet = Math.max(0, finalPayableGross - cartAdvance - appliedKittyAmount - appliedCreditAmount);
 
 
@@ -383,7 +379,8 @@ export function useCheckout({
 
         const preTaxDeductions = standardDiscount + exchangeNum + appliedVoucherAmount;
 
-        const invoiceData = {
+        // 1. Build the base payload WITHOUT the exchange details keys
+        const invoiceData: any = {
           created_at: effectiveDateISO,
           customer_id: selectedCustomer?.id, 
           warehouse_id: selectedLocation,
@@ -402,9 +399,7 @@ export function useCheckout({
           voucher_code: activeVoucher?.code || null,
           voucher_discount: appliedVoucherAmount, 
           Voucher_handling_fee: handlingAmt,
-          exchange_value: exchangeNum, 
-          exchange_notes: exchangeNotes, 
-          exchange_physical_details: exchangePhysicalDetails,
+          exchange_value: exchangeNum || 0, // Ensure strictly 0
           
           kitty_payment: effectiveKittyAmt, 
           wallet_payment: effectiveCreditAmt,
@@ -417,10 +412,17 @@ export function useCheckout({
           billing_remarks: customTransactionContext?.billing_remarks || null,
           target_bank_account_id: customTransactionContext?.target_bank_account_id || null,
           transfer_type: customTransactionContext?.transfer_type || null
-      }
+        };
         
+        // ✨ THE STRICT GATEKEEPER ✨
+        // 2. ONLY attach these keys to the payload if a real exchange occurred!
+        // This makes it completely invisible to the database RPC otherwise.
+        if (exchangeNum > 0 && exchangePhysicalDetails) {
+           invoiceData.exchange_notes = exchangeNotes;
+           invoiceData.exchange_physical_details = exchangePhysicalDetails;
+        }
+
         const { data, error } = await callRpc('pos_confirm_sale', { p_invoice_json: invoiceData, p_user_id: appUser?.user_id })
-        if (error) throw error
         
         finalNo = data?.invoice_number || `INV-${Date.now().toString().slice(-6)}`
         
@@ -521,11 +523,8 @@ export function useCheckout({
         
         if (buybackErr) throw buybackErr
 
-       // 2. ✨ NEW: Immediately create the physical item in the Vault
-       // 2. ✨ NEW: Immediately create the physical item in the Vault
        const uniqueRef = `RTN-${Date.now().toString().slice(-6)}`;
         
-       // Satisfy DB constraints: weight must be > 0
        const grossWt = Number(returnDetails.physicalDetails?.gross_weight_g) || 0.001;
        const netWt = Number(returnDetails.physicalDetails?.net_weight_g) || grossWt;
 
@@ -533,12 +532,12 @@ export function useCheckout({
          company_id: appUser?.company_id,
          warehouse_id: selectedLocation,
          sku: uniqueRef,
-         barcode: uniqueRef, // ✨ REQUIRED: Cannot be null
+         barcode: uniqueRef,
          item_category: returnDetails.physicalDetails?.item_category || 'Old Gold',
          metal_type: returnDetails.physicalDetails?.metal_type || 'Gold',
          
-         purity_karat: returnDetails.physicalDetails?.purity_karat || '22K', // ✨ FIXED name
-         purity_percent: returnDetails.physicalDetails?.purity_percent || 91.60, // ✨ REQUIRED: Cannot be null
+         purity_karat: returnDetails.physicalDetails?.purity_karat || '22K', 
+         purity_percent: returnDetails.physicalDetails?.purity_percent || 91.60, 
          
          gross_weight_g: grossWt,
          net_weight_g: netWt,
@@ -612,7 +611,7 @@ export function useCheckout({
     voucherCode, setVoucherCode, activeVoucher, setActiveVoucher, handlingFee,
     isExchangeOpen, setIsExchangeOpen, exchangeInvoiceNo, setExchangeInvoiceNo, exchangeValue, setExchangeValue, exchangeNotes, setExchangeNotes,
     discountAmount: standardDiscount, appliedVoucherAmount, handlingAmt, finalTaxableValue, cgstAmount, sgstAmount, exactFinalPayable, roundOffAmount, 
-    setExchangePhysicalDetails, // Add this to the returned exports
+    setExchangePhysicalDetails,
     finalPayable: finalPayableNet, 
     
     appliedKittyAmount, setAppliedKittyAmount,appliedKittyPlanId, setAppliedKittyPlanId, appliedCreditAmount, setAppliedCreditAmount,
