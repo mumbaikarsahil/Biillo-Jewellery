@@ -5,7 +5,7 @@ import { format } from 'date-fns'
 import { 
   Download, Filter, Loader2, Package, Search, 
   RefreshCw, FileText, Store, Layers, TrendingDown, TrendingUp, AlertTriangle, Sparkles, IndianRupee, MapPin,
-  CheckCircle2, Trophy, Target
+  CheckCircle2, Trophy, Target, PieChart, Gem // ✨ Added Gem icon
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -71,12 +71,10 @@ export function InventoryRegistryReport() {
     fetchWarehouses()
   }, [appUser])
 
-  // --- HELPER: LOCAL WAREHOUSE NAME FINDER ---
   const getWhName = (wId: string) => {
     return warehouses.find((w: any) => w.id === wId)?.name || 'Global / Unassigned'
   }
 
-  // --- BULLETPROOF DATA ENGINE ---
   // --- BULLETPROOF DATA ENGINE ---
   const fetchData = async () => {
     if (!appUser?.company_id) return
@@ -88,12 +86,11 @@ export function InventoryRegistryReport() {
       let step = 0;
       const limit = 1000;
 
-      // Loop to bypass API limits and get 100% of the data
       while (isFetching) {
+        // ✨ FIX: Added total_stone_weight_cts to the query
         let query = supabase.from('inventory_items')
-          .select(`id, barcode, item_category, metal_type, purity_karat, gross_weight_g, net_weight_g, cost_total, mrp, status, created_at, warehouse_id, warehouses(name)`)
+          .select(`id, barcode, item_category, metal_type, purity_karat, gross_weight_g, net_weight_g, total_stone_weight_cts, cost_total, mrp, status, created_at, warehouse_id, warehouses(name)`)
           .eq('company_id', appUser.company_id)
-          // FIX 1: Add secondary sort by 'id' to prevent pagination duplicates on bulk-imported items
           .order('created_at', { ascending: false })
           .order('id', { ascending: true }) 
           .range(step * limit, (step + 1) * limit - 1)
@@ -115,13 +112,12 @@ export function InventoryRegistryReport() {
         }
       }
 
-      // FIX 2: Final frontend safety net to strip any accidental duplicates
       const uniqueItems = Array.from(new Map(allItems.map(item => [item.id, item])).values());
 
       setData(uniqueItems)
       
       if (uniqueItems.length > 0) {
-        const highest = Math.max(...uniqueItems.map(d => Number(d.mrp) || 0), 100000);
+        const highest = Math.max(...uniqueItems.map((d: any) => Number(d.mrp) || 0), 100000);
         setMaxPrice(highest);
         setPriceRange([0, highest]);
       }
@@ -133,12 +129,11 @@ export function InventoryRegistryReport() {
     }
   }
 
-  // Re-fetch whenever the warehouse changes, just like InventoryPage
   useEffect(() => { fetchData() }, [appUser, filterWarehouse])
 
   // --- 1. DYNAMIC FILTER EXTRACTION ---
-  const uniqueCategories = useMemo(() => Array.from(new Set(data.map(d => d.item_category || 'Uncategorized'))).filter(Boolean).sort(), [data]);
-  const uniqueMetals = useMemo(() => Array.from(new Set(data.map(d => d.metal_type || 'Unknown Metal'))).filter(Boolean).sort(), [data]);
+  const uniqueCategories = useMemo(() => Array.from(new Set(data.map((d: any) => d.item_category || 'Uncategorized'))).filter(Boolean).sort(), [data]);
+  const uniqueMetals = useMemo(() => Array.from(new Set(data.map((d: any) => d.metal_type || 'Unknown Metal'))).filter(Boolean).sort(), [data]);
 
   // --- 2. LOCAL FILTERING ENGINE FOR THE TABLE ---
   const filteredData = useMemo(() => {
@@ -149,7 +144,6 @@ export function InventoryRegistryReport() {
       const stat = item.status || 'unknown';
 
       if (search && !bar.toLowerCase().includes(search.toLowerCase()) && !cat.toLowerCase().includes(search.toLowerCase())) return false;
-      // Note: filterWarehouse is handled by the database now, so we removed it from here.
       if (filterStatus !== 'all' && stat !== filterStatus) return false;
       if (filterMetal !== 'all' && met !== filterMetal) return false;
       if (filterCategory !== 'all' && cat !== filterCategory) return false;
@@ -171,18 +165,29 @@ export function InventoryRegistryReport() {
     }), { totalItems: 0, totalGrossWt: 0, totalNetWt: 0, totalValue: 0 })
   }, [filteredData]);
 
+  // ✨ CATEGORY SUMMARY BREAKDOWN (Updated with stoneWt) ✨
+  const categorySummary = useMemo(() => {
+    const summary: Record<string, { count: number, grossWt: number, netWt: number, stoneWt: number, value: number }> = {};
+    filteredData.forEach(item => {
+      const cat = item.item_category || 'Uncategorized';
+      if (!summary[cat]) {
+        summary[cat] = { count: 0, grossWt: 0, netWt: 0, stoneWt: 0, value: 0 };
+      }
+      summary[cat].count += 1;
+      summary[cat].grossWt += (Number(item.gross_weight_g) || 0);
+      summary[cat].netWt += (Number(item.net_weight_g) || 0);
+      summary[cat].stoneWt += (Number(item.total_stone_weight_cts) || 0);
+      summary[cat].value += (Number(item.mrp) || 0);
+    });
+    return Object.entries(summary).sort((a, b) => b[1].count - a[1].count);
+  }, [filteredData]);
+
   // --- 4. SMART ANALYTICS ENGINE ---
   const analytics = useMemo(() => {
     if (!showAnalytics) return null;
 
     const multiDimStats: Record<string, { 
-      location: string, 
-      category: string, 
-      bracket: string, 
-      stock: number, 
-      sold: number, 
-      dead: number, 
-      valStock: number 
+      location: string, category: string, bracket: string, stock: number, sold: number, dead: number, valStock: number 
     }> = {};
 
     const categoryAgg: Record<string, { sold: number, stock: number }> = {};
@@ -264,15 +269,12 @@ export function InventoryRegistryReport() {
     return {
       restockWarnings: restockWarnings.sort((a, b) => b.deficit - a.deficit),
       deadStockWarnings: deadStockWarnings.sort((a, b) => b.lockedValue - a.lockedValue),
-      marketIntel: {
-        bestCategory,
-        worstCategory: worstCategory.name !== 'N/A' ? worstCategory : null,
-        sweetSpot
-      }
+      marketIntel: { bestCategory, worstCategory: worstCategory.name !== 'N/A' ? worstCategory : null, sweetSpot }
     };
   }, [data, search, filterMetal, filterCategory, priceRange, showAnalytics, warehouses]);
 
 
+  // ✨ CSV EXPORT LOGIC UPDATED TO INCLUDE STONE CTS ✨
   const handleExport = () => {
     if (filteredData.length === 0) {
       toast({ title: "Empty Data", description: "No records to export.", variant: "destructive" })
@@ -280,46 +282,120 @@ export function InventoryRegistryReport() {
     }
     setExporting(true)
 
-    const formattedData = filteredData.map((d) => ({
-      'Barcode': d.barcode || '--',
-      'Category': d.item_category || 'Uncategorized',
-      'Metal': d.metal_type || 'Unknown',
-      'Purity': d.purity_karat || '--',
-      'Gross Wt (g)': d.gross_weight_g || 0,
-      'Net Wt (g)': d.net_weight_g || 0,
-      'Retail Value (₹)': d.mrp || 0,
-      'Status': (d.status || 'unknown').replace('_', ' ').toUpperCase(),
-      'Location': getWhName(d.warehouse_id),
-      'Date Added': d.created_at ? format(new Date(d.created_at), 'dd-MMM-yyyy') : '--'
-    }))
+    const groupedData = filteredData.reduce((acc, item) => {
+      const cat = item.item_category || 'Uncategorized';
+      if (!acc[cat]) acc[cat] = [];
+      acc[cat].push(item);
+      return acc;
+    }, {} as Record<string, any[]>);
 
-    const headers = Object.keys(formattedData[0])
+    const locationStr = filterWarehouse === 'all' ? 'All Locations' : getWhName(filterWarehouse);
+    const statusStr = filterStatus === 'all' ? 'All Statuses' : filterStatus.replace('_', ' ').toUpperCase();
+    const catStr = filterCategory === 'all' ? 'All Categories' : filterCategory;
+    const metalStr = filterMetal === 'all' ? 'All Metals' : filterMetal;
+    const searchStr = search ? ` | Search: "${search}"` : '';
+    const priceStr = ` | Retail: ₹${priceRange[0]} to ₹${priceRange[1]}`;
+
+    let csvRows: string[] = [
+      `"ASSET REGISTRY REPORT",,,,,,,,,,`, // Added 1 extra comma for new column
+      `"Generated On: ${format(new Date(), 'dd-MMM-yyyy hh:mm a')}",,,,,,,,,,`,
+      `"Filters Applied: Location - ${locationStr} | Status - ${statusStr} | Category - ${catStr} | Metal - ${metalStr}${priceStr}${searchStr}",,,,,,,,,,`,
+      `,,,,,,,,,,`, 
+    ];
+
+    const headers = [
+      'Barcode', 'Category', 'Metal', 'Purity', 
+      'Gross Wt (g)', 'Net Wt (g)', 'Stone Wt (cts)', 'Retail Value (₹)', // Added Stone Wt
+      'Status', 'Location', 'Date Added'
+    ];
     
-    // 1. Map regular data rows
-    const dataRows = formattedData.map(row => headers.map(h => `"${(row as any)[h] || ''}"`).join(','))
-    
-    // 2. Create a "Totals" row aligned with the specific columns
-    const totalsRow = [
-      `"TOTAL: ${metrics.totalItems} Items"`, // Under Barcode
-      `""`,                                   // Under Category
-      `""`,                                   // Under Metal
-      `""`,                                   // Under Purity
-      `"${metrics.totalGrossWt.toFixed(3)}"`, // Under Gross Wt (g)
-      `"${metrics.totalNetWt.toFixed(3)}"`,   // Under Net Wt (g)
-      `"${metrics.totalValue.toFixed(2)}"`,   // Under Retail Value (₹)
-      `""`,                                   // Under Status
-      `""`,                                   // Under Location
-      `""`                                    // Under Date Added
-    ].join(',')
+    csvRows.push(headers.join(','));
 
-    // 3. Assemble CSV: Headers -> Data -> Empty Spacer Row -> Totals Row
-    const csvContent = [
-      headers.join(','),
-      ...dataRows,
-      ',,,,,,,,,', // Empty row to create visual separation in Excel
-      totalsRow
-    ].join('\n')
+    let grandTotalItems = 0;
+    let grandTotalGross = 0;
+    let grandTotalNet = 0;
+    let grandTotalStone = 0;
+    let grandTotalValue = 0;
 
+    const categories = Object.keys(groupedData).sort();
+
+    categories.forEach(cat => {
+      const items = groupedData[cat];
+      let catGross = 0;
+      let catNet = 0;
+      let catStone = 0;
+      let catValue = 0;
+
+      csvRows.push(`"--- ${cat.toUpperCase()} ---",,,,,,,,,,`);
+
+      items.forEach((d: any) => {
+        const gross = Number(d.gross_weight_g) || 0;
+        const net = Number(d.net_weight_g) || 0;
+        const stone = Number(d.total_stone_weight_cts) || 0;
+        const mrp = Number(d.mrp) || 0;
+
+        catGross += gross;
+        catNet += net;
+        catStone += stone;
+        catValue += mrp;
+
+        grandTotalGross += gross;
+        grandTotalNet += net;
+        grandTotalStone += stone;
+        grandTotalValue += mrp;
+        grandTotalItems++;
+
+        const row = [
+          `"${d.barcode || '--'}"`,
+          `"${cat}"`,
+          `"${d.metal_type || 'Unknown'}"`,
+          `"${d.purity_karat || '--'}"`,
+          `"${gross}"`,
+          `"${net}"`,
+          `"${stone}"`, // Stone cts mapping
+          `"${mrp}"`,
+          `"${(d.status || 'unknown').replace('_', ' ').toUpperCase()}"`,
+          `"${getWhName(d.warehouse_id)}"`,
+          `"${d.created_at ? format(new Date(d.created_at), 'dd-MMM-yyyy') : '--'}"`
+        ];
+        csvRows.push(row.join(','));
+      });
+
+      // Matches the 11 columns
+      const catSummaryRow = [
+        `"${cat} TOTAL: ${items.length} Items"`, 
+        `""`, 
+        `""`, 
+        `""`, 
+        `"${catGross.toFixed(3)}"`, 
+        `"${catNet.toFixed(3)}"`, 
+        `"${catStone.toFixed(2)}"`, 
+        `"${catValue.toFixed(2)}"`, 
+        `""`, 
+        `""`, 
+        `""`  
+      ];
+      
+      csvRows.push(catSummaryRow.join(','));
+      csvRows.push(',,,,,,,,,,'); 
+    });
+
+    const grandTotalRow = [
+      `"GRAND TOTAL: ${grandTotalItems} Items"`,
+      `""`,
+      `""`,
+      `""`,
+      `"${grandTotalGross.toFixed(3)}"`,
+      `"${grandTotalNet.toFixed(3)}"`,
+      `"${grandTotalStone.toFixed(2)}"`,
+      `"${grandTotalValue.toFixed(2)}"`,
+      `""`,
+      `""`,
+      `""`
+    ];
+    csvRows.push(grandTotalRow.join(','));
+
+    const csvContent = csvRows.join('\n');
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement("a")
@@ -348,8 +424,6 @@ export function InventoryRegistryReport() {
       
       {/* MAIN TOOLBAR & FILTERS */}
       <div className="flex flex-col gap-3 bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm print:hidden">
-        
-        {/* Top Row: Persistent Search & Actions */}
         <div className="flex items-center gap-2 w-full">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
@@ -392,10 +466,8 @@ export function InventoryRegistryReport() {
           </Button>
         </div>
 
-        {/* Collapsible Advanced Filters */}
         {showFilters && (
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 pt-3 border-t border-zinc-100 animate-in slide-in-from-top-2 duration-200">
-            
             <Select value={filterWarehouse} onValueChange={setFilterWarehouse}>
               <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
                 <Store className="w-3 h-3 mr-1.5 text-zinc-500" />
@@ -441,7 +513,6 @@ export function InventoryRegistryReport() {
               </SelectContent>
             </Select>
 
-            {/* Dual Range Slider for Valuation */}
             <div className="col-span-2 md:col-span-4 lg:col-span-2 bg-zinc-50/50 p-2 rounded-lg border border-zinc-200">
               <div className="flex justify-between items-center mb-1.5">
                 <Label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
@@ -452,13 +523,7 @@ export function InventoryRegistryReport() {
                 </span>
               </div>
               <div className="px-2">
-                <Slider 
-                  min={0} 
-                  max={maxPrice} 
-                  step={1000} 
-                  value={priceRange} 
-                  onValueChange={setPriceRange} 
-                />
+                <Slider min={0} max={maxPrice} step={1000} value={priceRange} onValueChange={setPriceRange} />
               </div>
             </div>
 
@@ -476,8 +541,6 @@ export function InventoryRegistryReport() {
       {/* SMART MULTI-DIMENSIONAL ANALYTICS PANEL */}
       {showAnalytics && analytics && (
         <div className="flex flex-col gap-4 animate-in slide-in-from-top-4 duration-300">
-          
-          {/* MARKET INTELLIGENCE (TOP TIER) */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card className="bg-emerald-50 border-emerald-100 shadow-sm rounded-xl">
               <CardContent className="p-4 flex items-center gap-4">
@@ -523,14 +586,12 @@ export function InventoryRegistryReport() {
             </Card>
           </div>
 
-          {/* LOWER TIER: MATRICES */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <Card className="bg-indigo-50 border-indigo-100 shadow-sm rounded-2xl overflow-hidden">
               <CardHeader className="p-4 pb-2 border-b border-indigo-100/50 bg-indigo-100/30">
                 <div className="flex justify-between items-center">
                   <CardTitle className="text-xs font-black uppercase tracking-widest text-indigo-800 flex items-center gap-2">
-                    <TrendingUp className="w-4 h-4 text-indigo-600" /> 
-                    Restock Matrix Alerts
+                    <TrendingUp className="w-4 h-4 text-indigo-600" /> Restock Matrix Alerts
                   </CardTitle>
                   <Badge className="bg-indigo-600 hover:bg-indigo-600 text-[9px]">{analytics.restockWarnings.length} Alerts</Badge>
                 </div>
@@ -571,8 +632,7 @@ export function InventoryRegistryReport() {
               <CardHeader className="p-4 pb-2 border-b border-amber-100/50 bg-amber-100/30">
                 <div className="flex justify-between items-center">
                   <CardTitle className="text-xs font-black uppercase tracking-widest text-amber-800 flex items-center gap-2">
-                    <AlertTriangle className="w-4 h-4 text-amber-600" /> 
-                    Dead Stock Matrix (less than 90 Days)
+                    <AlertTriangle className="w-4 h-4 text-amber-600" /> Dead Stock Matrix (less than 90 Days)
                   </CardTitle>
                   <Badge className="bg-amber-500 hover:bg-amber-500 text-[9px]">{analytics.deadStockWarnings.length} Alerts</Badge>
                 </div>
@@ -613,7 +673,6 @@ export function InventoryRegistryReport() {
         </div>
       )}
 
-      {/* MODERN KPIs */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
         <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl">
           <CardContent className="p-4 sm:p-5">
@@ -645,6 +704,45 @@ export function InventoryRegistryReport() {
           </CardContent>
         </Card>
       </div>
+
+      {categorySummary.length > 0 && !loading && (
+        <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl overflow-hidden">
+          <CardHeader className="p-4 pb-2 border-b border-zinc-100/50 bg-zinc-50/50">
+            <CardTitle className="text-xs font-black uppercase tracking-widest text-zinc-800 flex items-center gap-2">
+              <PieChart className="w-4 h-4 text-zinc-500" /> 
+              Category Breakdown
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto custom-scrollbar max-h-[300px] overflow-y-auto">
+              <Table>
+                <TableHeader className="bg-zinc-50/90 sticky top-0 z-10 shadow-sm">
+                  <TableRow className="hover:bg-transparent border-zinc-200">
+                    <TableHead className="h-9 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-4">Category</TableHead>
+                    <TableHead className="h-9 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider text-right">Items Count</TableHead>
+                    <TableHead className="h-9 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider text-right">Total Gross</TableHead>
+                    <TableHead className="h-9 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider text-right">Total Net</TableHead>
+                    <TableHead className="h-9 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider text-right text-blue-600">Total Stone (cts)</TableHead>
+                    <TableHead className="h-9 text-[10px] font-semibold text-zinc-500 uppercase tracking-wider text-right pr-4">Total Value</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {categorySummary.map(([cat, stats]) => (
+                    <TableRow key={cat} className="hover:bg-zinc-50/50 border-zinc-100">
+                      <TableCell className="px-4 py-2.5 text-xs font-bold text-zinc-800">{cat}</TableCell>
+                      <TableCell className="text-right py-2.5 text-xs font-semibold text-zinc-600">{stats.count}</TableCell>
+                      <TableCell className="text-right py-2.5 text-xs font-semibold text-zinc-600">{stats.grossWt.toFixed(3)}g</TableCell>
+                      <TableCell className="text-right py-2.5 text-xs font-semibold text-zinc-600">{stats.netWt.toFixed(3)}g</TableCell>
+                      <TableCell className="text-right py-2.5 text-xs font-bold text-blue-600">{stats.stoneWt.toFixed(2)}cts</TableCell>
+                      <TableCell className="text-right py-2.5 pr-4 text-xs font-bold text-indigo-600">₹{stats.value.toLocaleString()}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* DATA VIEW */}
       <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl overflow-hidden">
@@ -687,6 +785,7 @@ export function InventoryRegistryReport() {
                     <div>
                       <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Weight</p>
                       <p className="text-xs font-semibold text-zinc-800">{item.gross_weight_g || 0}g <span className="text-[10px] text-zinc-500 font-medium">({item.net_weight_g || 0}g N)</span></p>
+                      <p className="text-[10px] text-blue-600 font-medium mt-0.5 flex items-center gap-1"><Gem className="w-3 h-3"/> {item.total_stone_weight_cts || 0} cts</p>
                     </div>
                   </div>
                   <div className="text-right">
@@ -708,6 +807,7 @@ export function InventoryRegistryReport() {
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Specs</TableHead>
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-right">Gross</TableHead>
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-right">Net</TableHead>
+                <TableHead className="h-11 text-[11px] font-semibold text-blue-500 uppercase tracking-wider text-right">Stone (cts)</TableHead>
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-center">Status</TableHead>
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Node / Vault</TableHead>
                 <TableHead className="h-11 text-[11px] font-semibold text-zinc-500 uppercase tracking-wider text-right pr-6">Retail MRP</TableHead>
@@ -721,6 +821,7 @@ export function InventoryRegistryReport() {
                     <TableCell><Skeleton className="h-4 w-20" /><Skeleton className="h-3 w-12 mt-1.5" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
+                    <TableCell><Skeleton className="h-4 w-12 ml-auto" /></TableCell>
                     <TableCell className="text-center"><Skeleton className="h-5 w-16 mx-auto rounded-full" /></TableCell>
                     <TableCell><Skeleton className="h-4 w-24" /></TableCell>
                     <TableCell className="pr-6"><Skeleton className="h-4 w-20 ml-auto" /></TableCell>
@@ -728,7 +829,7 @@ export function InventoryRegistryReport() {
                 ))
               ) : filteredData.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-60 text-center text-zinc-400 bg-zinc-50/50">
+                  <TableCell colSpan={8} className="h-60 text-center text-zinc-400 bg-zinc-50/50">
                     <Package className="h-8 w-8 mx-auto mb-3 opacity-30" />
                     <p className="text-sm font-semibold tracking-tight">No assets match active filters</p>
                   </TableCell>
@@ -746,6 +847,7 @@ export function InventoryRegistryReport() {
                     </TableCell>
                     <TableCell className="text-right text-[13px] font-semibold text-zinc-800">{item.gross_weight_g || 0}<span className="text-[10px] text-zinc-400 ml-0.5 font-medium">g</span></TableCell>
                     <TableCell className="text-right text-[13px] font-semibold text-zinc-500">{item.net_weight_g || 0}<span className="text-[10px] text-zinc-400 ml-0.5 font-medium">g</span></TableCell>
+                    <TableCell className="text-right text-[13px] font-bold text-blue-600">{item.total_stone_weight_cts || 0}<span className="text-[10px] text-blue-400 ml-0.5 font-medium">cts</span></TableCell>
                     <TableCell className="text-center">{getStatusBadge(item.status)}</TableCell>
                     <TableCell className="text-xs text-zinc-500 font-semibold">{getWhName(item.warehouse_id)}</TableCell>
                     <TableCell className="text-right text-[13px] font-bold text-indigo-700 pr-6">₹{item.mrp?.toLocaleString() || '0'}</TableCell>
