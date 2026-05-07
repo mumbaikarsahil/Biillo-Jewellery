@@ -46,8 +46,10 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
 
   const isDisputed = transfer.status === 'disputed'
   
-  // Calculate total weight for the shipping label
-  const totalWeight = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.net_weight_g || 0), 0) || 0;
+  // Calculate total weights for the ledger and shipping label
+  const totalGrossWeight = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.gross_weight_g || 0), 0) || 0;
+  const totalNetWeight = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.net_weight_g || 0), 0) || 0;
+  const totalStoneWeight = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.total_stone_weight_cts || 0), 0) || 0;
   
   // Generate pseudo-routing codes from warehouse names (e.g., "Juhu Branch" -> "JUH1")
   const fromCode = transfer.from?.name?.substring(0, 4).toUpperCase() || 'ORIG';
@@ -106,7 +108,7 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
         <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-slate-500 shadow-sm">
           <Printer className="w-12 h-12 mx-auto mb-4 text-slate-300" />
           <h2 className="text-lg font-bold text-slate-700 mb-2">Print Ready</h2>
-          <p className="text-sm">Click the "Print E-Com Labels" button above to generate the Amazon-style shipping label.</p>
+          <p className="text-sm">Click the "Print E-Com Labels" button above to generate the Amazon-style shipping label, or "Print HO Ledger" for the manifest.</p>
         </div>
       </main>
 
@@ -119,54 +121,84 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
         {/* --------------------------------------------------------- */}
         {/* 1. MASTER LEDGER (HO COPY) */}
         {/* --------------------------------------------------------- */}
-        <div ref={masterRef} className="p-10 bg-white min-h-[100vh] w-full max-w-[210mm] mx-auto print:p-0">
-          <div className="flex justify-between items-end border-b border-slate-200 pb-6 mb-8">
-            <div className="flex flex-col gap-2">
-              <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Pavitram Jewels</h2>
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Master Transfer Ledger (HO)</p>
+        <div ref={masterRef} className="p-10 bg-white min-h-[100vh] w-full max-w-[210mm] mx-auto print:p-0 flex flex-col">
+          <div className="flex-1">
+            <div className="flex justify-between items-end border-b border-slate-200 pb-6 mb-8">
+              <div className="flex flex-col gap-2">
+                <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Pavitram Jewels</h2>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Master Transfer Ledger (HO)</p>
+              </div>
+              <div className="text-right">
+                <p className="font-mono text-2xl font-black text-slate-900">{transfer.transfer_number}</p>
+                <p className="text-xs font-medium text-slate-500 mt-1">
+                  {new Date(transfer.dispatched_at || transfer.created_at).toLocaleString('en-IN')}
+                </p>
+              </div>
             </div>
-            <div className="text-right">
-              <p className="font-mono text-2xl font-black text-slate-900">{transfer.transfer_number}</p>
-              <p className="text-xs font-medium text-slate-500 mt-1">
-                {new Date(transfer.dispatched_at || transfer.created_at).toLocaleString('en-IN')}
-              </p>
+
+            <div className="grid grid-cols-2 gap-8 bg-slate-50 border border-slate-200 p-6 rounded-xl mb-8">
+              <div>
+                <p className="text-[10px] font-bold uppercase text-slate-500 tracking-widest mb-1.5">From</p>
+                <p className="font-bold text-lg text-slate-900 leading-none">{transfer.from.name}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase text-slate-500 tracking-widest mb-1.5">To</p>
+                <p className="font-bold text-lg text-slate-900 leading-none">{transfer.to.name}</p>
+              </div>
+            </div>
+
+            <table className="w-full border-collapse mb-12">
+              <thead>
+                <tr className="border-b-2 border-slate-200 text-left">
+                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400 w-12">#</th>
+                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400">Barcode</th>
+                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400">Category</th>
+                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400 text-right">Gross Wt</th>
+                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400 text-right">Net Wt</th>
+                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400 text-right">Stone (cts)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {transfer.items?.map((line: any, idx: number) => {
+                   if(!line.inventory_items) return null;
+                   return (
+                    <tr key={idx} className="text-sm text-slate-800">
+                      <td className="py-3 px-2 text-slate-400">{idx + 1}</td>
+                      <td className="py-3 px-2 font-mono font-bold text-slate-900">{line.inventory_items.barcode}</td>
+                      <td className="py-3 px-2 font-semibold">{line.inventory_items.item_category}</td>
+                      <td className="py-3 px-2 text-right font-medium">{(line.inventory_items.gross_weight_g || 0).toFixed(3)}g</td>
+                      <td className="py-3 px-2 text-right font-bold text-black">{(line.inventory_items.net_weight_g || 0).toFixed(3)}g</td>
+                      <td className="py-3 px-2 text-right font-medium text-blue-800">{(line.inventory_items.total_stone_weight_cts || 0).toFixed(2)}cts</td>
+                    </tr>
+                   )
+                })}
+              </tbody>
+              {/* LEDGER TOTALS */}
+              <tfoot>
+                <tr className="border-t-2 border-slate-900 bg-slate-50 text-slate-900">
+                  <td colSpan={3} className="py-4 px-2 text-right text-[11px] font-black uppercase tracking-widest">Manifest Totals ({transfer.items?.length || 0} Items)</td>
+                  <td className="py-4 px-2 text-right font-black text-sm">{totalGrossWeight.toFixed(3)}g</td>
+                  <td className="py-4 px-2 text-right font-black text-sm">{totalNetWeight.toFixed(3)}g</td>
+                  <td className="py-4 px-2 text-right font-black text-sm text-blue-800">{totalStoneWeight.toFixed(2)}cts</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          {/* SIGNATURE BLOCKS */}
+          <div className="mt-20 pt-10 flex justify-between items-end px-8 shrink-0">
+            <div className="flex flex-col items-center w-56">
+              <div className="w-full border-b border-black mb-2"></div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Assigner / Manager</p>
+              <p className="text-[8px] font-medium text-slate-400 mt-1">Authorized Signature</p>
+            </div>
+            <div className="flex flex-col items-center w-56">
+              <div className="w-full border-b border-black mb-2"></div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Delivery Agent</p>
+              <p className="text-[8px] font-medium text-slate-400 mt-1">Received Intact & Sealed</p>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-8 bg-slate-50 border border-slate-200 p-6 rounded-xl mb-8">
-            <div>
-              <p className="text-[10px] font-bold uppercase text-slate-500 tracking-widest mb-1.5">From</p>
-              <p className="font-bold text-lg text-slate-900 leading-none">{transfer.from.name}</p>
-            </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase text-slate-500 tracking-widest mb-1.5">To</p>
-              <p className="font-bold text-lg text-slate-900 leading-none">{transfer.to.name}</p>
-            </div>
-          </div>
-
-          <table className="w-full border-collapse mb-12">
-            <thead>
-              <tr className="border-b-2 border-slate-200 text-left">
-                <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400 w-12">#</th>
-                <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400">Barcode</th>
-                <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400">Category</th>
-                <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400 text-right">Net Wt</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {transfer.items?.map((line: any, idx: number) => {
-                 if(!line.inventory_items) return null;
-                 return (
-                  <tr key={idx} className="text-sm text-slate-800">
-                    <td className="py-3 px-2 text-slate-400">{idx + 1}</td>
-                    <td className="py-3 px-2 font-mono font-bold text-slate-900">{line.inventory_items.barcode}</td>
-                    <td className="py-3 px-2 font-semibold">{line.inventory_items.item_category}</td>
-                    <td className="py-3 px-2 text-right font-bold">{(line.inventory_items.net_weight_g || 0).toFixed(3)}g</td>
-                  </tr>
-                 )
-              })}
-            </tbody>
-          </table>
         </div>
 
         {/* --------------------------------------------------------- */}

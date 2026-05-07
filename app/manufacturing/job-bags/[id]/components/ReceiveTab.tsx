@@ -80,8 +80,8 @@ export default function ReceiveTab({
   refresh
 }: Props) {
   const [metalType, setMetalType] = useState('Gold')
-  const [purityKarat, setPurityKarat] = useState('22K')
-  const [purityPercent, setPurityPercent] = useState('91.6')
+  const [purityKarat, setPurityKarat] = useState('14')
+  const [purityPercent, setPurityPercent] = useState('58.3')
   const [laborRate, setLaborRate] = useState('')
   const [globalRemarks, setGlobalRemarks] = useState('')
 
