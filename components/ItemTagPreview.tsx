@@ -194,9 +194,9 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
 
         {/* RIGHT: QR CODE & BRANDING AREA (24mm) */}
         <div className="flex h-full w-[24mm] justify-between items-center shrink-0 pr-[1mm]">
-           {/* Vertical Barcode Text */}
+           {/* Vertical Barcode Text - ✨ UPDATED FOR HIGH VISIBILITY ✨ */}
            <div className="h-full w-[4mm] flex items-center justify-center">
-             <span className="font-black text-[7px] tracking-widest" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
+             <span className="font-black text-[10px] tracking-wider whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
                {item.barcode || 'NO-CODE'}
              </span>
            </div>

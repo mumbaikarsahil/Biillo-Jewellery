@@ -59,7 +59,7 @@ type ReceiveItem = {
   diamondShape: string
   diamondColor: string
   diamondClarity: string
-  sieve_size: string // ADDED
+  sieve_size: string 
   custom_order_id: string | null 
   repair_ticket_id: string | null
   is_repair: boolean
@@ -67,7 +67,7 @@ type ReceiveItem = {
   showCustomShape: boolean
   showCustomColor: boolean
   showCustomClarity: boolean
-  showCustomSieve: boolean // ADDED
+  showCustomSieve: boolean 
   imageFile: File | null
   imagePreview: string
   isSelected: boolean
@@ -113,7 +113,7 @@ export default function ReceiveTab({
   const DIAMOND_SHAPES = ['Round', 'Princess', 'Oval', 'Marquise', 'Emerald', 'Pear', 'Cushion', 'Radiant', 'Heart', 'Asscher']
   const DIAMOND_COLORS = ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'EF', 'FG', 'GH', 'HI', 'IJ', 'Fancy']
   const DIAMOND_CLARITIES = ['FL', 'IF', 'VVS1', 'VVS2', 'VVS', 'VS1', 'VS2', 'VS', 'SI1', 'SI2', 'SI', 'I1', 'I2', 'I3']
-  const SIEVE_SIZES = ['-2', '+2-6', '+6-11', '+11-14', 'Stars', 'Melee', 'Pointers', 'Solitaires', 'Mixed'] // ADDED
+  const SIEVE_SIZES = ['-2', '+2-6', '+6-11', '+11-14', 'Stars', 'Melee', 'Pointers', 'Solitaires', 'Mixed'] 
 
   useEffect(() => {
     async function fetchCompanyRates() {
@@ -174,7 +174,6 @@ export default function ReceiveTab({
   const loadJobBagItems = useCallback(async () => {
     setIsLoading(true)
     try {
-      // 1. Calculate EXACT Raw Materials Issued (Converting to FINE GOLD using table join!)
       const { data: gIssues, error: gError } = await supabase
         .from('job_bag_gold_issues')
         .select('issued_weight_g, inventory_gold_batches ( purity_percent )')
@@ -187,7 +186,6 @@ export default function ReceiveTab({
          return sum + (Number(row.issued_weight_g) * purity);
       }, 0) || 0;
 
-      // Fetch Diamond Issues AND Returns to get exact available pool
       const { data: dIssues } = await supabase.from('job_bag_diamond_issues').select('issued_weight_cts').eq('job_bag_id', jobId)
       const issuedDia = dIssues?.reduce((sum, row) => sum + Number(row.issued_weight_cts), 0) || 0
       
@@ -196,7 +194,6 @@ export default function ReceiveTab({
       
       const totalBagDia = issuedDia - returnedDia;
 
-      // 2. Calculate EXACT Consumed (Convert existing inventory items back to FINE GOLD)
       const { data: invItems } = await supabase.from('inventory_items')
         .select('net_weight_g, wastage_weight_g, purity_percent, total_stone_weight_cts')
         .eq('created_from_job_bag_id', jobId);
@@ -211,10 +208,8 @@ export default function ReceiveTab({
 
       setPoolStats({ issuedFineGold: totalBagFineGold, issuedDiaCts: totalBagDia, consumedFineGold, consumedDiaCts })
 
-      // --- AUTO-FILL DEFAULTS FETCHING ---
       let defShape = ''; let defColor = ''; let defClarity = ''; let defSieve = '';
       
-      // Get Diamond Defaults
       const { data: defaultDiamondLots } = await supabase
         .from('job_bag_diamond_issues')
         .select(`inventory_diamond_lots ( shape, color, clarity, sieve_size )`)
@@ -233,7 +228,6 @@ export default function ReceiveTab({
         }
       }
 
-      // Get Gold Defaults to update global Karat state
       const { data: defaultGoldBatches } = await supabase
         .from('job_bag_gold_issues')
         .select(`inventory_gold_batches ( purity_karat )`)
@@ -245,11 +239,10 @@ export default function ReceiveTab({
           ? defaultGoldBatches[0].inventory_gold_batches[0]
           : defaultGoldBatches[0].inventory_gold_batches;
         if (batch?.purity_karat) {
-          handleKaratChange(batch.purity_karat); // Auto-set the top dropdown
+          handleKaratChange(batch.purity_karat); 
         }
       }
 
-      // 3. Fetch Items to Receive
       const { data: items, error } = await supabase
         .from('job_bag_items')
         .select(`
@@ -295,10 +288,10 @@ export default function ReceiveTab({
           huid_code: '',
           item_remarks: '',
           metalColor: 'Yellow Gold',
-          diamondShape: defShape, // Auto-filled
-          diamondColor: defColor, // Auto-filled
-          diamondClarity: defClarity, // Auto-filled
-          sieve_size: defSieve, // Auto-filled
+          diamondShape: defShape, 
+          diamondColor: defColor, 
+          diamondClarity: defClarity, 
+          sieve_size: defSieve, 
           custom_order_id: item.custom_order_id || null, 
           repair_ticket_id: item.repair_ticket_id || null, 
           is_repair: item.is_repair || false, 
@@ -319,7 +312,7 @@ export default function ReceiveTab({
     } finally {
       setIsLoading(false)
     }
-  }, [jobId]) // Removed explicit handleKaratChange dependency to prevent loop
+  }, [jobId]) 
 
   useEffect(() => { loadJobBagItems() }, [loadJobBagItems])
 
@@ -433,18 +426,15 @@ export default function ReceiveTab({
     const invalidItem = selectedItems.find(i => parseFloat(i.grossWeight) <= 0 || !i.grossWeight)
     if (invalidItem) return toast.error(`Enter a valid Gross Weight for ${invalidItem.sku_reference}.`)
 
-    // 1. Calculate Fine Gold requested by the staged items based on UI Purity Dropdown
     const stagedRawGold = selectedItems.reduce((sum, item) => sum + (parseFloat(item.netWeight) || 0) + (parseFloat(item.lossWeight) || 0), 0)
     const currentPurityPct = Number(purityPercent) / 100 || 1;
     const stagedFineGoldRequired = stagedRawGold * currentPurityPct;
     
     const stagedDiaRequired = selectedItems.reduce((sum, item) => sum + (parseFloat(item.stoneWeight) || 0), 0)
 
-    // 2. Calculate Available Fine Balances
     const pendingFineGold = poolStats.issuedFineGold - poolStats.consumedFineGold;
     const availableDia = poolStats.issuedDiaCts - poolStats.consumedDiaCts;
 
-    // 3. WARNING GATE: Check for Negative Reconciliation (0.01g tolerance for float math)
     if (stagedFineGoldRequired > pendingFineGold + 0.01) {
       const proceed = window.confirm(
         `⚠️ WARNING: Negative Gold Reconciliation.\n\nYou are trying to receive ${stagedFineGoldRequired.toFixed(3)}g of FINE GOLD, but only ${pendingFineGold.toFixed(3)}g is available in this Job Bag.\n\nDo you want to FORCE RECEIVE anyway?`
@@ -591,11 +581,9 @@ export default function ReceiveTab({
   const selectedItems = receiveItems.filter(i => i.isSelected)
   const unselectedItems = receiveItems.filter(i => !i.isSelected)
 
-  // Calculate dynamic required totals for UI visual feedback
   const stagedRawGold = selectedItems.reduce((sum, item) => sum + (parseFloat(item.netWeight) || 0) + (parseFloat(item.lossWeight) || 0), 0)
   const stagedDiaRequired = selectedItems.reduce((sum, item) => sum + (parseFloat(item.stoneWeight) || 0), 0)
 
-  // CALCULATE EXACT RAW LIMITS BASED ON PURITY DROPDOWN
   let pendingFineGold = poolStats.issuedFineGold - poolStats.consumedFineGold;
   if (Math.abs(pendingFineGold) < 0.005) pendingFineGold = 0; 
 
@@ -672,11 +660,9 @@ export default function ReceiveTab({
               size="sm" 
               onClick={receiveSelectedBatch} 
               disabled={isProcessing || selectedItems.length === 0}
-              // ✨ FIX: Removed 'cursor-not-allowed' so the user knows it is clickable
               className={cn("h-8 px-4 text-xs font-bold uppercase shadow-md transition-all active:scale-[0.98]", (isGoldOverdraft || isDiaOverdraft) ? "bg-red-600 hover:bg-red-700 text-white" : "bg-foreground text-background hover:bg-foreground/90")}
             >
               {isProcessing ? <RefreshCw className="w-3 h-3 mr-2 animate-spin" /> : <Save className="w-3 h-3 mr-2" />}
-              {/* ✨ FIX: Updated the label to indicate they are forcing an overdraft */}
               {(isGoldOverdraft || isDiaOverdraft) ? `Force Receive Overdraft (${selectedItems.length})` : `Receive Selected (${selectedItems.length})`}
             </Button>
           </div>
@@ -911,7 +897,6 @@ export default function ReceiveTab({
                             
                             <Popover>
                               <PopoverTrigger asChild>
-                                {/* The clickable trigger area */}
                                 <div className="flex gap-1 items-center relative cursor-pointer group" title="Click to enter Solitaire/Melee breakup">
                                   <Input 
                                     readOnly
@@ -953,19 +938,20 @@ export default function ReceiveTab({
                                     <h4 className="text-xs font-black uppercase tracking-widest text-slate-800">Stone Breakup Required</h4>
                                   </div>
                                   
-                                  <div className="space-y-1.5">
-                                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Solitaire / Center Stone</Label>
-                                    <div className="flex gap-2">
-                                      <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.solitairePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitairePieces', e.target.value)} />
-                                      <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.solitaireWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitaireWeight', e.target.value)} />
-                                    </div>
-                                  </div>
-
+                                  {/* ✨ UPDATED: MELEE STONES FIRST ✨ */}
                                   <div className="space-y-1.5">
                                     <Label className="text-[10px] font-bold text-slate-500 uppercase">Melee / Side Stones</Label>
                                     <div className="flex gap-2">
                                       <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.meleePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleePieces', e.target.value)} />
                                       <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.meleeWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'meleeWeight', e.target.value)} />
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-1.5">
+                                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Solitaire / Center Stone</Label>
+                                    <div className="flex gap-2">
+                                      <Input type="number" placeholder="Pieces" className="h-8 text-xs bg-white/50 border-slate-200" value={item.solitairePieces} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitairePieces', e.target.value)} />
+                                      <Input type="number" step="0.01" placeholder="Carats" className="h-8 text-xs font-bold text-blue-700 bg-white/50 border-slate-200" value={item.solitaireWeight} onChange={(e) => updateBatchItem(item.job_bag_item_id, 'solitaireWeight', e.target.value)} />
                                     </div>
                                   </div>
 

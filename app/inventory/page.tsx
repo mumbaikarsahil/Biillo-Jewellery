@@ -154,14 +154,16 @@ const GeminiLoader = () => (
   </div>
 )
 
-// ===========================================================================
-// MAIN PAGE COMPONENT
-// ===========================================================================
 export default function InventoryPage() {
   const { appUser } = useAuth()
   const router = useRouter()
   
   const [items, setItems] = useState<InventoryItem[]>([])
+  
+  // ✨ THE FIX: Immutable Dictionary Cache
+  // This completely protects selected item data from being wiped out by fresh searches!
+  const [itemCache, setItemCache] = useState<Record<string, InventoryItem>>({})
+
   const [loading, setLoading] = useState(true)
   const [warehouses, setWarehouses] = useState<any[]>([])
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
@@ -221,20 +223,21 @@ export default function InventoryPage() {
     documentTitle: `Bulk-Inventory-Tags` 
   })
   
-  const itemsToPrint = items.filter(i => selectedIds.includes(i.id))
+  // ✨ FIX: Map directly from the robust cache so data is never empty during cross-search prints!
+  const itemsToPrint = useMemo(() => {
+    return selectedIds.map(id => itemCache[id]).filter(Boolean) as InventoryItem[];
+  }, [selectedIds, itemCache]);
 
   const uniqueCategories = useMemo(() => Array.from(new Set(items.map(c => c.item_category))).filter(Boolean).sort(), [items]);
   const uniquePurities = useMemo(() => Array.from(new Set(items.map(c => c.purity_karat))).filter(Boolean).sort(), [items]);
-  // ✨ FIX: Standardizes everything to uppercase and removes stray spaces
-  // ✨ FIX: Standardizes everything to uppercase and removes stray spaces
   const uniqueClaritiesFilter = useMemo(() => {
     const rawClarities = items.map(c => c.diamond_clarity).filter(Boolean) as string[];
     const cleanClarities = rawClarities.map(c => c.trim().toUpperCase());
     return Array.from(new Set(cleanClarities)).sort();
   }, [items]);
+
   const executeSmartSearch = useCallback(() => {
     if (!searchTerm.trim()) {
-      // 🐛 FIX: Only clear the text search string, do NOT wipe out user's explicit location or manual filters
       setDebouncedSearch('')
       return
     }
@@ -478,6 +481,13 @@ export default function InventoryPage() {
       const filteredRepairs = selectedLocation === 'ALL' ? repairList : repairList.filter(r => r.warehouse_id === selectedLocation || (r.status === 'fixed_ready_for_dispatch' && isHQ));
       const combined = [...inventoryList, ...filteredRepairs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
+      // ✨ FIX: Hydrate the cache so searches never delete selected data!
+      setItemCache(prev => {
+        const nextCache = { ...prev };
+        combined.forEach(item => { nextCache[item.id] = item as InventoryItem });
+        return nextCache;
+      });
+
       setItems(combined)
 
       if (!debouncedSearch && filterCategory.length === 0 && filterPurity.length === 0 && !isPriceFilterActive) {
@@ -529,6 +539,13 @@ export default function InventoryPage() {
         if (!data || data.length < limit) hasMore = false; else start += limit;
       }
 
+      // ✨ FIX: Update the cache with globally fetched items
+      setItemCache(prev => {
+        const nextCache = { ...prev };
+        allFetchedData.forEach(item => { nextCache[item.id] = item as InventoryItem });
+        return nextCache;
+      });
+
       const existingIds = new Set(items.map(i => i.id))
       const newItems = allFetchedData.filter(d => !existingIds.has(d.id)).map(d => ({ ...d, _type: 'inventory' as const, is_repair_ticket: false } as InventoryItem))
       if (newItems.length > 0) setItems(prev => [...prev, ...newItems])
@@ -555,11 +572,10 @@ export default function InventoryPage() {
       if (filterCategory.length > 0 && !filterCategory.includes(item.item_category)) continue;
       if (filterPurity.length > 0 && !filterPurity.includes(item.purity_karat)) continue;
       
-      // ✨ BULLETPROOF CLARITY FILTER
       if (filterClarity.length > 0) {
         const itemClarity = item.diamond_clarity ? item.diamond_clarity.trim().toUpperCase() : "";
         if (!itemClarity || !filterClarity.includes(itemClarity)) {
-          continue; // Skip this item if it doesn't match the selected clarities
+          continue; 
         }
       }
       
@@ -577,7 +593,6 @@ export default function InventoryPage() {
     }
     return { activeItemsFiltered: active, soldItemsFiltered: sold }
     
-  // ✨ CRITICAL FIX: filterClarity MUST be in this array below for React to update the table instantly
   }, [items, debouncedSearch, filterCategory, filterPurity, filterStatus, priceRange, isPriceFilterActive, filterClarity]);
   
   const toggleArrayItem = (arr: string[], setArr: any, item: string) => {
@@ -590,12 +605,11 @@ export default function InventoryPage() {
     setIsPriceFilterActive(false); setPriceRange([0, maxCatalogPrice]); 
     setSearchTerm(""); setDebouncedSearch("");
     setActiveTab("active");
-    // 🐛 FIX: Removed location reset here so it stays persistent
   }
 
   const handleSaveMrp = async (id: string) => { 
     if (!canEdit) return toast.error("Unauthorized to edit prices");
-    const item = items.find(i => i.id === id);
+    const item = itemCache[id] || items.find(i => i.id === id); // Pull from cache first
     if (!item) return;
 
     const newMrp = editingMrpVal ? Number(editingMrpVal) : null;
@@ -608,6 +622,8 @@ export default function InventoryPage() {
       if (error) return toast.error('Failed to update price');
     }
     
+    // Update both cache and local state
+    setItemCache(prev => ({ ...prev, [id]: { ...prev[id], mrp: newMrp }}));
     setItems(items.map(i => i.id === id ? { ...i, mrp: newMrp } : i))
     setEditingId(null)
     toast.success('Price updated')
@@ -623,7 +639,6 @@ export default function InventoryPage() {
       gross: item.gross_weight_g?.toString() || '0',
       net: item.net_weight_g?.toString() || '0',
       stone: aggWt.toString() || '0',
-      // ✨ ADDED: Load existing diamond details
       diamond_clarity: item.diamond_clarity || '',
       diamond_color: item.diamond_color || '',
       diamond_shape: item.diamond_shape || '',
@@ -648,7 +663,6 @@ export default function InventoryPage() {
     try {
       const currentStone = getStoneTotals(editWeightItem).aggWt;
       
-      // ✨ NEW: Clean the diamond inputs
       const dClarity = weightForm.diamond_clarity.trim() || null;
       const dColor = weightForm.diamond_color.trim() || null;
       const dShape = weightForm.diamond_shape.trim() || null;
@@ -657,7 +671,6 @@ export default function InventoryPage() {
         timestamp: new Date().toISOString(),
         user_name: appUser.full_name || 'System User',
         reason: weightForm.reason.trim(),
-        // ✨ NEW: Audit log now tracks diamond clarity changes
         changes: `Gross: ${editWeightItem.gross_weight_g}g ➝ ${newGross}g | Net: ${editWeightItem.net_weight_g}g ➝ ${newNet}g | Stone: ${currentStone}ct ➝ ${newStone}ct | Clarity: ${editWeightItem.diamond_clarity || 'None'} ➝ ${dClarity || 'None'}`
       };
 
@@ -676,7 +689,6 @@ export default function InventoryPage() {
         total_stone_weight_cts: newStone,
         solitaire_weight_cts: 0, 
         melee_weight_cts: 0,
-        // ✨ NEW: Save diamond specs to DB
         diamond_clarity: dClarity,
         diamond_color: dColor,
         diamond_shape: dShape,
@@ -686,19 +698,21 @@ export default function InventoryPage() {
 
       if (error) throw error;
 
-      setItems(items.map(i => i.id === editWeightItem.id ? { 
-        ...i, 
+      const updatedPayload = { 
+        ...editWeightItem, 
         gross_weight_g: newGross, 
         net_weight_g: newNet, 
         total_stone_weight_cts: newStone,
         solitaire_weight_cts: 0,
         melee_weight_cts: 0,
-        // ✨ NEW: Update Local UI State
         diamond_clarity: dClarity,
         diamond_color: dColor,
         diamond_shape: dShape,
         audit_history: updatedHistory
-      } : i));
+      };
+
+      setItemCache(prev => ({ ...prev, [editWeightItem.id]: updatedPayload }));
+      setItems(items.map(i => i.id === editWeightItem.id ? updatedPayload : i));
 
       toast.success("Details & Audit Log updated successfully");
       setEditWeightItem(null);
@@ -711,7 +725,9 @@ export default function InventoryPage() {
   
   const handleOpenCalc = () => {
     if (!canEdit) return toast.error("Unauthorized to use bulk calculator");
-    const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
+    
+    // ✨ FIX: Use itemCache to fetch proper data for cross-search selected items
+    const selectedItems = selectedIds.map(id => itemCache[id]).filter(i => i && i._type === 'inventory')
     if (selectedItems.length === 0) return toast.error("No valid items selected.", { description: "Repairs cannot be bulk-calculated. Select standard inventory." })
 
     const uniqueKarats = Array.from(new Set(selectedItems.map(i => i.purity_karat || '24K')))
@@ -722,7 +738,6 @@ export default function InventoryPage() {
     })
     setGoldRates(initialRates)
 
-    // ✨ FIX: Strip spaces and standardize to uppercase to prevent duplicate 'SI' keys
     const rawClarities = selectedItems.map(i => i.diamond_clarity);
     const uniqueClarities = Array.from(new Set(
       rawClarities.map(c => (c ? c.trim().toUpperCase() : 'DEFAULT'))
@@ -739,13 +754,13 @@ export default function InventoryPage() {
   }
   
   const handleGeneratePreview = () => {
-    const selectedItems = items.filter(i => selectedIds.includes(i.id) && i._type === 'inventory')
+    // ✨ FIX: Use itemCache
+    const selectedItems = selectedIds.map(id => itemCache[id]).filter(i => i && i._type === 'inventory')
     const previews = selectedItems.map(item => {
       const k = item.purity_karat || '24K'
       const gRate = goldRates[k] || 0
       const goldCost = (item.net_weight_g || 0) * gRate
       
-      // ✨ NEW: Apply specific diamond rate
       const dClarity = item.diamond_clarity || 'Default'
       const dRate = diamondRates[dClarity] || calcParams.diamondRatePerCt
       const diamondCost = (item.total_stone_weight_cts || 0) * dRate
@@ -756,8 +771,6 @@ export default function InventoryPage() {
       
       const exactMrp = subtotal + calcParams.flatCharge
       
-      // ✨ NEW: Round UP to the nearest target (e.g., nearest 50). Never subtracts.
-      // e.g., 11512 / 50 = 230.24 -> ceil(230.24) = 231 -> 231 * 50 = 11550
       const roundTarget = calcParams.roundUpTo || 10;
       const finalMrp = Math.ceil(exactMrp / roundTarget) * roundTarget;
       
@@ -771,10 +784,16 @@ export default function InventoryPage() {
     setIsCalculating(true)
     try {
       await Promise.all(previewData.map(p => supabase.from('inventory_items').update({ mrp: p.newMrp }).eq('id', p.id)))
+      
       setItems(prev => prev.map(item => {
         const update = previewData.find(px => px.id === item.id)
-        return update ? { ...item, mrp: update.newMrp } : item
+        if (update) {
+           setItemCache(c => ({...c, [item.id]: { ...c[item.id], mrp: update.newMrp }}));
+           return { ...item, mrp: update.newMrp };
+        }
+        return item
       }))
+      
       toast.success(`Successfully applied new MRP to ${previewData.length} items.`)
       setCalcModalOpen(false)
       setSelectedIds([]) 
@@ -809,6 +828,7 @@ export default function InventoryPage() {
         if (dbErr) throw dbErr
       }
 
+      setItemCache(prev => ({ ...prev, [itemId]: { ...prev[itemId], image_url: publicUrl }}));
       setItems(prev => prev.map(i => i.id === itemId ? { ...i, image_url: publicUrl } : i))
       if (viewItem && viewItem.id === itemId) setViewItem({ ...viewItem, image_url: publicUrl })
       
@@ -825,7 +845,8 @@ export default function InventoryPage() {
   
   const handleBulkTransfer = () => {
     if (selectedIds.length === 0) return
-    const whIds = new Set(items.filter(i => selectedIds.includes(i.id)).map(i => i.warehouse_id))
+    // ✨ FIX: Use itemCache to correctly validate transfer branches regardless of current search view
+    const whIds = new Set(selectedIds.map(id => itemCache[id]?.warehouse_id).filter(Boolean))
     if (whIds.size > 1) return toast.error("Items must be from same warehouse.")
     router.push(`/transfer/new?ids=${selectedIds.join(',')}&from=${Array.from(whIds)[0]}`)
   }
@@ -850,7 +871,6 @@ export default function InventoryPage() {
             <h1 className="text-sm font-semibold text-slate-900 tracking-tight leading-none hidden sm:block">Vault Inventory</h1>
           </div>
           <div className="flex items-center gap-2">
-            {/* ✨ NEW: Admin Buttons */}
             {canEdit && (
               <>
                 <Link href="/inventory/import-manual">
@@ -1011,7 +1031,6 @@ export default function InventoryPage() {
               )}
             </div>
 
-            {/* ✨ NEW CLARITY DROPDOWN */}
             <div className="relative">
               <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'clarity' ? null : 'clarity')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", filterClarity.length > 0 || openDropdown === 'clarity' ? "bg-cyan-50 text-cyan-700 border-cyan-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
                 Clarity {filterClarity.length > 0 && <span className="ml-1.5 bg-cyan-500 text-white rounded-full px-1.5 py-0.5 text-[9px]">{filterClarity.length}</span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
@@ -1178,11 +1197,26 @@ export default function InventoryPage() {
         )}
       </main>
 
-      {/* HIDDEN BULK PRINT CONTAINER */}
+      {/* ✨ FIX: HIDDEN BULK PRINT CONTAINER WITH PAGE-BREAKS ✨ */}
       <div className="hidden">
-        <div ref={printRef} className="print:p-0 flex flex-col">
+        <div ref={printRef} className="print:p-0 flex flex-col gap-4">
+          {/* Inject page-break styles strictly for thermal printers */}
+          <style dangerouslySetInnerHTML={{__html: `
+            @media print {
+              .tag-page-break {
+                page-break-after: always !important;
+                break-after: page !important;
+              }
+              .tag-page-break:last-child {
+                page-break-after: auto !important;
+                break-after: auto !important;
+              }
+            }
+          `}} />
            {itemsToPrint.map((invItem) => (
-             <ItemTagPreview key={invItem.id} item={invItem} isPrintOnly={true} />
+             <div key={invItem.id} className="tag-page-break inline-block">
+               <ItemTagPreview item={invItem} isPrintOnly={true} />
+             </div>
            ))}
         </div>
       </div>
@@ -1233,7 +1267,7 @@ export default function InventoryPage() {
                 />
               </div>
 
-              {/* ✨ NEW: Diamond Specifications Fields */}
+              {/* Diamond Specifications Fields */}
               <div className="col-span-2 border-t border-slate-100 pt-3 mt-1 space-y-3">
                 <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
                   <Gem className="w-3 h-3 text-slate-400" /> Diamond Specifications
@@ -1301,21 +1335,19 @@ export default function InventoryPage() {
 
       {/* BULK MRP CALCULATOR MODAL */}
       <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
-        {/* ✨ FIX: Widened to 800px */}
         <DialogContent className="sm:max-w-[800px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden bg-white">
           <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5">
             <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <Calculator className="w-5 h-5 text-indigo-600" />
-              Bulk MRP Calculator
+               <Calculator className="w-5 h-5 text-indigo-600" /> 
+               Bulk MRP Calculator
             </DialogTitle>
-            <DialogDescription className="text-xs mt-1">
+            <DialogDescription className="text-xs text-slate-500 mt-1 leading-relaxed">
               Calculate retail prices for {selectedIds.length} selected items based on current metal rates.
             </DialogDescription>
           </DialogHeader>
 
           {calcStep === 'params' ? (
             <div className="space-y-5 p-5 bg-slate-50/50">
-              {/* ✨ FIX: Side-by-side grid with internal scrolling (max-h-[35vh]) */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
                 
                 {/* Gold Section */}
@@ -1601,7 +1633,7 @@ export default function InventoryPage() {
                   )}
                 </div>
 
-                {/* ✨ DEDICATED AUDIT HISTORY TIMELINE ✨ */}
+                {/* AUDIT HISTORY TIMELINE */}
                 {viewItem.audit_history && viewItem.audit_history.length > 0 && (
                   <div className="bg-white border border-rose-200 rounded-xl overflow-hidden shadow-sm">
                     <div className="bg-rose-50 border-b border-rose-200 px-4 py-2 flex items-center gap-2">
@@ -1757,7 +1789,6 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                      <div className="text-xs font-semibold text-slate-900">{item.item_category}</div>
                      <div className="text-[10px] text-slate-500 font-medium uppercase tracking-wider mt-0.5">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</div>
                      
-                     {/* ✨ NEW: Diamond Specs Display */}
                      {(item.diamond_shape || item.diamond_color || item.diamond_clarity) && (
                        <div className="text-[9px] text-blue-600 font-bold uppercase tracking-widest mt-1.5 flex items-center gap-1">
                          <Gem className="w-2.5 h-2.5 shrink-0" />
@@ -1921,7 +1952,6 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                    <p className="text-xs font-semibold text-slate-900">{item.item_category}</p>
                    <p className="text-[10px] text-slate-500">{item.metal_type} {item.purity_karat !== 'N/A' ? `(${item.purity_karat})` : ''}</p>
                    
-                   {/* ✨ NEW: Diamond Specs Display */}
                    {(item.diamond_shape || item.diamond_color || item.diamond_clarity) && (
                      <div className="text-[9px] text-blue-600 font-bold uppercase tracking-widest mt-1.5 flex items-center gap-1">
                        <Gem className="w-2.5 h-2.5 shrink-0" />
