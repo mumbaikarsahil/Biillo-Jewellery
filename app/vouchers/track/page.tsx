@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { format, isPast } from "date-fns";
 import { 
@@ -15,6 +15,7 @@ import {
   AlertCircle,
   ArrowLeft,
   ChevronRight,
+  ChevronLeft,
   RefreshCw,
   Database,
   IndianRupee,
@@ -42,6 +43,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Card,
   CardContent,
@@ -110,6 +112,8 @@ interface TrackedVoucher {
   } | null;
 }
 
+const PAGE_SIZE = 50;
+
 export default function TrackVoucherPage() {
   const { toast } = useToast();
   const { appUser } = useAuth(); 
@@ -119,11 +123,14 @@ export default function TrackVoucherPage() {
   const [isSearching, setIsSearching] = useState(false);
   const [voucher, setVoucher] = useState<TrackedVoucher | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
 
-  // --- MASTER LIST STATE ---
+  // --- MASTER LIST STATE (PAGINATED) ---
   const [listData, setListData] = useState<TrackedVoucher[]>([]);
   const [isListLoading, setIsListLoading] = useState(false);
   const [localSearch, setLocalSearch] = useState("");
+  const [currentPage, setCurrentPage] = useState(0);
+  const [totalCount, setTotalCount] = useState(0);
 
   // --- ADVANCED FILTERS STATE ---
   const [activeFilter, setActiveFilter] = useState("all");
@@ -153,17 +160,16 @@ export default function TrackVoucherPage() {
     fetchFiltersData();
   }, []);
 
+  // Server-side debounced fetching triggered by filter/search/page changes
   useEffect(() => {
-    fetchVoucherList(activeFilter);
-    setSelectedVouchers(new Set()); 
-    setBulkHandlingFee("");
-    setBulkExpiryDate("");
-    setBulkOverrideReason("");
-  }, [activeFilter, selectedFilterDistributor, selectedFilterBatch]);
+    const timer = setTimeout(() => {
+      fetchVoucherList(activeFilter, currentPage, localSearch);
+    }, 400); // 400ms debounce
+    return () => clearTimeout(timer);
+  }, [activeFilter, selectedFilterDistributor, selectedFilterBatch, currentPage, localSearch]);
 
-  const fetchVoucherList = async (tabStatus: string) => {
+  const fetchVoucherList = async (tabStatus: string, page: number, searchKeyword: string) => {
     setIsListLoading(true);
-    setListData([]);
     try {
       let query = supabase
         .from("vouchers")
@@ -175,9 +181,9 @@ export default function TrackVoucherPage() {
           voucher_distributions (payment_status, delivery_agent),
           customers (id, full_name, phone),
           last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name)
-        `)
+        `, { count: 'exact' })
         .order('code', { ascending: true }) 
-        .limit(5000); 
+        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 
       const todayIso = new Date().toISOString();
       
@@ -189,10 +195,16 @@ export default function TrackVoucherPage() {
 
       if (selectedFilterDistributor !== "all") query = query.eq("distributor_id", selectedFilterDistributor);
       if (selectedFilterBatch !== "all") query = query.eq("batch_id", selectedFilterBatch);
+      if (searchKeyword.trim()) query = query.ilike("code", `%${searchKeyword.trim()}%`);
 
-      const { data, error } = await query;
+      const { data, count, error } = await query;
+      
       if (error) throw error;
       setListData((data as any) || []);
+      setTotalCount(count || 0);
+      
+      // Auto-clear selections when pagination or filters change
+      setSelectedVouchers(new Set());
     } catch (error: any) {
       toast({ title: "Failed to load list", description: error.message, variant: "destructive" });
     } finally {
@@ -200,12 +212,42 @@ export default function TrackVoucherPage() {
     }
   };
 
+  const generateAIOverview = (v: TrackedVoucher) => {
+    const isExpired = v.expiry_date && isPast(new Date(v.expiry_date));
+    let text = `Voucher ${v.code} is currently `;
+    
+    if (isExpired && (v.status === 'distributed' || v.status === 'registered')) {
+       text += `expired. It carried a discount value of ₹${v.discount_value.toLocaleString()} `;
+    } else {
+       text += `marked as ${v.status.replace('_', ' ')}. It carries a discount value of ₹${v.discount_value.toLocaleString()} `;
+    }
+
+    if (v.voucher_distributors) {
+      text += `and was issued to partner ${v.voucher_distributors.distributor_name}. `;
+    } else {
+      text += `and has not been assigned to a distributor yet. `;
+    }
+
+    if (v.customers) {
+      text += `It is securely registered to customer ${v.customers.full_name}. `;
+    }
+
+    if (v.scan_count > 0) {
+      text += `The system has logged ${v.scan_count} verification scans for this tag.`;
+    }
+
+    setAiSummary(text);
+  };
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
+    
     setIsSearching(true);
     setHasSearched(true);
     setVoucher(null);
+    setAiSummary(null);
+
     try {
       const { data, error } = await supabase
         .from("vouchers")
@@ -217,13 +259,19 @@ export default function TrackVoucherPage() {
           customers (id, full_name, phone),
           last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name)
         `)
-        .ilike("code", searchQuery.trim())
+        .ilike("code", `%${searchQuery.trim()}%`)
+        .limit(1)
         .maybeSingle();
 
       if (error) throw new Error(error.message || JSON.stringify(error));
-      if (!data) throw new Error("Voucher code not found in the system.");
       
-      setVoucher(data as TrackedVoucher);
+      if (!data) {
+        setAiSummary(`I searched the entire vault but couldn't find any voucher matching "${searchQuery}". Please check the alphanumeric code and try again.`);
+        setVoucher(null);
+      } else {
+        setVoucher(data as TrackedVoucher);
+        generateAIOverview(data as TrackedVoucher);
+      }
     } catch (error: any) {
       toast({ title: "Search Failed", description: error.message, variant: "destructive" });
     } finally {
@@ -251,7 +299,7 @@ export default function TrackVoucherPage() {
       if (error) throw error;
 
       toast({ title: "Bulk Update Successful", description: `Updated ${idsToUpdate.length} vouchers.` });
-      fetchVoucherList(activeFilter);
+      fetchVoucherList(activeFilter, currentPage, localSearch);
       setSelectedVouchers(new Set());
       setBulkHandlingFee("");
       setBulkExpiryDate("");
@@ -271,8 +319,8 @@ export default function TrackVoucherPage() {
   };
 
   const toggleAll = () => {
-    if (selectedVouchers.size === filteredListData.length && filteredListData.length > 0) setSelectedVouchers(new Set());
-    else setSelectedVouchers(new Set(filteredListData.map(v => v.id)));
+    if (selectedVouchers.size === listData.length && listData.length > 0) setSelectedVouchers(new Set());
+    else setSelectedVouchers(new Set(listData.map(v => v.id)));
   };
 
   const getDisplayStatus = (v: { status: string; expiry_date?: string | null }) => {
@@ -293,21 +341,14 @@ export default function TrackVoucherPage() {
     }
   };
 
-  // WhatsApp Link Generator
   const getWhatsAppLink = (phone: string) => {
     const cleanPhone = phone.replace(/\D/g, '');
     const finalPhone = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
     return `https://wa.me/${finalPhone}`;
   };
 
-  const filteredListData = listData.filter(v => 
-    v.code.toLowerCase().includes(localSearch.toLowerCase()) || 
-    v.voucher_batches?.batch_no.toLowerCase().includes(localSearch.toLowerCase())
-  );
-
-  // ✨ NEW: CSV Download Function
   const downloadCSV = () => {
-    if (filteredListData.length === 0) {
+    if (listData.length === 0) {
       return toast({ title: "No Data", description: "There is no data to export matching your current filters." });
     }
 
@@ -325,7 +366,7 @@ export default function TrackVoucherPage() {
       "Redeemed Date"
     ];
 
-    const csvRows = filteredListData.map(v => [
+    const csvRows = listData.map(v => [
       v.code,
       v.voucher_batches?.batch_no || '',
       getDisplayStatus(v).toUpperCase(),
@@ -344,7 +385,7 @@ export default function TrackVoucherPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
-    link.setAttribute("download", `Vouchers_Export_${format(new Date(), "yyyyMMdd_HHmm")}.csv`);
+    link.setAttribute("download", `Vouchers_Page${currentPage+1}_Export_${format(new Date(), "yyyyMMdd_HHmm")}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -353,11 +394,11 @@ export default function TrackVoucherPage() {
   };
 
   const canBulkUpdate = ["all", "pending_print", "in_stock", "distributed", "registered", "expired"].includes(activeFilter);
+  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
 
   return (
     <div className="flex flex-col min-h-screen bg-transparent font-sans selection:bg-indigo-100">
       
-      {/* GEMINI GRADIENT STYLES */}
       <style dangerouslySetInnerHTML={{__html: `
         @keyframes geminiGlow { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
         .gemini-bg { background: linear-gradient(90deg, #4285F4, #9b72cb, #d96570, #4285F4); background-size: 300% 100%; animation: geminiGlow 6s linear infinite; }
@@ -387,12 +428,12 @@ export default function TrackVoucherPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900" onClick={() => fetchVoucherList(activeFilter)}>
+          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900" onClick={() => fetchVoucherList(activeFilter, currentPage, localSearch)}>
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isListLoading ? "animate-spin text-indigo-500" : ""}`} />
             Refresh
           </Button>
           <div className="h-4 w-[1px] bg-slate-200 mx-1" />
-          <Button size="sm" className="h-8 text-xs font-bold px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-lg shadow-sm">
+          <Button size="sm" className="h-8 text-xs font-bold px-3 bg-slate-900 hover:bg-slate-800 text-white rounded-lg shadow-sm" onClick={() => { setCurrentPage(0); setLocalSearch(""); }}>
             <Database className="h-3.5 w-3.5 mr-1.5" />
             Sync Data
           </Button>
@@ -408,7 +449,7 @@ export default function TrackVoucherPage() {
             <div className="flex-1 max-w-xl">
               <Card className="shadow-sm border-slate-200 overflow-hidden bg-white rounded-xl h-full">
                 <CardHeader className="bg-slate-50 py-3 px-4 border-b border-slate-100">
-                  <h3 className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Intelligent Search</h3>
+                  <h3 className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Intelligent Lookup</h3>
                 </CardHeader>
                 <CardContent className="pt-6 pb-6 px-5 flex flex-col justify-center">
                   
@@ -430,7 +471,7 @@ export default function TrackVoucherPage() {
                         {searchQuery && (
                           <button 
                             type="button"
-                            onClick={() => setSearchQuery('')}
+                            onClick={() => { setSearchQuery(''); setVoucher(null); setAiSummary(null); }}
                             className="p-1.5 text-slate-400 hover:text-rose-500 bg-slate-50 hover:bg-rose-50 rounded-md transition-colors"
                           >
                             <X className="w-4 h-4" />
@@ -450,138 +491,169 @@ export default function TrackVoucherPage() {
               </Card>
             </div>
 
-            {/* --- Display Single Searched Voucher Details --- */}
-            {voucher && (
-              <Card className="w-full xl:flex-1 shadow-sm border-slate-200 overflow-hidden bg-white rounded-xl">
-                <CardHeader className="bg-slate-50 py-3 px-4 border-b border-slate-100">
-                  <div className="flex justify-between items-center">
-                    <h3 className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Live Telemetry</h3>
-                    <StatusBadge status={getDisplayStatus(voucher)} />
-                  </div>
-                </CardHeader>
-                <CardContent className="p-0">
-                  
-                  {/* Top Row: Core Values */}
-                  <div className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4 bg-white">
-                    <div className="col-span-2 md:col-span-2">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1.5">Voucher Code</p>
-                      <p className="text-2xl font-mono font-black text-slate-900 tracking-tight">{voucher.code}</p>
+            {/* --- AI SUMMARY & VOUCHER DETAILS --- */}
+            {(hasSearched) && (
+              <div className="w-full xl:flex-1 space-y-4">
+                
+                {/* AI SUMMARY BOX */}
+                {isSearching ? (
+                  <div className="bg-gradient-to-r from-blue-50/50 to-indigo-50/50 rounded-xl p-5 border border-blue-100/50 shadow-inner animate-in fade-in duration-300">
+                    <div className="flex items-center gap-2 mb-4">
+                      <Sparkles className="w-5 h-5 text-indigo-500 animate-pulse" />
+                      <span className="text-[11px] uppercase tracking-widest font-black text-indigo-900 animate-pulse">AI is querying the vault...</span>
                     </div>
-                    <div>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1.5">Handling Fee</p>
-                        <p className="text-lg font-bold text-slate-700">₹{voucher.handling_fee || 0}</p>
-                    </div>
-                    <div className="text-right">
-                        <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest leading-none mb-1.5">Discount Value</p>
-                        <p className="text-2xl font-black text-emerald-600">₹{voucher.discount_value.toLocaleString()}</p>
+                    <div className="space-y-3">
+                      <Skeleton className="h-3 w-full bg-indigo-100/50 rounded-full" />
+                      <Skeleton className="h-3 w-[85%] bg-indigo-100/50 rounded-full" />
+                      <Skeleton className="h-3 w-[60%] bg-indigo-100/50 rounded-full" />
                     </div>
                   </div>
-                  
-                  {/* Middle Row: Tracking & Distribution */}
-                  <div className="p-5 bg-slate-50/50 border-t border-b border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-6">
-                    
-                    {/* Left: Location & Scans */}
-                    <div className="space-y-4">
-                      <div>
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 mb-3">
-                          <MapPin className="w-3.5 h-3.5"/> Location Trail
-                        </p>
-                        <div className="space-y-3">
-                          <div className="flex items-start gap-2.5">
-                            <div className="w-2 h-2 rounded-full bg-slate-300 mt-1" />
-                            <div>
-                              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider leading-none">Created (Batch: {voucher.voucher_batches.batch_no})</p>
-                              <p className="text-xs font-bold text-slate-900 mt-1">System Generation</p>
-                            </div>
-                          </div>
-                          <div className="flex items-start gap-2.5 border-l-2 border-slate-200 ml-[3px] pl-[13px] py-1">
-                            <div>
-                              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider leading-none">Last Scanned Location</p>
-                              <p className="text-xs font-bold text-[#0052FF] mt-1">
-                                {voucher.last_scanned_warehouse?.name || <span className="text-slate-400 italic">Unscanned</span>}
-                              </p>
-                              {voucher.last_scanned_at && (
-                                <p className="text-[10px] font-mono text-slate-400 mt-1">{format(new Date(voucher.last_scanned_at), "dd MMM yyyy, HH:mm")}</p>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
-                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-                          <ScanFace className="w-4 h-4 text-[#0052FF]"/> Total Verification Scans
-                        </p>
-                        <Badge variant="secondary" className="bg-blue-50 text-[#0052FF] font-bold shadow-none">{voucher.scan_count || 0}</Badge>
-                      </div>
-                    </div>
-
-                    {/* Right: Partner & Customer */}
-                    <div className="space-y-4">
-                      {voucher.voucher_distributors ? (
-                        <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 mb-2">
-                            <Store className="w-3.5 h-3.5"/> Issued Partner
-                          </p>
-                          <p className="text-sm font-bold text-slate-900">{voucher.voucher_distributors.distributor_name}</p>
-                          <div className="flex items-center gap-3 mt-3 pt-3 border-t border-slate-100">
-                            {voucher.voucher_distributions?.delivery_agent && (
-                              <span className="text-[10px] font-medium text-slate-500 flex items-center gap-1"><Truck className="w-3.5 h-3.5"/> {voucher.voucher_distributions.delivery_agent}</span>
-                            )}
-                            {voucher.voucher_distributions && (
-                              <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded border ${voucher.voucher_distributions.payment_status === 'paid' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-amber-50 text-amber-600 border-amber-100'}`}>
-                                {voucher.voucher_distributions.payment_status}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="bg-white border border-slate-200 border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-center h-[96px]">
-                          <Store className="w-5 h-5 text-slate-300 mb-1.5" />
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Not Issued to Partner</p>
-                        </div>
-                      )}
-
-                      {/* ✨ INTERACTIVE CUSTOMER BLOCK */}
-                      {voucher.customers ? (
-                        <div 
-                          className="bg-teal-50 border border-teal-200 rounded-lg p-4 relative overflow-hidden cursor-pointer hover:bg-teal-100 hover:border-teal-300 transition-all group shadow-sm"
-                          onClick={() => setSelectedCustomer({ ...voucher.customers!, voucherCode: voucher.code })}
-                        >
-                          <div className="absolute right-2 top-2 opacity-10 group-hover:scale-110 group-hover:opacity-20 transition-all"><User className="w-12 h-12 text-teal-600"/></div>
-                          <p className="text-[10px] font-bold text-teal-700 uppercase tracking-widest flex items-center gap-1.5 mb-2 relative z-10">
-                            <CheckCircle2 className="w-3.5 h-3.5"/> Registered Customer <ExternalLink className="w-3 h-3 ml-auto opacity-50 group-hover:opacity-100" />
-                          </p>
-                          <p className="text-sm font-bold text-teal-950 relative z-10">{voucher.customers.full_name}</p>
-                          <p className="text-xs font-medium text-teal-800 flex items-center gap-1 mt-1.5 relative z-10">
-                            <Phone className="w-3.5 h-3.5"/> {voucher.customers.phone}
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="bg-white border border-slate-200 border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-center h-[96px]">
-                          <User className="w-5 h-5 text-slate-300 mb-1.5" />
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No Customer Registered</p>
-                        </div>
-                      )}
-                    </div>
-
-                  </div>
-
-                  {/* Bottom Row: Overrides & Logs */}
-                  {voucher.is_manual_override && (
-                     <div className="p-4 bg-rose-50 flex items-center gap-3">
-                       <div className="bg-rose-100 p-2 rounded">
-                         <ShieldAlert className="w-4 h-4 text-rose-600" />
-                       </div>
-                       <div>
-                         <p className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">System Override Executed</p>
-                         <p className="text-[12px] font-medium text-rose-800 mt-0.5">{voucher.updated_by_user}</p>
-                       </div>
+                ) : aiSummary && (
+                  <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl p-5 border border-blue-100 shadow-sm animate-in slide-in-from-bottom-2 duration-300">
+                     <div className="flex items-center gap-2 mb-2">
+                       <Sparkles className="w-4 h-4 text-[#0052FF]" />
+                       <span className="text-[10px] uppercase tracking-widest font-black text-[#0052FF]">AI Overview</span>
                      </div>
-                  )}
+                     <p className="text-sm text-slate-800 font-medium leading-relaxed">
+                       {aiSummary}
+                     </p>
+                  </div>
+                )}
 
-                </CardContent>
-              </Card>
+                {/* SINGLE VOUCHER DETAILS */}
+                {!isSearching && voucher && (
+                  <Card className="shadow-sm border-slate-200 overflow-hidden bg-white rounded-xl animate-in slide-in-from-bottom-4 duration-500">
+                    <CardHeader className="bg-slate-50 py-3 px-4 border-b border-slate-100">
+                      <div className="flex justify-between items-center">
+                        <h3 className="text-[11px] font-bold uppercase tracking-widest text-slate-500">Live Telemetry</h3>
+                        <StatusBadge status={getDisplayStatus(voucher)} />
+                      </div>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      
+                      {/* Top Row: Core Values */}
+                      <div className="p-5 grid grid-cols-2 md:grid-cols-4 gap-4 bg-white">
+                        <div className="col-span-2 md:col-span-2">
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1.5">Voucher Code</p>
+                          <p className="text-2xl font-mono font-black text-slate-900 tracking-tight">{voucher.code}</p>
+                        </div>
+                        <div>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none mb-1.5">Handling Fee</p>
+                            <p className="text-lg font-bold text-slate-700">₹{voucher.handling_fee || 0}</p>
+                        </div>
+                        <div className="text-right">
+                            <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-widest leading-none mb-1.5">Discount Value</p>
+                            <p className="text-2xl font-black text-emerald-600">₹{voucher.discount_value.toLocaleString()}</p>
+                        </div>
+                      </div>
+                      
+                      {/* Middle Row: Tracking & Distribution */}
+                      <div className="p-5 bg-slate-50/50 border-t border-b border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-6">
+                        
+                        {/* Left: Location & Scans */}
+                        <div className="space-y-4">
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 mb-3">
+                              <MapPin className="w-3.5 h-3.5"/> Location Trail
+                            </p>
+                            <div className="space-y-3">
+                              <div className="flex items-start gap-2.5">
+                                <div className="w-2 h-2 rounded-full bg-slate-300 mt-1" />
+                                <div>
+                                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider leading-none">Created (Batch: {voucher.voucher_batches.batch_no})</p>
+                                  <p className="text-xs font-bold text-slate-900 mt-1">System Generation</p>
+                                </div>
+                              </div>
+                              <div className="flex items-start gap-2.5 border-l-2 border-slate-200 ml-[3px] pl-[13px] py-1">
+                                <div>
+                                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider leading-none">Last Scanned Location</p>
+                                  <p className="text-xs font-bold text-[#0052FF] mt-1">
+                                    {voucher.last_scanned_warehouse?.name || <span className="text-slate-400 italic">Unscanned</span>}
+                                  </p>
+                                  {voucher.last_scanned_at && (
+                                    <p className="text-[10px] font-mono text-slate-400 mt-1">{format(new Date(voucher.last_scanned_at), "dd MMM yyyy, HH:mm")}</p>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between bg-white border border-slate-200 rounded-lg p-3 shadow-sm">
+                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                              <ScanFace className="w-4 h-4 text-[#0052FF]"/> Total Verification Scans
+                            </p>
+                            <Badge variant="secondary" className="bg-blue-50 text-[#0052FF] font-bold shadow-none">{voucher.scan_count || 0}</Badge>
+                          </div>
+                        </div>
+
+                        {/* Right: Partner & Customer */}
+                        <div className="space-y-4">
+                          {voucher.voucher_distributors ? (
+                            <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 mb-2">
+                                <Store className="w-3.5 h-3.5"/> Issued Partner
+                              </p>
+                              <p className="text-sm font-bold text-slate-900">{voucher.voucher_distributors.distributor_name}</p>
+                              <div className="flex items-center gap-3 mt-3 pt-3 border-t border-slate-100">
+                                {voucher.voucher_distributions?.delivery_agent && (
+                                  <span className="text-[10px] font-medium text-slate-500 flex items-center gap-1"><Truck className="w-3.5 h-3.5"/> {voucher.voucher_distributions.delivery_agent}</span>
+                                )}
+                                {voucher.voucher_distributions && (
+                                  <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded border ${voucher.voucher_distributions.payment_status === 'paid' ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'bg-amber-50 text-amber-600 border-amber-100'}`}>
+                                    {voucher.voucher_distributions.payment_status}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="bg-white border border-slate-200 border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-center h-[96px]">
+                              <Store className="w-5 h-5 text-slate-300 mb-1.5" />
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Not Issued to Partner</p>
+                            </div>
+                          )}
+
+                          {/* ✨ INTERACTIVE CUSTOMER BLOCK */}
+                          {voucher.customers ? (
+                            <div 
+                              className="bg-teal-50 border border-teal-200 rounded-lg p-4 relative overflow-hidden cursor-pointer hover:bg-teal-100 hover:border-teal-300 transition-all group shadow-sm"
+                              onClick={() => setSelectedCustomer({ ...voucher.customers!, voucherCode: voucher.code })}
+                            >
+                              <div className="absolute right-2 top-2 opacity-10 group-hover:scale-110 group-hover:opacity-20 transition-all"><User className="w-12 h-12 text-teal-600"/></div>
+                              <p className="text-[10px] font-bold text-teal-700 uppercase tracking-widest flex items-center gap-1.5 mb-2 relative z-10">
+                                <CheckCircle2 className="w-3.5 h-3.5"/> Registered Customer <ExternalLink className="w-3 h-3 ml-auto opacity-50 group-hover:opacity-100" />
+                              </p>
+                              <p className="text-sm font-bold text-teal-950 relative z-10">{voucher.customers.full_name}</p>
+                              <p className="text-xs font-medium text-teal-800 flex items-center gap-1 mt-1.5 relative z-10">
+                                <Phone className="w-3.5 h-3.5"/> {voucher.customers.phone}
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="bg-white border border-slate-200 border-dashed rounded-lg p-4 flex flex-col items-center justify-center text-center h-[96px]">
+                              <User className="w-5 h-5 text-slate-300 mb-1.5" />
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No Customer Registered</p>
+                            </div>
+                          )}
+                        </div>
+
+                      </div>
+
+                      {/* Bottom Row: Overrides & Logs */}
+                      {voucher.is_manual_override && (
+                         <div className="p-4 bg-rose-50 flex items-center gap-3">
+                           <div className="bg-rose-100 p-2 rounded">
+                             <ShieldAlert className="w-4 h-4 text-rose-600" />
+                           </div>
+                           <div>
+                             <p className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">System Override Executed</p>
+                             <p className="text-[12px] font-medium text-rose-800 mt-0.5">{voucher.updated_by_user}</p>
+                           </div>
+                         </div>
+                      )}
+
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
             )}
           </div>
         </section>
@@ -600,10 +672,10 @@ export default function TrackVoucherPage() {
               variant="outline" 
               className="bg-white border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm font-bold text-xs"
               onClick={downloadCSV}
-              disabled={filteredListData.length === 0}
+              disabled={listData.length === 0}
             >
               <Download className="w-4 h-4 mr-2 text-slate-400" />
-              Export CSV ({filteredListData.length})
+              Export Page ({listData.length})
             </Button>
           </div>
 
@@ -613,23 +685,26 @@ export default function TrackVoucherPage() {
             <div className="bg-slate-50 border-b border-slate-200 p-4 flex flex-col md:flex-row items-center gap-4">
               <div className="flex items-center gap-2 text-slate-500 w-full md:w-auto shrink-0">
                 <Filter className="w-4 h-4 text-[#0052FF]" />
-                <span className="text-[11px] font-bold uppercase tracking-widest text-[#0052FF]">Filters:</span>
+                <span className="text-[11px] font-bold uppercase tracking-widest text-[#0052FF]">Database Filters:</span>
               </div>
               
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:flex lg:flex-row flex-wrap items-center gap-3 w-full">
                 
-                {/* Local Search */}
+                {/* Local Search (Now hits the database via Debounce) */}
                 <div className="relative w-full lg:w-[220px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                   <Input 
-                    placeholder="Filter list by code..." 
+                    placeholder="Search database by code..." 
                     className="pl-9 h-9 text-xs bg-white border-slate-200 shadow-sm font-medium rounded-lg"
                     value={localSearch}
-                    onChange={(e) => setLocalSearch(e.target.value)}
+                    onChange={(e) => {
+                      setLocalSearch(e.target.value);
+                      setCurrentPage(0); // Reset page on new search
+                    }}
                   />
                 </div>
 
-                <Select value={activeFilter} onValueChange={setActiveFilter}>
+                <Select value={activeFilter} onValueChange={(val) => { setActiveFilter(val); setCurrentPage(0); }}>
                   <SelectTrigger className="w-full lg:w-[150px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
@@ -644,7 +719,7 @@ export default function TrackVoucherPage() {
                   </SelectContent>
                 </Select>
 
-                <Select value={selectedFilterDistributor} onValueChange={setSelectedFilterDistributor}>
+                <Select value={selectedFilterDistributor} onValueChange={(val) => { setSelectedFilterDistributor(val); setCurrentPage(0); }}>
                   <SelectTrigger className="w-full lg:w-[180px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
                     <SelectValue placeholder="All Partners" />
                   </SelectTrigger>
@@ -656,7 +731,7 @@ export default function TrackVoucherPage() {
                   </SelectContent>
                 </Select>
 
-                <Select value={selectedFilterBatch} onValueChange={setSelectedFilterBatch}>
+                <Select value={selectedFilterBatch} onValueChange={(val) => { setSelectedFilterBatch(val); setCurrentPage(0); }}>
                   <SelectTrigger className="w-full lg:w-[160px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
                     <SelectValue placeholder="All Batches" />
                   </SelectTrigger>
@@ -678,6 +753,7 @@ export default function TrackVoucherPage() {
                       setSelectedFilterBatch("all"); 
                       setActiveFilter("all");
                       setLocalSearch("");
+                      setCurrentPage(0);
                     }}
                   >
                     Clear
@@ -737,8 +813,15 @@ export default function TrackVoucherPage() {
 
             <CardContent className="p-0">
               {isListLoading ? (
-                <div className="flex justify-center py-20"><Loader2 className="w-10 h-10 animate-spin text-slate-300" /></div>
-              ) : filteredListData.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-24 bg-slate-50/50">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Sparkles className="w-5 h-5 text-[#0052FF] animate-pulse" />
+                    <span className="text-[11px] font-black uppercase tracking-widest text-[#0052FF]">Syncing Database</span>
+                  </div>
+                  <Skeleton className="h-6 w-64 bg-slate-200 rounded mb-2" />
+                  <Skeleton className="h-4 w-48 bg-slate-100 rounded" />
+                </div>
+              ) : listData.length === 0 ? (
                 <div className="text-center py-20 bg-slate-50/50">
                   <Package className="w-12 h-12 mx-auto mb-4 text-slate-200" />
                   <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">No records found for this filter</p>
@@ -753,7 +836,7 @@ export default function TrackVoucherPage() {
                             <input 
                               type="checkbox" 
                               className="w-4 h-4 rounded border-slate-300 text-[#0052FF] focus:ring-[#0052FF] cursor-pointer"
-                              checked={selectedVouchers.size === filteredListData.length && filteredListData.length > 0}
+                              checked={selectedVouchers.size === listData.length && listData.length > 0}
                               onChange={toggleAll}
                             />
                           </TableHead>
@@ -779,7 +862,7 @@ export default function TrackVoucherPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredListData.map((v) => (
+                      {listData.map((v) => (
                         <TableRow key={v.id} className={`hover:bg-slate-50/80 border-b border-slate-100 transition-colors ${selectedVouchers.has(v.id) ? 'bg-blue-50/30' : ''}`}>
                           {canBulkUpdate && (
                             <TableCell className="px-4 text-center">
@@ -870,6 +953,38 @@ export default function TrackVoucherPage() {
                 </div>
               )}
             </CardContent>
+            
+            {/* SERVER-SIDE PAGINATION FOOTER */}
+            {totalCount > 0 && (
+              <div className="bg-slate-50 border-t border-slate-200 px-4 py-3 flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-500">
+                  Showing <span className="text-slate-900">{currentPage * PAGE_SIZE + 1}</span> to <span className="text-slate-900">{Math.min((currentPage + 1) * PAGE_SIZE, totalCount)}</span> of <span className="text-slate-900">{totalCount}</span> entries
+                </span>
+                <div className="flex items-center gap-2">
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="h-8 text-xs font-bold text-slate-600 bg-white"
+                    onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
+                    disabled={currentPage === 0 || isListLoading}
+                  >
+                    <ChevronLeft className="w-4 h-4 mr-1" /> Previous
+                  </Button>
+                  <div className="text-xs font-bold text-slate-400 px-2">
+                    Page {currentPage + 1} of {totalPages}
+                  </div>
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    className="h-8 text-xs font-bold text-slate-600 bg-white"
+                    onClick={() => setCurrentPage(p => p + 1)}
+                    disabled={(currentPage + 1) * PAGE_SIZE >= totalCount || isListLoading}
+                  >
+                    Next <ChevronRight className="w-4 h-4 ml-1" />
+                  </Button>
+                </div>
+              </div>
+            )}
           </Card>
         </section>
 

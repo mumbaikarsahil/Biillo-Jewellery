@@ -140,7 +140,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
             <h1 className={`text-[34px] font-serif font-black tracking-widest mb-1.5 uppercase ${isEstimate ? 'text-slate-900' : 'text-[#B254A3]'}`}>
               Ossam Jewels Pvt. Ltd.
             </h1>
-            <h2 className="text-[11px] font-bold text-slate-900 tracking-[0.25em] mb-2.5 uppercase">Diamond Jewellery</h2>
+            <h2 className="text-[11px] font-bold text-slate-900 tracking-[0.25em] mb-2.5 uppercase">Pavitram Diamond Jewellery</h2>
             {data.branch?.address ? (
                <p className="text-[10px] font-bold text-slate-700 whitespace-pre-wrap max-w-xl mx-auto leading-snug">
                  {data.branch.address}
@@ -328,9 +328,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
               <div className={`mt-4 p-3 rounded-lg flex items-center shadow-sm ${isEstimate ? 'bg-white border border-slate-200' : 'bg-white'}`}>
                 <span className="text-[10px] font-bold text-slate-800 uppercase mr-3 shrink-0">Amt. In Words :</span> 
-                {/* ✨ FIX: Dynamic Amt In Words calculation for Custom orders to include Vouchers */}
                 <span className="text-[11px] font-bold text-slate-800 uppercase leading-tight tracking-wide">
-                  {numberToWords(
+                  Rupees {numberToWords(
                     mode === 'custom' ? (Number(customOrder?.advancePayment || 0) + voucherVal) :
                     mode === 'return' ? Number(returnDetails?.calculatedRefund || data.finalTotal || 0) : 
                     Number(data.finalTotal || 0)
@@ -406,6 +405,13 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
 
+                  {voucherVal > 0 && (
+                     <div className="flex justify-between text-slate-600">
+                       <span>Voucher Credit</span>
+                       <span>- ₹ {voucherVal?.toLocaleString()}</span>
+                     </div>
+                  )}
+
                   <div className="flex justify-between border-t border-slate-300 pt-1 mt-1"><span>Taxable Value</span><span>₹ {taxableValue?.toLocaleString()}</span></div>
                   
                   {chargeType === 'handling' && data.estimateHandlingAmt > 0 && (
@@ -441,17 +447,17 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                       <span>- ₹ {totalDiscount?.toLocaleString()}</span>
                     </div>
                   )}
+
+                  {(exchangeVal > 0 || voucherVal > 0) && (
+                    <div className="space-y-1 mb-1">
+                       {exchangeVal > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Exchange Credit</span><span>- ₹ {exchangeVal?.toLocaleString()}</span></div>}
+                       {voucherVal > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Voucher Credit</span><span>- ₹ {voucherVal?.toLocaleString()}</span></div>}
+                    </div>
+                  )}
                   
                   <div className="flex justify-between border-t border-slate-300 pt-1 mt-1"><span>Taxable Value</span><span>₹ {taxableValue?.toLocaleString()}</span></div>
                   <div className="flex justify-between text-xs text-slate-600 mt-1"><span>CGST (1.5%)</span><span>+ ₹ {cgstAmount?.toLocaleString()}</span></div>
                   <div className="flex justify-between text-xs text-slate-600 pb-1"><span>SGST (1.5%)</span><span>+ ₹ {sgstAmount?.toLocaleString()}</span></div>
-                  
-                  {(exchangeVal > 0 || voucherVal > 0) && (
-                    <div className="space-y-1 py-1 border-t border-slate-200">
-                       {exchangeVal > 0 && <div className="flex justify-between text-[#A85B9D] text-xs"><span>Exchange Credit</span><span>- ₹ {exchangeVal?.toLocaleString()}</span></div>}
-                       {voucherVal > 0 && <div className="flex justify-between text-[#A85B9D] text-xs"><span>Voucher Credit</span><span>- ₹ {voucherVal?.toLocaleString()}</span></div>}
-                    </div>
-                  )}
 
                   {data.items?.some((i: any) => i.advance_paid) && (
                     <div className="flex justify-between font-bold text-xs pt-1 border-t border-slate-200 mt-1">
@@ -474,7 +480,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
           </div>
 
           <div className="mt-auto flex flex-col shrink-0">
-            <div className="grid grid-cols-3 items-end text-sm font-bold mb-3 mt-1 relative">
+            {/* ✨ FIX: Added mt-4 here and removed -mt-10 from the logo div below */}
+            <div className="grid grid-cols-3 items-end text-sm font-bold mb-3 mt-4 relative">
               <div className="text-center px-6 relative">
                 {['normal', 'custom'].includes(mode) && (
                   <img 
@@ -488,11 +495,11 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   {(mode === 'repair' || mode === 'return') ? 'Customer Signature' : 'Customer / Receiver Signature'}
                 </div>
               </div>
-              <div className="text-center flex flex-col items-center justify-center -mt-8 z-10">
+              <div className="text-center flex flex-col items-center justify-center z-10">
                 <img 
                   src="/pavitram-logo.png" 
                   alt="Pavitram" 
-                  className={`h-20 mx-auto opacity-90 object-contain ${isEstimate ? 'grayscale' : ''}`} 
+                  className={`h-28 mx-auto opacity-90 object-contain ${isEstimate ? 'grayscale' : ''}`} 
                   onError={(e) => e.currentTarget.style.display = 'none'} 
                 />
               </div>
@@ -510,7 +517,13 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   <p className="underline mb-0.5">Terms & Conditions:</p>
                   <p>1) Order once placed can not be cancelled.</p>
                   <p>2) 30% will be deducted from the Total ordered Amount if order Cancelled.</p>
+                  
                 </div>
+              )}
+              {mode === 'normal' && (
+                 <p className="text-[7.5px] leading-snug text-justify text-slate-900 font-black uppercase tracking-tight mb-1 border-b border-slate-200 pb-1 inline-block w-max">
+                   * Lifetime 100% Exchange guarantee and Lifetime 70% Buyback on actual paid amount.
+                 </p>
               )}
               <p className="text-[7.5px] leading-snug text-justify text-slate-500 font-bold uppercase tracking-tight">
                 {legalDisclaimer}
