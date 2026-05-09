@@ -27,7 +27,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Badge } from "@/components/ui/badge"; // Ensure you have the Shadcn Badge component
+import { Badge } from "@/components/ui/badge"; 
+import { useStoreLocation } from "@/hooks/useStoreLocation"; 
+
 
 // --- IMPORT OUR MASTER MODULES ---
 import { OverviewDashboard } from "./components/OverviewDashboard";
@@ -72,10 +74,24 @@ const TABS_CONFIG = [
 ];
 
 export default function ReportsMasterPage() {
+  const { role, isHQ, selectedLocation } = useStoreLocation();
+  
   const [activeTab, setActiveTab] = useState("overview");
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  const currentTab = TABS_CONFIG.find((t) => t.id === activeTab) || TABS_CONFIG[0];
+  // Filter the tabs based on the role we just pulled
+  const visibleTabs = TABS_CONFIG.filter((tab) => {
+    if (role === 'branch_manager') {
+      return tab.id === 'overview' || tab.id === 'inventory';
+    }
+    return true; 
+  });
+
+  // ✨ FIX: Fallback to visibleTabs instead of the master config
+  const currentTab = visibleTabs.find((t) => t.id === activeTab) || visibleTabs[0];
+
+  // Failsafe: if somehow the role isn't loaded yet and visibleTabs is empty
+  if (!currentTab) return null;
 
   return (
     <div className="flex flex-col min-h-screen bg-muted/20 font-sans">
@@ -108,7 +124,8 @@ export default function ReportsMasterPage() {
           {/* DESKTOP VIEW: WRAPPING TABS */}
           <div className="hidden sm:block w-full pb-4 print:hidden">
             <TabsList className="bg-transparent border-none p-0 h-auto flex flex-wrap justify-start gap-2.5 pb-1">
-              {TABS_CONFIG.map((tab) => (
+              {/* ✨ FIX: Map over visibleTabs instead of TABS_CONFIG */}
+              {visibleTabs.map((tab) => (
                 <TabsTrigger
                   key={tab.id}
                   value={tab.id}
@@ -155,7 +172,8 @@ export default function ReportsMasterPage() {
                   onClick={() => setIsMobileMenuOpen(false)}
                 />
                 <div className="absolute top-[calc(100%+6px)] left-1 right-1 z-50 bg-white border border-gray-200 shadow-lg rounded-xl p-1 animate-in fade-in slide-in-from-top-1 duration-150 max-h-[60vh] overflow-y-auto">
-                  {TABS_CONFIG.map((tab) => {
+                  {/* ✨ FIX: Map over visibleTabs instead of TABS_CONFIG */}
+                  {visibleTabs.map((tab) => {
                     const isActive = activeTab === tab.id;
                     return (
                       <button
@@ -197,15 +215,15 @@ export default function ReportsMasterPage() {
             {/* Operational */}
             <TabsContent value="overview" className="m-0 border-none outline-none"><OverviewDashboard /></TabsContent>
             <TabsContent value="inventory" className="m-0 border-none outline-none"><InventoryRegistryReport /></TabsContent>
+            
+            {/* Financial & Accounting - We can keep these rendered in the DOM, 
+                they just won't be accessible because the triggers are hidden */}
             <TabsContent value="sales" className="m-0 border-none outline-none"><SalesVelocityReport /></TabsContent>
             <TabsContent value="procurement" className="m-0 border-none outline-none"><ProcurementLedgerReport /></TabsContent>
             <TabsContent value="transit" className="m-0 border-none outline-none"><TransitReconciliationReport /></TabsContent>
             <TabsContent value="wip" className="m-0 border-none outline-none"><FactoryWipReport /></TabsContent>
-
-            {/* Financial & Accounting */}
             <TabsContent value="manual_journal" className="m-0 border-none outline-none"><ManualJournalForm /></TabsContent>
             
-            {/* Logic: Only render content if not Coming Soon */}
             {!currentTab.isComingSoon && (
               <>
                 <TabsContent value="day_book" className="m-0 border-none outline-none"><DayBookReport /></TabsContent>
@@ -216,7 +234,6 @@ export default function ReportsMasterPage() {
               </>
             )}
 
-            {/* Jewelry Specific & Compliance */}
             <TabsContent value="metal_ledger" className="m-0 border-none outline-none"><MetalAccountingReport /></TabsContent>
             <TabsContent value="metal_movements" className="m-0 border-none outline-none"><MetalMovementLog /></TabsContent>
             <TabsContent value="gst_hub" className="m-0 border-none outline-none"><GstComplianceHub /></TabsContent>
@@ -224,7 +241,6 @@ export default function ReportsMasterPage() {
         </Tabs>
       </main>
 
-      {/* Global Style for hiding scrollbar on desktop tabs */}
       <style dangerouslySetInnerHTML={{__html:`
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }

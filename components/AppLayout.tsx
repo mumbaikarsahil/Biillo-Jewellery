@@ -19,7 +19,7 @@ const allCoreModules = [
   { href: '/pos', label: 'Terminal', icon: Monitor, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
   { href: '/shadow-pos', label: 'SIS Terminal', icon: QrCode, roles: ['owner', 'manager', 'shadow_manager', 'shadow_sales'] },
   { href: '/sales', label: 'Revenue', icon: Wallet, roles: ['owner', 'manager', 'branch_manager'] },
-  { href: '/reports', label: 'Analytics', icon: PieChart, roles: ['owner', 'manager'] },
+  { href: '/reports', label: 'Analytics', icon: PieChart, roles: ['owner', 'manager', 'branch_manager'] },
   { href: '/discovery', label: 'Discovery', icon: Compass, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
 ]
 

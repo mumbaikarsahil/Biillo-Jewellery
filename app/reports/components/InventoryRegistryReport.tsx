@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
+import { useStoreLocation } from '@/hooks/useStoreLocation' // ✨ SECURE LOCATION HOOK
 import { supabase } from '@/lib/supabaseClient'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -45,6 +46,9 @@ export function InventoryRegistryReport() {
   const { appUser } = useAuth()
   const { toast } = useToast()
   
+  // ✨ INTEGRATE LOCATION SECURITY HOOK ✨
+  const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
+
   const [loading, setLoading] = useState(true)
   const [exporting, setExporting] = useState(false)
   const [data, setData] = useState<any[]>([])
@@ -54,7 +58,6 @@ export function InventoryRegistryReport() {
   const [showAnalytics, setShowAnalytics] = useState(false)
 
   const [search, setSearch] = useState('')
-  const [filterWarehouse, setFilterWarehouse] = useState('all')
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterMetal, setFilterMetal] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
@@ -95,8 +98,9 @@ export function InventoryRegistryReport() {
           .order('id', { ascending: true }) 
           .range(step * limit, (step + 1) * limit - 1)
 
-        if (filterWarehouse !== 'all') {
-          query = query.eq('warehouse_id', filterWarehouse)
+        // ✨ APPLY SECURE LOCATION FILTER
+        if (selectedLocation !== 'ALL') {
+          query = query.eq('warehouse_id', selectedLocation)
         }
 
         const { data: chunkData, error } = await query
@@ -128,7 +132,10 @@ export function InventoryRegistryReport() {
     }
   }
 
-  useEffect(() => { fetchData() }, [appUser, filterWarehouse])
+  // ✨ REACT TO SECURE LOCATION STATE
+  useEffect(() => { 
+    if (selectedLocation) fetchData() 
+  }, [appUser, selectedLocation])
 
   const uniqueCategories = useMemo(() => Array.from(new Set(data.map((d: any) => normalizeCategory(d.item_category)))).filter(Boolean).sort(), [data]);
   const uniqueMetals = useMemo(() => Array.from(new Set(data.map((d: any) => d.metal_type || 'Unknown Metal'))).filter(Boolean).sort(), [data]);
@@ -178,7 +185,6 @@ export function InventoryRegistryReport() {
     return Object.entries(summary).sort((a, b) => b[1].count - a[1].count);
   }, [filteredData]);
 
-  // ✨ FIX: Removed the `!showAnalytics` block so the data is ALWAYS calculated for the PDF printout!
   const analytics = useMemo(() => {
     if (filteredData.length === 0) return null;
 
@@ -284,7 +290,7 @@ export function InventoryRegistryReport() {
       return acc;
     }, {} as Record<string, any[]>);
 
-    const locationStr = filterWarehouse === 'all' ? 'All Locations' : getWhName(filterWarehouse);
+    const locationStr = selectedLocation === 'ALL' ? 'All Locations' : getWhName(selectedLocation);
     const statusStr = filterStatus === 'all' ? 'All Statuses' : filterStatus.replace('_', ' ').toUpperCase();
     const catStr = filterCategory === 'all' ? 'All Categories' : filterCategory;
     const metalStr = filterMetal === 'all' ? 'All Metals' : filterMetal;
@@ -390,8 +396,8 @@ export function InventoryRegistryReport() {
     csvRows.push(grandTotalRow.join(','));
 
     let fileNameParts = ['Asset_Registry'];
-    if (filterWarehouse !== 'all') {
-      fileNameParts.push(getWhName(filterWarehouse).replace(/[^a-zA-Z0-9]/g, '_'));
+    if (selectedLocation !== 'ALL') {
+      fileNameParts.push(getWhName(selectedLocation).replace(/[^a-zA-Z0-9]/g, '_'));
     } else {
       fileNameParts.push('All_Locations');
     }
@@ -418,7 +424,7 @@ export function InventoryRegistryReport() {
   const handleSummaryExportCSV = () => {
     if (categorySummary.length === 0) return;
 
-    const locationStr = filterWarehouse === 'all' ? 'All Locations' : getWhName(filterWarehouse);
+    const locationStr = selectedLocation === 'ALL' ? 'All Locations' : getWhName(selectedLocation);
     const headers = ['Category', 'Items Count', 'Total Gross (g)', 'Total Net (g)', 'Total Stone (cts)', 'Total Value (₹)'];
     
     let csvRows = [
@@ -452,7 +458,7 @@ export function InventoryRegistryReport() {
       return;
     }
 
-    const locationStr = filterWarehouse === 'all' ? 'All Locations' : getWhName(filterWarehouse);
+    const locationStr = selectedLocation === 'ALL' ? 'All Locations' : getWhName(selectedLocation);
     let text = `*📊 ASSET REGISTRY SUMMARY*\n`;
     text += `*Location:* ${locationStr}\n`;
     text += `*Date:* ${format(new Date(), 'dd-MMM-yyyy hh:mm a')}\n\n`;
@@ -491,18 +497,20 @@ export function InventoryRegistryReport() {
 
   return (
     <>
-      {/* ✨ NEW: INJECT AGGRESSIVE PRINT STYLES TO FIX BROWSER HEADERS AND NAVBAR OVERLAP ✨ */}
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
-          /* 1. Hide absolutely everything in the browser by default */
-          body * {
-            visibility: hidden;
+          @page {
+            margin: 15mm 15mm 20mm 15mm;
+            size: A4 portrait;
           }
-          /* 2. Make ONLY our specific report ID and its children visible */
+          * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          body * { visibility: hidden; }
           #executive-pdf-report, #executive-pdf-report * {
             visibility: visible;
           }
-          /* 3. Rip the report out of the DOM flow and pin it to the absolute top-left edge */
           #executive-pdf-report {
             position: absolute;
             left: 0;
@@ -510,19 +518,18 @@ export function InventoryRegistryReport() {
             width: 100%;
             margin: 0;
             padding: 0;
+            background: white !important;
+            color: black !important;
           }
-          /* 4. This specifically disables Chrome/Edge URL, Page Number, and Date Headers! */
-          @page {
-            margin: 10mm;
-            size: auto;
+          tr, .prevent-break {
+            page-break-inside: avoid;
+            break-inside: avoid;
           }
         }
       `}} />
 
-      {/* --- STANDARD SCREEN VIEW (Hidden during print) --- */}
       <div className="space-y-5 animate-in fade-in duration-500 print:hidden">
         
-        {/* MAIN TOOLBAR & FILTERS */}
         <div className="flex flex-col gap-3 bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm print:hidden">
           <div className="flex items-center gap-2 w-full">
             <div className="relative flex-1 max-w-md">
@@ -568,13 +575,15 @@ export function InventoryRegistryReport() {
 
           {showFilters && (
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 pt-3 border-t border-zinc-100 animate-in slide-in-from-top-2 duration-200">
-              <Select value={filterWarehouse} onValueChange={setFilterWarehouse}>
+              
+              {/* ✨ SECURE LOCATION DROPDOWN ✨ */}
+              <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
                 <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
                   <Store className="w-3 h-3 mr-1.5 text-zinc-500" />
                   <SelectValue placeholder="Location" />
                 </SelectTrigger>
                 <SelectContent className="rounded-xl shadow-xl border-zinc-200">
-                  <SelectItem value="all" className="text-xs font-medium">All Locations</SelectItem>
+                  {isHQ && <SelectItem value="ALL" className="text-xs font-medium text-indigo-600">All Locations</SelectItem>}
                   {warehouses.map(w => <SelectItem key={w.id} value={w.id} className="text-xs font-medium">{w.name}</SelectItem>)}
                 </SelectContent>
               </Select>
@@ -627,9 +636,9 @@ export function InventoryRegistryReport() {
                 </div>
               </div>
 
-              {(filterWarehouse !== 'all' || filterStatus !== 'all' || filterCategory !== 'all' || filterMetal !== 'all' || search) && (
+              {(filterStatus !== 'all' || filterCategory !== 'all' || filterMetal !== 'all' || search) && (
                 <Button variant="ghost" className="h-9 text-xs font-bold text-red-500 hover:bg-red-50 hover:text-red-600" onClick={() => {
-                  setSearch(''); setFilterWarehouse('all'); setFilterStatus('all'); setFilterCategory('all'); setFilterMetal('all'); setPriceRange([0, maxPrice]);
+                  setSearch(''); setFilterStatus('all'); setFilterCategory('all'); setFilterMetal('all'); setPriceRange([0, maxPrice]);
                 }}>
                   Reset Filters
                 </Button>
@@ -989,63 +998,63 @@ export function InventoryRegistryReport() {
       </div>
 
       {/* ✨ EXECUTIVE PDF REPORT (HIDDEN ON SCREEN, VISIBLE ON PRINT) ✨ */}
-      {/* id="executive-pdf-report" acts as the anchor for the print CSS above */}
-      <div id="executive-pdf-report" className="hidden print:block w-full bg-white text-black p-8 font-sans">
+      <div id="executive-pdf-report" className="hidden print:block w-full font-sans bg-white pb-10">
         
         {/* REPORT HEADER */}
-        <div className="border-b-4 border-black pb-4 mb-8 flex justify-between items-end">
+        <div className="flex justify-between items-end border-b-[3px] border-black pb-4 mb-6">
           <div>
-            <h1 className="text-3xl font-black uppercase tracking-tight text-black">Asset Intelligence Report</h1>
-            <p className="text-sm font-semibold text-gray-500 mt-1 uppercase tracking-widest">
-              Generated: {format(new Date(), 'dd MMM yyyy')}
-            </p>
+            <h2 className="text-xl font-bold tracking-widest uppercase text-gray-500 mb-1">Pavitram Jewels</h2>
+            <h1 className="text-4xl font-black uppercase tracking-tighter text-black">Asset Registry</h1>
           </div>
           <div className="text-right">
-            <p className="text-sm font-bold text-gray-800 uppercase bg-gray-100 px-3 py-1 rounded">
-              Location: {filterWarehouse === 'all' ? 'All Locations' : getWhName(filterWarehouse)}
+            <p className="text-sm font-bold uppercase tracking-widest text-gray-800 bg-gray-100 px-3 py-1 rounded inline-block">
+              {selectedLocation === 'ALL' ? 'GLOBAL INVENTORY' : getWhName(selectedLocation).toUpperCase()}
+            </p>
+            <p className="text-xs font-semibold text-gray-500 mt-2 uppercase tracking-widest">
+              Generated: {format(new Date(), 'dd MMM yyyy • hh:mm a')}
             </p>
           </div>
         </div>
 
-        {/* EXECUTIVE SUMMARY KPIs */}
-        <div className="grid grid-cols-4 gap-4 mb-8">
-          <div className="p-4 border-2 border-gray-200 rounded-xl bg-gray-50">
-            <p className="text-[10px] text-gray-500 uppercase font-black tracking-widest">Total Assets</p>
-            <p className="text-3xl font-black mt-1 text-black">{metrics.totalItems}</p>
+        {/* FINANCIAL KPI GRID */}
+        <div className="grid grid-cols-4 border-2 border-black rounded-xl overflow-hidden mb-8 prevent-break">
+          <div className="p-4 bg-white border-r-2 border-gray-200">
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1">Total Assets</p>
+            <p className="text-3xl font-black text-black">{metrics.totalItems}</p>
           </div>
-          <div className="p-4 border-2 border-gray-200 rounded-xl bg-gray-50">
-            <p className="text-[10px] text-gray-500 uppercase font-black tracking-widest">Gross Weight</p>
-            <p className="text-3xl font-black mt-1 text-black">{metrics.totalGrossWt.toFixed(3)}g</p>
+          <div className="p-4 bg-white border-r-2 border-gray-200">
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1">Gross Weight</p>
+            <p className="text-3xl font-black text-black">{metrics.totalGrossWt.toFixed(3)}<span className="text-lg text-gray-400 font-bold ml-1">g</span></p>
           </div>
-          <div className="p-4 border-2 border-gray-200 rounded-xl bg-gray-50">
-            <p className="text-[10px] text-gray-500 uppercase font-black tracking-widest">Net Weight</p>
-            <p className="text-3xl font-black mt-1 text-black">{metrics.totalNetWt.toFixed(3)}g</p>
+          <div className="p-4 bg-white border-r-2 border-gray-200">
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1">Net Weight</p>
+            <p className="text-3xl font-black text-black">{metrics.totalNetWt.toFixed(3)}<span className="text-lg text-gray-400 font-bold ml-1">g</span></p>
           </div>
-          <div className="p-4 border-2 border-black rounded-xl bg-black text-white">
-            <p className="text-[10px] text-gray-400 uppercase font-black tracking-widest">Asset Valuation</p>
-            <p className="text-3xl font-black mt-1">₹{metrics.totalValue.toLocaleString()}</p>
+          <div className="p-4 bg-black text-white">
+            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">Total Valuation</p>
+            <p className="text-3xl font-black tracking-tight">₹{metrics.totalValue.toLocaleString()}</p>
           </div>
         </div>
 
         {/* AI MARKET INTELLIGENCE */}
         {analytics && (
-          <div className="mb-8">
-            <h2 className="text-lg font-black uppercase tracking-widest border-b-2 border-gray-200 pb-2 mb-4 text-black">Market Intelligence</h2>
+          <div className="mb-8 prevent-break">
+            <h3 className="text-sm font-black uppercase tracking-widest text-black mb-3 border-b-2 border-gray-200 pb-2">Market Intelligence</h3>
             <div className="grid grid-cols-3 gap-6">
               <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-emerald-600">Top Performer</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Top Volume Mover</p>
                 <p className="text-xl font-bold text-black">{analytics.marketIntel.bestCategory.name}</p>
-                <p className="text-xs font-semibold text-gray-500 mt-1">{analytics.marketIntel.bestCategory.sold} units sold</p>
+                <p className="text-xs font-semibold text-gray-500 mt-0.5">{analytics.marketIntel.bestCategory.sold} units sold</p>
               </div>
               <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-blue-600">Price Sweet Spot</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Price Sweet Spot</p>
                 <p className="text-xl font-bold text-black">{analytics.marketIntel.sweetSpot.name}</p>
-                <p className="text-xs font-semibold text-gray-500 mt-1">Highest bracket conversion</p>
+                <p className="text-xs font-semibold text-gray-500 mt-0.5">Highest bracket conversion</p>
               </div>
               <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-rose-600">Underperformer</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-gray-500">Underperformer</p>
                 <p className="text-xl font-bold text-black">{analytics.marketIntel.worstCategory?.name || 'N/A'}</p>
-                <p className="text-xs font-semibold text-gray-500 mt-1">
+                <p className="text-xs font-semibold text-gray-500 mt-0.5">
                   {analytics.marketIntel.worstCategory ? `${analytics.marketIntel.worstCategory.sellThrough.toFixed(1)}% sell-through rate` : 'Data insufficient'}
                 </p>
               </div>
@@ -1054,36 +1063,44 @@ export function InventoryRegistryReport() {
         )}
 
         {/* CATEGORY VALUATION BREAKDOWN */}
-        <h2 className="text-lg font-black uppercase tracking-widest border-b-2 border-gray-200 pb-2 mb-4 text-black">Category Valuation Breakdown</h2>
-        <table className="w-full text-left border-collapse">
-          <thead>
-            <tr className="border-b-2 border-black text-black">
-              <th className="py-3 text-[11px] font-black uppercase tracking-widest">Category</th>
-              <th className="py-3 text-[11px] font-black uppercase tracking-widest text-right">Items Count</th>
-              <th className="py-3 text-[11px] font-black uppercase tracking-widest text-right">Total Gross</th>
-              <th className="py-3 text-[11px] font-black uppercase tracking-widest text-right">Total Net</th>
-              <th className="py-3 text-[11px] font-black uppercase tracking-widest text-right">Stone (cts)</th>
-              <th className="py-3 text-[11px] font-black uppercase tracking-widest text-right">Total Value</th>
-            </tr>
-          </thead>
-          <tbody className="text-black">
-            {categorySummary.map(([cat, stats], idx) => (
-              <tr key={cat} className={`border-b border-gray-200 ${idx % 2 === 0 ? 'bg-gray-50' : 'bg-white'}`}>
-                <td className="py-3 px-2 text-sm font-bold">{cat}</td>
-                <td className="py-3 px-2 text-sm text-right font-medium">{stats.count}</td>
-                <td className="py-3 px-2 text-sm text-right font-medium">{stats.grossWt.toFixed(3)}g</td>
-                <td className="py-3 px-2 text-sm text-right font-medium">{stats.netWt.toFixed(3)}g</td>
-                <td className="py-3 px-2 text-sm text-right font-medium">{stats.stoneWt.toFixed(2)}cts</td>
-                <td className="py-3 px-2 text-sm text-right font-black">₹{stats.value.toLocaleString()}</td>
+        <div className="mt-8">
+          <h3 className="text-sm font-black uppercase tracking-widest text-black mb-3">Category Breakdown</h3>
+          <table className="w-full text-left border-collapse">
+            <thead>
+              <tr className="bg-gray-100 border-y-2 border-black text-black">
+                <th className="py-2.5 px-3 text-[10px] font-black uppercase tracking-widest">Category</th>
+                <th className="py-2.5 px-3 text-[10px] font-black uppercase tracking-widest text-center">Items</th>
+                <th className="py-2.5 px-3 text-[10px] font-black uppercase tracking-widest text-right">Gross (g)</th>
+                <th className="py-2.5 px-3 text-[10px] font-black uppercase tracking-widest text-right">Net (g)</th>
+                <th className="py-2.5 px-3 text-[10px] font-black uppercase tracking-widest text-right">Stone (cts)</th>
+                <th className="py-2.5 px-3 text-[10px] font-black uppercase tracking-widest text-right">Value (₹)</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-
-        {/* WATERMARK */}
-        <div className="mt-12 text-center text-gray-400 text-xs font-bold uppercase tracking-widest">
-          Powered By Biillo ERP
+            </thead>
+            <tbody className="text-black">
+              {categorySummary.map(([cat, stats], idx) => (
+                <tr key={cat} className="border-b border-gray-200">
+                  <td className="py-2.5 px-3 text-sm font-bold">{cat}</td>
+                  <td className="py-2.5 px-3 text-sm text-center font-medium">{stats.count}</td>
+                  <td className="py-2.5 px-3 text-sm text-right font-medium">{stats.grossWt.toFixed(3)}</td>
+                  <td className="py-2.5 px-3 text-sm text-right font-medium">{stats.netWt.toFixed(3)}</td>
+                  <td className="py-2.5 px-3 text-sm text-right font-medium">{stats.stoneWt.toFixed(2)}</td>
+                  <td className="py-2.5 px-3 text-sm text-right font-bold">₹{stats.value.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="border-y-2 border-black text-black bg-gray-50 prevent-break">
+                <td className="py-3 px-3 text-[11px] font-black uppercase tracking-widest">Grand Total</td>
+                <td className="py-3 px-3 text-sm text-center font-black">{metrics.totalItems}</td>
+                <td className="py-3 px-3 text-sm text-right font-black">{metrics.totalGrossWt.toFixed(3)}</td>
+                <td className="py-3 px-3 text-sm text-right font-black">{metrics.totalNetWt.toFixed(3)}</td>
+                <td className="py-3 px-3 text-sm text-right font-black">{metrics.totalStoneWt.toFixed(2)}</td>
+                <td className="py-3 px-3 text-sm text-right font-black">₹{metrics.totalValue.toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
         </div>
+
       </div>
     </>
   )

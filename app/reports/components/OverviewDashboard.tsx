@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation' // NEW: For routing to the registry tab
+import { useRouter } from 'next/navigation'
 import { 
   Store, Calendar, RefreshCw, Printer, 
   TrendingUp, ArrowRightLeft, Briefcase, Activity, Filter, ExternalLink
@@ -11,6 +11,7 @@ import {
 } from 'recharts'
 
 import { useAuth } from '@/hooks/useAuth'
+import { useStoreLocation } from '@/hooks/useStoreLocation' // ✨ NEW: Import your secure location hook
 import { supabase } from '@/lib/supabaseClient'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -43,14 +44,16 @@ const COLORS = [
 export function OverviewDashboard() {
   const { appUser } = useAuth()
   const { toast } = useToast()
-  const router = useRouter() // NEW: Navigation router
+  const router = useRouter()
+  
+  // ✨ INTEGRATE LOCATION SECURITY HOOK ✨
+  const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
   
   const [loading, setLoading] = useState(true)
   const [warehouses, setWarehouses] = useState<any[]>([])
   
   // Filters & State
   const [showFilters, setShowFilters] = useState(false)
-  const [selectedWarehouseId, setSelectedWarehouseId] = useState('all')
   const [startDate, setStartDate] = useState(() => {
     const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().split('T')[0];
   })
@@ -97,9 +100,10 @@ export function OverviewDashboard() {
         .in('status', ['open', 'issued', 'in_progress'])
         .limit(5000)
 
-      if (selectedWarehouseId !== 'all') {
-        salesQ = salesQ.eq('warehouse_id', selectedWarehouseId)
-        trfQ = trfQ.or(`from_warehouse_id.eq.${selectedWarehouseId},to_warehouse_id.eq.${selectedWarehouseId}`)
+      // ✨ APPLY SECURE LOCATION FILTER
+      if (selectedLocation !== 'ALL') {
+        salesQ = salesQ.eq('warehouse_id', selectedLocation)
+        trfQ = trfQ.or(`from_warehouse_id.eq.${selectedLocation},to_warehouse_id.eq.${selectedLocation}`)
       }
 
       // Execute non-inventory queries in parallel
@@ -121,8 +125,9 @@ export function OverviewDashboard() {
           .order('id', { ascending: true }) // Crucial for stable pagination
           .range(step * limit, (step + 1) * limit - 1)
 
-        if (selectedWarehouseId !== 'all') {
-          invQ = invQ.eq('warehouse_id', selectedWarehouseId)
+        // ✨ APPLY SECURE LOCATION FILTER
+        if (selectedLocation !== 'ALL') {
+          invQ = invQ.eq('warehouse_id', selectedLocation)
         }
 
         const { data: chunk, error: invErr } = await invQ;
@@ -159,7 +164,8 @@ export function OverviewDashboard() {
         // DEFENSIVE CHECK: Handle cases where the join returns an array instead of an object
         const whName = Array.isArray(item.warehouses) ? item.warehouses[0]?.name : item.warehouses?.name;
         
-        const key = selectedWarehouseId === 'all' ? (whName || 'Unknown Vault') : (item.metal_type || 'Unknown Metal')
+        // If viewing globally, breakdown by Vault. If viewing a specific node, breakdown by Metal Type
+        const key = selectedLocation === 'ALL' ? (whName || 'Unknown Vault') : (item.metal_type || 'Unknown Metal')
         distMap[key] = (distMap[key] || 0) + 1
       })
       
@@ -180,7 +186,10 @@ export function OverviewDashboard() {
     }
   }
 
-  useEffect(() => { fetchDashboardData() }, [appUser, selectedWarehouseId, startDate, endDate])
+  // ✨ REACT TO SECURE LOCATION STATE
+  useEffect(() => { 
+    if (selectedLocation) fetchDashboardData() 
+  }, [appUser, selectedLocation, startDate, endDate])
 
   const formatDateForPrint = (dateString: string) => {
     try { return new Date(dateString).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) } 
@@ -193,13 +202,15 @@ export function OverviewDashboard() {
       {/* NATIVE APP STYLE FILTERS */}
       <div className="flex flex-col gap-2.5 print:hidden bg-white p-2.5 rounded-2xl border border-zinc-200 shadow-sm">
         <div className="flex items-center gap-2 w-full">
-          <Select value={selectedWarehouseId} onValueChange={setSelectedWarehouseId}>
+          
+          {/* ✨ SECURE LOCATION DROPDOWN ✨ */}
+          <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
             <SelectTrigger className="flex-1 h-9 text-xs font-medium bg-zinc-50 border-zinc-200 rounded-full focus:ring-0 focus:ring-offset-0">
               <Store className="w-3.5 h-3.5 mr-2 text-zinc-500" />
-              <SelectValue placeholder="All Nodes" />
+              <SelectValue placeholder="Location" />
             </SelectTrigger>
             <SelectContent className="rounded-xl border-zinc-200 shadow-xl">
-              <SelectItem value="all" className="text-xs font-medium rounded-lg">Global Scope</SelectItem>
+              {isHQ && <SelectItem value="ALL" className="text-xs font-medium rounded-lg text-indigo-600">Global Scope</SelectItem>}
               {warehouses.map(w => <SelectItem key={w.id} value={w.id} className="text-xs font-medium rounded-lg">{w.name}</SelectItem>)}
             </SelectContent>
           </Select>
@@ -243,7 +254,7 @@ export function OverviewDashboard() {
       {/* PRINT HEADER */}
       <div className="hidden print:block mb-8 border-b border-zinc-200 pb-2">
         <h1 className="text-xl font-semibold tracking-tight text-zinc-900">Executive Overview</h1>
-        <p className="text-[10px] font-medium text-zinc-500 uppercase tracking-widest mt-1">Period: {formatDateForPrint(startDate)} - {formatDateForPrint(endDate)} | Scope: {selectedWarehouseId === 'all' ? 'Global' : warehouses.find(w=>w.id===selectedWarehouseId)?.name}</p>
+        <p className="text-[10px] font-medium text-zinc-500 uppercase tracking-widest mt-1">Period: {formatDateForPrint(startDate)} - {formatDateForPrint(endDate)} | Scope: {selectedLocation === 'ALL' ? 'Global' : warehouses.find(w=>w.id===selectedLocation)?.name}</p>
       </div>
 
       {/* VERCEL STYLE KPIs */}
@@ -324,17 +335,17 @@ export function OverviewDashboard() {
         {/* CLICKABLE PIE CHART FOR ASSET REGISTRY NAVIGATION */}
         <Card 
           className="shadow-sm border-zinc-200 rounded-2xl overflow-hidden print:border-zinc-300 bg-white flex flex-col group cursor-pointer hover:border-indigo-300 hover:ring-1 hover:ring-indigo-100 transition-all"
-          onClick={() => router.push('/reports/registry')} // IMPORTANT: Adjust this path if your tab structure is different
+          onClick={() => router.push('/reports/registry')} 
         >
           <div className="pt-5 px-5 print:pt-4 flex justify-between items-center">
             <h2 className="text-sm font-semibold tracking-tight text-zinc-900 truncate">
-              {selectedWarehouseId === 'all' ? 'Asset Distribution' : 'Asset Breakdown'}
+              {selectedLocation === 'ALL' ? 'Global Vault Asset Dist.' : 'Local Metal Breakdown'}
             </h2>
             <ExternalLink className="w-4 h-4 text-zinc-300 group-hover:text-indigo-500 transition-colors" />
           </div>
           <CardContent className="p-4 sm:p-5 flex-1 flex flex-col justify-center min-h-0">
             {loading ? <Skeleton className="h-[200px] w-full rounded-full" /> : inventoryDist.length === 0 ? (
-              <div className="h-[200px] flex items-center justify-center text-xs font-medium text-zinc-400">Vaults Empty</div>
+              <div className="h-[200px] flex items-center justify-center text-xs font-medium text-zinc-400">Vault Empty</div>
             ) : (
               <div className="w-full flex flex-col items-center">
                 <div className="h-[180px] w-full relative">

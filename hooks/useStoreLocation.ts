@@ -29,6 +29,8 @@ export function useStoreLocation() {
     isLocked: !isHQ,            // Boolean: true if we should disable the dropdown
     selectedLocation,           // The current value to pass to your database queries
     setSelectedLocation,        // Function to change location (only works if !isLocked)
-    userWarehouseId: appUser?.warehouse_id // The raw ID if needed
+    userWarehouseId: appUser?.warehouse_id,
+    role: appUser?.role,         // ✨ NEW: Now the hook provides the exact role!
+    appUser // The raw ID if needed
   }
 }

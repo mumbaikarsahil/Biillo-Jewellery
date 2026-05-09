@@ -84,7 +84,10 @@ export async function middleware(request: NextRequest) {
     
     const isVoucherRoute = path.startsWith('/vouchers')
     const isOpsRoute = path.startsWith('/purchases') || path.startsWith('/manufacturing') || path.startsWith('/inventory') || path.startsWith('/transfer') || path.startsWith('/catalog')
-    const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/crm') || path.startsWith('/transfer') || path.startsWith('/catalog')
+    
+    // ✨ FIX: Added path.startsWith('/reports') to the Branch Manager route group
+    const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/crm') || path.startsWith('/transfer') || path.startsWith('/catalog') || path.startsWith('/reports')
+    
     const isSalesRoute = path.startsWith('/discovery') || path.startsWith('/pos') || path.startsWith('/crm') || path.startsWith('/catalog')
     
     // Everyone is allowed on the dashboard

@@ -73,6 +73,27 @@ type ReceiveItem = {
   isSelected: boolean
 }
 
+// --- SMART CATEGORY PREFIX GENERATOR ---
+const getCategoryPrefix = (categoryStr: string) => {
+  if (!categoryStr || categoryStr === 'N/A') return 'GEN';
+  const cat = categoryStr.toUpperCase();
+  
+  // Smart mappings for common Indian jewelry terms
+  if (cat.includes('RING') && cat.includes('LADIES')) return 'LRG';
+  if (cat.includes('RING') && (cat.includes('GENTS') || cat.includes('MEN'))) return 'MRG';
+  if (cat.includes('RING')) return 'RNG';
+  if (cat.includes('PENDANT')) return 'PND';
+  if (cat.includes('BANGLE')) return 'BGL';
+  if (cat.includes('BRACELET')) return 'BRC';
+  if (cat.includes('NECKLACE')) return 'NCK';
+  if (cat.includes('NOSE')) return 'NSP';
+  if (cat.includes('TOP') || cat.includes('EARRING')) return 'EAR';
+  if (cat.includes('TANMANIA')) return 'TNM';
+  
+  // Fallback: Strip vowels/spaces and take the first 3 letters
+  return cat.replace(/[^A-Z]/g, '').substring(0, 3) || 'GEN';
+};
+
 export default function ReceiveTab({
   jobId,
   companyId,
@@ -260,17 +281,21 @@ export default function ReceiveTab({
         return
       }
 
+      // 1. Map items with initial smart barcode guess (Prefix + 4 Digits)
       const mappedItems: ReceiveItem[] = items.map((item: any, index: number) => {
         const category = (item.ornament_type && item.ornament_type !== 'N/A') 
                           ? item.ornament_type 
-                          : (item.job_bags?.product_category || 'Jewelry')
+                          : (item.job_bags?.product_category || 'Jewelry');
+
+        const prefix = getCategoryPrefix(category);
+        const random4Digit = Math.floor(1000 + Math.random() * 9000); // e.g., 4821
 
         return {
           job_bag_item_id: item.id,
           sku_reference: item.sku_reference,
           ornament_type: item.ornament_type || 'N/A', 
           category: category, 
-          barcode: `ITM-${Math.floor(100000 + Math.random() * 900000)}`,
+          barcode: `${prefix}-${random4Digit}`, // e.g., RNG-4821
           grossWeight: '',
           stonePieces: '',
           stoneWeight: '',
@@ -304,15 +329,48 @@ export default function ReceiveTab({
           imagePreview: '',
           isSelected: false 
         }
-      })
+      });
 
-      setReceiveItems(mappedItems)
+      // 2. ✨ ANTI-COLLISION DATABASE CHECK ✨
+      let barcodesToCheck = mappedItems.map(i => i.barcode);
+      let hasCollisions = true;
+      let safetyCounter = 0; // Prevents infinite loops just in case
+
+      while (hasCollisions && safetyCounter < 5) {
+        safetyCounter++;
+        
+        // Query the database to see if any of our generated barcodes already exist
+        const { data: existing } = await supabase
+          .from('inventory_items')
+          .select('barcode')
+          .in('barcode', barcodesToCheck);
+
+        if (!existing || existing.length === 0) {
+          hasCollisions = false; // All clear! No duplicates found.
+        } else {
+          // We found duplicates! Regenerate ONLY the ones that collided.
+          const existingCodes = existing.map(e => e.barcode);
+          
+          mappedItems.forEach(item => {
+            if (existingCodes.includes(item.barcode)) {
+              const prefix = getCategoryPrefix(item.category);
+              item.barcode = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+            }
+          });
+          
+          // Update the list to check in the next loop iteration
+          barcodesToCheck = mappedItems.map(i => i.barcode);
+        }
+      }
+
+      // Finally, set the safely verified items to state
+      setReceiveItems(mappedItems);
     } catch (err: any) {
       toast.error(`Error loading items: ${err.message}`)
     } finally {
       setIsLoading(false)
     }
-  }, [jobId]) 
+  }, [jobId])
 
   useEffect(() => { loadJobBagItems() }, [loadJobBagItems])
 
