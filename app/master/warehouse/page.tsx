@@ -43,27 +43,26 @@ import {
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
-import { Plus, Warehouse, Search, Edit2, MapPin, Phone, ShieldCheck, Store } from 'lucide-react'
+import { Plus, Warehouse, Search, Edit2, MapPin, Phone, ShieldCheck, Store, Loader2 } from 'lucide-react'
 
-// 1. UPDATE ZOD SCHEMA TO INCLUDE STATUS
 const warehouseSchema = z.object({
   warehouse_code: z.string().min(2, 'Code required'),
   name: z.string().min(2, 'Name required'),
   warehouse_type: z.enum(['main_safe', 'factory', 'branch', 'transit']),
-  address: z.string().optional(),
-  contact_number: z.string().optional(),
-  gstin: z.string().optional(),
-  is_active: z.boolean().default(true) // <-- Added for edit mode
+  address: z.string().optional().nullable(),
+  contact_number: z.string().optional().nullable(),
+  gstin: z.string().optional().nullable(),
+  is_active: z.boolean().default(true) 
 })
 
 export default function WarehousePage() {
   const { appUser } = useAuth()
   const [warehouses, setWarehouses] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [isSubmitting, setIsSubmitting] = useState(false)
   const [search, setSearch] = useState('')
   const [isSheetOpen, setIsSheetOpen] = useState(false)
   
-  // --- NEW: EDIT STATE ---
   const [editingId, setEditingId] = useState<string | null>(null)
 
   const defaultValues = {
@@ -89,7 +88,7 @@ export default function WarehousePage() {
       .from('warehouses')
       .select('*')
       .eq('company_id', appUser.company_id)
-      .order('is_active', { ascending: false }) // Active first
+      .order('is_active', { ascending: false }) 
       .order('created_at', { ascending: false })
 
     setWarehouses(data || [])
@@ -100,13 +99,13 @@ export default function WarehousePage() {
     fetchWarehouses()
   }, [appUser])
 
-  // --- NEW: HANDLE OPENING EDIT SHEET ---
   const openEditSheet = (w: any) => {
     setEditingId(w.id)
     form.reset({
       warehouse_code: w.warehouse_code || '',
       name: w.name || '',
       warehouse_type: w.warehouse_type || 'branch',
+      // ✨ FIX: Guarantee these are strings so the form inputs are always controlled
       address: w.address || '',
       contact_number: w.contact_number || '',
       gstin: w.gstin || '',
@@ -118,7 +117,6 @@ export default function WarehousePage() {
   const handleSheetOpenChange = (open: boolean) => {
     setIsSheetOpen(open)
     if (!open) {
-      // Reset form when closing
       setTimeout(() => {
         setEditingId(null)
         form.reset(defaultValues)
@@ -126,28 +124,35 @@ export default function WarehousePage() {
     }
   }
 
+  // ✨ HELPER: Safely convert empty strings to actual nulls for Supabase
+  const sanitizeValue = (val: string | null | undefined) => {
+    if (val === undefined || val === null) return null;
+    if (typeof val === 'string' && val.trim() === '') return null;
+    return val.trim();
+  }
+
   async function onSubmit(values: z.infer<typeof warehouseSchema>) {
     if (!appUser) return
+    setIsSubmitting(true)
 
     try {
       if (editingId) {
-        // --- UPDATE EXISTING WAREHOUSE ---
-        const { error } = await supabase
-          .from('warehouses')
-          .update({
-            warehouse_code: values.warehouse_code,
-            name: values.name,
-            warehouse_type: values.warehouse_type,
-            address: values.address,
-            contact_number: values.contact_number,
-            gstin: values.gstin,
-            is_active: values.is_active
-          })
-          .eq('id', editingId)
-          .eq('company_id', appUser.company_id) // Security check
+        // --- STRICT RPC UPDATE (Bypasses RLS blocks) ---
+        const { error } = await supabase.rpc('update_warehouse', {
+          _warehouse_id: editingId,
+          _company_id: appUser.company_id,
+          _warehouse_code: values.warehouse_code,
+          _name: values.name,
+          _warehouse_type: values.warehouse_type,
+          _address: sanitizeValue(values.address),
+          _contact_number: sanitizeValue(values.contact_number),
+          _gstin: sanitizeValue(values.gstin),
+          _is_active: values.is_active
+        })
 
         if (error) throw error
-        toast.success('Warehouse Updated Successfully')
+        toast.success('Location Updated Successfully')
+        
       } else {
         // --- CREATE NEW WAREHOUSE ---
         const { error } = await supabase.rpc('create_warehouse', {
@@ -155,23 +160,26 @@ export default function WarehousePage() {
           _warehouse_code: values.warehouse_code,
           _name: values.name,
           _warehouse_type: values.warehouse_type,
-          _address: values.address,            
-          _contact_number: values.contact_number, 
-          _gstin: values.gstin                 
+          _address: sanitizeValue(values.address),            
+          _contact_number: sanitizeValue(values.contact_number), 
+          _gstin: sanitizeValue(values.gstin)                 
         })
 
         if (error) throw error
-        toast.success('Warehouse Created Successfully')
+        toast.success('Location Created Successfully')
       }
 
       handleSheetOpenChange(false)
       fetchWarehouses()
     } catch (err: any) {
+      console.error("Supabase Error:", err);
       if (err.message?.includes('idx_warehouse_company_code') || err.message?.includes('unique')) {
-        toast.error('Warehouse Code already exists')
+        toast.error('Location Code already exists')
       } else {
-        toast.error(err.message)
+        toast.error(err.message || 'An unexpected error occurred')
       }
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -234,7 +242,7 @@ export default function WarehousePage() {
                           <FormItem>
                             <FormLabel className="text-[11px] font-bold uppercase tracking-widest text-zinc-500">Code *</FormLabel>
                             <FormControl>
-                              <Input {...field} className="uppercase font-mono bg-zinc-50 h-10" placeholder="BR-01" disabled={!!editingId} />
+                              <Input {...field} value={field.value || ''} className="uppercase font-mono bg-zinc-50 h-10" placeholder="BR-01" disabled={!!editingId} />
                             </FormControl>
                             <FormMessage />
                           </FormItem>
@@ -273,7 +281,7 @@ export default function WarehousePage() {
                         <FormItem>
                           <FormLabel className="text-[11px] font-bold uppercase tracking-widest text-zinc-500">Location Name *</FormLabel>
                           <FormControl>
-                            <Input {...field} className="h-10 font-medium" placeholder="e.g. Andheri West Showroom" />
+                            <Input {...field} value={field.value || ''} className="h-10 font-medium" placeholder="e.g. Andheri West Showroom" />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -291,6 +299,7 @@ export default function WarehousePage() {
                             <FormControl>
                               <Textarea 
                                 {...field} 
+                                value={field.value || ''}
                                 placeholder="Enter complete billing/shipping address..." 
                                 className="resize-none h-20 text-sm bg-zinc-50" 
                               />
@@ -308,7 +317,7 @@ export default function WarehousePage() {
                             <FormItem>
                               <FormLabel className="text-[11px] font-bold uppercase tracking-widest text-zinc-500">Phone</FormLabel>
                               <FormControl>
-                                <Input {...field} className="h-10 bg-zinc-50 text-sm" placeholder="+91 9876543210" />
+                                <Input {...field} value={field.value || ''} className="h-10 bg-zinc-50 text-sm" placeholder="+91 9876543210" />
                               </FormControl>
                               <FormMessage />
                             </FormItem>
@@ -322,7 +331,7 @@ export default function WarehousePage() {
                             <FormItem>
                               <FormLabel className="text-[11px] font-bold uppercase tracking-widest text-zinc-500">GSTIN</FormLabel>
                               <FormControl>
-                                <Input {...field} className="uppercase h-10 bg-zinc-50 font-mono text-sm" placeholder="27AAOP..." />
+                                <Input {...field} value={field.value || ''} className="uppercase h-10 bg-zinc-50 font-mono text-sm" placeholder="27AAOP..." />
                               </FormControl>
                               <FormMessage />
                             </FormItem>
@@ -358,7 +367,10 @@ export default function WarehousePage() {
                     )}
 
                     <div className="pt-6">
-                      <Button type="submit" className="w-full h-12 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold uppercase tracking-widest text-xs shadow-md">
+                      <Button type="submit" disabled={isSubmitting} className="w-full h-12 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold uppercase tracking-widest text-xs shadow-md">
+                        {isSubmitting ? (
+                           <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                        ) : null}
                         {editingId ? 'Save Changes' : 'Create Location'}
                       </Button>
                     </div>

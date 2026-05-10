@@ -522,7 +522,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
               )}
               {mode === 'normal' && (
                  <p className="text-[7.5px] leading-snug text-justify text-slate-900 font-black uppercase tracking-tight mb-1 border-b border-slate-200 pb-1 inline-block w-max">
-                   * Lifetime 100% Exchange guarantee and Lifetime 70% Buyback on actual paid amount.
+                   * Lifetime 100% Exchange guarantee. And Lifetime 70% Buyback on actual paid amount.
                  </p>
               )}
               <p className="text-[7.5px] leading-snug text-justify text-slate-500 font-bold uppercase tracking-tight">
