@@ -15,7 +15,6 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
 
   const [transfer, setTransfer] = useState<any>(null)
   
-  // Two print refs: One for the HO Ledger, One for the Combined Shipping Labels
   const masterRef = useRef<HTMLDivElement>(null)
   const shippingLabelsRef = useRef<HTMLDivElement>(null)
 
@@ -46,17 +45,17 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
 
   const isDisputed = transfer.status === 'disputed'
   
-  // Calculate total weights for the ledger and shipping label
   const totalGrossWeight = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.gross_weight_g || 0), 0) || 0;
   const totalNetWeight = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.net_weight_g || 0), 0) || 0;
   const totalStoneWeight = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.total_stone_weight_cts || 0), 0) || 0;
+  const totalMRP = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.mrp || 0), 0) || 0;
   
-  // Generate pseudo-routing codes from warehouse names (e.g., "Juhu Branch" -> "JUH1")
   const fromCode = transfer.from?.name?.substring(0, 4).toUpperCase() || 'ORIG';
   const toCode = transfer.to?.name?.substring(0, 4).toUpperCase() || 'DEST';
-  const shortDate = new Date(transfer.dispatched_at || transfer.created_at).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' });
+  const dispatchDate = transfer.dispatched_at || transfer.created_at;
+  const shortDate = new Date(dispatchDate).toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit' });
+  const fullDate = new Date(dispatchDate).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-  // CSS Trick for generating a realistic looking shipping barcode without an external library
   const barcodeStyle = {
     backgroundImage: 'repeating-linear-gradient(90deg, #000, #000 3px, transparent 3px, transparent 6px, #000 6px, #000 8px, transparent 8px, transparent 11px, #000 11px, #000 16px, transparent 16px, transparent 18px)'
   };
@@ -92,7 +91,6 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
       </header>
 
       <main className="max-w-4xl mx-auto p-4 sm:p-8 space-y-6 print:hidden">
-        {/* DISPUTE ALERT */}
         {isDisputed && (
           <div className="bg-red-50 border-2 border-red-500 rounded-xl p-6 flex items-start gap-4 shadow-sm animate-in fade-in">
              <AlertTriangle className="h-8 w-8 text-red-600 shrink-0 mt-1" />
@@ -108,132 +106,195 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
         <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-slate-500 shadow-sm">
           <Printer className="w-12 h-12 mx-auto mb-4 text-slate-300" />
           <h2 className="text-lg font-bold text-slate-700 mb-2">Print Ready</h2>
-          <p className="text-sm">Click the "Print E-Com Labels" button above to generate the Amazon-style shipping label, or "Print HO Ledger" for the manifest.</p>
+          <p className="text-sm">Click the "Print E-Com Labels" button above to generate the Amazon-style shipping label, or "Print HO Ledger" for the high-detail manifest.</p>
         </div>
       </main>
 
-      {/* ========================================================= */}
-      {/* HIDDEN PRINT LAYOUTS (Only visible when printing) */}
-      {/* ========================================================= */}
-      
-      <div className="hidden print:block">
+      <style dangerouslySetInnerHTML={{__html: `
+        @media print {
+          @page {
+            margin: 10mm;
+            size: A4 portrait;
+          }
+          * {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+          }
+          .break-inside-avoid {
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          .tabular-nums {
+            font-variant-numeric: tabular-nums;
+          }
+        }
+      `}} />
+
+      <div className="hidden">
         
         {/* --------------------------------------------------------- */}
-        {/* 1. MASTER LEDGER (HO COPY) */}
+        {/* 1. MASTER LEDGER (HO COPY) - PROFESSIONAL SERIF REDESIGN */}
         {/* --------------------------------------------------------- */}
-        <div ref={masterRef} className="p-10 bg-white min-h-[100vh] w-full max-w-[210mm] mx-auto print:p-0 flex flex-col">
-          <div className="flex-1">
-            <div className="flex justify-between items-end border-b border-slate-200 pb-6 mb-8">
-              <div className="flex flex-col gap-2">
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight uppercase">Pavitram Jewels</h2>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Master Transfer Ledger (HO)</p>
-              </div>
-              <div className="text-right">
-                <p className="font-mono text-2xl font-black text-slate-900">{transfer.transfer_number}</p>
-                <p className="text-xs font-medium text-slate-500 mt-1">
-                  {new Date(transfer.dispatched_at || transfer.created_at).toLocaleString('en-IN')}
-                </p>
-              </div>
+        <div ref={masterRef} className="bg-white w-[210mm] mx-auto text-black font-serif p-8">
+          
+          {/* HEADER SECTION */}
+          <div className="border-b-[3px] border-black pb-4 mb-6 flex justify-between items-end font-sans">
+            <div>
+              <h2 className="text-sm font-black uppercase tracking-widest text-gray-500 mb-1">Pavitram Jewels</h2>
+              <h1 className="text-3xl font-black uppercase tracking-tighter font-serif">Transfer Manifest</h1>
             </div>
-
-            <div className="grid grid-cols-2 gap-8 bg-slate-50 border border-slate-200 p-6 rounded-xl mb-8">
-              <div>
-                <p className="text-[10px] font-bold uppercase text-slate-500 tracking-widest mb-1.5">From</p>
-                <p className="font-bold text-lg text-slate-900 leading-none">{transfer.from.name}</p>
-              </div>
-              <div>
-                <p className="text-[10px] font-bold uppercase text-slate-500 tracking-widest mb-1.5">To</p>
-                <p className="font-bold text-lg text-slate-900 leading-none">{transfer.to.name}</p>
-              </div>
-            </div>
-
-            <table className="w-full border-collapse mb-12">
-              <thead>
-                <tr className="border-b-2 border-slate-200 text-left">
-                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400 w-12">#</th>
-                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400">Barcode</th>
-                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400">Category</th>
-                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400 text-right">Gross Wt</th>
-                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400 text-right">Net Wt</th>
-                  <th className="py-3 px-2 text-[10px] font-bold uppercase text-slate-400 text-right">Stone (cts)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {transfer.items?.map((line: any, idx: number) => {
-                   if(!line.inventory_items) return null;
-                   return (
-                    <tr key={idx} className="text-sm text-slate-800">
-                      <td className="py-3 px-2 text-slate-400">{idx + 1}</td>
-                      <td className="py-3 px-2 font-mono font-bold text-slate-900">{line.inventory_items.barcode}</td>
-                      <td className="py-3 px-2 font-semibold">{line.inventory_items.item_category}</td>
-                      <td className="py-3 px-2 text-right font-medium">{(line.inventory_items.gross_weight_g || 0).toFixed(3)}g</td>
-                      <td className="py-3 px-2 text-right font-bold text-black">{(line.inventory_items.net_weight_g || 0).toFixed(3)}g</td>
-                      <td className="py-3 px-2 text-right font-medium text-blue-800">{(line.inventory_items.total_stone_weight_cts || 0).toFixed(2)}cts</td>
-                    </tr>
-                   )
-                })}
-              </tbody>
-              {/* LEDGER TOTALS */}
-              <tfoot>
-                <tr className="border-t-2 border-slate-900 bg-slate-50 text-slate-900">
-                  <td colSpan={3} className="py-4 px-2 text-right text-[11px] font-black uppercase tracking-widest">Manifest Totals ({transfer.items?.length || 0} Items)</td>
-                  <td className="py-4 px-2 text-right font-black text-sm">{totalGrossWeight.toFixed(3)}g</td>
-                  <td className="py-4 px-2 text-right font-black text-sm">{totalNetWeight.toFixed(3)}g</td>
-                  <td className="py-4 px-2 text-right font-black text-sm text-blue-800">{totalStoneWeight.toFixed(2)}cts</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-
-          {/* SIGNATURE BLOCKS */}
-          <div className="mt-20 pt-10 flex justify-between items-end px-8 shrink-0">
-            <div className="flex flex-col items-center w-56">
-              <div className="w-full border-b border-black mb-2"></div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Assigner / Manager</p>
-              <p className="text-[8px] font-medium text-slate-400 mt-1">Authorized Signature</p>
-            </div>
-            <div className="flex flex-col items-center w-56">
-              <div className="w-full border-b border-black mb-2"></div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Delivery Agent</p>
-              <p className="text-[8px] font-medium text-slate-400 mt-1">Received Intact & Sealed</p>
+            <div className="text-right flex flex-col items-end">
+              <div className="w-[40mm] h-[8mm] mb-2" style={barcodeStyle}></div>
+              <p className="font-mono text-lg font-black tracking-widest leading-none">{transfer.transfer_number}</p>
             </div>
           </div>
 
+          {/* ROUTING & INFO BLOCK (Sans-Serif for labels) */}
+          <div className="flex border-2 border-black rounded-lg overflow-hidden mb-6 font-sans">
+            <div className="flex-1 p-3 bg-gray-50 border-r-2 border-black">
+              <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Dispatching Node</p>
+              <p className="font-bold text-sm font-serif">{transfer.from.name}</p>
+            </div>
+            <div className="flex-1 p-3 bg-gray-50 border-r-2 border-black">
+              <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Receiving Node</p>
+              <p className="font-bold text-sm font-serif">{transfer.to.name}</p>
+            </div>
+            <div className="flex-1 p-3">
+              <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Dispatch Time</p>
+              <p className="font-bold text-sm tabular-nums">{fullDate}</p>
+            </div>
+            <div className="flex-1 p-3 border-l-2 border-black">
+              <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Seal Number</p>
+              <p className="font-mono font-black text-sm tracking-widest">{transfer.seal_number || 'UNSEALED'}</p>
+            </div>
+          </div>
+
+          {/* ASSET TABLE (Serif body, Mono numbers) */}
+          <table className="w-full text-left border-collapse mb-8">
+            <thead>
+              <tr className="border-y-2 border-black bg-gray-100 font-sans">
+                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest w-8">#</th>
+                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest">Asset Identity</th>
+                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest">Metal Specs</th>
+                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest">Stone Profile</th>
+                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest text-right">Total Stone</th>
+                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest text-right">MRP (₹)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {transfer.items?.map((line: any, idx: number) => {
+                 if(!line.inventory_items) return null;
+                 const item = line.inventory_items;
+                 
+                 const diamondSpecs = [item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' ') || 'Plain Metal';
+                 
+                 let stoneDetails = [];
+                 if (Number(item.solitaire_weight_cts) > 0) stoneDetails.push(`Sol: ${item.solitaire_weight_cts}ct (${item.solitaire_pieces || 0}p)`);
+                 if (Number(item.melee_weight_cts) > 0) stoneDetails.push(`Mel: ${item.melee_weight_cts}ct (${item.melee_pieces || 0}p)`);
+                 
+                 return (
+                  <tr key={idx} className="border-b border-gray-300 even:bg-gray-50 text-sm break-inside-avoid">
+                    <td className="py-3 px-2 text-xs font-bold text-gray-500 align-top tabular-nums">{idx + 1}.</td>
+                    <td className="py-3 px-2 align-top">
+                      <div className="font-mono font-black text-xs">{item.barcode}</div>
+                      <div className="text-[10px] text-gray-500 font-sans font-bold uppercase tracking-wider mt-0.5">{item.item_category}</div>
+                    </td>
+                    <td className="py-3 px-2 align-top">
+                      <div className="font-bold text-xs">{item.metal_type} <span className="text-gray-500">{item.purity_karat}</span></div>
+                      <div className="text-[10px] text-gray-600 font-sans font-bold uppercase tracking-wider mt-0.5 tabular-nums">
+                        Gross: {(item.gross_weight_g || 0).toFixed(3)}g | Net: {(item.net_weight_g || 0).toFixed(3)}g
+                      </div>
+                    </td>
+                    <td className="py-3 px-2 align-top">
+                      <div className="font-bold text-xs">{diamondSpecs}</div>
+                      {stoneDetails.length > 0 && (
+                        <div className="text-[9px] text-gray-600 font-sans font-bold uppercase tracking-wider mt-0.5 tabular-nums">
+                          {stoneDetails.join(' • ')}
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-3 px-2 text-right font-bold align-top tabular-nums">
+                      {(item.total_stone_weight_cts || 0).toFixed(2)} ct
+                    </td>
+                    <td className="py-3 px-2 text-right font-black align-top tabular-nums">
+                      {(item.mrp || 0).toLocaleString('en-IN')}
+                    </td>
+                  </tr>
+                 )
+              })}
+            </tbody>
+            {/* TABLE FOOTER / TOTALS */}
+            <tfoot>
+              <tr className="border-y-[3px] border-black bg-gray-100 break-inside-avoid font-sans">
+                <td colSpan={2} className="py-3 px-2 text-right text-[11px] font-black uppercase tracking-widest">
+                  Grand Totals ({transfer.items?.length || 0} Assets)
+                </td>
+                <td className="py-3 px-2 text-[10px] font-black uppercase tracking-widest text-gray-600 tabular-nums">
+                  Gross: {totalGrossWeight.toFixed(3)}g <br/> Net: {totalNetWeight.toFixed(3)}g
+                </td>
+                <td colSpan={2} className="py-3 px-2 text-right font-black text-sm tabular-nums">
+                  {totalStoneWeight.toFixed(2)} cts
+                </td>
+                <td className="py-3 px-2 text-right font-black text-sm tabular-nums">
+                  ₹{totalMRP.toLocaleString('en-IN')}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+
+          {/* SIGNATURE & AUDIT BLOCKS */}
+          <div className="grid grid-cols-3 gap-6 mt-16 break-inside-avoid font-sans">
+            <div className="flex flex-col">
+              <div className="border-b border-black h-8 mb-2"></div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-black">Dispatched By</p>
+              <p className="text-[8px] font-bold text-gray-500 mt-1 uppercase">Name / Signature / Date</p>
+            </div>
+            <div className="flex flex-col">
+              <div className="border-b border-black h-8 mb-2"></div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-black">HO Security Audit</p>
+              <p className="text-[8px] font-bold text-gray-500 mt-1 uppercase">Seal Intact / Signature / Date</p>
+            </div>
+            <div className="flex flex-col">
+              <div className="border-b border-black h-8 mb-2"></div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-black">Received By</p>
+              <p className="text-[8px] font-bold text-gray-500 mt-1 uppercase">Name / Signature / Date</p>
+            </div>
+          </div>
+
+          <div className="mt-8 text-center border-t border-gray-200 pt-4 font-sans">
+            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Generated by Biillo ERP System • Internal Document</p>
+          </div>
         </div>
 
         {/* --------------------------------------------------------- */}
         {/* 2. E-COM STYLE SHIPPING LABELS (Stacked Landscape on A4) */}
         {/* --------------------------------------------------------- */}
-        <div ref={shippingLabelsRef} className="bg-white min-h-[297mm] w-[210mm] mx-auto print:p-0 flex flex-col justify-center items-center font-sans">
+        <div ref={shippingLabelsRef} className="bg-white w-[210mm] min-h-[297mm] mx-auto flex flex-col items-center pt-10 font-sans">
           
           {/* TOP HALF: OUTER LABEL (Landscape 6x4 format - 152x102mm) */}
           <div className="w-[152mm] h-[102mm] bg-white border-[3px] border-black flex flex-col text-black">
             
-            {/* Routing Header */}
             <div className="flex border-b-[3px] border-black h-[12mm]">
               <div className="p-1 text-lg font-black border-r-[3px] border-black flex-1 flex items-center justify-center tracking-widest">{fromCode}</div>
 
-              <div className="p-1 text-xs font-bold border-r-[3px] border-black flex-1 flex items-center justify-center">{shortDate}</div>
+              <div className="p-1 text-xs font-bold border-r-[3px] border-black flex-1 flex items-center justify-center tabular-nums">{shortDate}</div>
               <div className="p-1 text-lg font-black bg-black text-white flex-1 flex items-center justify-center tracking-widest">{toCode}</div>
             </div>
 
             <div className="flex flex-1">
-              {/* Left Side: Addresses & Barcode */}
               <div className="flex-[3] border-r-[3px] border-black p-4 flex flex-col justify-between">
                 <div>
                   <p className="text-[10px] font-bold uppercase text-gray-500 tracking-widest mb-1">Deliver To:</p>
-                  <p className="text-2xl font-black uppercase leading-none tracking-tight">{transfer.to.name}</p>
-                  <p className="text-[10px] font-bold uppercase text-gray-600 mt-2">From: {transfer.from.name}</p>
+                  <p className="text-2xl font-black uppercase leading-none tracking-tight font-serif">{transfer.to.name}</p>
+                  <p className="text-[10px] font-bold uppercase text-gray-600 mt-2 font-serif">From: {transfer.from.name}</p>
                 </div>
 
-                {/* Simulated 1D Barcode */}
                 <div className="mt-4">
                   <div className="w-full h-[15mm] mb-1" style={barcodeStyle}></div>
-                  <p className="text-sm font-black tracking-widest uppercase text-center">{transfer.transfer_number}</p>
+                  <p className="text-sm font-black tracking-widest uppercase text-center font-mono">{transfer.transfer_number}</p>
                 </div>
               </div>
 
-              {/* Right Side: QR & Seal No */}
               <div className="flex-[2] flex flex-col items-center justify-center p-4 bg-gray-50">
                 {transfer.outer_qr_hash ? (
                   <div className="border-[3px] border-black p-2 bg-white">
@@ -245,13 +306,12 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
                 
                 <div className="mt-4 text-center w-full">
                   <p className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-0.5">Seal Number</p>
-                  <p className="text-xl font-mono font-black tracking-widest">{transfer.seal_number}</p>
+                  <p className="text-xl font-mono font-black tracking-widest">{transfer.seal_number || 'NONE'}</p>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* HORIZONTAL SCISSOR CUT LINE */}
           <div className="w-[152mm] border-b-2 border-dashed border-gray-400 flex items-center justify-center relative my-6">
              <div className="absolute bg-white px-2 text-gray-400 flex items-center gap-2">
                <Scissors className="w-4 h-4" />
@@ -259,20 +319,17 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
              </div>
           </div>
 
-          {/* BOTTOM HALF: INNER MANIFEST (Landscape 6x4 format - 152x102mm) */}
           <div className="w-[152mm] h-[102mm] bg-white border-[3px] border-black flex flex-col text-black">
             
-            {/* Header */}
             <div className="flex border-b-[3px] border-black h-[12mm]">
               <div className="p-1 text-lg font-black border-r-[3px] border-black flex-[3] flex items-center justify-center tracking-widest">INNER SECURE MANIFEST</div>
               <div className="p-1 text-lg font-black bg-black text-white flex-1 flex items-center justify-center tracking-widest">LOCK</div>
             </div>
 
             <div className="flex flex-1">
-              {/* Left Side: Instructions & Info */}
               <div className="flex-[3] border-r-[3px] border-black p-4 flex flex-col justify-between">
                 <div className="text-center mt-2">
-                  <h2 className="text-3xl font-black uppercase tracking-tighter">PLACE INSIDE</h2>
+                  <h2 className="text-3xl font-black uppercase tracking-tighter font-serif">PLACE INSIDE</h2>
                   <p className="text-[10px] font-bold uppercase text-gray-600 mt-2 tracking-widest">Do not stick on outer box</p>
                 </div>
                 
@@ -283,16 +340,15 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
                 <div className="flex justify-between items-end text-[9px] font-bold uppercase text-gray-600">
                   <div className="flex flex-col">
                     <span>TRX ID</span>
-                    <span className="text-sm text-black">{transfer.transfer_number}</span>
+                    <span className="text-sm text-black font-mono">{transfer.transfer_number}</span>
                   </div>
                   <div className="text-right flex flex-col">
                     <span>Packed On</span>
-                    <span className="text-sm text-black">{shortDate}</span>
+                    <span className="text-sm text-black tabular-nums">{shortDate}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Right Side: Giant QR */}
               <div className="flex-[2] flex flex-col items-center justify-center p-4 bg-gray-50">
                 {transfer.inner_qr_hash ? (
                   <div className="border-[3px] border-black p-2 bg-white">

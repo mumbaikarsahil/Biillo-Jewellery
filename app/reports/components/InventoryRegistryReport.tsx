@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
-import { useStoreLocation } from '@/hooks/useStoreLocation' // ✨ SECURE LOCATION HOOK
+import { useStoreLocation } from '@/hooks/useStoreLocation' 
 import { supabase } from '@/lib/supabaseClient'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -46,7 +46,6 @@ export function InventoryRegistryReport() {
   const { appUser } = useAuth()
   const { toast } = useToast()
   
-  // ✨ INTEGRATE LOCATION SECURITY HOOK ✨
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
 
   const [loading, setLoading] = useState(true)
@@ -61,6 +60,7 @@ export function InventoryRegistryReport() {
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterMetal, setFilterMetal] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
+  const [filterStone, setFilterStone] = useState('all') // ✨ NEW: Stone Profile Filter
   
   const [maxPrice, setMaxPrice] = useState(1000000)
   const [priceRange, setPriceRange] = useState<number[]>([0, 1000000])
@@ -92,13 +92,12 @@ export function InventoryRegistryReport() {
 
       while (isFetching) {
         let query = supabase.from('inventory_items')
-          .select(`id, barcode, item_category, metal_type, purity_karat, gross_weight_g, net_weight_g, total_stone_weight_cts, cost_total, mrp, status, created_at, warehouse_id, warehouses(name)`)
+          .select(`id, barcode, item_category, metal_type, purity_karat, gross_weight_g, net_weight_g, total_stone_weight_cts, cost_total, mrp, status, created_at, warehouse_id, diamond_shape, diamond_color, diamond_clarity, solitaire_weight_cts, solitaire_pieces, melee_weight_cts, melee_pieces, warehouses(name)`)
           .eq('company_id', appUser.company_id)
           .order('created_at', { ascending: false })
           .order('id', { ascending: true }) 
           .range(step * limit, (step + 1) * limit - 1)
 
-        // ✨ APPLY SECURE LOCATION FILTER
         if (selectedLocation !== 'ALL') {
           query = query.eq('warehouse_id', selectedLocation)
         }
@@ -132,7 +131,6 @@ export function InventoryRegistryReport() {
     }
   }
 
-  // ✨ REACT TO SECURE LOCATION STATE
   useEffect(() => { 
     if (selectedLocation) fetchData() 
   }, [appUser, selectedLocation])
@@ -152,12 +150,17 @@ export function InventoryRegistryReport() {
       if (filterMetal !== 'all' && met !== filterMetal) return false;
       if (filterCategory !== 'all' && cat !== filterCategory) return false;
       
+      // ✨ NEW: Stone Filter Logic
+      if (filterStone === 'solitaire' && !(Number(item.solitaire_weight_cts) > 0)) return false;
+      if (filterStone === 'melee' && !(Number(item.melee_weight_cts) > 0)) return false;
+      if (filterStone === 'plain' && (Number(item.total_stone_weight_cts) > 0)) return false;
+
       const val = Number(item.mrp) || 0;
       if (val < priceRange[0] || val > priceRange[1]) return false;
       
       return true;
     });
-  }, [data, search, filterStatus, filterMetal, filterCategory, priceRange]);
+  }, [data, search, filterStatus, filterMetal, filterCategory, filterStone, priceRange]); // ✨ Added filterStone dependency
 
   const metrics = useMemo(() => {
     return filteredData.reduce((acc, curr) => ({
@@ -203,6 +206,9 @@ export function InventoryRegistryReport() {
       if (search && !bar.toLowerCase().includes(search.toLowerCase()) && !cat.toLowerCase().includes(search.toLowerCase())) return;
       if (filterMetal !== 'all' && met !== filterMetal) return;
       if (filterCategory !== 'all' && cat !== filterCategory) return;
+      if (filterStone === 'solitaire' && !(Number(item.solitaire_weight_cts) > 0)) return;
+      if (filterStone === 'melee' && !(Number(item.melee_weight_cts) > 0)) return;
+      if (filterStone === 'plain' && (Number(item.total_stone_weight_cts) > 0)) return;
       
       const price = Number(item.mrp) || 0;
       if (price < priceRange[0] || price > priceRange[1]) return;
@@ -273,7 +279,7 @@ export function InventoryRegistryReport() {
       deadStockWarnings: deadStockWarnings.sort((a, b) => b.lockedValue - a.lockedValue),
       marketIntel: { bestCategory, worstCategory: worstCategory.name !== 'N/A' ? worstCategory : null, sweetSpot }
     };
-  }, [data, search, filterMetal, filterCategory, priceRange, showAnalytics, warehouses]);
+  }, [data, search, filterMetal, filterCategory, filterStone, priceRange, showAnalytics, warehouses]);
 
 
   const handleExport = () => {
@@ -294,20 +300,22 @@ export function InventoryRegistryReport() {
     const statusStr = filterStatus === 'all' ? 'All Statuses' : filterStatus.replace('_', ' ').toUpperCase();
     const catStr = filterCategory === 'all' ? 'All Categories' : filterCategory;
     const metalStr = filterMetal === 'all' ? 'All Metals' : filterMetal;
+    const stoneStr = filterStone === 'all' ? 'All Stones' : filterStone.toUpperCase();
     const searchStr = search ? ` | Search: "${search}"` : '';
     const priceStr = ` | Retail: ₹${priceRange[0]} to ₹${priceRange[1]}`;
 
     let csvRows: string[] = [
-      `"ASSET REGISTRY REPORT",,,,,,,,,,`, 
-      `"Generated On: ${format(new Date(), 'dd-MMM-yyyy hh:mm a')}",,,,,,,,,,`,
-      `"Filters Applied: Location - ${locationStr} | Status - ${statusStr} | Category - ${catStr} | Metal - ${metalStr}${priceStr}${searchStr}",,,,,,,,,,`,
-      `,,,,,,,,,,`, 
+      `"ASSET REGISTRY REPORT",,,,,,,,,,,,,`, 
+      `"Generated On: ${format(new Date(), 'dd-MMM-yyyy hh:mm a')}",,,,,,,,,,,,,`,
+      `"Filters Applied: Location - ${locationStr} | Status - ${statusStr} | Category - ${catStr} | Metal - ${metalStr} | Stone - ${stoneStr}${priceStr}${searchStr}",,,,,,,,,,,,,`,
+      `,,,,,,,,,,,,,`, 
     ];
 
     const headers = [
       'Barcode', 'Category', 'Metal', 'Purity', 
-      'Gross Wt (g)', 'Net Wt (g)', 'Stone Wt (cts)', 'Retail Value (₹)',
-      'Status', 'Location', 'Date Added'
+      'Gross Wt (g)', 'Net Wt (g)', 'Total Stone Wt (cts)',
+      'Diamond Specs', 'Solitaire (Cts / Pcs)', 'Melee (Cts / Pcs)',
+      'Retail Value (₹)', 'Status', 'Location', 'Date Added'
     ];
     
     csvRows.push(headers.join(','));
@@ -327,7 +335,7 @@ export function InventoryRegistryReport() {
       let catStone = 0;
       let catValue = 0;
 
-      csvRows.push(`"--- ${cat.toUpperCase()} ---",,,,,,,,,,`);
+      csvRows.push(`"--- ${cat.toUpperCase()} ---",,,,,,,,,,,,,`);
 
       items.forEach((d: any) => {
         const gross = Number(d.gross_weight_g) || 0;
@@ -346,6 +354,10 @@ export function InventoryRegistryReport() {
         grandTotalValue += mrp;
         grandTotalItems++;
 
+        const diamondSpecs = [d.diamond_shape, d.diamond_color, d.diamond_clarity].filter(Boolean).join(' ') || '--';
+        const solitaireStr = d.solitaire_weight_cts ? `${d.solitaire_weight_cts}ct / ${d.solitaire_pieces || 0}pcs` : '--';
+        const meleeStr = d.melee_weight_cts ? `${d.melee_weight_cts}ct / ${d.melee_pieces || 0}pcs` : '--';
+
         const row = [
           `"${d.barcode || '--'}"`,
           `"${cat}"`,
@@ -354,6 +366,9 @@ export function InventoryRegistryReport() {
           `"${gross}"`,
           `"${net}"`,
           `"${stone}"`,
+          `"${diamondSpecs}"`,
+          `"${solitaireStr}"`,
+          `"${meleeStr}"`,
           `"${mrp}"`,
           `"${(d.status || 'unknown').replace('_', ' ').toUpperCase()}"`,
           `"${getWhName(d.warehouse_id)}"`,
@@ -364,34 +379,28 @@ export function InventoryRegistryReport() {
 
       const catSummaryRow = [
         `"${cat} TOTAL: ${items.length} Items"`, 
-        `""`, 
-        `""`, 
-        `""`, 
+        `""`, `""`, `""`, 
         `"${catGross.toFixed(3)}"`, 
         `"${catNet.toFixed(3)}"`, 
         `"${catStone.toFixed(2)}"`, 
+        `""`, `""`, `""`, 
         `"${catValue.toFixed(2)}"`, 
-        `""`, 
-        `""`, 
-        `""`  
+        `""`, `""`, `""`  
       ];
       
       csvRows.push(catSummaryRow.join(','));
-      csvRows.push(',,,,,,,,,,'); 
+      csvRows.push(',,,,,,,,,,,,,'); 
     });
 
     const grandTotalRow = [
       `"GRAND TOTAL: ${grandTotalItems} Items"`,
-      `""`,
-      `""`,
-      `""`,
+      `""`, `""`, `""`,
       `"${grandTotalGross.toFixed(3)}"`,
       `"${grandTotalNet.toFixed(3)}"`,
       `"${grandTotalStone.toFixed(2)}"`,
+      `""`, `""`, `""`, 
       `"${grandTotalValue.toFixed(2)}"`,
-      `""`,
-      `""`,
-      `""`
+      `""`, `""`, `""`
     ];
     csvRows.push(grandTotalRow.join(','));
 
@@ -574,9 +583,8 @@ export function InventoryRegistryReport() {
           </div>
 
           {showFilters && (
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3 pt-3 border-t border-zinc-100 animate-in slide-in-from-top-2 duration-200">
+            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 pt-3 border-t border-zinc-100 animate-in slide-in-from-top-2 duration-200">
               
-              {/* ✨ SECURE LOCATION DROPDOWN ✨ */}
               <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
                 <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
                   <Store className="w-3 h-3 mr-1.5 text-zinc-500" />
@@ -622,7 +630,21 @@ export function InventoryRegistryReport() {
                 </SelectContent>
               </Select>
 
-              <div className="col-span-2 md:col-span-4 lg:col-span-2 bg-zinc-50/50 p-2 rounded-lg border border-zinc-200">
+              {/* ✨ NEW: Stone Profile Filter */}
+              <Select value={filterStone} onValueChange={setFilterStone}>
+                <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
+                  <Gem className="w-3 h-3 mr-1.5 text-zinc-500" />
+                  <SelectValue placeholder="Stone Profile" />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl shadow-xl border-zinc-200">
+                  <SelectItem value="all" className="text-xs font-medium">All Stones</SelectItem>
+                  <SelectItem value="solitaire" className="text-xs font-medium font-bold text-blue-600">Has Solitaire</SelectItem>
+                  <SelectItem value="melee" className="text-xs font-medium">Has Melee</SelectItem>
+                  <SelectItem value="plain" className="text-xs font-medium text-zinc-500">Plain Metal</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <div className="col-span-2 md:col-span-3 xl:col-span-2 bg-zinc-50/50 p-2 rounded-lg border border-zinc-200">
                 <div className="flex justify-between items-center mb-1.5">
                   <Label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
                     <IndianRupee className="w-3 h-3"/> Retail Value Range
@@ -636,9 +658,10 @@ export function InventoryRegistryReport() {
                 </div>
               </div>
 
-              {(filterStatus !== 'all' || filterCategory !== 'all' || filterMetal !== 'all' || search) && (
+              {/* ✨ Updated reset button logic to include filterStone */}
+              {(filterStatus !== 'all' || filterCategory !== 'all' || filterMetal !== 'all' || filterStone !== 'all' || search) && (
                 <Button variant="ghost" className="h-9 text-xs font-bold text-red-500 hover:bg-red-50 hover:text-red-600" onClick={() => {
-                  setSearch(''); setFilterStatus('all'); setFilterCategory('all'); setFilterMetal('all'); setPriceRange([0, maxPrice]);
+                  setSearch(''); setFilterStatus('all'); setFilterCategory('all'); setFilterMetal('all'); setFilterStone('all'); setPriceRange([0, maxPrice]);
                 }}>
                   Reset Filters
                 </Button>
@@ -884,7 +907,6 @@ export function InventoryRegistryReport() {
 
         {/* DATA VIEW */}
         <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl overflow-hidden">
-          
           <div className="block sm:hidden divide-y divide-zinc-100">
             {loading ? (
                Array.from({ length: 5 }).map((_, i) => (
@@ -918,11 +940,25 @@ export function InventoryRegistryReport() {
                       <div>
                         <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Specs</p>
                         <p className="text-xs font-semibold text-zinc-800">{item.metal_type || '--'} <span className="text-[10px] text-zinc-500 font-medium">{item.purity_karat || ''}</span></p>
+                        {(item.diamond_shape || item.diamond_color || item.diamond_clarity) && (
+                          <p className="text-[9px] text-blue-500 font-bold mt-1 uppercase tracking-wider">
+                             {[item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' • ')}
+                          </p>
+                        )}
                       </div>
                       <div>
                         <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Weight</p>
                         <p className="text-xs font-semibold text-zinc-800">{item.gross_weight_g || 0}g <span className="text-[10px] text-zinc-500 font-medium">({item.net_weight_g || 0}g N)</span></p>
-                        <p className="text-[10px] text-blue-600 font-medium mt-0.5 flex items-center gap-1"><Gem className="w-3 h-3"/> {item.total_stone_weight_cts || 0} cts</p>
+                        
+                        <p className="text-[10px] text-blue-600 font-medium mt-0.5 flex flex-col gap-0.5">
+                          <span className="flex items-center gap-1"><Gem className="w-3 h-3"/> {item.total_stone_weight_cts || 0} cts</span>
+                          {(item.solitaire_weight_cts > 0 || item.melee_weight_cts > 0) && (
+                             <span className="text-[9px] text-zinc-400 whitespace-nowrap">
+                               {item.solitaire_weight_cts > 0 && `Sol: ${item.solitaire_weight_cts}ct `}
+                               {item.melee_weight_cts > 0 && `Mel: ${item.melee_weight_cts}ct`}
+                             </span>
+                          )}
+                        </p>
                       </div>
                     </div>
                     <div className="text-right">
@@ -977,13 +1013,30 @@ export function InventoryRegistryReport() {
                         <div className="font-mono text-xs sm:text-[13px] font-bold text-zinc-900 tracking-tight">{item.barcode || '--'}</div>
                         <div className="text-[10px] text-zinc-400 font-medium mt-0.5 uppercase tracking-widest">{normalizeCategory(item.item_category)}</div>
                       </TableCell>
+                      
                       <TableCell>
                         <div className="text-xs font-bold text-zinc-700">{item.metal_type || '--'}</div>
                         <div className="text-[10px] text-zinc-500 font-medium mt-0.5">{item.purity_karat || '--'}</div>
+                        {(item.diamond_shape || item.diamond_color || item.diamond_clarity) && (
+                          <div className="text-[9px] text-blue-500 font-bold mt-1 uppercase tracking-wider">
+                             {[item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' • ')}
+                          </div>
+                        )}
                       </TableCell>
+
                       <TableCell className="text-right text-[13px] font-semibold text-zinc-800">{item.gross_weight_g || 0}<span className="text-[10px] text-zinc-400 ml-0.5 font-medium">g</span></TableCell>
                       <TableCell className="text-right text-[13px] font-semibold text-zinc-500">{item.net_weight_g || 0}<span className="text-[10px] text-zinc-400 ml-0.5 font-medium">g</span></TableCell>
-                      <TableCell className="text-right text-[13px] font-bold text-blue-600">{item.total_stone_weight_cts || 0}<span className="text-[10px] text-blue-400 ml-0.5 font-medium">cts</span></TableCell>
+                      
+                      <TableCell className="text-right">
+                        <div className="text-[13px] font-bold text-blue-600">{item.total_stone_weight_cts || 0}<span className="text-[10px] text-blue-400 ml-0.5 font-medium">cts</span></div>
+                        {(item.solitaire_weight_cts > 0 || item.melee_weight_cts > 0) && (
+                           <div className="text-[9px] text-zinc-400 font-medium mt-0.5 whitespace-nowrap">
+                             {item.solitaire_weight_cts > 0 && `Sol: ${item.solitaire_weight_cts}ct `}
+                             {item.melee_weight_cts > 0 && `Mel: ${item.melee_weight_cts}ct`}
+                           </div>
+                        )}
+                      </TableCell>
+
                       <TableCell className="text-center">{getStatusBadge(item.status)}</TableCell>
                       <TableCell className="text-xs text-zinc-500 font-semibold">{getWhName(item.warehouse_id)}</TableCell>
                       <TableCell className="text-right text-[13px] font-bold text-indigo-700 pr-6">₹{item.mrp?.toLocaleString() || '0'}</TableCell>
