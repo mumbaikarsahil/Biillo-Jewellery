@@ -10,6 +10,8 @@ import {
 import { toast } from 'sonner'
 import { Scanner } from '@yudiel/react-qr-scanner'
 
+import { useAuth } from '@/hooks/useAuth'
+import { useStoreLocation } from '@/hooks/useStoreLocation' // ✨ Imported the hook
 import { supabase } from '@/lib/supabaseClient'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -46,6 +48,11 @@ const sanitizeScannedQR = (scannedText: string): string => {
 
 export default function ReceiveStockPage() {
   const router = useRouter()
+  const { appUser } = useAuth()
+  
+  // ✨ INTEGRATED GLOBAL LOCATION STATE
+  const { isHQ, selectedLocation } = useStoreLocation() 
+
   const [searchInput, setSearchInput] = useState('')
   const [transferData, setTransferData] = useState<any>(null)
   
@@ -104,6 +111,12 @@ export default function ReceiveStockPage() {
 
     if (error || !data) {
       return toast.error(`Invalid QR Code or Hash: ${cleanInput}`)
+    }
+
+    // ✨ STRICT LOCATION SECURITY CHECK ✨
+    // If the user is NOT HQ, and the transfer destination does not match their currently active branch location, block them!
+    if (!isHQ && selectedLocation !== 'ALL' && data.to_warehouse_id !== selectedLocation) {
+      return toast.error(`Unauthorized: This parcel is routed to ${data.to.name}, not your current location.`);
     }
 
     const isRepair = data.transfer_category === 'repair'
@@ -331,6 +344,14 @@ export default function ReceiveStockPage() {
               </Button>
             </Link>
             <h1 className="text-sm font-semibold text-slate-900 tracking-tight">Receive Parcel</h1>
+            
+            {/* Display active location logic contextually in the header */}
+            {!isHQ && selectedLocation !== 'ALL' && (
+               <Badge variant="secondary" className="ml-2 bg-indigo-50 text-indigo-700 hover:bg-indigo-50 text-[10px] hidden sm:inline-flex">
+                 Receiving to Active Vault
+               </Badge>
+            )}
+
           </div>
           <Button 
             variant="ghost" size="sm" className="text-xs font-semibold text-slate-500"
