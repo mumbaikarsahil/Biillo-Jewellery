@@ -108,30 +108,38 @@ export default function NewTransferPage() {
       // 2. FORK IN THE ROAD: Update Line Items & Statuses
       if (transferType === 'repair') {
          const lines = items.map(itm => ({ transfer_id: transfer.id, repair_ticket_id: itm.id }))
-         await supabase.from('stock_transfer_repair_lines').insert(lines)
          
-         // Smart routing: If sending from branch, it's going to HO. If sending from HO, it's returning to branch.
+         // ✨ FIX: Strict Error Handling Added
+         const { error: lineErr } = await supabase.from('stock_transfer_repair_lines').insert(lines)
+         if (lineErr) throw new Error(`Repair Line Insert Failed: ${lineErr.message}`)
+         
          const isGoingToHO = items[0]?.origin_warehouse_id === sourceWarehouseId;
          const repairStatus = isGoingToHO ? 'in_transit_to_ho' : 'in_transit_to_store';
 
-         await supabase.from('repair_tickets')
+         const { error: statusErr } = await supabase.from('repair_tickets')
             .update({ status: repairStatus })
             .in('id', activeIds)
+         if (statusErr) throw new Error(`Repair Status Update Failed: ${statusErr.message}`)
             
       } else {
          // Normal Inventory Flow
          const lines = items.map(itm => ({ transfer_id: transfer.id, item_id: itm.id }))
-         await supabase.from('stock_transfer_item_lines').insert(lines)
          
-         await supabase.from('inventory_items')
-            .update({ status: 'transit' })
+         // ✨ FIX: Strict Error Handling Added
+         const { error: lineErr } = await supabase.from('stock_transfer_item_lines').insert(lines)
+         if (lineErr) throw new Error(`Inventory Line Insert Failed: ${lineErr.message}`)
+         
+         const { error: statusErr } = await supabase.from('inventory_items')
+            .update({ status: 'in_transit' }) // ✨ FIX: Standardized to 'in_transit'
             .in('id', activeIds)
+         if (statusErr) throw new Error(`Inventory Status Update Failed: ${statusErr.message}`)
       }
 
       toast.success("Consignment Dispatched & Secured")
       setDispatchSuccess(transfer) // Triggers the print screen
     } catch (err: any) {
-      toast.error(err.message)
+      // Now you will actually see the underlying database constraint error!
+      toast.error(err.message, { duration: 8000 })
     } finally {
       setIsDispatching(false)
     }
