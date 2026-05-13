@@ -188,7 +188,8 @@ export default function TrackVoucherPage() {
       const todayIso = new Date().toISOString();
       
       if (tabStatus === "expired") {
-        query = query.in("status", ["distributed", "registered"]).lt("expiry_date", todayIso);
+        // ✨ FIX: Included 'in_stock' so newly distributed vouchers correctly show as expired when time is up
+        query = query.in("status", ["distributed", "in_stock", "registered"]).lt("expiry_date", todayIso);
       } else if (tabStatus !== "all") {
         query = query.eq("status", tabStatus);
       }
@@ -216,7 +217,8 @@ export default function TrackVoucherPage() {
     const isExpired = v.expiry_date && isPast(new Date(v.expiry_date));
     let text = `Voucher ${v.code} is currently `;
     
-    if (isExpired && (v.status === 'distributed' || v.status === 'registered')) {
+    // ✨ FIX: Included 'in_stock' in the AI summary check
+    if (isExpired && (v.status === 'distributed' || v.status === 'in_stock' || v.status === 'registered')) {
        text += `expired. It carried a discount value of ₹${v.discount_value.toLocaleString()} `;
     } else {
        text += `marked as ${v.status.replace('_', ' ')}. It carries a discount value of ₹${v.discount_value.toLocaleString()} `;
@@ -324,7 +326,8 @@ export default function TrackVoucherPage() {
   };
 
   const getDisplayStatus = (v: { status: string; expiry_date?: string | null }) => {
-    if ((v.status === 'distributed' || v.status === 'registered') && v.expiry_date && isPast(new Date(v.expiry_date))) return 'expired';
+    // ✨ FIX: Included 'in_stock' to correctly output 'expired' on the UI Badge
+    if ((v.status === 'distributed' || v.status === 'in_stock' || v.status === 'registered') && v.expiry_date && isPast(new Date(v.expiry_date))) return 'expired';
     return v.status;
   };
 
@@ -847,11 +850,13 @@ export default function TrackVoucherPage() {
                         <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-right">Value (INR)</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-right">Fee & Pmt</TableHead>
                         
-                        {["all", "distributed", "registered", "redeemed", "expired"].includes(activeFilter) && (
+                        {/* ✨ FIX: Added 'in_stock' array check to display logistics */}
+                        {["all", "distributed", "in_stock", "registered", "redeemed", "expired"].includes(activeFilter) && (
                           <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10">Logistics & Customer</TableHead>
                         )}
                         
-                        {["all", "distributed", "registered", "expired"].includes(activeFilter) && (
+                        {/* ✨ FIX: Added 'in_stock' array check to display Expiration */}
+                        {["all", "distributed", "in_stock", "registered", "expired"].includes(activeFilter) && (
                           <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-center">Expiration</TableHead>
                         )}
                         {["redeemed"].includes(activeFilter) && (
@@ -914,7 +919,8 @@ export default function TrackVoucherPage() {
                           </TableCell>
                           
                           {/* LOGISTICS & CUSTOMER CELL - INTERACTIVE */}
-                          {["all", "distributed", "registered", "redeemed", "expired"].includes(activeFilter) && (
+                          {/* ✨ FIX: Included in_stock condition */}
+                          {["all", "distributed", "in_stock", "registered", "redeemed", "expired"].includes(activeFilter) && (
                             <TableCell className="px-4">
                               <div className="flex flex-col items-start gap-1.5">
                                 <span className="font-semibold text-[11px] text-slate-700 flex items-center gap-1">
@@ -934,7 +940,8 @@ export default function TrackVoucherPage() {
                             </TableCell>
                           )}
 
-                          {["all", "distributed", "registered", "expired"].includes(activeFilter) && (
+                          {/* ✨ FIX: Included in_stock condition */}
+                          {["all", "distributed", "in_stock", "registered", "expired"].includes(activeFilter) && (
                             <TableCell className="text-center font-bold text-[10px] text-rose-500 px-4">
                               {v.expiry_date ? format(new Date(v.expiry_date), "dd MMM yy") : "-"}
                             </TableCell>

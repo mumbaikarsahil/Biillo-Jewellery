@@ -76,6 +76,23 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
     const exchangeVal = data.exchangeValue || 0
     const voucherVal = data.voucherAmount || 0
+    const handlingFee = data.handlingFee || 0
+    const effectiveVoucherCredit = Math.max(0, voucherVal - handlingFee)
+
+    // --- CUSTOM ORDER CALCULATIONS ---
+    const customBaseEstimate = Number(customOrder?.estimatedValue || 0);
+    const customTaxable = Math.max(0, customBaseEstimate - manualDiscount - exchangeVal - effectiveVoucherCredit);
+    const customCgst = customTaxable * 0.015;
+    const customSgst = customTaxable * 0.015;
+    const customTotalEstimate = Math.round(customTaxable + customCgst + customSgst);
+    const customAdvancePaid = Number(customOrder?.advancePayment || 0);
+    
+    const appliedKitty = data.appliedKitty || 0;
+    const appliedCredit = data.appliedCredit || 0;
+    const totalSettlements = appliedKitty + appliedCredit;
+
+    const customEstimatedBalance = Math.max(0, customTotalEstimate - customAdvancePaid - totalSettlements);
+    const customTotalAdvanceReceived = customAdvancePaid + voucherVal;
 
     let docTitle = "TAX INVOICE" 
     let docNoLabel = "Invoice No. :"
@@ -330,7 +347,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 <span className="text-[10px] font-bold text-slate-800 uppercase mr-3 shrink-0">Amt. In Words :</span> 
                 <span className="text-[11px] font-bold text-slate-800 uppercase leading-tight tracking-wide">
                   Rupees {numberToWords(
-                    mode === 'custom' ? (Number(customOrder?.advancePayment || 0) + voucherVal) :
+                    mode === 'custom' ? customTotalAdvanceReceived :
                     mode === 'return' ? Number(returnDetails?.calculatedRefund || data.finalTotal || 0) : 
                     Number(data.finalTotal || 0)
                   )}
@@ -339,7 +356,86 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
             </div>
 
             <div className={`w-1/2 p-3 space-y-1.5 text-sm font-semibold text-slate-800 ${isEstimate ? 'bg-white' : 'bg-white/40'}`}>
-              {mode === 'repair' && repair ? (
+              
+              {mode === 'custom' && customOrder ? (
+                <>
+                  <div className="flex justify-between text-slate-600 mb-1">
+                    <span>Estimated Base Value</span>
+                    <span>₹ {customBaseEstimate.toLocaleString('en-IN')}</span>
+                  </div>
+                  
+                  {/* ✨ FIX: Added the manual discount deduction to the print template */}
+                  {manualDiscount > 0 && (
+                    <div className="flex justify-between text-slate-600">
+                      <span> Discount</span>
+                      <span>- ₹ {manualDiscount.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+
+                  {exchangeVal > 0 && (
+                    <div className="flex justify-between text-[#A85B9D]">
+                      <span>Exchange Credit</span>
+                      <span>- ₹ {exchangeVal.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+                  
+                  {voucherVal > 0 && (
+                    <div className="flex justify-between text-[#A85B9D]">
+                      <span>Voucher Credit {handlingFee > 0 ? `(Post ₹${handlingFee} Fee)` : ''}</span>
+                      <span>- ₹ {effectiveVoucherCredit.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+
+                  <div className="flex justify-between border-t border-slate-200 pt-1 mt-1 text-slate-800 font-semibold">
+                    <span>Estimated Taxable Value</span>
+                    <span>₹ {customTaxable.toLocaleString('en-IN')}</span>
+                  </div>
+                  
+                  <div className="flex justify-between text-xs text-slate-600 mt-1">
+                    <span>Estimated CGST (1.5%)</span>
+                    <span>+ ₹ {customCgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-slate-600 pb-1">
+                    <span>Estimated SGST (1.5%)</span>
+                    <span>+ ₹ {customSgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                  </div>
+                  
+                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-300 text-lg font-black text-slate-900">
+                    <span>Total Estimated Amount</span>
+                    <span>₹ {customTotalEstimate.toLocaleString('en-IN')}</span>
+                  </div>
+                  
+                  {customAdvancePaid > 0 && (
+                    <div className="flex justify-between text-emerald-600 font-semibold mt-1">
+                      <span>Advance Paid (Cash/Bank)</span>
+                      <span>- ₹ {customAdvancePaid.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+
+                  {appliedKitty > 0 && (
+                    <div className="flex justify-between items-center text-purple-600 font-bold mt-1">
+                      <span>Less: Kitty Payment</span>
+                      <span>- ₹ {appliedKitty.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+                  
+                  {appliedCredit > 0 && (
+                    <div className="flex justify-between items-center text-emerald-600 font-bold mt-1">
+                      <span>Less: Store Credit</span>
+                      <span>- ₹ {appliedCredit.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+                  
+                  <div className="flex justify-between pt-1.5 mt-1.5 border-t border-slate-300 text-sm font-bold text-[#881798]">
+                    <span>Est. Balance on Pickup</span>
+                    <span>₹ {customEstimatedBalance.toLocaleString('en-IN')}</span>
+                  </div>
+
+                  <div className="text-[8px] text-slate-500 font-medium italic mt-2 leading-tight">
+                    * Note: All amounts listed are estimates and not a final bill. Exact values and taxes will be recalculated upon fabrication and delivery.
+                  </div>
+                </>
+              ) : mode === 'repair' && repair ? (
                 <>
                   <div className="flex justify-between text-slate-600"><span>Estimated Cost (Approx)</span><span>₹ {Number(repair.estimatedCost || 0).toLocaleString()}</span></div>
                   <div className="flex justify-between py-2 mt-2 border-t border-slate-300 text-xl font-black text-slate-900"><span>Advance Received</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
@@ -363,35 +459,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   <span>₹ {Number(returnDetails.calculatedRefund || data.finalTotal || 0).toLocaleString()}</span>
                 </div>
               </>
-              ) : mode === 'custom' && customOrder ? (
-                <>
-                  <div className="flex justify-between text-slate-600 mb-1">
-                    <span>Estimated Value (Approx)</span>
-                    <span>₹ {Number(customOrder.estimatedValue || 0).toLocaleString()}</span>
-                  </div>
-                  
-                  <div className="flex justify-between text-slate-600">
-                    <span>Customer Advance (Cash/Bank)</span>
-                    <span>₹ {Number(customOrder.advancePayment || 0).toLocaleString()}</span>
-                  </div>
-                  
-                  {voucherVal > 0 && (
-                    <div className="flex justify-between text-[#A85B9D]">
-                      <span>Voucher Credit {data.handlingFee > 0 ? `(Post ₹${data.handlingFee} Fee)` : ''}</span>
-                      <span>+ ₹ {voucherVal.toLocaleString()}</span>
-                    </div>
-                  )}
-                  
-                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-300 text-lg font-black text-slate-900">
-                    <span>Total Advance Logged</span>
-                    <span>₹ {(Number(customOrder.advancePayment || 0) + voucherVal).toLocaleString()}</span>
-                  </div>
-                  
-                  <div className="flex justify-between pt-1 text-sm font-bold text-[#881798]">
-                    <span>Est. Balance on Pickup</span>
-                    <span>₹ {Math.max(0, Number(customOrder.estimatedValue || 0) - (Number(customOrder.advancePayment || 0) + voucherVal)).toLocaleString()}</span>
-                  </div>
-                </>
               ) : mode === 'challan' ? (
                 <div className="flex justify-between py-2 text-xl font-black text-slate-900"><span>Total Memo Value</span><span>₹ {subtotal?.toLocaleString()}</span></div>
               ) : mode === 'estimate' ? (
@@ -399,7 +466,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   <div className="flex justify-between"><span>Sub Total</span><span>₹ {subtotal?.toLocaleString()}</span></div>
                   
                   {totalDiscount > 0 && (
-                    <div className="flex justify-between text-slate-600">
+                    <div className="flex justify-between text-[#A85B9D]">
                       <span>Discount</span>
                       <span>- ₹ {totalDiscount?.toLocaleString()}</span>
                     </div>
@@ -480,7 +547,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
           </div>
 
           <div className="mt-auto flex flex-col shrink-0">
-            {/* ✨ FIX: Added mt-4 here and removed -mt-10 from the logo div below */}
             <div className="grid grid-cols-3 items-end text-sm font-bold mb-3 mt-4 relative">
               <div className="text-center px-6 relative">
                 {['normal', 'custom'].includes(mode) && (

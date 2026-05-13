@@ -20,7 +20,6 @@ const BRANCHES = [
 ];
 
 const QUICK_QUESTIONS = [
-
   { id: "charges", short: "Extra Charges?", q: "Are there any extra or hidden charges?" },
   { id: "minimum", short: "Minimum Purchase?", q: "Is there a minimum purchase amount?" },
   { id: "timing", short: "Store Timings?", q: "What are your store timings?" },
@@ -143,7 +142,8 @@ export default function VoucherClaimPage() {
       if (data.status === 'expired' || (data.expiry_date && new Date(data.expiry_date) < new Date())) {
         throw new Error("This voucher has expired.");
       }
-      if (data.status !== 'distributed') {
+      // ✨ FIX: Accept both legacy 'distributed' and modern 'in_stock' statuses
+      if (data.status !== 'distributed' && data.status !== 'in_stock') {
         throw new Error("Invalid voucher code, Please contact the support");
       }
 

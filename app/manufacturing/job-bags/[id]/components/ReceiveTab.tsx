@@ -23,7 +23,7 @@ import {
   Save, Layers, Settings2, RefreshCw, CheckCircle2, 
   ArrowUpCircle, ArrowDownCircle, CheckSquare,
   Calculator, Database, Gem, Hammer, ArrowRight, ArrowLeft, Check, Box,
-  UploadCloud, Image as ImageIcon, Camera, AlertOctagon 
+  UploadCloud, Image as ImageIcon, Camera, AlertOctagon, ShieldAlert 
 } from 'lucide-react'
 
 interface Props {
@@ -101,7 +101,8 @@ export default function ReceiveTab({
   refresh
 }: Props) {
   const [metalType, setMetalType] = useState('Gold')
-  const [purityKarat, setPurityKarat] = useState('14')
+  // ✨ FIX: Set strict default to 14K
+  const [purityKarat, setPurityKarat] = useState('14K')
   const [purityPercent, setPurityPercent] = useState('58.3')
   const [laborRate, setLaborRate] = useState('')
   const [globalRemarks, setGlobalRemarks] = useState('')
@@ -112,6 +113,9 @@ export default function ReceiveTab({
   const [receiveItems, setReceiveItems] = useState<ReceiveItem[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
+
+  // ✨ NEW: State for Confirmation Modal
+  const [isConfirmModalOpen, setConfirmModalOpen] = useState(false)
 
   const [poolStats, setPoolStats] = useState({
     issuedFineGold: 0,
@@ -161,7 +165,17 @@ export default function ReceiveTab({
       
       if (data && data.length > 0) {
         setWarehouses(data)
-        setSelectedWarehouseId(data[0].id) 
+        // ✨ FIX: Smart Vault Selection targeting Pavitram Main Office
+        const mainOffice = data.find(w => 
+          w.name.toLowerCase().includes('main office') || 
+          w.name.toLowerCase().includes('pavitram') ||
+          w.name.toLowerCase().includes('ho')
+        )
+        if (mainOffice) {
+          setSelectedWarehouseId(mainOffice.id)
+        } else {
+          setSelectedWarehouseId(data[0].id) 
+        }
       }
     }
     fetchWarehouses()
@@ -249,6 +263,7 @@ export default function ReceiveTab({
         }
       }
 
+      // NOTE: This safely overrides the 14K default if the Job Bag explicitly used 22K/18K
       const { data: defaultGoldBatches } = await supabase
         .from('job_bag_gold_issues')
         .select(`inventory_gold_batches ( purity_karat )`)
@@ -281,21 +296,20 @@ export default function ReceiveTab({
         return
       }
 
-      // 1. Map items with initial smart barcode guess (Prefix + 4 Digits)
       const mappedItems: ReceiveItem[] = items.map((item: any, index: number) => {
         const category = (item.ornament_type && item.ornament_type !== 'N/A') 
                           ? item.ornament_type 
                           : (item.job_bags?.product_category || 'Jewelry');
 
         const prefix = getCategoryPrefix(category);
-        const random4Digit = Math.floor(1000 + Math.random() * 9000); // e.g., 4821
+        const random4Digit = Math.floor(1000 + Math.random() * 9000); 
 
         return {
           job_bag_item_id: item.id,
           sku_reference: item.sku_reference,
           ornament_type: item.ornament_type || 'N/A', 
           category: category, 
-          barcode: `${prefix}-${random4Digit}`, // e.g., RNG-4821
+          barcode: `${prefix}-${random4Digit}`, 
           grossWeight: '',
           stonePieces: '',
           stoneWeight: '',
@@ -331,24 +345,21 @@ export default function ReceiveTab({
         }
       });
 
-      // 2. ✨ ANTI-COLLISION DATABASE CHECK ✨
       let barcodesToCheck = mappedItems.map(i => i.barcode);
       let hasCollisions = true;
-      let safetyCounter = 0; // Prevents infinite loops just in case
+      let safetyCounter = 0; 
 
       while (hasCollisions && safetyCounter < 5) {
         safetyCounter++;
         
-        // Query the database to see if any of our generated barcodes already exist
         const { data: existing } = await supabase
           .from('inventory_items')
           .select('barcode')
           .in('barcode', barcodesToCheck);
 
         if (!existing || existing.length === 0) {
-          hasCollisions = false; // All clear! No duplicates found.
+          hasCollisions = false; 
         } else {
-          // We found duplicates! Regenerate ONLY the ones that collided.
           const existingCodes = existing.map(e => e.barcode);
           
           mappedItems.forEach(item => {
@@ -358,12 +369,10 @@ export default function ReceiveTab({
             }
           });
           
-          // Update the list to check in the next loop iteration
           barcodesToCheck = mappedItems.map(i => i.barcode);
         }
       }
 
-      // Finally, set the safely verified items to state
       setReceiveItems(mappedItems);
     } catch (err: any) {
       toast.error(`Error loading items: ${err.message}`)
@@ -473,12 +482,9 @@ export default function ReceiveTab({
     setCalcModalOpen(false)
   }
 
-  // ============================================================================
-  // THE STRICT VALIDATION GATE
-  // ============================================================================
-  async function receiveSelectedBatch() {
+  // ✨ NEW: Pre-Verification Gate
+  const handleOpenConfirmModal = () => {
     const selectedItems = receiveItems.filter(i => i.isSelected)
-    
     if (selectedItems.length === 0) return toast.error("No items selected to receive.")
     
     const invalidItem = selectedItems.find(i => parseFloat(i.grossWeight) <= 0 || !i.grossWeight)
@@ -493,6 +499,7 @@ export default function ReceiveTab({
     const pendingFineGold = poolStats.issuedFineGold - poolStats.consumedFineGold;
     const availableDia = poolStats.issuedDiaCts - poolStats.consumedDiaCts;
 
+    // Overdraft warnings trigger before the modal
     if (stagedFineGoldRequired > pendingFineGold + 0.01) {
       const proceed = window.confirm(
         `⚠️ WARNING: Negative Gold Reconciliation.\n\nYou are trying to receive ${stagedFineGoldRequired.toFixed(3)}g of FINE GOLD, but only ${pendingFineGold.toFixed(3)}g is available in this Job Bag.\n\nDo you want to FORCE RECEIVE anyway?`
@@ -507,6 +514,11 @@ export default function ReceiveTab({
       if (!proceed) return;
     }
 
+    setConfirmModalOpen(true)
+  }
+
+  async function receiveSelectedBatch() {
+    const selectedItems = receiveItems.filter(i => i.isSelected)
     setIsProcessing(true)
     const { data: authData } = await supabase.auth.getUser()
     const userId = authData?.user?.id
@@ -668,6 +680,57 @@ export default function ReceiveTab({
   return (
     <div className="space-y-6">
 
+      {/* --- CONFIRMATION MODAL --- */}
+      <Dialog open={isConfirmModalOpen} onOpenChange={setConfirmModalOpen}>
+        <DialogContent className="sm:max-w-[420px] p-0 border-none shadow-2xl rounded-2xl overflow-hidden bg-white">
+          <DialogHeader className="bg-emerald-50 p-6 border-b border-emerald-100">
+            <DialogTitle className="flex items-center gap-2 text-emerald-900 font-black text-xl">
+              <ShieldAlert className="h-6 w-6 text-emerald-600" /> Confirm Receive
+            </DialogTitle>
+            <DialogDescription className="text-xs font-medium text-emerald-700/80 mt-1">
+              Please verify the Vault and Purity before injecting these items into live inventory.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="p-6 space-y-4 bg-white">
+            <div className="p-3 bg-amber-50 text-amber-800 rounded-xl text-sm font-medium border border-amber-200 flex items-center justify-between">
+              <span className="font-bold text-[10px] uppercase tracking-widest text-amber-600">Destination Vault:</span>
+              <span className="font-bold">{warehouses.find(w => w.id === selectedWarehouseId)?.name || 'Unknown'}</span>
+            </div>
+            <div className="p-3 bg-blue-50 text-blue-800 rounded-xl text-sm font-medium border border-blue-200 flex items-center justify-between">
+              <span className="font-bold text-[10px] uppercase tracking-widest text-blue-600">Purity Selected:</span>
+              <span className="font-black text-lg leading-none">{purityKarat}</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 pt-2">
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl text-center">
+                <p className="text-[9px] uppercase text-slate-400 font-bold tracking-widest">Total Gross</p>
+                <p className="font-black text-slate-800 mt-1">{selectedItems.reduce((acc, i) => acc + (parseFloat(i.grossWeight) || 0), 0).toFixed(3)}g</p>
+              </div>
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl text-center">
+                <p className="text-[9px] uppercase text-slate-400 font-bold tracking-widest">Total Net</p>
+                <p className="font-black text-slate-800 mt-1">{selectedItems.reduce((acc, i) => acc + (parseFloat(i.netWeight) || 0), 0).toFixed(3)}g</p>
+              </div>
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl text-center">
+                <p className="text-[9px] uppercase text-slate-400 font-bold tracking-widest">Stone Wt</p>
+                <p className="font-black text-blue-600 mt-1">{selectedItems.reduce((acc, i) => acc + (parseFloat(i.stoneWeight) || 0), 0).toFixed(2)}cts</p>
+              </div>
+            </div>
+          </div>
+          <DialogFooter className="bg-slate-50 p-4 border-t border-slate-100 flex gap-2 sm:justify-end">
+            <Button variant="outline" className="text-xs font-bold uppercase" onClick={() => setConfirmModalOpen(false)}>Cancel</Button>
+            <Button 
+              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase px-6"
+              onClick={() => { 
+                setConfirmModalOpen(false); 
+                receiveSelectedBatch(); 
+              }}
+            >
+              Confirm & Receive
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+
       {/* --- REAL-TIME RECONCILIATION DASHBOARD --- */}
       <div className="grid grid-cols-2 gap-4">
         <Card className={cn("shadow-sm transition-all duration-300 border-2", isGoldOverdraft ? "bg-red-50/80 border-red-400" : "bg-amber-50/50 border-amber-200")}>
@@ -716,7 +779,7 @@ export default function ReceiveTab({
             </Button>
             <Button 
               size="sm" 
-              onClick={receiveSelectedBatch} 
+              onClick={handleOpenConfirmModal} 
               disabled={isProcessing || selectedItems.length === 0}
               className={cn("h-8 px-4 text-xs font-bold uppercase shadow-md transition-all active:scale-[0.98]", (isGoldOverdraft || isDiaOverdraft) ? "bg-red-600 hover:bg-red-700 text-white" : "bg-foreground text-background hover:bg-foreground/90")}
             >
@@ -751,7 +814,7 @@ export default function ReceiveTab({
                     <SelectItem value="24K" className="text-xs">24K (99.9%)</SelectItem>
                     <SelectItem value="22K" className="text-xs">22K (91.6%)</SelectItem>
                     <SelectItem value="18K" className="text-xs">18K (75.0%)</SelectItem>
-                    <SelectItem value="14K" className="text-xs">14K (58.3%)</SelectItem>
+                    <SelectItem value="14K" className="text-xs font-bold text-primary">14K (58.3%)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -996,7 +1059,6 @@ export default function ReceiveTab({
                                     <h4 className="text-xs font-black uppercase tracking-widest text-slate-800">Stone Breakup Required</h4>
                                   </div>
                                   
-                                  {/* ✨ UPDATED: MELEE STONES FIRST ✨ */}
                                   <div className="space-y-1.5">
                                     <Label className="text-[10px] font-bold text-slate-500 uppercase">Melee / Side Stones</Label>
                                     <div className="flex gap-2">
