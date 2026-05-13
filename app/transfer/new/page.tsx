@@ -130,7 +130,7 @@ export default function NewTransferPage() {
          if (lineErr) throw new Error(`Inventory Line Insert Failed: ${lineErr.message}`)
          
          const { error: statusErr } = await supabase.from('inventory_items')
-            .update({ status: 'in_transit' }) // ✨ FIX: Standardized to 'in_transit'
+            .update({ status: 'transit' }) // ✨ FIX: Standardized to 'in_transit'
             .in('id', activeIds)
          if (statusErr) throw new Error(`Inventory Status Update Failed: ${statusErr.message}`)
       }
