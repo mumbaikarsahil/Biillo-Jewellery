@@ -159,9 +159,6 @@ export default function InventoryPage() {
   const router = useRouter()
   
   const [items, setItems] = useState<InventoryItem[]>([])
-  
-  // ✨ THE FIX: Immutable Dictionary Cache
-  // This completely protects selected item data from being wiped out by fresh searches!
   const [itemCache, setItemCache] = useState<Record<string, InventoryItem>>({})
 
   const [loading, setLoading] = useState(true)
@@ -192,6 +189,11 @@ export default function InventoryPage() {
   const [filterCategory, setFilterCategory] = useState<string[]>([])
   const [filterPurity, setFilterPurity] = useState<string[]>([])
   const [filterClarity, setFilterClarity] = useState<string[]>([])
+  
+  // ✨ NEW FILTERS
+  const [filterSolitaire, setFilterSolitaire] = useState<string>('all') 
+  const [filterDiaWt, setFilterDiaWt] = useState<string>('all') 
+
   const [activeTab, setActiveTab] = useState<string>("active")
   
   const [maxCatalogPrice, setMaxCatalogPrice] = useState(1000000)
@@ -223,7 +225,6 @@ export default function InventoryPage() {
     documentTitle: `Bulk-Inventory-Tags` 
   })
   
-  // ✨ FIX: Map directly from the robust cache so data is never empty during cross-search prints!
   const itemsToPrint = useMemo(() => {
     return selectedIds.map(id => itemCache[id]).filter(Boolean) as InventoryItem[];
   }, [selectedIds, itemCache]);
@@ -276,6 +277,26 @@ export default function InventoryPage() {
       const cVal = clarityMatch[1].toUpperCase()
       setFilterClarity(prev => { if (!prev.includes(cVal)) { magicalUpdate = true; return [...prev, cVal]; } return prev; });
       q = q.replace(clarityMatch[0], '')
+    }
+
+    // ✨ NEW: Smart Search for Solitaire
+    const hasSolMatch = q.match(/(?:with|has)\s*solitaire/i)
+    if (hasSolMatch) {
+      setFilterSolitaire('has_solitaire'); magicalUpdate = true; q = q.replace(hasSolMatch[0], '')
+    }
+    const noSolMatch = q.match(/(?:no|without)\s*solitaire/i)
+    if (noSolMatch) {
+      setFilterSolitaire('no_solitaire'); magicalUpdate = true; q = q.replace(noSolMatch[0], '')
+    }
+
+    // ✨ NEW: Smart Search for Diamond Weight
+    const belowDiaMatch = q.match(/(?:under|below|less than)\s*0?\.?20\s*(?:ct|cts|carat)/i)
+    if (belowDiaMatch) {
+      setFilterDiaWt('below_0.20'); magicalUpdate = true; q = q.replace(belowDiaMatch[0], '')
+    }
+    const aboveDiaMatch = q.match(/(?:over|above|more than)\s*0?\.?20\s*(?:ct|cts|carat)/i)
+    if (aboveDiaMatch) {
+      setFilterDiaWt('above_0.20'); magicalUpdate = true; q = q.replace(aboveDiaMatch[0], '')
     }
 
     setFilterStatus(prev => {
@@ -422,6 +443,14 @@ export default function InventoryPage() {
       if (isPriceFilterActive && debouncedPriceRange[0] > 0) activeQuery = activeQuery.gte('mrp', debouncedPriceRange[0])
       if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) activeQuery = activeQuery.lte('mrp', debouncedPriceRange[1])
 
+      // ✨ DB: Solitaire Filter
+      if (filterSolitaire === 'has_solitaire') activeQuery = activeQuery.gt('solitaire_weight_cts', 0)
+      else if (filterSolitaire === 'no_solitaire') activeQuery = activeQuery.or('solitaire_weight_cts.eq.0,solitaire_weight_cts.is.null')
+
+      // ✨ DB: Diamond Weight Filter
+      if (filterDiaWt === 'below_0.20') activeQuery = activeQuery.lt('total_stone_weight_cts', 0.20)
+      else if (filterDiaWt === 'above_0.20') activeQuery = activeQuery.gte('total_stone_weight_cts', 0.20)
+
       const { count: activeCount } = await activeQuery
       if (activeCount !== null) setGlobalTotalCount(activeCount)
 
@@ -437,14 +466,25 @@ export default function InventoryPage() {
       if (debouncedSearch) soldQuery = soldQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
       if (filterCategory.length > 0) soldQuery = soldQuery.in('item_category', filterCategory)
       if (filterPurity.length > 0) soldQuery = soldQuery.in('purity_karat', filterPurity)
+      if (filterClarity.length > 0) soldQuery = soldQuery.in('diamond_clarity', filterClarity)
+      
       if (isPriceFilterActive && debouncedPriceRange[0] > 0) soldQuery = soldQuery.gte('mrp', debouncedPriceRange[0])
       if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) soldQuery = soldQuery.lte('mrp', debouncedPriceRange[1])
+
+      // ✨ DB: Solitaire Filter (Sold Items)
+      if (filterSolitaire === 'has_solitaire') soldQuery = soldQuery.gt('solitaire_weight_cts', 0)
+      else if (filterSolitaire === 'no_solitaire') soldQuery = soldQuery.or('solitaire_weight_cts.eq.0,solitaire_weight_cts.is.null')
+
+      // ✨ DB: Diamond Weight Filter (Sold Items)
+      if (filterDiaWt === 'below_0.20') soldQuery = soldQuery.lt('total_stone_weight_cts', 0.20)
+      else if (filterDiaWt === 'above_0.20') soldQuery = soldQuery.gte('total_stone_weight_cts', 0.20)
+
 
       const { count: soldCount } = await soldQuery
       if (soldCount !== null) setGlobalSoldCount(soldCount)
     }
     fetchCounts()
-  }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, debouncedPriceRange, maxCatalogPrice, isPriceFilterActive])
+  }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, debouncedPriceRange, maxCatalogPrice, isPriceFilterActive, filterSolitaire, filterDiaWt])
 
   const fetchItems = async () => {
     if (!appUser || !selectedLocation) return
@@ -481,7 +521,6 @@ export default function InventoryPage() {
       const filteredRepairs = selectedLocation === 'ALL' ? repairList : repairList.filter(r => r.warehouse_id === selectedLocation || (r.status === 'fixed_ready_for_dispatch' && isHQ));
       const combined = [...inventoryList, ...filteredRepairs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-      // ✨ FIX: Hydrate the cache so searches never delete selected data!
       setItemCache(prev => {
         const nextCache = { ...prev };
         combined.forEach(item => { nextCache[item.id] = item as InventoryItem });
@@ -518,6 +557,7 @@ export default function InventoryPage() {
         if (debouncedSearch) globalQuery = globalQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
         if (filterCategory.length > 0) globalQuery = globalQuery.in('item_category', filterCategory)
         if (filterPurity.length > 0) globalQuery = globalQuery.in('purity_karat', filterPurity)
+        if (filterClarity.length > 0) globalQuery = globalQuery.in('diamond_clarity', filterClarity)
         
         if (filterStatus.length > 0) {
           const validStatuses = filterStatus.filter(s => s !== 'repairs' && s !== 'exchanged');
@@ -532,6 +572,14 @@ export default function InventoryPage() {
         if (isPriceFilterActive && debouncedPriceRange[0] > 0) globalQuery = globalQuery.gte('mrp', debouncedPriceRange[0])
         if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) globalQuery = globalQuery.lte('mrp', debouncedPriceRange[1])
 
+        // ✨ DB: Solitaire Filter
+        if (filterSolitaire === 'has_solitaire') globalQuery = globalQuery.gt('solitaire_weight_cts', 0)
+        else if (filterSolitaire === 'no_solitaire') globalQuery = globalQuery.or('solitaire_weight_cts.eq.0,solitaire_weight_cts.is.null')
+
+        // ✨ DB: Diamond Weight Filter
+        if (filterDiaWt === 'below_0.20') globalQuery = globalQuery.lt('total_stone_weight_cts', 0.20)
+        else if (filterDiaWt === 'above_0.20') globalQuery = globalQuery.gte('total_stone_weight_cts', 0.20)
+
         const { data, error } = await globalQuery
         if (error) throw error
 
@@ -539,7 +587,6 @@ export default function InventoryPage() {
         if (!data || data.length < limit) hasMore = false; else start += limit;
       }
 
-      // ✨ FIX: Update the cache with globally fetched items
       setItemCache(prev => {
         const nextCache = { ...prev };
         allFetchedData.forEach(item => { nextCache[item.id] = item as InventoryItem });
@@ -589,11 +636,20 @@ export default function InventoryPage() {
 
       if (isPriceFilterActive && ((item.mrp || 0) < priceRange[0] || (item.mrp || 0) > priceRange[1])) continue;
 
+      // ✨ LOCAL MEMO: Solitaire Filter
+      if (filterSolitaire === 'has_solitaire' && !(item.solitaire_weight_cts > 0 || item.solitaire_pieces > 0)) continue;
+      if (filterSolitaire === 'no_solitaire' && (item.solitaire_weight_cts > 0 || item.solitaire_pieces > 0)) continue;
+
+      // ✨ LOCAL MEMO: Diamond Weight Filter
+      const diaWt = item.total_stone_weight_cts || 0;
+      if (filterDiaWt === 'below_0.20' && diaWt >= 0.20) continue;
+      if (filterDiaWt === 'above_0.20' && diaWt < 0.20) continue;
+
       if (isSold) sold.push(item); else active.push(item);
     }
     return { activeItemsFiltered: active, soldItemsFiltered: sold }
     
-  }, [items, debouncedSearch, filterCategory, filterPurity, filterStatus, priceRange, isPriceFilterActive, filterClarity]);
+  }, [items, debouncedSearch, filterCategory, filterPurity, filterStatus, priceRange, isPriceFilterActive, filterClarity, filterSolitaire, filterDiaWt]);
   
   const toggleArrayItem = (arr: string[], setArr: any, item: string) => {
     if (arr.includes(item)) setArr(arr.filter((i: string) => i !== item));
@@ -602,6 +658,7 @@ export default function InventoryPage() {
 
   const clearAllFilters = () => {
     setFilterCategory([]); setFilterPurity([]); setFilterStatus([]);setFilterClarity([]);
+    setFilterSolitaire('all'); setFilterDiaWt('all');
     setIsPriceFilterActive(false); setPriceRange([0, maxCatalogPrice]); 
     setSearchTerm(""); setDebouncedSearch("");
     setActiveTab("active");
@@ -609,7 +666,7 @@ export default function InventoryPage() {
 
   const handleSaveMrp = async (id: string) => { 
     if (!canEdit) return toast.error("Unauthorized to edit prices");
-    const item = itemCache[id] || items.find(i => i.id === id); // Pull from cache first
+    const item = itemCache[id] || items.find(i => i.id === id); 
     if (!item) return;
 
     const newMrp = editingMrpVal ? Number(editingMrpVal) : null;
@@ -622,7 +679,6 @@ export default function InventoryPage() {
       if (error) return toast.error('Failed to update price');
     }
     
-    // Update both cache and local state
     setItemCache(prev => ({ ...prev, [id]: { ...prev[id], mrp: newMrp }}));
     setItems(items.map(i => i.id === id ? { ...i, mrp: newMrp } : i))
     setEditingId(null)
@@ -726,7 +782,6 @@ export default function InventoryPage() {
   const handleOpenCalc = () => {
     if (!canEdit) return toast.error("Unauthorized to use bulk calculator");
     
-    // ✨ FIX: Use itemCache to fetch proper data for cross-search selected items
     const selectedItems = selectedIds.map(id => itemCache[id]).filter(i => i && i._type === 'inventory')
     if (selectedItems.length === 0) return toast.error("No valid items selected.", { description: "Repairs cannot be bulk-calculated. Select standard inventory." })
 
@@ -754,7 +809,6 @@ export default function InventoryPage() {
   }
   
   const handleGeneratePreview = () => {
-    // ✨ FIX: Use itemCache
     const selectedItems = selectedIds.map(id => itemCache[id]).filter(i => i && i._type === 'inventory')
     const previews = selectedItems.map(item => {
       const k = item.purity_karat || '24K'
@@ -845,7 +899,6 @@ export default function InventoryPage() {
   
   const handleBulkTransfer = () => {
     if (selectedIds.length === 0) return
-    // ✨ FIX: Use itemCache to correctly validate transfer branches regardless of current search view
     const whIds = new Set(selectedIds.map(id => itemCache[id]?.warehouse_id).filter(Boolean))
     if (whIds.size > 1) return toast.error("Items must be from same warehouse.")
     router.push(`/transfer/new?ids=${selectedIds.join(',')}&from=${Array.from(whIds)[0]}`)
@@ -1050,6 +1103,54 @@ export default function InventoryPage() {
               )}
             </div>
 
+            {/* ✨ NEW: Solitaire Filter */}
+            <div className="relative">
+              <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'solitaire' ? null : 'solitaire')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", filterSolitaire !== 'all' || openDropdown === 'solitaire' ? "bg-purple-50 text-purple-700 border-purple-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
+                Solitaire {filterSolitaire !== 'all' && <span className="ml-1.5 w-2 h-2 rounded-full bg-purple-500 block"></span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
+              </Button>
+              {openDropdown === 'solitaire' && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)}></div>
+                  <div className="absolute top-full left-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 p-2 animate-in fade-in slide-in-from-top-2">
+                    {[
+                      { id: 'all', label: 'All Items' },
+                      { id: 'has_solitaire', label: 'Has Solitaire' },
+                      { id: 'no_solitaire', label: 'No Solitaire' }
+                    ].map(s => (
+                      <label key={s.id} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors">
+                        <input type="radio" checked={filterSolitaire === s.id} onChange={() => { setFilterSolitaire(s.id); setOpenDropdown(null); }} className="rounded-full border-slate-300 text-purple-600 focus:ring-purple-600" />
+                        <span className="text-xs font-medium text-slate-700">{s.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* ✨ NEW: Diamond Weight Filter */}
+            <div className="relative">
+              <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'diawt' ? null : 'diawt')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", filterDiaWt !== 'all' || openDropdown === 'diawt' ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
+                Dia Wt {filterDiaWt !== 'all' && <span className="ml-1.5 w-2 h-2 rounded-full bg-blue-500 block"></span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
+              </Button>
+              {openDropdown === 'diawt' && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)}></div>
+                  <div className="absolute top-full left-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 p-2 animate-in fade-in slide-in-from-top-2">
+                    {[
+                      { id: 'all', label: 'All Weights' },
+                      { id: 'below_0.20', label: 'Below 0.20 cts' },
+                      { id: 'above_0.20', label: '0.20 cts & Above' }
+                    ].map(s => (
+                      <label key={s.id} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors">
+                        <input type="radio" checked={filterDiaWt === s.id} onChange={() => { setFilterDiaWt(s.id); setOpenDropdown(null); }} className="rounded-full border-slate-300 text-blue-600 focus:ring-blue-600" />
+                        <span className="text-xs font-medium text-slate-700">{s.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
             <div className="relative">
               <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'price' ? null : 'price')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", isPriceFilterActive || openDropdown === 'price' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
                 Price Range {isPriceFilterActive && <span className="ml-1.5 w-2 h-2 rounded-full bg-emerald-500 block"></span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
@@ -1082,7 +1183,7 @@ export default function InventoryPage() {
               )}
             </div>
 
-            {(filterCategory.length > 0 || filterPurity.length > 0 || filterStatus.length > 0 || isPriceFilterActive || debouncedSearch) && (
+            {(filterCategory.length > 0 || filterPurity.length > 0 || filterStatus.length > 0 || isPriceFilterActive || debouncedSearch || filterSolitaire !== 'all' || filterDiaWt !== 'all') && (
               <Button variant="ghost" size="sm" onClick={clearAllFilters} className="h-8 rounded-full text-xs font-bold text-slate-400 hover:text-red-600 hover:bg-red-50 ml-auto transition-colors z-10">
                 Clear All
               </Button>
@@ -1100,12 +1201,21 @@ export default function InventoryPage() {
                 {p} <X className="w-3 h-3 cursor-pointer hover:text-amber-900" onClick={() => toggleArrayItem(filterPurity, setFilterPurity, p)} />
               </Badge>
             ))}
-            
             {filterStatus.map(s => (
               <Badge key={`stat-${s}`} className="bg-rose-50 text-rose-700 hover:bg-rose-100 border-rose-100 rounded-full px-3 py-1 flex items-center gap-1.5 text-[11px] font-semibold transition-all shadow-none">
                 {s.replace(/_/g, ' ')} <X className="w-3 h-3 cursor-pointer hover:text-rose-900" onClick={() => toggleArrayItem(filterStatus, setFilterStatus, s)} />
               </Badge>
             ))}
+            {filterSolitaire !== 'all' && (
+              <Badge className="bg-purple-50 text-purple-700 hover:bg-purple-100 border-purple-100 rounded-full px-3 py-1 flex items-center gap-1.5 text-[11px] font-semibold transition-all shadow-none">
+                {filterSolitaire === 'has_solitaire' ? 'Has Solitaire' : 'No Solitaire'} <X className="w-3 h-3 cursor-pointer hover:text-purple-900" onClick={() => setFilterSolitaire('all')} />
+              </Badge>
+            )}
+            {filterDiaWt !== 'all' && (
+              <Badge className="bg-blue-50 text-blue-700 hover:bg-blue-100 border-blue-100 rounded-full px-3 py-1 flex items-center gap-1.5 text-[11px] font-semibold transition-all shadow-none font-mono">
+                {filterDiaWt === 'below_0.20' ? '< 0.20 cts' : '≥ 0.20 cts'} <X className="w-3 h-3 cursor-pointer hover:text-blue-900" onClick={() => setFilterDiaWt('all')} />
+              </Badge>
+            )}
             {isPriceFilterActive && (
               <Badge className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-emerald-100 rounded-full px-3 py-1 flex items-center gap-1.5 text-[11px] font-semibold transition-all shadow-none font-mono">
                 ₹{priceRange[0].toLocaleString()} - ₹{priceRange[1].toLocaleString()} 
@@ -1200,7 +1310,6 @@ export default function InventoryPage() {
       {/* ✨ FIX: HIDDEN BULK PRINT CONTAINER WITH PAGE-BREAKS ✨ */}
       <div className="hidden">
         <div ref={printRef} className="print:p-0 flex flex-col gap-4">
-          {/* Inject page-break styles strictly for thermal printers */}
           <style dangerouslySetInnerHTML={{__html: `
             @media print {
               .tag-page-break {
@@ -1843,7 +1952,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                      <span className={cn("inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border", 
                         item._type === 'repair' ? "bg-amber-50 text-amber-700 border-amber-200" :
                         item.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-500 border-slate-200")}>
-                       {item.status.replace(/_/g, ' ')}
+                        {item.status.replace(/_/g, ' ')}
                      </span>
                      <div className="mt-1 flex items-center justify-center gap-1 text-[9px] font-bold uppercase tracking-widest text-slate-400">
                        <Store className="w-2.5 h-2.5" />
