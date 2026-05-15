@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
 import { format } from 'date-fns'
@@ -352,9 +352,47 @@ export function useCheckout({
         setIsProcessing(false); return { success: false };
       }
 
+      // Pre-compute the exact draft data we are printing to ensure identical math
+      const finalDraftData = generateDraftData(isEstimate);
+
+      // =================================================================
+      // ✨ NEW: SAVE PROFORMA ESTIMATES TO THE DATABASE
+      // =================================================================
       if (isEstimate) {
         finalNo = `EST-${Date.now().toString().slice(-6)}`
-        toast.success("Estimate generated.")
+        finalDraftData.invoice_number = finalNo; // Update payload for the print screen
+
+        const { data: estData, error: estError } = await supabase.from('estimates').insert({
+          company_id: appUser?.company_id,
+          warehouse_id: selectedLocation,
+          customer_id: selectedCustomer?.id || null,
+          estimate_number: finalNo,
+          subtotal: finalDraftData.subtotal,
+          discount_amount: finalDraftData.discountAmount + finalDraftData.voucherAmount + finalDraftData.exchangeValue,
+          handling_charge: finalDraftData.estimateHandlingAmt > 0 ? finalDraftData.estimateHandlingAmt : finalDraftData.handlingFee,
+          cgst: finalDraftData.cgstAmount,
+          sgst: finalDraftData.sgstAmount,
+          round_off: finalDraftData.roundOffAmount,
+          total_amount: finalDraftData.finalTotal,
+          // ✨ FIX: Safely grab the billing remarks directly from context without throwing a TS error
+          remarks: customTransactionContext?.billing_remarks || customTransactionContext?.payment_remarks || null,
+          created_by: appUser?.user_id
+        }).select('id').single();
+
+        if (estError) throw new Error("Failed to save estimate: " + estError.message);
+
+        // Map standard cart items to the estimate items table
+        if (cart && cart.length > 0 && mode === 'normal') {
+           const estItems = cart.map((item: any) => ({
+                estimate_id: estData.id,
+                inventory_id: item.id,
+                mrp: item.mrp || 0
+           }));
+           const { error: estItemsError } = await supabase.from('estimate_items').insert(estItems);
+           if (estItemsError) throw new Error("Failed to log estimate items: " + estItemsError.message);
+        }
+
+        toast.success("Estimate generated and securely logged.");
       } 
       else if (mode === 'normal') {
         
@@ -414,9 +452,7 @@ export function useCheckout({
           transfer_type: customTransactionContext?.transfer_type || null
         };
         
-        // ✨ THE STRICT GATEKEEPER ✨
         // 2. ONLY attach these keys to the payload if a real exchange occurred!
-        // This makes it completely invisible to the database RPC otherwise.
         if (exchangeNum > 0 && exchangePhysicalDetails) {
            invoiceData.exchange_notes = exchangeNotes;
            invoiceData.exchange_physical_details = exchangePhysicalDetails;
@@ -582,7 +618,6 @@ export function useCheckout({
         toast.success(`Custom Order ${finalNo} submitted to manufacturing!`)
       }
 
-      const finalDraftData = generateDraftData(isEstimate);
       finalDraftData.invoice_number = finalNo;
       
       if (customTransactionContext) {

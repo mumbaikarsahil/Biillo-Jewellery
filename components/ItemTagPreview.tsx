@@ -22,22 +22,17 @@ export interface TagItemData {
   purity_karat?: string;
   gross_weight_g?: number | string;
   net_weight_g?: number | string;
-  
   total_stone_pieces?: number | string;
   total_stone_weight_cts?: number | string;
-  
   solitaire_weight_cts?: number | string;
   solitaire_pieces?: number | string;
   melee_weight_cts?: number | string;
   melee_pieces?: number | string;
-
   label_1?: string | null; 
   label_2?: string | null; 
-  
   diamond_shape?: string | null;
   diamond_color?: string | null;
   diamond_clarity?: string | null;
-
   mrp?: number | null; 
   origin_name?: string; 
   expected_delivery_date?: string | null;
@@ -50,18 +45,20 @@ interface Props {
 }
 
 export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
-  const labelRef = useRef<HTMLDivElement>(null)
+  // ✨ FIX: This ref sits on a stable wrapper div, immune to React re-renders
+  const printContentRef = useRef<HTMLDivElement>(null)
 
   const handlePrint = useReactToPrint({
-    contentRef: labelRef,
+    contentRef: printContentRef, // Strict v3 syntax
     documentTitle: `Jewelry-Tag-${item?.barcode || 'Item'}`,
     onAfterPrint: () => toast.success('Sent to Thermal Printer'),
+    onPrintError: () => toast.error('Printing failed or was cancelled.'),
   })
 
   const downloadTagImage = async () => {
-    if (!labelRef.current || !item) return
+    if (!printContentRef.current || !item) return
     try {
-      const canvas = await html2canvas(labelRef.current, { scale: 4 })
+      const canvas = await html2canvas(printContentRef.current, { scale: 4 })
       const link = document.createElement("a")
       link.href = canvas.toDataURL("image/png")
       link.download = `Tag-${item.barcode}.png`
@@ -86,7 +83,6 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
   const fallbackWt = Number(item.total_stone_weight_cts || 0);
   const fallbackPcs = Number(item.total_stone_pieces || 0);
 
-  // STN line prefers Melee. If Melee is empty, it falls back to Total Stones.
   let stnWt = meleeWt;
   let stnPcs = meleePcs;
   if (meleeWt === 0 && meleePcs === 0 && (fallbackWt > 0 || fallbackPcs > 0)) {
@@ -96,7 +92,6 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
 
   const stnWtStr = stnWt.toFixed(2);
   const solCtsStr = solWt.toFixed(2);
-  // -----------------------------------
   
   const categoryStr = item.item_category || 'CATEGORY';
   const skuStr = item.sku_reference || '';
@@ -106,16 +101,12 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
   const netWtStr = Number(item.net_weight_g || 0).toFixed(3);
   
   // --- QUALITY & SHAPE LOGIC ---
-  // Joins Color and Clarity with a slash (e.g., "GH/SI")
   const colorClarity = [item.diamond_color, item.diamond_clarity].filter(Boolean).join('/');
-  
-  // Combines Shape + (Color/Clarity). If all are missing, falls back to '---' (e.g., "ROUND GH/SI")
   const qltStr = [item.diamond_shape, colorClarity].filter(Boolean).join(' ') || '---';
 
-  // --- EXTRACTED PURE LABEL COMPONENT ---
-  const LabelContent = () => (
+  // ✨ FIX: Pure Static JSX (Not an inline component) ensures flawless rendering
+  const pureTagUI = (
     <div 
-      ref={isPrintOnly ? undefined : labelRef} 
       className="bg-white text-black flex border border-gray-300 shadow-sm print:border-none print:shadow-none overflow-hidden shrink-0" 
       style={{ 
         width: '100mm', 
@@ -134,10 +125,7 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
         {/* LEFT: TEXT DETAILS AREA (43mm) */}
         <div 
           className="flex flex-col justify-center h-full w-[43mm] pl-[2mm] pr-[1mm] tracking-tight text-black font-bold" 
-          style={{ 
-            fontSize: hasSolitaire ? '8.5px' : '9.5px', 
-            lineHeight: hasSolitaire ? '1.15' : '1.3' 
-          }}
+          style={{ fontSize: hasSolitaire ? '8.5px' : '9.5px', lineHeight: hasSolitaire ? '1.15' : '1.3' }}
         >
           {isRepair ? (
             <>
@@ -153,35 +141,22 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
             </>
           ) : (
             <>
-              {/* Header */}
               <div className="uppercase truncate" style={{ fontSize: hasSolitaire ? '9.5px' : '10.5px', marginBottom: '1px' }}>
                 {headerText}
               </div>
-              
-              {/* Line 1: KT/NW */}
               <div className="truncate uppercase flex">
-                <span className="w-[14mm] inline-block shrink-0">KT/NW</span>
-                <span>: {ktStr}/{netWtStr}</span>
+                <span className="w-[14mm] inline-block shrink-0">KT/NW</span><span>: {ktStr}/{netWtStr}</span>
               </div>
-              
-              {/* Line 2: STN */}
               <div className="truncate uppercase flex">
-                <span className="w-[14mm] inline-block shrink-0">STN</span>
-                <span>: {stnPcs}/{stnWtStr}</span>
+                <span className="w-[14mm] inline-block shrink-0">STN</span><span>: {stnPcs}/{stnWtStr}</span>
               </div>
-              
-              {/* Line 3 (Optional): SOL */}
               {hasSolitaire && (
                 <div className="truncate uppercase flex">
-                  <span className="w-[14mm] inline-block shrink-0">SOL</span>
-                  <span>: {solPcs}/{solCtsStr}</span>
+                  <span className="w-[14mm] inline-block shrink-0">SOL</span><span>: {solPcs}/{solCtsStr}</span>
                 </div>
               )}
-              
-              {/* Line 4: QLT & SHAPE */}
               <div className="truncate uppercase flex">
-                <span className="w-[14mm] inline-block shrink-0">QLT</span>
-                <span>: {qltStr}</span>
+                <span className="w-[14mm] inline-block shrink-0">QLT</span><span>: {qltStr}</span>
               </div>
             </>
           )}
@@ -194,30 +169,22 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
 
         {/* RIGHT: QR CODE & BRANDING AREA (24mm) */}
         <div className="flex h-full w-[24mm] justify-between items-center shrink-0 pr-[1mm]">
-           {/* Vertical Barcode Text - ✨ UPDATED FOR HIGH VISIBILITY ✨ */}
            <div className="h-full w-[4mm] flex items-center justify-center">
              <span className="font-black text-[10px] tracking-wider whitespace-nowrap" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
                {item.barcode || 'NO-CODE'}
              </span>
            </div>
            
-           {/* STRICT QR CODE QUIET ZONE */}
            <div className="flex flex-col justify-center items-center w-[15mm]">
              {item.barcode ? (
                <div className="bg-white p-[1px] rounded-sm">
-                 <QRCode 
-                    value={item.barcode} 
-                    size={64} 
-                    level="M" 
-                    style={{ height: "13mm", width: "13mm", display: "block" }} 
-                 />
+                 <QRCode value={item.barcode} size={64} level="M" style={{ height: "13mm", width: "13mm", display: "block" }} />
                </div>
              ) : (
                <div className="h-[13mm] w-[13mm] bg-gray-100 flex items-center justify-center border border-dashed border-gray-300 text-[5px] text-gray-400">N/A</div>
              )}
            </div>
            
-           {/* Safe-Margin Branding */}
            <div className="h-[18mm] w-[4mm] flex items-center justify-center ml-[1mm]">
               <div className="bg-black text-white h-full w-full flex items-center justify-center rounded-sm">
                 <h2 className="font-black uppercase tracking-widest text-[7px] leading-none" style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}>
@@ -233,18 +200,16 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
          <span className="text-[5px] text-gray-300 print:hidden rotate-90 tracking-widest">TAIL AREA</span>
       </div>
     </div>
-  )
+  );
 
-  // --------------------------------------------------------------------------
-  // RENDER LOGIC
-  // --------------------------------------------------------------------------
-  
+  // If this is called from the Bulk Printer loop in InventoryPage, return raw JSX immediately
   if (isPrintOnly) {
-    return <LabelContent />
+    return pureTagUI;
   }
 
+  // If this is called from a single-row button, render the interactive Dialog
   return (
-    <Dialog open={true} onOpenChange={(val) => !val && onClose && onClose()}>
+    <Dialog open={!!item} onOpenChange={(val) => !val && onClose && onClose()}>
       <DialogContent className="sm:max-w-[550px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white">
         <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200">
           <DialogTitle className="text-base font-semibold text-slate-900 flex items-center gap-2">
@@ -253,7 +218,10 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
         </DialogHeader>
         
         <div className="flex flex-col items-center justify-center py-10 bg-slate-100/50 min-h-[250px] overflow-x-auto">
-          <LabelContent />
+          {/* ✨ FIX: We wrap the pureTagUI inside a highly stable ref container */}
+          <div ref={printContentRef}>
+             {pureTagUI}
+          </div>
         </div>
 
         <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 flex-row gap-3">

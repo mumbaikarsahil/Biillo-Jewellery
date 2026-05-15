@@ -41,6 +41,8 @@ import {
 import { cn } from "@/lib/utils"
 import { ItemTagPreview } from "@/components/ItemTagPreview"
 
+const PAGE_SIZE = 50;
+
 // ===========================================================================
 // ✨ GLOBAL HELPER: SMART STONE FALLBACK
 // ===========================================================================
@@ -163,8 +165,10 @@ export default function InventoryPage() {
 
   // ✨ STRICT PAGINATION STATE
   const [loading, setLoading] = useState(true)
+  const [isFetchingMore, setIsFetchingMore] = useState(false)
   const [page, setPage] = useState(0)
-  const [pageSize, setPageSize] = useState<number>(50) // User-selectable page size!
+  const [pageSize, setPageSize] = useState<number>(50) 
+  const [hasMore, setHasMore] = useState(true)
 
   const [warehouses, setWarehouses] = useState<any[]>([])
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
@@ -227,8 +231,13 @@ export default function InventoryPage() {
   const [uniqueClaritiesFilter, setUniqueClaritiesFilter] = useState<string[]>([])
 
   const printRef = useRef<HTMLDivElement>(null)
-  const handleBulkPrint = useReactToPrint({ contentRef: printRef, documentTitle: `Bulk-Inventory-Tags` })
   
+  // ✨ FIX: Safe backward-compatible react-to-print syntax
+  const handleBulkPrint = useReactToPrint({ 
+    contentRef: printRef,
+    documentTitle: `Bulk-Inventory-Tags` 
+  })
+
   const itemsToPrint = useMemo(() => {
     return selectedIds.map(id => itemCache[id]).filter(Boolean) as InventoryItem[];
   }, [selectedIds, itemCache]);
@@ -534,7 +543,7 @@ export default function InventoryPage() {
   }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, filterSolitaire, filterDiaWt, debouncedPriceRange, isPriceFilterActive, activeTab, pageSize])
 
 
-  // ✨ BULK ACTION FIX: Add _type to cache and NEVER SELECT BUYBACKS
+  // ✨ BULK ACTION FIX: NEVER SELECT BUYBACKS OR REPAIRS
   const handleSelectAllGlobal = async () => {
     if (!appUser) return;
     setIsFetchingGlobal(true)
@@ -547,14 +556,16 @@ export default function InventoryPage() {
           .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged, diamond_shape, diamond_color, diamond_clarity, audit_history')
           
         globalQuery = buildServerQuery(globalQuery, false); // Applies all current filters
-        globalQuery = globalQuery.eq('is_exchanged', false); // Exclude buybacks
+        
+        // ✨ THE STRICT EXCLUSION: Block Buybacks explicitly. Repairs are naturally ignored as they are in a different table.
+        globalQuery = globalQuery.eq('is_exchanged', false);
+
         globalQuery = globalQuery.range(start, start + limit - 1);
 
         const { data, error } = await globalQuery;
         if (error) throw error;
 
         if (data && data.length > 0) {
-          // ✨ THE FIX: We MUST attach the _type tag before caching so handleOpenCalc doesn't crash!
           const typedData = data.map(d => ({ ...d, _type: 'inventory', is_repair_ticket: false } as InventoryItem));
           allFetchedData = [...allFetchedData, ...typedData];
         }
@@ -708,7 +719,6 @@ export default function InventoryPage() {
   const handleOpenCalc = () => {
     if (!canEdit) return toast.error("Unauthorized to use bulk calculator");
     
-    // Using the protected itemCache ensures that even if you paginated away, the items are perfectly intact
     const selectedItems = selectedIds.map(id => itemCache[id]).filter(i => i && i._type === 'inventory')
     if (selectedItems.length === 0) return toast.error("No valid items selected.", { description: "Repairs cannot be bulk-calculated. Select standard inventory." })
 
@@ -1229,7 +1239,6 @@ export default function InventoryPage() {
             </div>
             
             <div className="flex items-center gap-1 pr-1">
-              {/* ✨ FIX: The Global Select Button is always active if what's loaded on screen is less than the total database count */}
               {globalTotalCount > items.length && selectedIds.length === items.length ? (
                 <Button 
                   size="sm" 
@@ -1275,7 +1284,7 @@ export default function InventoryPage() {
       </main>
 
       {/* ✨ FIX: HIDDEN BULK PRINT CONTAINER WITH PAGE-BREAKS ✨ */}
-      <div className="hidden">
+      <div style={{ position: 'absolute', top: '-9999px', left: '-9999px', zIndex: -50 }}>
         <div ref={printRef} className="print:p-0 flex flex-col gap-4">
           <style dangerouslySetInnerHTML={{__html: `
             @media print {
@@ -1774,7 +1783,7 @@ export default function InventoryPage() {
 }
 
 // --- HYBRID RENDER TABLE ---
-function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, handleOpenWeightEdit, setTagItem, handleSingleTransfer, setViewItem, canEdit }: any) {
+function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, handleOpenWeightEdit, setTagItem, handleSingleTransfer, setViewItem, canEdit, observerRef }: any) {
   const getWarehouseName = (wId: string) => warehouses.find((w: any) => w.id === wId)?.name || 'Unknown Vault'
 
   return (
@@ -1928,15 +1937,9 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                           <Eye className="h-4 w-4" />
                         </Button>
                         
-                        {canEdit && (
-                          <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors" onClick={() => setTagItem(item)} title="Print Label">
-                            <Printer className="h-4 w-4" />
-                          </Button>
-                        )}
-                        
                         {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
                            <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => handleSingleTransfer(item)} title="Transfer">
-                          <Truck className="h-4 w-4" />
+                          <Truck className="h-3.5 w-3.5" />
                         </Button>
                         )}
                      </div>
@@ -2053,13 +2056,6 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                    )}
                  </div>
                  <div className="flex gap-1.5">
-                   
-                   {canEdit && (
-                     <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 border-slate-200 bg-white" onClick={() => setTagItem(item)}>
-                       <Printer className="h-3.5 w-3.5" />
-                     </Button>
-                   )}
-
                    {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
                      <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
                     <Truck className="h-3.5 w-3.5" />
@@ -2070,6 +2066,8 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
             </div>
            )
         })}
+        {/* ✨ OBSERVER TARGET FOR INFINITE SCROLL (MOBILE) ✨ */}
+        <div ref={observerRef} className="h-12 w-full flex items-center justify-center mt-2"></div>
       </div>
     </div>
   )

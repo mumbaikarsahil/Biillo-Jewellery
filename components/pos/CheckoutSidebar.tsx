@@ -567,7 +567,7 @@ export function CheckoutSidebar({
           </div>
         )}
 
-        {/* ✨ UPDATED CUSTOM ORDER ESTIMATE LEDGER ✨ */}
+        {/* ✨ UPDATED CUSTOM ORDER ESTIMATE LEDGER WITH SAFE MATH ✨ */}
         {mode === 'custom' && customEstBase > 0 && (
           <div className="space-y-1.5 text-sm text-slate-500 pb-3 border-b border-slate-100 mb-3 bg-purple-50/30 p-3 rounded-lg border border-purple-100 animate-in fade-in">
             <div className="flex justify-between items-center mb-1">
@@ -576,12 +576,10 @@ export function CheckoutSidebar({
             
             <div className="flex justify-between items-center">
               <span>Estimated Base Value</span>
-              <span className="tabular-nums font-medium text-slate-700">
-                ₹{customEstBase.toLocaleString('en-IN')}
-              </span>
+              <span className="tabular-nums font-medium text-slate-700">₹{customEstBase.toLocaleString('en-IN')}</span>
             </div>
             
-            {customDiscount > 0 && (
+            {Number(customDiscount) > 0 && (
               <div className="flex justify-between items-center text-red-500">
                 <span>Discount Applied</span>
                 <span className="tabular-nums">- ₹{customDiscount.toLocaleString('en-IN')}</span>
@@ -597,10 +595,8 @@ export function CheckoutSidebar({
             
             {activeVoucher && (
               <div className="flex justify-between items-center text-emerald-600 font-medium">
-                <span>Voucher Auth {handlingVal > 0 ? `(Post ₹${handlingVal} Fee)` : ''}</span>
-                <span className="tabular-nums">
-                  - ₹{effectiveVoucherCredit.toLocaleString('en-IN')}
-                </span>
+                <span>Voucher Auth {Number(activeVoucher.handling_fee) > 0 ? `(Post ₹${activeVoucher.handling_fee} Fee)` : ''}</span>
+                <span className="tabular-nums">- ₹{effectiveVoucherCredit.toLocaleString('en-IN')}</span>
               </div>
             )}
 
@@ -633,14 +629,14 @@ export function CheckoutSidebar({
             {Number(appliedKittyAmount) > 0 && (
               <div className="flex justify-between items-center text-purple-600 font-bold mt-1">
                 <span>Less: Kitty Payment</span>
-                <span className="tabular-nums">- ₹{(Number(appliedKittyAmount) || 0).toLocaleString('en-IN')}</span>
+                <span className="tabular-nums">- ₹{appliedKittyAmount.toLocaleString('en-IN')}</span>
               </div>
             )}
             
             {Number(appliedCreditAmount) > 0 && (
               <div className="flex justify-between items-center text-emerald-600 font-bold mt-1">
                 <span>Less: Store Credit</span>
-                <span className="tabular-nums">- ₹{(Number(appliedCreditAmount) || 0).toLocaleString('en-IN')}</span>
+                <span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString('en-IN')}</span>
               </div>
             )}
 
@@ -653,7 +649,7 @@ export function CheckoutSidebar({
 
         <div className="flex justify-between items-end mb-3 mt-4 border-t-2 border-dashed border-slate-200 pt-3">
           <p className="text-xs font-black uppercase text-slate-500">
-            {mode === 'custom' || mode === 'repair' ? ' Advance' : mode === 'return' ? 'Refund Amount' : mode === 'challan' ? 'Memo Value' : 'Balance to Pay'}
+            {mode === 'custom' || mode === 'repair' ? 'Balance Advance' : mode === 'return' ? 'Refund Amount' : mode === 'challan' ? 'Memo Value' : 'Balance to Pay'}
           </p>
           <p className={`text-4xl font-bold tracking-tight tabular-nums ${theme.text}`}>
              ₹{displayTotal.toLocaleString()}
@@ -712,7 +708,7 @@ export function CheckoutSidebar({
                 variant="outline"
                 className="flex-1 font-semibold h-12 text-orange-600 border-orange-200 bg-orange-50/50 hover:bg-orange-100 hover:border-orange-300 rounded-xl transition-all"
               >
-                Print Estimate
+                {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : "Save & Print Estimate"}
               </Button>
             )}
             
