@@ -131,11 +131,14 @@ interface InventoryItem {
   diamond_shape: string | null
   diamond_color: string | null
   diamond_clarity: string | null
+  cost_price: number | null
   cost_metal: number
   cost_stone: number
   cost_making: number
   cost_total: number
   wastage_weight_g: number
+  label_1: string | null
+  label_2: string | null
   created_at: string
   updated_at: string
   last_status_change_at: string
@@ -180,13 +183,10 @@ export default function InventoryPage() {
   const [editingMrpId, setEditingId] = useState<string | null>(null)
   const [editingMrpVal, setEditingMrpVal] = useState<string>('')
   
-  const [editWeightItem, setEditWeightItem] = useState<InventoryItem | null>(null)
-  const [weightForm, setWeightForm] = useState({ 
-    gross: '', net: '', stone: '', 
-    diamond_clarity: '', diamond_color: '', diamond_shape: '',
-    reason: '' 
-  })
-  const [isSavingWeights, setIsSavingWeights] = useState(false)
+  // ✨ COMPREHENSIVE EDIT STATE
+  const [fullEditItem, setFullEditItem] = useState<InventoryItem | null>(null)
+  const [fullEditForm, setFullEditForm] = useState<any>({})
+  const [isSavingFullEdit, setIsSavingFullEdit] = useState(false)
 
   const [tagItem, setTagItem] = useState<InventoryItem | null>(null)
   const [viewItem, setViewItem] = useState<InventoryItem | null>(null)
@@ -225,19 +225,17 @@ export default function InventoryPage() {
   const [isUploadingImage, setIsUploadingImage] = useState(false)
   const [calcParams, setCalcParams] = useState({ diamondRatePerCt: 25000, markupPercent: 80, flatCharge: 8000, roundUpTo: 50 })
 
-  // Static options for dropdowns
   const [uniqueCategories, setUniqueCategories] = useState<string[]>([])
   const [uniquePurities, setUniquePurities] = useState<string[]>([])
   const [uniqueClaritiesFilter, setUniqueClaritiesFilter] = useState<string[]>([])
 
   const printRef = useRef<HTMLDivElement>(null)
   
-  // ✨ FIX: Safe backward-compatible react-to-print syntax
   const handleBulkPrint = useReactToPrint({ 
     contentRef: printRef,
     documentTitle: `Bulk-Inventory-Tags` 
   })
-
+  
   const itemsToPrint = useMemo(() => {
     return selectedIds.map(id => itemCache[id]).filter(Boolean) as InventoryItem[];
   }, [selectedIds, itemCache]);
@@ -418,7 +416,6 @@ export default function InventoryPage() {
           if (companyData.current_rate_diamond) setCalcParams(prev => ({ ...prev, diamondRatePerCt: companyData.current_rate_diamond }))
         }
         
-        // Fetch globally unique categories/purities once for the dropdowns
         const { data: uniqueData } = await supabase.from('inventory_items').select('item_category, purity_karat, diamond_clarity').eq('company_id', appUser.company_id)
         if (uniqueData) {
           setUniqueCategories(Array.from(new Set(uniqueData.map(d => d.item_category))).filter(Boolean).sort());
@@ -431,7 +428,6 @@ export default function InventoryPage() {
     fetchInitialData()
   }, [appUser, isHQ])
 
-  // ✨ SERVER-SIDE FILTER BUILDER
   const buildServerQuery = (queryObj: any, isSoldTabContext: boolean) => {
     let q = queryObj.eq('company_id', appUser?.company_id);
     
@@ -467,13 +463,11 @@ export default function InventoryPage() {
     return q;
   };
 
-  // ✨ TRADITIONAL PAGINATION FETCH ✨
   const fetchPage = async (pageToLoad: number) => {
     if (!appUser || !selectedLocation) return;
     setLoading(true);
 
     try {
-      // 1. Fetch Inventory Items (Paginated)
       let invQuery = supabase.from('inventory_items')
         .select(`*, custom_orders (id, order_number, origin:origin_warehouse_id(name)), karigars:karigar_id (full_name, karigar_code), created_from_job_bag:job_bags (karigar_id, karigars:karigar_id (full_name, karigar_code))`, { count: 'exact' });
       
@@ -483,7 +477,6 @@ export default function InventoryPage() {
       const [invRes] = await Promise.all([invQuery]);
       if (invRes.error) throw invRes.error;
 
-      // 2. Fetch Repairs (Only on Page 0, if repairs are relevant)
       let repairList: any[] = [];
       const isRepairAllowed = !isPriceFilterActive && filterSolitaire === 'all' && filterDiaWt === 'all' && filterClarity.length === 0 && filterPurity.length === 0 && filterCategory.length === 0;
       const wantsRepairs = filterStatus.includes('repairs') || filterStatus.length === 0;
@@ -515,7 +508,6 @@ export default function InventoryPage() {
       const inventoryList = (invRes.data || []).map(item => ({ ...item, _type: 'inventory' as const, is_repair_ticket: false }));
       const combined = pageToLoad === 0 ? [...repairList, ...inventoryList] : inventoryList;
 
-      // ✨ STRICT OVERRIDE FOR PAGINATION (No Append!)
       setItems(combined as InventoryItem[]);
 
       setItemCache(prev => {
@@ -536,14 +528,12 @@ export default function InventoryPage() {
     }
   }
 
-  // Trigger page reset when filters change
   useEffect(() => {
     setPage(0);
     fetchPage(0);
   }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, filterSolitaire, filterDiaWt, debouncedPriceRange, isPriceFilterActive, activeTab, pageSize])
 
 
-  // ✨ BULK ACTION FIX: NEVER SELECT BUYBACKS OR REPAIRS
   const handleSelectAllGlobal = async () => {
     if (!appUser) return;
     setIsFetchingGlobal(true)
@@ -555,11 +545,8 @@ export default function InventoryPage() {
         let globalQuery = supabase.from('inventory_items')
           .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged, diamond_shape, diamond_color, diamond_clarity, audit_history')
           
-        globalQuery = buildServerQuery(globalQuery, false); // Applies all current filters
-        
-        // ✨ THE STRICT EXCLUSION: Block Buybacks explicitly. Repairs are naturally ignored as they are in a different table.
-        globalQuery = globalQuery.eq('is_exchanged', false);
-
+        globalQuery = buildServerQuery(globalQuery, false); 
+        globalQuery = globalQuery.eq('is_exchanged', false); 
         globalQuery = globalQuery.range(start, start + limit - 1);
 
         const { data, error } = await globalQuery;
@@ -622,97 +609,117 @@ export default function InventoryPage() {
     toast.success('Price updated')
   }
 
-  const handleOpenWeightEdit = (item: InventoryItem) => {
-    if (!canEdit) return toast.error("Unauthorized to edit master weights");
-    setEditWeightItem(item);
+  // ✨ COMPREHENSIVE EDIT HANDLERS ✨
+  const handleOpenFullEdit = (item: InventoryItem) => {
+    if (!canEdit) return toast.error("Unauthorized to edit master details.");
+    setFullEditItem(item);
     
-    const { aggWt } = getStoneTotals(item);
-    
-    setWeightForm({
-      gross: item.gross_weight_g?.toString() || '0',
-      net: item.net_weight_g?.toString() || '0',
-      stone: aggWt.toString() || '0',
-      diamond_clarity: item.diamond_clarity || '',
-      diamond_color: item.diamond_color || '',
+    setFullEditForm({
+      sku_reference: item.sku_reference || '',
+      item_category: item.item_category || '',
+      item_size: item.item_size || '',
+      huid_code: item.huid_code || '',
+      hsn_code: item.hsn_code || '',
+      label_1: item.label_1 || '',
+      label_2: item.label_2 || '',
+      remarks: item.remarks || '',
+
+      metal_type: item.metal_type || 'Gold',
+      purity_karat: item.purity_karat || '22K',
+      purity_percent: item.purity_percent?.toString() || '91.6',
+      metal_color: item.metal_color || '',
+
+      gross_weight_g: item.gross_weight_g?.toString() || '0',
+      net_weight_g: item.net_weight_g?.toString() || '0',
+      cost_price: item.cost_price?.toString() || '0',
+      mrp: item.mrp?.toString() || '0',
+
+      total_stone_weight_cts: item.total_stone_weight_cts?.toString() || '0',
+      total_stone_pieces: item.total_stone_pieces?.toString() || '0',
+      solitaire_weight_cts: item.solitaire_weight_cts?.toString() || '0',
+      solitaire_pieces: item.solitaire_pieces?.toString() || '0',
+      melee_weight_cts: item.melee_weight_cts?.toString() || '0',
+      melee_pieces: item.melee_pieces?.toString() || '0',
+
       diamond_shape: item.diamond_shape || '',
+      diamond_color: item.diamond_color || '',
+      diamond_clarity: item.diamond_clarity || '',
+
       reason: ''
     });
   }
 
-  const handleSaveWeights = async () => {
-    if (!editWeightItem || !appUser) return;
-    if (!weightForm.reason.trim()) return toast.error("Reason is required for the audit log.");
+  const handleSaveFullEdit = async () => {
+    if (!fullEditItem || !appUser) return;
+    if (!fullEditForm.reason.trim()) return toast.error("Audit reason is required.");
 
-    const newGross = parseFloat(weightForm.gross);
-    const newNet = parseFloat(weightForm.net);
-    const newStone = parseFloat(weightForm.stone);
-
-    if (isNaN(newGross) || isNaN(newNet) || isNaN(newStone)) return toast.error("Invalid weight values entered.");
-    if (newNet <= 0 || newGross <= 0) return toast.error("Gross and Net weights must be greater than 0.");
-    if (newGross < newNet) return toast.error("Gross weight cannot be less than Net weight.");
-
-    setIsSavingWeights(true);
+    setIsSavingFullEdit(true);
 
     try {
-      const currentStone = getStoneTotals(editWeightItem).aggWt;
-      
-      const dClarity = weightForm.diamond_clarity.trim() || null;
-      const dColor = weightForm.diamond_color.trim() || null;
-      const dShape = weightForm.diamond_shape.trim() || null;
+      const payload: any = {
+        sku_reference: fullEditForm.sku_reference,
+        item_category: fullEditForm.item_category,
+        item_size: fullEditForm.item_size,
+        huid_code: fullEditForm.huid_code,
+        hsn_code: fullEditForm.hsn_code,
+        label_1: fullEditForm.label_1,
+        label_2: fullEditForm.label_2,
+        remarks: fullEditForm.remarks,
+        metal_type: fullEditForm.metal_type,
+        purity_karat: fullEditForm.purity_karat,
+        purity_percent: Number(fullEditForm.purity_percent) || 0,
+        metal_color: fullEditForm.metal_color,
+        gross_weight_g: Number(fullEditForm.gross_weight_g) || 0,
+        net_weight_g: Number(fullEditForm.net_weight_g) || 0,
+        cost_price: Number(fullEditForm.cost_price) || 0,
+        mrp: Number(fullEditForm.mrp) || null,
+        total_stone_weight_cts: Number(fullEditForm.total_stone_weight_cts) || 0,
+        total_stone_pieces: Number(fullEditForm.total_stone_pieces) || 0,
+        solitaire_weight_cts: Number(fullEditForm.solitaire_weight_cts) || 0,
+        solitaire_pieces: Number(fullEditForm.solitaire_pieces) || 0,
+        melee_weight_cts: Number(fullEditForm.melee_weight_cts) || 0,
+        melee_pieces: Number(fullEditForm.melee_pieces) || 0,
+        diamond_shape: fullEditForm.diamond_shape,
+        diamond_color: fullEditForm.diamond_color,
+        diamond_clarity: fullEditForm.diamond_clarity,
+        updated_by: appUser.user_id || appUser.id
+      };
 
+      // Detect Changes for Audit Log
+      let diffs = [];
+      if (Number(fullEditItem.mrp) !== payload.mrp) diffs.push(`MRP: ${fullEditItem.mrp} -> ${payload.mrp}`);
+      if (Number(fullEditItem.gross_weight_g) !== payload.gross_weight_g) diffs.push(`Gross: ${fullEditItem.gross_weight_g}g -> ${payload.gross_weight_g}g`);
+      if (Number(fullEditItem.net_weight_g) !== payload.net_weight_g) diffs.push(`Net: ${fullEditItem.net_weight_g}g -> ${payload.net_weight_g}g`);
+      
       const newLogEntry: AuditLogEntry = {
         timestamp: new Date().toISOString(),
         user_name: appUser.full_name || 'System User',
-        reason: weightForm.reason.trim(),
-        changes: `Gross: ${editWeightItem.gross_weight_g}g ➝ ${newGross}g | Net: ${editWeightItem.net_weight_g}g ➝ ${newNet}g | Stone: ${currentStone}ct ➝ ${newStone}ct | Clarity: ${editWeightItem.diamond_clarity || 'None'} ➝ ${dClarity || 'None'}`
+        reason: fullEditForm.reason.trim(),
+        changes: diffs.length > 0 ? diffs.join(' | ') : 'Comprehensive Details Update'
       };
 
-      const currentHistory = Array.isArray(editWeightItem.audit_history) ? editWeightItem.audit_history : [];
-      const updatedHistory = [newLogEntry, ...currentHistory];
+      const currentHistory = Array.isArray(fullEditItem.audit_history) ? fullEditItem.audit_history : [];
+      payload.audit_history = [newLogEntry, ...currentHistory];
 
-      if (editWeightItem._type === 'repair') {
-         toast.error("Weight editing for repairs is not supported in this view.");
-         setIsSavingWeights(false);
+      if (fullEditItem._type === 'repair') {
+         toast.error("Full editing for repairs is not supported in this view.");
+         setIsSavingFullEdit(false);
          return;
       }
 
-      const { error } = await supabase.from('inventory_items').update({
-        gross_weight_g: newGross,
-        net_weight_g: newNet,
-        total_stone_weight_cts: newStone,
-        solitaire_weight_cts: 0, 
-        melee_weight_cts: 0,
-        diamond_clarity: dClarity,
-        diamond_color: dColor,
-        diamond_shape: dShape,
-        audit_history: updatedHistory,
-        updated_by: appUser.user_id || appUser.id
-      }).eq('id', editWeightItem.id);
-
+      const { error } = await supabase.from('inventory_items').update(payload).eq('id', fullEditItem.id);
       if (error) throw error;
 
-      const updatedPayload = { 
-        ...editWeightItem, 
-        gross_weight_g: newGross, 
-        net_weight_g: newNet, 
-        total_stone_weight_cts: newStone,
-        solitaire_weight_cts: 0,
-        melee_weight_cts: 0,
-        diamond_clarity: dClarity,
-        diamond_color: dColor,
-        diamond_shape: dShape,
-        audit_history: updatedHistory
-      };
+      const updatedItem = { ...fullEditItem, ...payload };
+      setItemCache(prev => ({ ...prev, [fullEditItem.id]: updatedItem }));
+      setItems(items.map(i => i.id === fullEditItem.id ? updatedItem : i));
 
-      setItemCache(prev => ({ ...prev, [editWeightItem.id]: updatedPayload }));
-      setItems(items.map(i => i.id === editWeightItem.id ? updatedPayload : i));
-
-      toast.success("Details & Audit Log updated successfully");
-      setEditWeightItem(null);
+      toast.success("Master Details & Audit Log updated successfully");
+      setFullEditItem(null);
     } catch (e: any) {
       toast.error(e.message || "Failed to update item details");
     } finally {
-      setIsSavingWeights(false);
+      setIsSavingFullEdit(false);
     }
   }
   
@@ -843,7 +850,6 @@ export default function InventoryPage() {
 
   if (!appUser) return null
 
-  // Pagination Helper Component
   const PaginationFooter = () => {
     const totalCurrentCount = activeTab === 'sold' ? globalSoldCount : globalTotalCount;
     return (
@@ -937,7 +943,6 @@ export default function InventoryPage() {
           
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 w-full">
             
-            {/* Clean AI Search Bar */}
             <div className="relative w-full max-w-2xl group">
               <div className="absolute -inset-[2px] rounded-full bg-gradient-to-r from-[#4285F4] via-[#9b72cb] to-[#d96570] blur-md opacity-0 group-focus-within:opacity-20 transition-opacity duration-500"></div>
               
@@ -975,7 +980,6 @@ export default function InventoryPage() {
               </div>
             </div>
 
-            {/* Vault Context Selector */}
             <div className="flex flex-col items-end w-full md:w-auto shrink-0 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm">
               <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
                 <SelectTrigger className="h-10 border-none bg-slate-50 hover:bg-slate-100 transition-colors rounded-xl shadow-none text-xs font-bold text-slate-700 w-full md:w-[220px] focus:ring-0">
@@ -1212,7 +1216,7 @@ export default function InventoryPage() {
           <TabsContent value="active">
              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative">
                 {loading && <GeminiLoader />}
-                <InventoryTable data={items} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} handleOpenWeightEdit={handleOpenWeightEdit} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />
+                <InventoryTable data={items} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} handleOpenFullEdit={handleOpenFullEdit} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />
                 
                 <PaginationFooter />
              </div>
@@ -1221,7 +1225,7 @@ export default function InventoryPage() {
           <TabsContent value="sold">
              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative">
                 {loading && <GeminiLoader />}
-                <InventoryTable data={items} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} handleOpenWeightEdit={()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />
+                <InventoryTable data={items} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} handleOpenFullEdit={()=>{}} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />
                 
                 <PaginationFooter />
              </div>
@@ -1306,113 +1310,195 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* ✨ EDIT WEIGHTS MODAL ✨ */}
-      <Dialog open={!!editWeightItem} onOpenChange={(val) => !val && setEditWeightItem(null)}>
-        <DialogContent className="sm:max-w-[450px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden bg-white">
+      {/* ✨ COMPREHENSIVE EDIT MODAL ✨ */}
+      <Dialog open={!!fullEditItem} onOpenChange={(val) => !val && setFullEditItem(null)}>
+        <DialogContent className="sm:max-w-[750px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden bg-white">
           <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5">
             <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Edit2 className="w-5 h-5 text-indigo-600" />
-              Edit Master Weights
+              Edit Master Details
             </DialogTitle>
             <DialogDescription className="text-xs mt-1">
-              Adjust physical attributes for <strong className="text-slate-700">{editWeightItem?.barcode}</strong>. All changes are logged permanently.
+              Adjust attributes for <strong className="text-slate-700">{fullEditItem?.barcode}</strong>. All changes are logged permanently.
             </DialogDescription>
           </DialogHeader>
 
-          <div className="p-5 space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Gross Weight (g)</Label>
-                <Input 
-                  type="number" 
-                  step="0.001"
-                  className="font-mono font-bold border-slate-300"
-                  value={weightForm.gross}
-                  onChange={(e) => setWeightForm({...weightForm, gross: e.target.value})}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Net Weight (g)</Label>
-                <Input 
-                  type="number" 
-                  step="0.001"
-                  className="font-mono font-bold border-emerald-300 bg-emerald-50 text-emerald-900 focus-visible:ring-emerald-500"
-                  value={weightForm.net}
-                  onChange={(e) => setWeightForm({...weightForm, net: e.target.value})}
-                />
-              </div>
-              <div className="space-y-1.5 col-span-2">
-                <Label className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Total Stone Weight (cts)</Label>
-                <Input 
-                  type="number" 
-                  step="0.001"
-                  className="font-mono font-bold border-blue-300 bg-blue-50 text-blue-900 focus-visible:ring-blue-500"
-                  value={weightForm.stone}
-                  onChange={(e) => setWeightForm({...weightForm, stone: e.target.value})}
-                />
-              </div>
+          <Tabs defaultValue="basic" className="w-full">
+            <div className="px-5 pt-3 bg-slate-50/50">
+              <TabsList className="grid w-full grid-cols-3 bg-slate-200/50">
+                <TabsTrigger value="basic" className="text-xs">Identity & Class</TabsTrigger>
+                <TabsTrigger value="metal" className="text-xs">Metal & Price</TabsTrigger>
+                <TabsTrigger value="stone" className="text-xs">Stones & Specs</TabsTrigger>
+              </TabsList>
+            </div>
 
-              {/* Diamond Specifications Fields */}
-              <div className="col-span-2 border-t border-slate-100 pt-3 mt-1 space-y-3">
-                <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                  <Gem className="w-3 h-3 text-slate-400" /> Diamond Specifications
-                </Label>
-                <div className="grid grid-cols-3 gap-3">
+            <div className="p-5 max-h-[50vh] overflow-y-auto custom-scrollbar">
+              <TabsContent value="basic" className="m-0 space-y-4">
+                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <Label className="text-[9px] font-bold text-slate-500 uppercase">Clarity</Label>
-                    <Input 
-                      className="border-slate-300 h-8 text-xs font-semibold uppercase"
-                      placeholder="VVS-VS"
-                      value={weightForm.diamond_clarity}
-                      onChange={(e) => setWeightForm({...weightForm, diamond_clarity: e.target.value})}
-                    />
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Design SKU</Label>
+                    <Input className="h-9 text-xs font-semibold" value={fullEditForm.sku_reference} onChange={(e) => setFullEditForm({...fullEditForm, sku_reference: e.target.value})} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[9px] font-bold text-slate-500 uppercase">Color</Label>
-                    <Input 
-                      className="border-slate-300 h-8 text-xs font-semibold uppercase"
-                      placeholder="E-F"
-                      value={weightForm.diamond_color}
-                      onChange={(e) => setWeightForm({...weightForm, diamond_color: e.target.value})}
-                    />
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Category</Label>
+                    <Input className="h-9 text-xs font-semibold" value={fullEditForm.item_category} onChange={(e) => setFullEditForm({...fullEditForm, item_category: e.target.value})} />
                   </div>
                   <div className="space-y-1.5">
-                    <Label className="text-[9px] font-bold text-slate-500 uppercase">Shape</Label>
-                    <Input 
-                      className="border-slate-300 h-8 text-xs font-semibold"
-                      placeholder="Round"
-                      value={weightForm.diamond_shape}
-                      onChange={(e) => setWeightForm({...weightForm, diamond_shape: e.target.value})}
-                    />
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Item Size</Label>
+                    <Input className="h-9 text-xs font-semibold" value={fullEditForm.item_size} onChange={(e) => setFullEditForm({...fullEditForm, item_size: e.target.value})} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">HUID Code</Label>
+                    <Input className="h-9 text-xs font-semibold font-mono" value={fullEditForm.huid_code} onChange={(e) => setFullEditForm({...fullEditForm, huid_code: e.target.value})} maxLength={6} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">HSN Code</Label>
+                    <Input className="h-9 text-xs font-semibold font-mono" value={fullEditForm.hsn_code} onChange={(e) => setFullEditForm({...fullEditForm, hsn_code: e.target.value})} />
                   </div>
                 </div>
+                <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Custom Label 1</Label>
+                    <Input className="h-9 text-xs font-semibold" value={fullEditForm.label_1} onChange={(e) => setFullEditForm({...fullEditForm, label_1: e.target.value})} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Custom Label 2</Label>
+                    <Input className="h-9 text-xs font-semibold" value={fullEditForm.label_2} onChange={(e) => setFullEditForm({...fullEditForm, label_2: e.target.value})} />
+                  </div>
+                </div>
+                <div className="space-y-1.5 border-t border-slate-100 pt-4">
+                  <Label className="text-[10px] font-bold text-slate-500 uppercase">General Remarks</Label>
+                  <Input className="h-9 text-xs font-semibold" value={fullEditForm.remarks} onChange={(e) => setFullEditForm({...fullEditForm, remarks: e.target.value})} />
+                </div>
+              </TabsContent>
+
+              <TabsContent value="metal" className="m-0 space-y-4">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Metal Type</Label>
+                    <Input className="h-9 text-xs font-semibold" value={fullEditForm.metal_type} onChange={(e) => setFullEditForm({...fullEditForm, metal_type: e.target.value})} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Karat</Label>
+                    <Input className="h-9 text-xs font-semibold" value={fullEditForm.purity_karat} onChange={(e) => setFullEditForm({...fullEditForm, purity_karat: e.target.value})} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Purity %</Label>
+                    <Input type="number" step="0.01" className="h-9 text-xs font-semibold font-mono" value={fullEditForm.purity_percent} onChange={(e) => setFullEditForm({...fullEditForm, purity_percent: e.target.value})} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Metal Color</Label>
+                    <Input className="h-9 text-xs font-semibold" value={fullEditForm.metal_color} onChange={(e) => setFullEditForm({...fullEditForm, metal_color: e.target.value})} />
+                  </div>
+                </div>
+                
+                <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Gross Wt (g)</Label>
+                    <Input type="number" step="0.001" className="h-9 text-xs font-semibold font-mono" value={fullEditForm.gross_weight_g} onChange={(e) => setFullEditForm({...fullEditForm, gross_weight_g: e.target.value})} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-emerald-600 uppercase">Net Wt (g)</Label>
+                    <Input type="number" step="0.001" className="h-9 text-xs font-semibold font-mono border-emerald-300 bg-emerald-50 text-emerald-900" value={fullEditForm.net_weight_g} onChange={(e) => setFullEditForm({...fullEditForm, net_weight_g: e.target.value})} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Cost Price (₹)</Label>
+                    <Input type="number" step="0.01" className="h-9 text-xs font-semibold font-mono" value={fullEditForm.cost_price} onChange={(e) => setFullEditForm({...fullEditForm, cost_price: e.target.value})} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-indigo-600 uppercase">Retail MRP (₹)</Label>
+                    <Input type="number" step="0.01" className="h-9 text-xs font-semibold font-mono border-indigo-300 bg-indigo-50 text-indigo-900" value={fullEditForm.mrp} onChange={(e) => setFullEditForm({...fullEditForm, mrp: e.target.value})} />
+                  </div>
+                </div>
+              </TabsContent>
+
+              <TabsContent value="stone" className="m-0 space-y-4">
+                <div className="grid grid-cols-2 gap-4 bg-blue-50/50 p-3 rounded-xl border border-blue-100">
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-blue-700 uppercase">Total Stone Wt (cts)</Label>
+                    <Input type="number" step="0.001" className="h-9 text-xs font-semibold font-mono border-blue-200" value={fullEditForm.total_stone_weight_cts} onChange={(e) => setFullEditForm({...fullEditForm, total_stone_weight_cts: e.target.value})} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-blue-700 uppercase">Total Stone Pcs</Label>
+                    <Input type="number" className="h-9 text-xs font-semibold font-mono border-blue-200" value={fullEditForm.total_stone_pieces} onChange={(e) => setFullEditForm({...fullEditForm, total_stone_pieces: e.target.value})} />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-6 pt-2">
+                  <div className="space-y-3">
+                    <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 w-full block pb-1">Solitaire</Label>
+                    <div className="flex gap-2">
+                      <div className="flex-1 space-y-1.5">
+                        <Label className="text-[9px] text-slate-500 uppercase">Cts</Label>
+                        <Input type="number" step="0.001" className="h-8 text-xs font-mono" value={fullEditForm.solitaire_weight_cts} onChange={(e) => setFullEditForm({...fullEditForm, solitaire_weight_cts: e.target.value})} />
+                      </div>
+                      <div className="flex-1 space-y-1.5">
+                        <Label className="text-[9px] text-slate-500 uppercase">Pcs</Label>
+                        <Input type="number" className="h-8 text-xs font-mono" value={fullEditForm.solitaire_pieces} onChange={(e) => setFullEditForm({...fullEditForm, solitaire_pieces: e.target.value})} />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="space-y-3">
+                    <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 w-full block pb-1">Melee / Side</Label>
+                    <div className="flex gap-2">
+                      <div className="flex-1 space-y-1.5">
+                        <Label className="text-[9px] text-slate-500 uppercase">Cts</Label>
+                        <Input type="number" step="0.001" className="h-8 text-xs font-mono" value={fullEditForm.melee_weight_cts} onChange={(e) => setFullEditForm({...fullEditForm, melee_weight_cts: e.target.value})} />
+                      </div>
+                      <div className="flex-1 space-y-1.5">
+                        <Label className="text-[9px] text-slate-500 uppercase">Pcs</Label>
+                        <Input type="number" className="h-8 text-xs font-mono" value={fullEditForm.melee_pieces} onChange={(e) => setFullEditForm({...fullEditForm, melee_pieces: e.target.value})} />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-3 border-t border-slate-100 pt-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Shape</Label>
+                    <Input className="h-9 text-xs font-semibold" value={fullEditForm.diamond_shape} onChange={(e) => setFullEditForm({...fullEditForm, diamond_shape: e.target.value})} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Color</Label>
+                    <Input className="h-9 text-xs font-semibold uppercase" value={fullEditForm.diamond_color} onChange={(e) => setFullEditForm({...fullEditForm, diamond_color: e.target.value})} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase">Clarity</Label>
+                    <Input className="h-9 text-xs font-semibold uppercase" value={fullEditForm.diamond_clarity} onChange={(e) => setFullEditForm({...fullEditForm, diamond_clarity: e.target.value})} />
+                  </div>
+                </div>
+              </TabsContent>
+            </div>
+            
+            <div className="p-5 pt-0">
+              <div className="pt-3 border-t border-slate-200">
+                <Label className="text-[10px] font-bold text-rose-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
+                  <FileText className="w-3 h-3" /> Reason for Update (Required for Audit Log)
+                </Label>
+                <Input 
+                  className="h-10 text-sm border-rose-200 bg-rose-50/50 focus-visible:ring-rose-500"
+                  placeholder="e.g., Typo in original entry, Recalculated pricing..."
+                  value={fullEditForm.reason}
+                  onChange={(e) => setFullEditForm({...fullEditForm, reason: e.target.value})}
+                />
               </div>
             </div>
-
-            <div className="pt-3 border-t border-slate-100">
-              <Label className="text-[10px] font-bold text-rose-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
-                <FileText className="w-3 h-3" /> Reason for Update (Required)
-              </Label>
-              <textarea 
-                className="w-full min-h-[80px] p-3 text-sm rounded-md border border-rose-200 bg-rose-50/50 focus:outline-none focus:ring-2 focus:ring-rose-500 transition-shadow resize-none"
-                placeholder="e.g., Typo in original entry, Recalculated after stone replacement..."
-                value={weightForm.reason}
-                onChange={(e) => setWeightForm({...weightForm, reason: e.target.value})}
-              />
-            </div>
-          </div>
+          </Tabs>
 
           <DialogFooter className="bg-slate-50 p-4 border-t border-slate-100 flex gap-2">
-            <Button variant="outline" className="flex-1 rounded-xl h-11 font-bold text-slate-500 hover:text-slate-800" onClick={() => setEditWeightItem(null)}>
+            <Button variant="outline" className="flex-1 rounded-xl h-11 font-bold text-slate-500 hover:text-slate-800" onClick={() => setFullEditItem(null)}>
               Cancel
             </Button>
             <Button 
-              className="flex-1 rounded-xl h-11 font-bold bg-indigo-600 hover:bg-indigo-700 text-white" 
-              onClick={handleSaveWeights}
-              disabled={isSavingWeights || !weightForm.reason.trim()}
+              className="flex-[2] rounded-xl h-11 font-bold bg-indigo-600 hover:bg-indigo-700 text-white shadow-md" 
+              onClick={handleSaveFullEdit}
+              disabled={isSavingFullEdit || !fullEditForm.reason?.trim()}
             >
-              {isSavingWeights ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-              Save & Log Audit
+              {isSavingFullEdit ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+              Save Master Details
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1623,6 +1709,16 @@ export default function InventoryPage() {
                         <span className="text-[10px] font-bold uppercase tracking-widest">No Image</span>
                       </div>
                     )}
+                    
+                    {/* EDIT IMAGE BUTTON */}
+                    {canEdit && (
+                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                        <label className="cursor-pointer bg-white text-slate-900 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest shadow-lg hover:bg-slate-100">
+                          Upload Photo
+                          <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, viewItem.id, viewItem._type)} />
+                        </label>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex-1 grid grid-cols-2 gap-4">
@@ -1748,6 +1844,10 @@ export default function InventoryPage() {
                     {viewItem._type !== 'repair' && (
                       <>
                         <div className="flex justify-between items-center text-xs">
+                          <span className="text-slate-500 font-medium">Cost Price (System)</span>
+                          <span className="font-mono font-semibold">₹{(viewItem.cost_price || 0).toLocaleString()}</span>
+                        </div>
+                        <div className="border-t border-slate-100 pt-3 mt-1 flex justify-between items-center text-xs">
                           <span className="text-slate-500 font-medium">Metal Base Cost</span>
                           <span className="font-mono font-semibold">₹{(viewItem.cost_metal || 0).toLocaleString()}</span>
                         </div>
@@ -1783,7 +1883,7 @@ export default function InventoryPage() {
 }
 
 // --- HYBRID RENDER TABLE ---
-function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, handleOpenWeightEdit, setTagItem, handleSingleTransfer, setViewItem, canEdit, observerRef }: any) {
+function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, handleOpenFullEdit, handleSingleTransfer, setViewItem, canEdit, observerRef }: any) {
   const getWarehouseName = (wId: string) => warehouses.find((w: any) => w.id === wId)?.name || 'Unknown Vault'
 
   return (
@@ -1875,16 +1975,6 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                             {item._type === 'repair' ? 'ADDED' : 'STN'}
                           </span>
                         </span>
-
-                        {canEdit && !isSoldTab && !item.is_repair_ticket && (
-                           <button 
-                             onClick={() => handleOpenWeightEdit(item)}
-                             className="absolute -right-3 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition-all"
-                             title="Edit Master Weights"
-                           >
-                             <Edit2 className="w-3.5 h-3.5" />
-                           </button>
-                        )}
                      </div>
                   </TableCell>
                   
@@ -1936,6 +2026,13 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => setViewItem(item)} title="View Full Details">
                           <Eye className="h-4 w-4" />
                         </Button>
+                        
+                        {/* ✨ NEW MASTER EDIT BUTTON ✨ */}
+                        {canEdit && !isSoldTab && !item.is_repair_ticket && (
+                           <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-md transition-colors" onClick={() => handleOpenFullEdit(item)} title="Edit Master Details">
+                             <Edit2 className="h-4 w-4" />
+                           </Button>
+                        )}
                         
                         {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
                            <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => handleSingleTransfer(item)} title="Transfer">
@@ -1996,6 +2093,11 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                  </div>
                  
                  <div className="flex gap-2 items-center">
+                   {canEdit && !isSoldTab && !item.is_repair_ticket && (
+                     <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-amber-600 bg-slate-50" onClick={() => handleOpenFullEdit(item)}>
+                        <Edit2 className="h-3.5 w-3.5" />
+                     </Button>
+                   )}
                    <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400 hover:text-indigo-600 bg-slate-50" onClick={() => setViewItem(item)}>
                       <Eye className="h-3.5 w-3.5" />
                    </Button>
@@ -2018,10 +2120,9 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                    )}
                  </div>
 
-                 <div className="text-right group relative pr-2" onClick={() => { if(canEdit && !isSoldTab && !item.is_repair_ticket) handleOpenWeightEdit(item) }}>
+                 <div className="text-right">
                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 flex justify-end items-center gap-1">
                      {item._type === 'repair' ? 'Materials Added' : 'Weights'}
-                     {canEdit && !isSoldTab && !item.is_repair_ticket && <Edit2 className="w-2.5 h-2.5 text-slate-300 group-hover:text-indigo-500" />}
                    </p>
                    <p className="text-xs font-semibold text-slate-900">
                      {item.net_weight_g?.toFixed(3)}g 
