@@ -657,11 +657,13 @@ export default function InventoryPage() {
 
     try {
       const payload: any = {
-        sku_reference: fullEditForm.sku_reference,
+        // ✨ FIX: Safely convert empty strings back to true NULLs to prevent unique constraint crashes
+        sku_reference: fullEditForm.sku_reference?.trim() || null,
         item_category: fullEditForm.item_category,
         item_size: fullEditForm.item_size,
-        huid_code: fullEditForm.huid_code,
-        hsn_code: fullEditForm.hsn_code,
+        huid_code: fullEditForm.huid_code?.trim() || null,
+        hsn_code: fullEditForm.hsn_code?.trim() || null,
+        
         label_1: fullEditForm.label_1,
         label_2: fullEditForm.label_2,
         remarks: fullEditForm.remarks,
@@ -1312,7 +1314,7 @@ export default function InventoryPage() {
 
       {/* ✨ COMPREHENSIVE EDIT MODAL ✨ */}
       <Dialog open={!!fullEditItem} onOpenChange={(val) => !val && setFullEditItem(null)}>
-        <DialogContent className="sm:max-w-[750px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden bg-white">
+      <DialogContent className="sm:max-w-[600px] w-[95vw] p-0 overflow-hidden bg-white/95 backdrop-blur-xl border border-slate-200/60 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.2)] rounded-2xl ring-1 ring-black/5 transition-all">
           <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5">
             <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Edit2 className="w-5 h-5 text-indigo-600" />
@@ -1506,7 +1508,7 @@ export default function InventoryPage() {
 
       {/* BULK MRP CALCULATOR MODAL */}
       <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
-        <DialogContent className="sm:max-w-[800px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden bg-white">
+      <DialogContent className="sm:max-w-[650px] w-[95vw] p-0 overflow-hidden bg-white/95 backdrop-blur-xl border border-slate-200/60 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.2)] rounded-2xl ring-1 ring-black/5 transition-all">
           <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5">
             <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
                <Calculator className="w-5 h-5 text-indigo-600" /> 
@@ -1623,7 +1625,7 @@ export default function InventoryPage() {
 
       {/* VIEW DETAILS MODAL */}
       <Dialog open={!!viewItem} onOpenChange={(val) => !val && setViewItem(null)}>
-        <DialogContent className="sm:max-w-[700px] p-0 overflow-hidden border-none shadow-2xl rounded-2xl bg-white">
+      <DialogContent className="sm:max-w-[550px] w-[95vw] p-0 overflow-hidden bg-white/95 backdrop-blur-xl border border-slate-200/60 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.2)] rounded-2xl ring-1 ring-black/5 transition-all">
           {viewItem && (
             <>
               <DialogHeader className="bg-slate-50 p-6 border-b border-slate-100 flex flex-row items-start justify-between">
