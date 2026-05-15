@@ -13,7 +13,7 @@ import {
   Search, Printer, Edit2, Check, X, Store, Truck, 
   RefreshCw, Database, Package, Calculator, Gem, Hammer, 
   Upload, Eye, Image as ImageIcon, CheckCircle2, Box, Layers, Wrench, Clock, CalendarDays,
-  Loader2, Filter, IndianRupee, UserCircle, CheckSquare, Sparkles, Mic, ChevronDown, Download, FileText, History, ArrowRightLeft
+  Loader2, Filter, IndianRupee, UserCircle, CheckSquare, Sparkles, Mic, ChevronDown, Download, FileText, History, ArrowRightLeft, ChevronLeft, ChevronRight
 } from "lucide-react"
 
 import { useAuth } from "@/hooks/useAuth"
@@ -161,7 +161,11 @@ export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([])
   const [itemCache, setItemCache] = useState<Record<string, InventoryItem>>({})
 
+  // ✨ STRICT PAGINATION STATE
   const [loading, setLoading] = useState(true)
+  const [page, setPage] = useState(0)
+  const [pageSize, setPageSize] = useState<number>(50) // User-selectable page size!
+
   const [warehouses, setWarehouses] = useState<any[]>([])
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
   
@@ -190,7 +194,6 @@ export default function InventoryPage() {
   const [filterPurity, setFilterPurity] = useState<string[]>([])
   const [filterClarity, setFilterClarity] = useState<string[]>([])
   
-  // ✨ NEW FILTERS
   const [filterSolitaire, setFilterSolitaire] = useState<string>('all') 
   const [filterDiaWt, setFilterDiaWt] = useState<string>('all') 
 
@@ -218,24 +221,17 @@ export default function InventoryPage() {
   const [isUploadingImage, setIsUploadingImage] = useState(false)
   const [calcParams, setCalcParams] = useState({ diamondRatePerCt: 25000, markupPercent: 80, flatCharge: 8000, roundUpTo: 50 })
 
+  // Static options for dropdowns
+  const [uniqueCategories, setUniqueCategories] = useState<string[]>([])
+  const [uniquePurities, setUniquePurities] = useState<string[]>([])
+  const [uniqueClaritiesFilter, setUniqueClaritiesFilter] = useState<string[]>([])
+
   const printRef = useRef<HTMLDivElement>(null)
-  
-  const handleBulkPrint = useReactToPrint({ 
-    contentRef: printRef, 
-    documentTitle: `Bulk-Inventory-Tags` 
-  })
+  const handleBulkPrint = useReactToPrint({ contentRef: printRef, documentTitle: `Bulk-Inventory-Tags` })
   
   const itemsToPrint = useMemo(() => {
     return selectedIds.map(id => itemCache[id]).filter(Boolean) as InventoryItem[];
   }, [selectedIds, itemCache]);
-
-  const uniqueCategories = useMemo(() => Array.from(new Set(items.map(c => c.item_category))).filter(Boolean).sort(), [items]);
-  const uniquePurities = useMemo(() => Array.from(new Set(items.map(c => c.purity_karat))).filter(Boolean).sort(), [items]);
-  const uniqueClaritiesFilter = useMemo(() => {
-    const rawClarities = items.map(c => c.diamond_clarity).filter(Boolean) as string[];
-    const cleanClarities = rawClarities.map(c => c.trim().toUpperCase());
-    return Array.from(new Set(cleanClarities)).sort();
-  }, [items]);
 
   const executeSmartSearch = useCallback(() => {
     if (!searchTerm.trim()) {
@@ -279,7 +275,6 @@ export default function InventoryPage() {
       q = q.replace(clarityMatch[0], '')
     }
 
-    // ✨ NEW: Smart Search for Solitaire
     const hasSolMatch = q.match(/(?:with|has)\s*solitaire/i)
     if (hasSolMatch) {
       setFilterSolitaire('has_solitaire'); magicalUpdate = true; q = q.replace(hasSolMatch[0], '')
@@ -289,7 +284,6 @@ export default function InventoryPage() {
       setFilterSolitaire('no_solitaire'); magicalUpdate = true; q = q.replace(noSolMatch[0], '')
     }
 
-    // ✨ NEW: Smart Search for Diamond Weight
     const belowDiaMatch = q.match(/(?:under|below|less than)\s*0?\.?20\s*(?:ct|cts|carat)/i)
     if (belowDiaMatch) {
       setFilterDiaWt('below_0.20'); magicalUpdate = true; q = q.replace(belowDiaMatch[0], '')
@@ -378,7 +372,7 @@ export default function InventoryPage() {
     const cleanSearch = q.replace(/\b(in|at|from|find|show|me|the|all|branch|store|where|are|with|price|cost|under|over|above|below)\b/gi, '').replace(/\s+/g, ' ').trim()
     setDebouncedSearch(cleanSearch)
 
-  }, [searchTerm, warehouses, selectedLocation, uniqueCategories, maxCatalogPrice, isHQ, setSelectedLocation])
+  }, [searchTerm, warehouses, selectedLocation, maxCatalogPrice, isHQ, setSelectedLocation])
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -414,112 +408,106 @@ export default function InventoryPage() {
           if (companyData.current_rate_24k) setBase24kRate(companyData.current_rate_24k)
           if (companyData.current_rate_diamond) setCalcParams(prev => ({ ...prev, diamondRatePerCt: companyData.current_rate_diamond }))
         }
+        
+        // Fetch globally unique categories/purities once for the dropdowns
+        const { data: uniqueData } = await supabase.from('inventory_items').select('item_category, purity_karat, diamond_clarity').eq('company_id', appUser.company_id)
+        if (uniqueData) {
+          setUniqueCategories(Array.from(new Set(uniqueData.map(d => d.item_category))).filter(Boolean).sort());
+          setUniquePurities(Array.from(new Set(uniqueData.map(d => d.purity_karat))).filter(Boolean).sort());
+          setUniqueClaritiesFilter(Array.from(new Set(uniqueData.map(d => d.diamond_clarity ? d.diamond_clarity.trim().toUpperCase() : null))).filter(Boolean).sort() as string[]);
+        }
+
       } catch (err) { toast.error('Error loading initial data') }
     }
     fetchInitialData()
-  }, [appUser, isHQ, selectedLocation, setSelectedLocation])
+  }, [appUser, isHQ])
 
-  useEffect(() => {
-    if (!appUser) return;
-    const fetchCounts = async () => {
-      let activeQuery = supabase.from('inventory_items').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id)
-      
-      if (selectedLocation !== 'ALL') activeQuery = activeQuery.eq('warehouse_id', selectedLocation)
-      if (debouncedSearch) activeQuery = activeQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
-      if (filterCategory.length > 0) activeQuery = activeQuery.in('item_category', filterCategory)
-      if (filterPurity.length > 0) activeQuery = activeQuery.in('purity_karat', filterPurity)
-      if (filterClarity.length > 0) activeQuery = activeQuery.in('diamond_clarity', filterClarity)
-      
+  // ✨ SERVER-SIDE FILTER BUILDER
+  const buildServerQuery = (queryObj: any, isSoldTabContext: boolean) => {
+    let q = queryObj.eq('company_id', appUser?.company_id);
+    
+    if (selectedLocation !== 'ALL') q = q.eq('warehouse_id', selectedLocation);
+    if (debouncedSearch) q = q.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`);
+    if (filterCategory.length > 0) q = q.in('item_category', filterCategory);
+    if (filterPurity.length > 0) q = q.in('purity_karat', filterPurity);
+    if (filterClarity.length > 0) q = q.in('diamond_clarity', filterClarity);
+
+    if (isSoldTabContext) {
+      q = q.in('status', ['sold', 'delivered']);
+    } else {
       if (filterStatus.length > 0) {
         const validStatuses = filterStatus.filter(s => s !== 'repairs' && s !== 'exchanged');
         let orStrings = [];
         if (validStatuses.length > 0) orStrings.push(`status.in.(${validStatuses.join(',')})`);
         if (filterStatus.includes('exchanged')) orStrings.push(`is_exchanged.eq.true`);
-        if (orStrings.length > 0) activeQuery = activeQuery.or(orStrings.join(','));
+        if (orStrings.length > 0) q = q.or(orStrings.join(','));
       } else {
-        activeQuery = activeQuery.in('status', ['in_stock', 'transit'])
+        q = q.in('status', ['in_stock', 'transit']);
       }
-
-      if (isPriceFilterActive && debouncedPriceRange[0] > 0) activeQuery = activeQuery.gte('mrp', debouncedPriceRange[0])
-      if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) activeQuery = activeQuery.lte('mrp', debouncedPriceRange[1])
-
-      // ✨ DB: Solitaire Filter
-      if (filterSolitaire === 'has_solitaire') activeQuery = activeQuery.gt('solitaire_weight_cts', 0)
-      else if (filterSolitaire === 'no_solitaire') activeQuery = activeQuery.or('solitaire_weight_cts.eq.0,solitaire_weight_cts.is.null')
-
-      // ✨ DB: Diamond Weight Filter
-      if (filterDiaWt === 'below_0.20') activeQuery = activeQuery.lt('total_stone_weight_cts', 0.20)
-      else if (filterDiaWt === 'above_0.20') activeQuery = activeQuery.gte('total_stone_weight_cts', 0.20)
-
-      const { count: activeCount } = await activeQuery
-      if (activeCount !== null) setGlobalTotalCount(activeCount)
-
-      let soldQuery = supabase.from('inventory_items').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id)
-      
-      if (filterStatus.includes('sold')) {
-        soldQuery = soldQuery.in('status', ['sold', 'delivered'])
-      } else {
-        soldQuery = soldQuery.in('status', ['sold', 'delivered'])
-      }
-      
-      if (selectedLocation !== 'ALL') soldQuery = soldQuery.eq('warehouse_id', selectedLocation)
-      if (debouncedSearch) soldQuery = soldQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
-      if (filterCategory.length > 0) soldQuery = soldQuery.in('item_category', filterCategory)
-      if (filterPurity.length > 0) soldQuery = soldQuery.in('purity_karat', filterPurity)
-      if (filterClarity.length > 0) soldQuery = soldQuery.in('diamond_clarity', filterClarity)
-      
-      if (isPriceFilterActive && debouncedPriceRange[0] > 0) soldQuery = soldQuery.gte('mrp', debouncedPriceRange[0])
-      if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) soldQuery = soldQuery.lte('mrp', debouncedPriceRange[1])
-
-      // ✨ DB: Solitaire Filter (Sold Items)
-      if (filterSolitaire === 'has_solitaire') soldQuery = soldQuery.gt('solitaire_weight_cts', 0)
-      else if (filterSolitaire === 'no_solitaire') soldQuery = soldQuery.or('solitaire_weight_cts.eq.0,solitaire_weight_cts.is.null')
-
-      // ✨ DB: Diamond Weight Filter (Sold Items)
-      if (filterDiaWt === 'below_0.20') soldQuery = soldQuery.lt('total_stone_weight_cts', 0.20)
-      else if (filterDiaWt === 'above_0.20') soldQuery = soldQuery.gte('total_stone_weight_cts', 0.20)
-
-
-      const { count: soldCount } = await soldQuery
-      if (soldCount !== null) setGlobalSoldCount(soldCount)
     }
-    fetchCounts()
-  }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, debouncedPriceRange, maxCatalogPrice, isPriceFilterActive, filterSolitaire, filterDiaWt])
 
-  const fetchItems = async () => {
-    if (!appUser || !selectedLocation) return
-    setLoading(true)
+    if (isPriceFilterActive && debouncedPriceRange[0] > 0) q = q.gte('mrp', debouncedPriceRange[0]);
+    if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) q = q.lte('mrp', debouncedPriceRange[1]);
+
+    if (filterSolitaire === 'has_solitaire') q = q.gt('solitaire_weight_cts', 0);
+    else if (filterSolitaire === 'no_solitaire') q = q.or('solitaire_weight_cts.eq.0,solitaire_weight_cts.is.null');
+
+    if (filterDiaWt === 'below_0.20') q = q.lt('total_stone_weight_cts', 0.20);
+    else if (filterDiaWt === 'above_0.20') q = q.gte('total_stone_weight_cts', 0.20);
+
+    return q;
+  };
+
+  // ✨ TRADITIONAL PAGINATION FETCH ✨
+  const fetchPage = async (pageToLoad: number) => {
+    if (!appUser || !selectedLocation) return;
+    setLoading(true);
+
     try {
+      // 1. Fetch Inventory Items (Paginated)
       let invQuery = supabase.from('inventory_items')
-        .select(`*, custom_orders (id, order_number, origin:origin_warehouse_id(name)), karigars:karigar_id (full_name, karigar_code), created_from_job_bag:job_bags (karigar_id, karigars:karigar_id (full_name, karigar_code))`)
-        .eq('company_id', appUser.company_id).limit(2500)
+        .select(`*, custom_orders (id, order_number, origin:origin_warehouse_id(name)), karigars:karigar_id (full_name, karigar_code), created_from_job_bag:job_bags (karigar_id, karigars:karigar_id (full_name, karigar_code))`, { count: 'exact' });
       
-      if (selectedLocation !== 'ALL') invQuery = invQuery.eq('warehouse_id', selectedLocation)
-      if (debouncedSearch) invQuery = invQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%`)
+      invQuery = buildServerQuery(invQuery, activeTab === 'sold');
+      invQuery = invQuery.order('created_at', { ascending: false }).range(pageToLoad * pageSize, (pageToLoad + 1) * pageSize - 1);
 
-      let repQuery = supabase.from('repair_tickets').select(`*, origin:warehouses!repair_tickets_origin_warehouse_id_fkey(name)`).eq('company_id', appUser.company_id)
-      if (debouncedSearch) repQuery = repQuery.or(`ticket_number.ilike.%${debouncedSearch}%,item_description.ilike.%${debouncedSearch}%`)
+      const [invRes] = await Promise.all([invQuery]);
+      if (invRes.error) throw invRes.error;
 
-      const [invRes, repRes] = await Promise.all([invQuery, repQuery])
-      if (invRes.error) throw invRes.error
-      if (repRes.error) throw repRes.error
+      // 2. Fetch Repairs (Only on Page 0, if repairs are relevant)
+      let repairList: any[] = [];
+      const isRepairAllowed = !isPriceFilterActive && filterSolitaire === 'all' && filterDiaWt === 'all' && filterClarity.length === 0 && filterPurity.length === 0 && filterCategory.length === 0;
+      const wantsRepairs = filterStatus.includes('repairs') || filterStatus.length === 0;
 
-      const inventoryList = (invRes.data || []).map(item => ({ ...item, _type: 'inventory' as const, is_repair_ticket: false }))
-      const repairList = (repRes.data || []).map(rep => ({
-        id: rep.id, _type: 'repair' as const, barcode: rep.ticket_number, sku_reference: 'REPAIR TICKET', item_category: rep.item_description || 'Repair Service',
-        item_size: 'N/A', metal_type: 'Mixed', purity_karat: rep.purity || 'N/A', purity_percent: 0, gross_weight_g: rep.gross_weight_g || 0, 
-        net_weight_g: rep.issued_gold_g || 0, total_stone_weight_cts: rep.issued_diamond_cts || 0, total_stone_pieces: 0, solitaire_weight_cts: 0, solitaire_pieces: 0, melee_weight_cts: 0,
-        melee_pieces: 0, color_stone_weight_cts: 0, color_stone_pieces: 0, mrp: rep.actual_cost || 0, status: rep.status,
-        warehouse_id: rep.status === 'fixed_ready_for_dispatch' && warehouses.find(w => w.name.includes('HQ'))?.id ? warehouses.find(w => w.name.includes('HQ'))?.id || rep.origin_warehouse_id : rep.origin_warehouse_id, 
-        is_exchanged: false, is_custom_order: false, is_repair_ticket: true, custom_order_id: null, origin_name: rep.origin?.name || 'Unknown Branch', 
-        karigars: null, created_from_job_bag: null, huid_code: null, hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: rep.stone_shape || null, diamond_color: null,
-        diamond_clarity: null, cost_metal: 0, cost_stone: 0, cost_making: rep.labor_charges || 0, cost_total: rep.actual_cost || 0, wastage_weight_g: 0,
-        created_at: rep.created_at, updated_at: rep.updated_at, expected_delivery_date: rep.expected_delivery_date, last_status_change_at: rep.updated_at,
-        audit_history: null 
-      }))
+      if (pageToLoad === 0 && activeTab !== 'sold' && isRepairAllowed && wantsRepairs && !filterStatus.includes('exchanged')) {
+        let repQuery = supabase.from('repair_tickets').select(`*, origin:warehouses!repair_tickets_origin_warehouse_id_fkey(name)`).eq('company_id', appUser.company_id);
+        if (selectedLocation !== 'ALL') repQuery = repQuery.eq('origin_warehouse_id', selectedLocation);
+        if (debouncedSearch) repQuery = repQuery.or(`ticket_number.ilike.%${debouncedSearch}%,item_description.ilike.%${debouncedSearch}%`);
+        
+        repQuery = repQuery.neq('status', 'delivered').order('created_at', { ascending: false }).limit(50);
+        const repRes = await repQuery;
+        
+        if (!repRes.error && repRes.data) {
+          repairList = repRes.data.map(rep => ({
+            id: rep.id, _type: 'repair' as const, barcode: rep.ticket_number, sku_reference: 'REPAIR TICKET', item_category: rep.item_description || 'Repair Service',
+            item_size: 'N/A', metal_type: 'Mixed', purity_karat: rep.purity || 'N/A', purity_percent: 0, gross_weight_g: rep.gross_weight_g || 0, 
+            net_weight_g: rep.issued_gold_g || 0, total_stone_weight_cts: rep.issued_diamond_cts || 0, total_stone_pieces: 0, solitaire_weight_cts: 0, solitaire_pieces: 0, melee_weight_cts: 0,
+            melee_pieces: 0, color_stone_weight_cts: 0, color_stone_pieces: 0, mrp: rep.actual_cost || 0, status: rep.status,
+            warehouse_id: rep.status === 'fixed_ready_for_dispatch' && warehouses.find(w => w.name.includes('HQ'))?.id ? warehouses.find(w => w.name.includes('HQ'))?.id || rep.origin_warehouse_id : rep.origin_warehouse_id, 
+            is_exchanged: false, is_custom_order: false, is_repair_ticket: true, custom_order_id: null, origin_name: rep.origin?.name || 'Unknown Branch', 
+            karigars: null, created_from_job_bag: null, huid_code: null, hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: rep.stone_shape || null, diamond_color: null,
+            diamond_clarity: null, cost_metal: 0, cost_stone: 0, cost_making: rep.labor_charges || 0, cost_total: rep.actual_cost || 0, wastage_weight_g: 0,
+            created_at: rep.created_at, updated_at: rep.updated_at, expected_delivery_date: rep.expected_delivery_date, last_status_change_at: rep.updated_at,
+            audit_history: null 
+          }));
+        }
+      }
 
-      const filteredRepairs = selectedLocation === 'ALL' ? repairList : repairList.filter(r => r.warehouse_id === selectedLocation || (r.status === 'fixed_ready_for_dispatch' && isHQ));
-      const combined = [...inventoryList, ...filteredRepairs].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      const inventoryList = (invRes.data || []).map(item => ({ ...item, _type: 'inventory' as const, is_repair_ticket: false }));
+      const combined = pageToLoad === 0 ? [...repairList, ...inventoryList] : inventoryList;
+
+      // ✨ STRICT OVERRIDE FOR PAGINATION (No Append!)
+      setItems(combined as InventoryItem[]);
 
       setItemCache(prev => {
         const nextCache = { ...prev };
@@ -527,64 +515,51 @@ export default function InventoryPage() {
         return nextCache;
       });
 
-      setItems(combined)
-
-      if (!debouncedSearch && filterCategory.length === 0 && filterPurity.length === 0 && !isPriceFilterActive) {
-        const highestPrice = Math.max(...combined.map(c => c.mrp || 0), 100000);
-        setMaxCatalogPrice(highestPrice);
-        setPriceRange([0, highestPrice]);
+      if (invRes.count !== null) {
+        if (activeTab === 'sold') setGlobalSoldCount(invRes.count);
+        else setGlobalTotalCount(invRes.count);
       }
 
-    } catch (error) { toast.error('Failed to load inventory') } 
-    finally { setLoading(false) }
+    } catch (error) { 
+      toast.error('Failed to load inventory');
+    } finally { 
+      setLoading(false);
+    }
   }
 
-  useEffect(() => { fetchItems() }, [appUser, selectedLocation, debouncedSearch])
+  // Trigger page reset when filters change
+  useEffect(() => {
+    setPage(0);
+    fetchPage(0);
+  }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, filterSolitaire, filterDiaWt, debouncedPriceRange, isPriceFilterActive, activeTab, pageSize])
 
+
+  // ✨ BULK ACTION FIX: Add _type to cache and NEVER SELECT BUYBACKS
   const handleSelectAllGlobal = async () => {
     if (!appUser) return;
     setIsFetchingGlobal(true)
     try {
       let allFetchedData: any[] = [];
-      let start = 0; const limit = 1000; let hasMore = true;
+      let start = 0; const limit = 1000; let hasMoreLoop = true;
 
-      while (hasMore) {
+      while (hasMoreLoop) {
         let globalQuery = supabase.from('inventory_items')
           .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged, diamond_shape, diamond_color, diamond_clarity, audit_history')
-          .eq('company_id', appUser.company_id).range(start, start + limit - 1)
-        
-        if (selectedLocation !== 'ALL') globalQuery = globalQuery.eq('warehouse_id', selectedLocation)
-        if (debouncedSearch) globalQuery = globalQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
-        if (filterCategory.length > 0) globalQuery = globalQuery.in('item_category', filterCategory)
-        if (filterPurity.length > 0) globalQuery = globalQuery.in('purity_karat', filterPurity)
-        if (filterClarity.length > 0) globalQuery = globalQuery.in('diamond_clarity', filterClarity)
-        
-        if (filterStatus.length > 0) {
-          const validStatuses = filterStatus.filter(s => s !== 'repairs' && s !== 'exchanged');
-          let orStrings = [];
-          if (validStatuses.length > 0) orStrings.push(`status.in.(${validStatuses.join(',')})`);
-          if (filterStatus.includes('exchanged')) orStrings.push(`is_exchanged.eq.true`);
-          if (orStrings.length > 0) globalQuery = globalQuery.or(orStrings.join(','));
-        } else {
-          globalQuery = globalQuery.in('status', ['in_stock', 'transit'])
+          
+        globalQuery = buildServerQuery(globalQuery, false); // Applies all current filters
+        globalQuery = globalQuery.eq('is_exchanged', false); // Exclude buybacks
+        globalQuery = globalQuery.range(start, start + limit - 1);
+
+        const { data, error } = await globalQuery;
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          // ✨ THE FIX: We MUST attach the _type tag before caching so handleOpenCalc doesn't crash!
+          const typedData = data.map(d => ({ ...d, _type: 'inventory', is_repair_ticket: false } as InventoryItem));
+          allFetchedData = [...allFetchedData, ...typedData];
         }
-
-        if (isPriceFilterActive && debouncedPriceRange[0] > 0) globalQuery = globalQuery.gte('mrp', debouncedPriceRange[0])
-        if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) globalQuery = globalQuery.lte('mrp', debouncedPriceRange[1])
-
-        // ✨ DB: Solitaire Filter
-        if (filterSolitaire === 'has_solitaire') globalQuery = globalQuery.gt('solitaire_weight_cts', 0)
-        else if (filterSolitaire === 'no_solitaire') globalQuery = globalQuery.or('solitaire_weight_cts.eq.0,solitaire_weight_cts.is.null')
-
-        // ✨ DB: Diamond Weight Filter
-        if (filterDiaWt === 'below_0.20') globalQuery = globalQuery.lt('total_stone_weight_cts', 0.20)
-        else if (filterDiaWt === 'above_0.20') globalQuery = globalQuery.gte('total_stone_weight_cts', 0.20)
-
-        const { data, error } = await globalQuery
-        if (error) throw error
-
-        if (data && data.length > 0) allFetchedData = [...allFetchedData, ...data];
-        if (!data || data.length < limit) hasMore = false; else start += limit;
+        
+        if (!data || data.length < limit) hasMoreLoop = false; else start += limit;
       }
 
       setItemCache(prev => {
@@ -592,64 +567,15 @@ export default function InventoryPage() {
         allFetchedData.forEach(item => { nextCache[item.id] = item as InventoryItem });
         return nextCache;
       });
-
-      const existingIds = new Set(items.map(i => i.id))
-      const newItems = allFetchedData.filter(d => !existingIds.has(d.id)).map(d => ({ ...d, _type: 'inventory' as const, is_repair_ticket: false } as InventoryItem))
-      if (newItems.length > 0) setItems(prev => [...prev, ...newItems])
       
       setSelectedIds(allFetchedData.map(item => item.id))
-      toast.success(`Selected all ${allFetchedData.length} items matching your filters.`)
+      toast.success(`Selected ${allFetchedData.length} valid items (Excluded repairs & buybacks).`)
     } catch (error) {
       toast.error("Failed to fetch global database items.")
     } finally {
       setIsFetchingGlobal(false)
     }
   }
-
-  const { activeItemsFiltered, soldItemsFiltered } = useMemo(() => {
-    let active = [], sold = [];
-    for (const item of items) {
-      const isSold = item.status === 'sold' || item.status === 'delivered';
-      
-      if (debouncedSearch) {
-        const q = debouncedSearch.toLowerCase()
-        if (!(item.barcode?.toLowerCase().includes(q) || item.sku_reference?.toLowerCase().includes(q))) continue;
-      }
-
-      if (filterCategory.length > 0 && !filterCategory.includes(item.item_category)) continue;
-      if (filterPurity.length > 0 && !filterPurity.includes(item.purity_karat)) continue;
-      
-      if (filterClarity.length > 0) {
-        const itemClarity = item.diamond_clarity ? item.diamond_clarity.trim().toUpperCase() : "";
-        if (!itemClarity || !filterClarity.includes(itemClarity)) {
-          continue; 
-        }
-      }
-      
-      if (filterStatus.length > 0) {
-        let match = false;
-        if (filterStatus.includes('repairs') && item._type === 'repair') match = true;
-        if (filterStatus.includes('exchanged') && item.is_exchanged) match = true;
-        if (filterStatus.includes(item.status)) match = true;
-        if (!match) continue;
-      }
-
-      if (isPriceFilterActive && ((item.mrp || 0) < priceRange[0] || (item.mrp || 0) > priceRange[1])) continue;
-
-      // ✨ LOCAL MEMO: Solitaire Filter
-      if (filterSolitaire === 'has_solitaire' && !(item.solitaire_weight_cts > 0 || item.solitaire_pieces > 0)) continue;
-      if (filterSolitaire === 'no_solitaire' && (item.solitaire_weight_cts > 0 || item.solitaire_pieces > 0)) continue;
-
-      // ✨ LOCAL MEMO: Diamond Weight Filter
-      const diaWt = item.total_stone_weight_cts || 0;
-      if (filterDiaWt === 'below_0.20' && diaWt >= 0.20) continue;
-      if (filterDiaWt === 'above_0.20' && diaWt < 0.20) continue;
-
-      if (isSold) sold.push(item); else active.push(item);
-    }
-    return { activeItemsFiltered: active, soldItemsFiltered: sold }
-    
-  }, [items, debouncedSearch, filterCategory, filterPurity, filterStatus, priceRange, isPriceFilterActive, filterClarity, filterSolitaire, filterDiaWt]);
   
   const toggleArrayItem = (arr: string[], setArr: any, item: string) => {
     if (arr.includes(item)) setArr(arr.filter((i: string) => i !== item));
@@ -782,6 +708,7 @@ export default function InventoryPage() {
   const handleOpenCalc = () => {
     if (!canEdit) return toast.error("Unauthorized to use bulk calculator");
     
+    // Using the protected itemCache ensures that even if you paginated away, the items are perfectly intact
     const selectedItems = selectedIds.map(id => itemCache[id]).filter(i => i && i._type === 'inventory')
     if (selectedItems.length === 0) return toast.error("No valid items selected.", { description: "Repairs cannot be bulk-calculated. Select standard inventory." })
 
@@ -906,6 +833,43 @@ export default function InventoryPage() {
 
   if (!appUser) return null
 
+  // Pagination Helper Component
+  const PaginationFooter = () => {
+    const totalCurrentCount = activeTab === 'sold' ? globalSoldCount : globalTotalCount;
+    return (
+      <div className="bg-slate-50 border-t border-slate-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-b-2xl">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500 font-medium">Rows per page:</span>
+          <Select value={pageSize.toString()} onValueChange={(val) => setPageSize(Number(val))}>
+            <SelectTrigger className="h-8 w-[80px] text-xs bg-white font-semibold">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="50">50</SelectItem>
+              <SelectItem value="100">100</SelectItem>
+              <SelectItem value="200">200</SelectItem>
+              <SelectItem value="500">500</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        
+        <div className="flex items-center gap-4">
+          <span className="text-xs text-slate-500 font-medium">
+            Showing <span className="font-bold text-slate-700">{items.length > 0 ? page * pageSize + 1 : 0}</span> to <span className="font-bold text-slate-700">{Math.min((page + 1) * pageSize, totalCurrentCount)}</span> of <span className="font-bold text-slate-700">{totalCurrentCount}</span> records
+          </span>
+          <div className="flex items-center gap-1.5">
+            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0 || loading} className="h-8 px-3 text-xs bg-white text-slate-600">
+              <ChevronLeft className="w-4 h-4 mr-1"/> Prev
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={(page + 1) * pageSize >= totalCurrentCount || loading} className="h-8 px-3 text-xs bg-white text-slate-600">
+              Next <ChevronRight className="w-4 h-4 ml-1"/>
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col min-h-screen bg-[#fafafa] font-sans selection:bg-indigo-100 pb-20">
       
@@ -948,7 +912,7 @@ export default function InventoryPage() {
               </>
             )}
 
-            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900 hover:bg-slate-100" onClick={fetchItems}>
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900 hover:bg-slate-100" onClick={() => fetchPage(0)}>
               <RefreshCw className={`h-3.5 w-3.5 sm:mr-1.5 ${loading ? 'animate-spin text-indigo-500' : ''}`} />
               <span className="hidden sm:inline">Refresh</span>
             </Button>
@@ -1103,7 +1067,6 @@ export default function InventoryPage() {
               )}
             </div>
 
-            {/* ✨ NEW: Solitaire Filter */}
             <div className="relative">
               <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'solitaire' ? null : 'solitaire')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", filterSolitaire !== 'all' || openDropdown === 'solitaire' ? "bg-purple-50 text-purple-700 border-purple-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
                 Solitaire {filterSolitaire !== 'all' && <span className="ml-1.5 w-2 h-2 rounded-full bg-purple-500 block"></span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
@@ -1127,7 +1090,6 @@ export default function InventoryPage() {
               )}
             </div>
 
-            {/* ✨ NEW: Diamond Weight Filter */}
             <div className="relative">
               <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'diawt' ? null : 'diawt')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", filterDiaWt !== 'all' || openDropdown === 'diawt' ? "bg-blue-50 text-blue-700 border-blue-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
                 Dia Wt {filterDiaWt !== 'all' && <span className="ml-1.5 w-2 h-2 rounded-full bg-blue-500 block"></span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
@@ -1230,24 +1192,28 @@ export default function InventoryPage() {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
           <TabsList className="bg-transparent border-b border-slate-200 rounded-none h-11 w-full justify-start p-0 gap-6 mb-2">
             <TabsTrigger value="active" className="rounded-none border-b-2 border-transparent data-[state=active]:border-indigo-600 data-[state=active]:text-indigo-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-500 transition-all hover:text-slate-800">
-              Live Stock <span className="ml-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-600">{Math.max(globalTotalCount, activeItemsFiltered.length)}</span>
+              Live Stock <span className="ml-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-600">{globalTotalCount}</span>
             </TabsTrigger>
             <TabsTrigger value="sold" className="rounded-none border-b-2 border-transparent data-[state=active]:border-slate-800 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600 data-[state=active]:text-slate-800 transition-all">
-              Archive / Sold <span className="ml-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-600">{Math.max(globalSoldCount, soldItemsFiltered.length)}</span>
+              Archive / Sold <span className="ml-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-600">{globalSoldCount}</span>
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="active">
              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative">
                 {loading && <GeminiLoader />}
-                <InventoryTable data={activeItemsFiltered} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} handleOpenWeightEdit={handleOpenWeightEdit} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />
+                <InventoryTable data={items} warehouses={warehouses} selectedIds={selectedIds} setSelectedIds={setSelectedIds} editingMrpId={editingMrpId} setEditingId={setEditingId} editingMrpVal={editingMrpVal} setEditingMrpVal={setEditingMrpVal} handleSaveMrp={handleSaveMrp} handleOpenWeightEdit={handleOpenWeightEdit} setTagItem={setTagItem} handleSingleTransfer={handleSingleTransfer} setViewItem={setViewItem} canEdit={canEdit} />
+                
+                <PaginationFooter />
              </div>
           </TabsContent>
 
           <TabsContent value="sold">
              <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative">
                 {loading && <GeminiLoader />}
-                <InventoryTable data={soldItemsFiltered} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} handleOpenWeightEdit={()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />
+                <InventoryTable data={items} warehouses={warehouses} isSoldTab selectedIds={[]} setSelectedIds={()=>{}} editingMrpId={null} setEditingId={()=>{}} editingMrpVal="" setEditingMrpVal={()=>{}} handleSaveMrp={async()=>{}} handleOpenWeightEdit={()=>{}} setTagItem={setTagItem} handleSingleTransfer={()=>{}} setViewItem={setViewItem} canEdit={canEdit} />
+                
+                <PaginationFooter />
              </div>
           </TabsContent>
         </Tabs>
@@ -1263,7 +1229,8 @@ export default function InventoryPage() {
             </div>
             
             <div className="flex items-center gap-1 pr-1">
-              {globalTotalCount > activeItemsFiltered.length && selectedIds.length === activeItemsFiltered.length ? (
+              {/* ✨ FIX: The Global Select Button is always active if what's loaded on screen is less than the total database count */}
+              {globalTotalCount > items.length && selectedIds.length === items.length ? (
                 <Button 
                   size="sm" 
                   onClick={handleSelectAllGlobal} 
@@ -1276,10 +1243,10 @@ export default function InventoryPage() {
               ) : (
                 <Button 
                   size="sm" 
-                  onClick={() => setSelectedIds(activeItemsFiltered.map(i => i.id))} 
+                  onClick={() => setSelectedIds(items.map(i => i.id))} 
                   className="h-8 px-3 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-white rounded-xl shadow-sm transition-none hidden sm:flex"
                 >
-                  <CheckSquare className="w-3.5 h-3.5 mr-1.5 text-indigo-400" /> Select Loaded ({activeItemsFiltered.length})
+                  <CheckSquare className="w-3.5 h-3.5 mr-1.5 text-indigo-400" /> Select Loaded ({items.length})
                 </Button>
               )}
 
@@ -1802,36 +1769,13 @@ export default function InventoryPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ITEM TAG PRINT PREVIEW */}
-      <ItemTagPreview item={tagItem} onClose={() => setTagItem(null)} />
-
     </div>
   )
 }
 
 // --- HYBRID RENDER TABLE ---
 function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, handleOpenWeightEdit, setTagItem, handleSingleTransfer, setViewItem, canEdit }: any) {
-  const [visibleCount, setVisibleCount] = useState(50)
-  
-  const observer = useRef<IntersectionObserver | null>(null)
-  const observerRef = useCallback((node: HTMLDivElement | null) => {
-    if (observer.current) observer.current.disconnect()
-    if (node) {
-      observer.current = new IntersectionObserver((entries) => {
-        if (entries[0].isIntersecting) {
-          setVisibleCount((prev) => prev + 50)
-        }
-      }, { threshold: 0.1 })
-      observer.current.observe(node)
-    }
-  }, [])
-
-  useEffect(() => {
-    setVisibleCount(50)
-  }, [data])
-
   const getWarehouseName = (wId: string) => warehouses.find((w: any) => w.id === wId)?.name || 'Unknown Vault'
-  const visibleData = data.slice(0, visibleCount)
 
   return (
     <div className="h-full flex flex-col">
@@ -1843,7 +1787,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
               {!isSoldTab && (
                 <TableHead className="w-[40px] px-4 h-10">
                   <Checkbox 
-                    checked={selectedIds.length === data.length && data.length > 0} 
+                    checked={selectedIds.length > 0 && selectedIds.length === data.length} 
                     onCheckedChange={() => setSelectedIds(selectedIds.length === data.length ? [] : data.map((i: any) => i.id))} 
                     className="rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600"
                   />
@@ -1859,7 +1803,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
             </TableRow>
           </TableHeader>
           <TableBody>
-            {visibleData.map((item: any) => {
+            {data.map((item: any) => {
               const { aggWt, stnWt, aggPcs } = getStoneTotals(item);
               const karigar = item.karigars || item.created_from_job_bag?.karigars;
               
@@ -2006,7 +1950,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
 
       {/* MOBILE VIEW */}
       <div className="md:hidden flex flex-col gap-3 bg-slate-50/50 p-3 flex-1 overflow-y-auto custom-scrollbar">
-        {visibleData.map((item: any) => {
+        {data.map((item: any) => {
            const { aggWt, stnWt } = getStoneTotals(item);
            const karigar = item.karigars || item.created_from_job_bag?.karigars;
            
@@ -2127,17 +2071,6 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
            )
         })}
       </div>
-
-      {/* GEMINI INFINITE SCROLL TARGET */}
-      {visibleCount < data.length && (
-        <div ref={observerRef} className="h-16 w-full flex items-center justify-center my-4 relative">
-          <div className="flex items-center gap-1.5 opacity-60">
-            <Sparkles className="w-4 h-4 text-[#4285F4] animate-pulse" />
-            <Sparkles className="w-5 h-5 text-[#9b72cb] animate-pulse" style={{ animationDelay: '200ms' }} />
-            <Sparkles className="w-4 h-4 text-[#d96570] animate-pulse" style={{ animationDelay: '400ms' }} />
-          </div>
-        </div>
-      )}
     </div>
   )
 }
