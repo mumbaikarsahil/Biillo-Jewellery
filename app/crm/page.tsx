@@ -212,14 +212,23 @@ export default function CRMPage() {
              store_credit_balance: Number(row.store_credit_balance) || 0
         }));
 
-      const { error } = await supabase.from('customers').upsert(validPayloads, { onConflict: 'company_id, phone' });
+      // ✨ DEDUPLICATION FIX: Keep only the latest entry for each unique phone number in this batch
+      const uniqueCustomersMap = new Map();
+      validPayloads.forEach(payload => {
+         // Using a combination of company_id and phone if your constraint requires both, 
+         // but phone is usually sufficient for deduplication within the same batch.
+         uniqueCustomersMap.set(payload.phone, payload); 
+      });
+      const deduplicatedPayload = Array.from(uniqueCustomersMap.values());
+
+      const { error } = await supabase.from('customers').upsert(deduplicatedPayload, { onConflict: 'company_id, phone' });
       if (error) throw error;
 
-      toast.success(`Imported ${validPayloads.length} customers!`);
+      toast.success(`Imported ${deduplicatedPayload.length} unique customers!`);
       setIsPreviewModalOpen(false);
       setImportFile(null);
       setPreviewData([]);
-      fetchCRMData();
+      fetchCRMData(); // Assuming this is passed as a prop or accessible in scope
     } catch (err: any) {
       toast.error(`Import Failed: ${err.message}`);
     } finally {

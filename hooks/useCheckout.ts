@@ -527,16 +527,18 @@ export function useCheckout({
       }
       else if (mode === 'return') { 
         finalNo = `RET-${Date.now().toString().slice(-6)}`
+        const isExternal = returnDetails.physicalDetails?.is_external_item || false;
         
         // 1. Insert the Buyback Ledger Entry
         const { data: buybackData, error: buybackErr } = await supabase.from('buybacks').insert({
           created_at: effectiveDateISO, 
           company_id: appUser?.company_id,
-          reference_invoice_number: returnDetails.invoiceNo || null,
-          customer_id: selectedCustomer?.id,
           warehouse_id: selectedLocation,
+          customer_id: selectedCustomer?.id || null,
+          invoice_id: returnDetails.invoiceId || null, // ✨ Linked to actual Invoice DB Row
+          reference_invoice_number: returnDetails.invoiceNo || null,
           
-          is_external_item: returnDetails.physicalDetails?.is_external_item || false,
+          is_external_item: isExternal,
           item_category: returnDetails.physicalDetails?.item_category || null,
           metal_type: returnDetails.physicalDetails?.metal_type || null,
           purity_karat: returnDetails.physicalDetails?.purity_karat || null,
@@ -552,42 +554,52 @@ export function useCheckout({
           deduction_amount: Number(returnDetails.discountApplied) || 0,
           buyback_percent: Number(returnDetails.returnPercent) || 100,
           net_refund: Number(returnDetails.calculatedRefund) || 0,
-          
           status: 'received',
           created_by: appUser?.user_id
         }).select('id').single()
         
         if (buybackErr) throw buybackErr
 
-       const uniqueRef = `RTN-${Date.now().toString().slice(-6)}`;
-        
-       const grossWt = Number(returnDetails.physicalDetails?.gross_weight_g) || 0.001;
-       const netWt = Number(returnDetails.physicalDetails?.net_weight_g) || grossWt;
+        // 2. Handle the Physical Inventory 
+        if (isExternal) {
+           // External Old Gold -> Mint a new RTN barcode
+           const uniqueRef = `RTN-${Date.now().toString().slice(-6)}`;
+           const grossWt = Number(returnDetails.physicalDetails?.gross_weight_g) || 0.001;
+           const netWt = Number(returnDetails.physicalDetails?.net_weight_g) || grossWt;
 
-       const { error: invError } = await supabase.from('inventory_items').insert({
-         company_id: appUser?.company_id,
-         warehouse_id: selectedLocation,
-         sku: uniqueRef,
-         barcode: uniqueRef,
-         item_category: returnDetails.physicalDetails?.item_category || 'Old Gold',
-         metal_type: returnDetails.physicalDetails?.metal_type || 'Gold',
-         
-         purity_karat: returnDetails.physicalDetails?.purity_karat || '22K', 
-         purity_percent: returnDetails.physicalDetails?.purity_percent || 91.60, 
-         
-         gross_weight_g: grossWt,
-         net_weight_g: netWt,
-         
-         acquisition_method: 'buyback',
-         is_for_sale: false, 
-         status: 'in_vault', 
-         source_buyback_id: buybackData.id, 
-         cost_price: Number(returnDetails.calculatedRefund) || 0 
-       })
-       
-       if (invError) throw invError
+           const { error: invError } = await supabase.from('inventory_items').insert({
+             company_id: appUser?.company_id,
+             warehouse_id: selectedLocation,
+             sku_reference: uniqueRef,
+             barcode: uniqueRef,
+             item_category: returnDetails.physicalDetails?.item_category || 'Old Gold',
+             metal_type: returnDetails.physicalDetails?.metal_type || 'Gold',
+             purity_karat: returnDetails.physicalDetails?.purity_karat || '22K', 
+             purity_percent: returnDetails.physicalDetails?.purity_percent || 91.60, 
+             gross_weight_g: grossWt,
+             net_weight_g: netWt,
+             acquisition_method: 'buyback',
+             is_exchanged: true, // Mark it strictly as a buyback item
+             status: 'in_vault', 
+             source_buyback_id: buybackData.id, 
+             cost_price: Number(returnDetails.calculatedRefund) || 0 
+           });
+           if (invError) throw invError;
+
+        } else if (returnDetails.selectedSystemItems?.length > 0) {
+           // ✨ Internal System Return -> Push the exact original items back into the vault!
+           const itemIdsToReturn = returnDetails.selectedSystemItems.map((i:any) => i.item_id);
+           
+           const { error: updateErr } = await supabase.from('inventory_items').update({
+             status: 'in_vault',
+             warehouse_id: selectedLocation, // Return it to the current branch manager's vault
+             source_buyback_id: buybackData.id
+           }).in('id', itemIdsToReturn);
+           
+           if (updateErr) throw updateErr;
+        }
         
-        toast.success("Buyback processed & Item added to Vault!")
+        toast.success("Return processed & Items sent to Vault!")
       }
       else if (mode === 'challan') {
         finalNo = `CHL-${Date.now().toString().slice(-6)}`

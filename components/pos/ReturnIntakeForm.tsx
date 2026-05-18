@@ -52,35 +52,45 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
   const [showCustomColor, setShowCustomColor] = useState(false)
   const [showCustomShape, setShowCustomShape] = useState(false)
 
+  const [invoiceData, setInvoiceData] = useState<any>(null)
+  const [invoiceItems, setInvoiceItems] = useState<any[]>([])
+  const [selectedItemIds, setSelectedItemIds] = useState<string[]>([])
+
   const handleFetchInvoice = async () => {
-    if (!details.invoiceNo?.trim()) {
-      return toast.error('Please enter an invoice number first.')
-    }
-    if (!appUser?.company_id) {
-      return toast.error('Authentication error. Missing company ID.')
-    }
+    if (!details.invoiceNo?.trim()) return toast.error('Please enter an invoice number first.')
+    if (!appUser?.company_id) return toast.error('Authentication error.')
 
     setIsFetching(true)
     try {
+      // ✨ FIX: Fetch the invoice AND its associated physical items!
       const { data, error } = await supabase
         .from('invoices')
-        .select('subtotal, discount_amount') 
+        .select(`
+          id, subtotal, discount_amount,
+          invoice_items (
+            item_id, rate,
+            inventory_items (id, barcode, item_category, gross_weight_g, net_weight_g, total_stone_weight_cts, purity_karat, metal_type)
+          )
+        `)
         .ilike('invoice_number', details.invoiceNo.trim())
         .eq('company_id', appUser.company_id)
         .maybeSingle()
 
-      if (error || !data) {
-        toast.error('Invoice not found. Switching to manual Old Gold entry.')
+      if (error || !data || !data.invoice_items?.length) {
+        toast.error('Invoice not found or has no items. Switching to manual Old Gold entry.')
         setFlowState('manual')
         setArticleCost('')
         setDiscountApplied('0')
         return
       }
 
-      setArticleCost(data.subtotal?.toString() || '0')
-      setDiscountApplied(data.discount_amount?.toString() || '0')
+      setInvoiceData(data)
+      setInvoiceItems(data.invoice_items)
+      // Auto-select all items on the bill initially
+      setSelectedItemIds(data.invoice_items.map((i: any) => i.item_id))
+      
       setFlowState('found')
-      toast.success('Invoice verified successfully.')
+      toast.success('Invoice verified. Please select the items being returned.')
 
     } catch (error: any) {
       toast.error(error.message || 'Failed to fetch invoice data.')
@@ -109,16 +119,40 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
     }
   }
 
-  // Real-time Math & State Sync Engine
-  useEffect(() => {
-    const cost = parseFloat(articleCost) || 0
-    const discount = parseFloat(discountApplied) || 0
-    const percent = parseFloat(returnPercent) || 70
+ // Real-time Math & State Sync Engine
+ useEffect(() => {
+  let cost = parseFloat(articleCost) || 0
+  let discount = parseFloat(discountApplied) || 0
+  const percent = parseFloat(returnPercent) || 70
 
-    const paidValue = cost - discount
-    const refundValue = paidValue * (percent / 100)
+  let physicalDetails: any = { is_external_item: true }
+  let selectedSystemItems: any[] = []
+  let invId = null
 
-    const physicalDetails = flowState === 'manual' ? {
+  if (flowState === 'found' && invoiceData) {
+    // Calculate costs and aggregate weights ONLY for the checked items
+    const selectedObjs = invoiceItems.filter(i => selectedItemIds.includes(i.item_id))
+    selectedSystemItems = selectedObjs
+
+    cost = selectedObjs.reduce((sum, i) => sum + Number(i.rate || 0), 0)
+    
+    // Pro-rata the discount based on how much of the bill is being returned
+    const proportion = invoiceData.subtotal > 0 ? (cost / invoiceData.subtotal) : 1
+    discount = (invoiceData.discount_amount || 0) * proportion
+
+    const aggGross = selectedObjs.reduce((sum, i) => sum + Number(i.inventory_items?.gross_weight_g || 0), 0)
+    const aggNet = selectedObjs.reduce((sum, i) => sum + Number(i.inventory_items?.net_weight_g || 0), 0)
+    
+    physicalDetails = {
+      is_external_item: false,
+      item_category: 'System Return',
+      metal_type: 'Mixed',
+      gross_weight_g: aggGross,
+      net_weight_g: aggNet,
+    }
+    invId = invoiceData.id
+  } else if (flowState === 'manual') {
+    physicalDetails = {
       is_external_item: true,
       item_category: itemCategory,
       metal_type: metalType,
@@ -130,23 +164,29 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
       diamond_clarity: diamondClarity.trim() || null,
       diamond_color: diamondColor.trim() || null,
       diamond_shape: diamondShape.trim() || null,
-    } : { is_external_item: false };
+    }
+  }
 
-    setDetails((prev: any) => ({
-      ...prev,
-      articleCost: cost,
-      discountApplied: discount,
-      paidValue: paidValue,
-      returnPercent: percent,
-      calculatedRefund: refundValue,
-      physicalDetails: physicalDetails 
-    }))
-    
-  }, [
-    articleCost, discountApplied, returnPercent, flowState,
-    itemCategory, metalType, purityKarat, grossWeight, netWeight,
-    stoneWeight, diamondClarity, diamondColor, diamondShape, setDetails
-  ])
+  const paidValue = cost - discount
+  const refundValue = paidValue * (percent / 100)
+
+  setDetails((prev: any) => ({
+    ...prev,
+    invoiceId: invId,
+    selectedSystemItems,
+    articleCost: cost,
+    discountApplied: discount,
+    paidValue: paidValue,
+    returnPercent: percent,
+    calculatedRefund: refundValue,
+    physicalDetails: physicalDetails 
+  }))
+  
+}, [
+  articleCost, discountApplied, returnPercent, flowState, selectedItemIds, invoiceData, invoiceItems,
+  itemCategory, metalType, purityKarat, grossWeight, netWeight,
+  stoneWeight, diamondClarity, diamondColor, diamondShape, setDetails
+])
 
   return (
     <div className="flex-1 overflow-y-auto p-3 sm:p-6 custom-scrollbar bg-slate-50">
@@ -210,11 +250,36 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
         {flowState !== 'search' && (
           <div className="space-y-5 animate-in fade-in slide-in-from-top-4 duration-300 pt-2 border-t border-slate-100 sm:border-0 sm:pt-0">
             
-            {/* Context Banners */}
+            {/* Context Banners & Item Selection */}
             {flowState === 'found' ? (
-              <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 p-3 rounded-lg flex items-center gap-2 text-xs font-semibold">
-                <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                Invoice verified. System details loaded automatically.
+              <div className="space-y-4">
+                <div className="bg-emerald-50 text-emerald-800 border border-emerald-200 p-3 rounded-lg flex items-center gap-2 text-xs font-semibold">
+                  <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                  Invoice verified. Select the specific items being returned:
+                </div>
+                
+                <div className="border border-slate-200 rounded-lg divide-y divide-slate-100 max-h-[200px] overflow-y-auto">
+                  {invoiceItems.map((item: any) => (
+                    <label key={item.item_id} className="flex items-center gap-3 p-3 hover:bg-slate-50 cursor-pointer transition-colors">
+                      <input 
+                        type="checkbox" 
+                        className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                        checked={selectedItemIds.includes(item.item_id)}
+                        onChange={(e) => {
+                          if (e.target.checked) setSelectedItemIds([...selectedItemIds, item.item_id])
+                          else setSelectedItemIds(selectedItemIds.filter(id => id !== item.item_id))
+                        }}
+                      />
+                      <div className="flex-1 flex justify-between items-center">
+                        <div className="flex flex-col">
+                          <span className="text-xs font-bold text-slate-800 font-mono">{item.inventory_items?.barcode}</span>
+                          <span className="text-[10px] text-slate-500">{item.inventory_items?.item_category} • {item.inventory_items?.gross_weight_g}g</span>
+                        </div>
+                        <span className="text-xs font-bold text-slate-700">₹{item.rate?.toLocaleString()}</span>
+                      </div>
+                    </label>
+                  ))}
+                </div>
               </div>
             ) : (
               <div className="bg-amber-50 text-amber-800 border border-amber-200 p-3 rounded-lg flex items-center gap-2 text-xs font-semibold">
