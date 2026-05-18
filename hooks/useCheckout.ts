@@ -562,42 +562,60 @@ export function useCheckout({
 
         // 2. Handle the Physical Inventory 
         if (isExternal) {
-           // External Old Gold -> Mint a new RTN barcode
-           const uniqueRef = `RTN-${Date.now().toString().slice(-6)}`;
-           const grossWt = Number(returnDetails.physicalDetails?.gross_weight_g) || 0.001;
-           const netWt = Number(returnDetails.physicalDetails?.net_weight_g) || grossWt;
+          // External Old Gold -> Mint a new RTN barcode
+          const uniqueRef = `RTN-${Date.now().toString().slice(-6)}`;
+          const grossWt = Number(returnDetails.physicalDetails?.gross_weight_g) || 0.001;
+          const netWt = Number(returnDetails.physicalDetails?.net_weight_g) || grossWt;
 
-           const { error: invError } = await supabase.from('inventory_items').insert({
-             company_id: appUser?.company_id,
-             warehouse_id: selectedLocation,
-             sku_reference: uniqueRef,
-             barcode: uniqueRef,
-             item_category: returnDetails.physicalDetails?.item_category || 'Old Gold',
-             metal_type: returnDetails.physicalDetails?.metal_type || 'Gold',
-             purity_karat: returnDetails.physicalDetails?.purity_karat || '22K', 
-             purity_percent: returnDetails.physicalDetails?.purity_percent || 91.60, 
-             gross_weight_g: grossWt,
-             net_weight_g: netWt,
-             acquisition_method: 'buyback',
-             is_exchanged: true, // Mark it strictly as a buyback item
-             status: 'in_vault', 
-             source_buyback_id: buybackData.id, 
-             cost_price: Number(returnDetails.calculatedRefund) || 0 
-           });
-           if (invError) throw invError;
+          // A. Create the item in inventory
+          const { data: newItem, error: invError } = await supabase.from('inventory_items').insert({
+            company_id: appUser?.company_id,
+            warehouse_id: selectedLocation,
+            sku_reference: uniqueRef,
+            barcode: uniqueRef,
+            item_category: returnDetails.physicalDetails?.item_category || 'Old Gold',
+            metal_type: returnDetails.physicalDetails?.metal_type || 'Gold',
+            purity_karat: returnDetails.physicalDetails?.purity_karat || '22K', 
+            purity_percent: returnDetails.physicalDetails?.purity_percent || 91.60, 
+            gross_weight_g: grossWt,
+            net_weight_g: netWt,
+            acquisition_method: 'buyback',
+            is_exchanged: true,
+            status: 'in_vault', 
+            cost_price: Number(returnDetails.calculatedRefund) || 0 
+          }).select('id').single();
+          
+          if (invError) throw invError;
 
-        } else if (returnDetails.selectedSystemItems?.length > 0) {
-           // ✨ Internal System Return -> Push the exact original items back into the vault!
-           const itemIdsToReturn = returnDetails.selectedSystemItems.map((i:any) => i.item_id);
-           
-           const { error: updateErr } = await supabase.from('inventory_items').update({
-             status: 'in_vault',
-             warehouse_id: selectedLocation, // Return it to the current branch manager's vault
-             source_buyback_id: buybackData.id
-           }).in('id', itemIdsToReturn);
-           
-           if (updateErr) throw updateErr;
-        }
+          // B. Log it permanently in the junction table
+          await supabase.from('buyback_items').insert({
+            buyback_id: buybackData.id,
+            inventory_item_id: newItem.id,
+            barcode: uniqueRef
+          });
+
+       } else if (returnDetails.selectedSystemItems?.length > 0) {
+          // Internal System Return
+          const itemIdsToReturn = returnDetails.selectedSystemItems.map((i:any) => i.item_id);
+          
+          // A. Update current item status back to vault
+          const { error: updateErr } = await supabase.from('inventory_items').update({
+            status: 'in_vault',
+            warehouse_id: selectedLocation
+          }).in('id', itemIdsToReturn);
+          
+          if (updateErr) throw updateErr;
+
+          // B. Log every item permanently in the junction table
+          const historyPayload = returnDetails.selectedSystemItems.map((i:any) => ({
+            buyback_id: buybackData.id,
+            inventory_item_id: i.item_id,
+            barcode: i.inventory_items?.barcode || 'UNKNOWN'
+          }));
+
+          const { error: historyErr } = await supabase.from('buyback_items').insert(historyPayload);
+          if (historyErr) throw historyErr;
+       }
         
         toast.success("Return processed & Items sent to Vault!")
       }

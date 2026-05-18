@@ -20,6 +20,20 @@ interface CustomerSelectorProps {
   onApplyWallet?: (type: 'credit' | 'kitty', availableAmount: number, planId?: string) => void 
 }
 
+// ✨ FIX: Safely parse DD-MM-YYYY back to DB format (YYYY-MM-DD)
+const formatToDBDate = (dateStr?: string) => {
+  if (!dateStr) return null;
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+     const d = parts[0].padStart(2, '0');
+     const m = parts[1].padStart(2, '0');
+     let y = parts[2];
+     if (y.length === 2) y = parseInt(y) > 30 ? `19${y}` : `20${y}`;
+     if (y.length === 4) return `${y}-${m}-${d}`;
+  }
+  return null; 
+};
+
 export function CustomerSelector({ 
   mode, customers, setCustomers, selectedCustomer, setSelectedCustomer, appUser, selectedLocation, subtotal = 0, onApplyWallet 
 }: CustomerSelectorProps) {
@@ -37,12 +51,35 @@ export function CustomerSelector({
     c.phone.includes(searchCustomer)
   )
 
+  // ✨ FIX: Smart Date Input Handler (Auto-formats as user types)
+  const handleDateInput = (value: string) => {
+    // Prevent formatting glitches when user hits backspace
+    if (newCustForm.birth_date.length > value.length) {
+      setNewCustForm(prev => ({ ...prev, birth_date: value }));
+      return;
+    }
+    const digits = value.replace(/\D/g, ''); // Strip all non-numbers
+    let formatted = digits;
+    if (digits.length > 2 && digits.length <= 4) {
+      formatted = `${digits.slice(0, 2)}-${digits.slice(2)}`;
+    } else if (digits.length > 4) {
+      formatted = `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4, 8)}`;
+    }
+    setNewCustForm(prev => ({ ...prev, birth_date: formatted }));
+  }
+
   const handleAddCustomer = async () => {
     if (!newCustForm.full_name || !newCustForm.phone) {
       return toast.error('Name and Phone are required.')
     }
     if (!selectedLocation || selectedLocation === 'ALL') {
       return toast.error('Please select a specific branch terminal first.')
+    }
+
+    // Validate the manual date entry before saving
+    const finalDbDate = formatToDBDate(newCustForm.birth_date);
+    if (newCustForm.birth_date && !finalDbDate) {
+      return toast.error('Invalid Date. Please use DD-MM-YYYY format.');
     }
 
     setIsSaving(true)
@@ -56,7 +93,7 @@ export function CustomerSelector({
         city: newCustForm.city || null,
         address: newCustForm.address || null,
         pan_no: newCustForm.pan_no?.toUpperCase() || null,
-        birth_date: newCustForm.birth_date || null
+        birth_date: finalDbDate // Send the strictly formatted DB date
       }]).select().single()
 
       if (error) throw error
@@ -314,10 +351,20 @@ export function CustomerSelector({
               <Label className="text-xs font-semibold text-slate-700">Phone *</Label>
               <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.phone} onChange={(e) => setNewCustForm({...newCustForm, phone: e.target.value})} />
             </div>
+            
+            {/* ✨ FIX: Smart Date Input field */}
             <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-slate-700">Date of Birth</Label>
-              <Input type="date" className="h-9 rounded-sm border-slate-300" value={newCustForm.birth_date} onChange={(e) => setNewCustForm({...newCustForm, birth_date: e.target.value})} />
+              <Label className="text-xs font-semibold text-slate-700">D.O.B (DD-MM-YYYY)</Label>
+              <Input 
+                type="text" 
+                inputMode="numeric"
+                placeholder="15-08-1990"
+                className="h-9 rounded-sm border-slate-300 font-mono tracking-widest text-sm" 
+                value={newCustForm.birth_date} 
+                onChange={(e) => handleDateInput(e.target.value)} 
+              />
             </div>
+
             <div className="space-y-1.5 sm:col-span-2">
               <Label className="text-xs font-semibold text-slate-700">Address</Label>
               <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.address} onChange={(e) => setNewCustForm({...newCustForm, address: e.target.value})} />
