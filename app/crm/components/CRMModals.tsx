@@ -253,7 +253,6 @@ export function CRMModals(props: CRMModalsProps) {
                     </div>
                   </div>
                   
-                  {/* ---> UPDATED: Edit Profile Button added to header <--- */}
                   <div className="flex items-center gap-2">
                     <Button 
                       size="icon" 
@@ -319,16 +318,25 @@ export function CRMModals(props: CRMModalsProps) {
                   <div className="bg-gray-50/80 border border-gray-100 rounded-[20px] sm:rounded-[24px] p-5 sm:p-6 flex flex-col justify-center space-y-3 sm:space-y-4">
                     <div className="flex justify-between items-center">
                       <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-widest text-gray-500">Birth Date</span>
-                      <span className="text-xs sm:text-[13px] font-bold text-gray-900">{selectedCustomer.birth_date ? new Date(selectedCustomer.birth_date).toLocaleDateString() : 'Not Set'}</span>
+                      {/* ✨ FIX: Forced Strict DD-MM-YYYY format */}
+                      <span className="text-xs sm:text-[13px] font-bold text-gray-900">
+                        {selectedCustomer.birth_date ? format(new Date(selectedCustomer.birth_date), 'dd-MM-yyyy') : 'Not Set'}
+                      </span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-widest text-gray-500">Anniversary</span>
-                      <span className="text-xs sm:text-[13px] font-bold text-gray-900">{selectedCustomer.anniversary_date ? new Date(selectedCustomer.anniversary_date).toLocaleDateString() : 'Not Set'}</span>
+                      {/* ✨ FIX: Forced Strict DD-MM-YYYY format */}
+                      <span className="text-xs sm:text-[13px] font-bold text-gray-900">
+                        {selectedCustomer.anniversary_date ? format(new Date(selectedCustomer.anniversary_date), 'dd-MM-yyyy') : 'Not Set'}
+                      </span>
                     </div>
                     <Separator className="bg-gray-200/60" />
                     <div className="flex justify-between items-center pt-1">
                       <span className="text-[10px] sm:text-[11px] font-bold uppercase tracking-widest text-gray-500">Customer Since</span>
-                      <span className="text-xs sm:text-[13px] font-bold text-gray-900">{new Date(selectedCustomer.created_at).toLocaleDateString()}</span>
+                      {/* ✨ FIX: Forced Strict DD-MM-YYYY format */}
+                      <span className="text-xs sm:text-[13px] font-bold text-gray-900">
+                        {format(new Date(selectedCustomer.created_at), 'dd-MM-yyyy')}
+                      </span>
                     </div>
                   </div>
                 </div>

@@ -59,7 +59,8 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
     return (
       <div className="flex flex-col gap-1">
         <div className={cn("flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-md border w-max", statusColor)}>
-          {icon} {fDate.toLocaleDateString()}
+          {/* ✨ FIX: Forced Strict DD-MM-YYYY format instead of relying on browser locales */}
+          {icon} {format(fDate, 'dd-MM-yyyy')}
         </div>
         {reason && <p className="text-[10px] font-medium text-slate-600 truncate max-w-[200px] mt-0.5">Goal: {reason}</p>}
       </div>

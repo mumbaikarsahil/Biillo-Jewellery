@@ -29,6 +29,26 @@ import { CustomerList } from './components/CustomerList'
 import { CRMMetrics } from './components/CRMMetrics'
 import { CRMModals } from './components/CRMModals'
 
+// ✨ FIX: Robust DD-MM-YYYY Parser for CSV Uploads
+const formatToDBDate = (dateStr?: string) => {
+  if (!dateStr) return '';
+  const cleanDate = dateStr.trim();
+  // If it's already perfectly YYYY-MM-DD, allow it
+  if (/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) return cleanDate;
+  
+  // Convert DD-MM-YYYY, DD/MM/YYYY, or DD.MM.YYYY to DB strict format
+  const parts = cleanDate.split(/[-/.]/);
+  if (parts.length === 3) {
+     const d = parts[0].padStart(2, '0');
+     const m = parts[1].padStart(2, '0');
+     let y = parts[2];
+     // Handle 2-digit years (e.g. "92" -> "1992", "24" -> "2024")
+     if (y.length === 2) y = parseInt(y) > 30 ? `19${y}` : `20${y}`;
+     return `${y}-${m}-${d}`;
+  }
+  return cleanDate;
+};
+
 export default function CRMPage() {
   const { appUser, loading } = useAuth()
   
@@ -134,7 +154,8 @@ export default function CRMPage() {
   useEffect(() => { fetchCRMData() }, [appUser, selectedLocation])
 
   const handleDownloadSample = () => {
-    const csvContent = "full_name,phone,city,customer_status,birth_date,anniversary_date,store_credit_balance\nJohn Doe,9876543210,Mumbai,Lead,1990-01-01,2015-05-15,0\nJane Smith,9123456789,Delhi,Purchased,1985-08-20,1200\nRahul Sharma,9988776655,Pune,Kitty Member,1992-12-10,2020-11-20,0";
+    // ✨ FIX: Updated sample data to strictly showcase the expected DD-MM-YYYY format
+    const csvContent = "full_name,phone,city,customer_status,birth_date,anniversary_date,store_credit_balance\nJohn Doe,9876543210,Mumbai,Lead,01-01-1990,15-05-2015,0\nJane Smith,9123456789,Delhi,Purchased,20-08-1985,,1200\nRahul Sharma,9988776655,Pune,Kitty Member,10-12-1992,20-11-2020,0";
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
@@ -163,8 +184,9 @@ export default function CRMPage() {
                phone: row.phone?.trim().replace(/\D/g, '') || '',
                city: row.city?.trim() || '',
                customer_status: row.customer_status?.trim() || 'Lead',
-               birth_date: row.birth_date?.trim() || '',
-               anniversary_date: row.anniversary_date?.trim() || '',
+               // ✨ FIX: Apply the Indian format parser safely
+               birth_date: formatToDBDate(row.birth_date),
+               anniversary_date: formatToDBDate(row.anniversary_date),
                store_credit_balance: row.store_credit_balance?.trim() || '0'
             }));
 
@@ -212,11 +234,8 @@ export default function CRMPage() {
              store_credit_balance: Number(row.store_credit_balance) || 0
         }));
 
-      // ✨ DEDUPLICATION FIX: Keep only the latest entry for each unique phone number in this batch
       const uniqueCustomersMap = new Map();
       validPayloads.forEach(payload => {
-         // Using a combination of company_id and phone if your constraint requires both, 
-         // but phone is usually sufficient for deduplication within the same batch.
          uniqueCustomersMap.set(payload.phone, payload); 
       });
       const deduplicatedPayload = Array.from(uniqueCustomersMap.values());
@@ -228,7 +247,7 @@ export default function CRMPage() {
       setIsPreviewModalOpen(false);
       setImportFile(null);
       setPreviewData([]);
-      fetchCRMData(); // Assuming this is passed as a prop or accessible in scope
+      fetchCRMData();
     } catch (err: any) {
       toast.error(`Import Failed: ${err.message}`);
     } finally {
@@ -473,7 +492,6 @@ export default function CRMPage() {
     let statusKey = 'Lead'
     if (customer.customer_status === 'Purchased') statusKey = 'Purchased'
     
-    // Check for both active AND matured plans to determine if they are a Kitty Member
     const hasActivePlan = customer.kitty_plans && customer.kitty_plans.some(p => ['active', 'matured'].includes(p.status));
     if (customer.customer_status === 'Kitty Member' || hasActivePlan) statusKey = 'Kitty'
 
@@ -540,7 +558,6 @@ export default function CRMPage() {
     let baseLeads = customers.filter(c => c.customer_status === 'Lead' || c.customer_status == null)
     let basePurchased = customers.filter(c => c.customer_status === 'Purchased')
     
-    // --- FIXED: Make sure matured plans keep the customer in the Kitty tab! ---
     let baseKitty = customers.filter(c => c.customer_status === 'Kitty Member' || (c.kitty_plans && c.kitty_plans.some(p => ['active', 'matured'].includes(p.status))))
 
     let dueToday = 0; let overdue = 0;
