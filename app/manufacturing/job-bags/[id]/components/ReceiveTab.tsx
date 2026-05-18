@@ -296,20 +296,29 @@ export default function ReceiveTab({
         return
       }
 
+      const prefixSerialCounters: Record<string, number> = {};
+
       const mappedItems: ReceiveItem[] = items.map((item: any, index: number) => {
         const category = (item.ornament_type && item.ornament_type !== 'N/A') 
                           ? item.ornament_type 
                           : (item.job_bags?.product_category || 'Jewelry');
 
         const prefix = getCategoryPrefix(category);
-        const random4Digit = Math.floor(1000 + Math.random() * 9000); 
+        
+        // If this is the first time we see this category, generate a starting base (e.g. 6610)
+        if (!prefixSerialCounters[prefix]) {
+           prefixSerialCounters[prefix] = Math.floor(1000 + Math.random() * 8000);
+        }
+        
+        // Grab the current number and increment the counter for the next item of this type
+        const currentSerial = prefixSerialCounters[prefix]++;
 
         return {
           job_bag_item_id: item.id,
           sku_reference: item.sku_reference,
           ornament_type: item.ornament_type || 'N/A', 
           category: category, 
-          barcode: `${prefix}-${random4Digit}`, 
+          barcode: `${prefix}-${currentSerial}`, // ✨ Sequenced Barcode
           grossWeight: '',
           stonePieces: '',
           stoneWeight: '',
@@ -345,13 +354,14 @@ export default function ReceiveTab({
         }
       });
 
-      let barcodesToCheck = mappedItems.map(i => i.barcode);
+      // ✨ FIX: Collision Check that preserves the sequence
       let hasCollisions = true;
       let safetyCounter = 0; 
 
       while (hasCollisions && safetyCounter < 5) {
         safetyCounter++;
         
+        const barcodesToCheck = mappedItems.map(i => i.barcode);
         const { data: existing } = await supabase
           .from('inventory_items')
           .select('barcode')
@@ -362,14 +372,22 @@ export default function ReceiveTab({
         } else {
           const existingCodes = existing.map(e => e.barcode);
           
+          // Find which prefixes collided with the database
+          const collidedPrefixes = new Set(existingCodes.map(code => code.split('-')[0]));
+          
+          // Bump the base counter for those prefixes significantly to find a clean block of numbers
+          collidedPrefixes.forEach(prefix => {
+             prefixSerialCounters[prefix] = prefixSerialCounters[prefix] + Math.floor(100 + Math.random() * 500);
+          });
+
+          // Re-apply the sequence to the mapped items
+          const tempCounters = { ...prefixSerialCounters };
           mappedItems.forEach(item => {
-            if (existingCodes.includes(item.barcode)) {
-              const prefix = getCategoryPrefix(item.category);
-              item.barcode = `${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+            const prefix = getCategoryPrefix(item.category);
+            if (collidedPrefixes.has(prefix)) {
+                item.barcode = `${prefix}-${tempCounters[prefix]++}`;
             }
           });
-          
-          barcodesToCheck = mappedItems.map(i => i.barcode);
         }
       }
 

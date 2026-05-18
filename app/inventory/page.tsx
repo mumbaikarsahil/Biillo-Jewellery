@@ -416,6 +416,7 @@ export default function InventoryPage() {
           if (companyData.current_rate_diamond) setCalcParams(prev => ({ ...prev, diamondRatePerCt: companyData.current_rate_diamond }))
         }
         
+        // Fetch globally unique categories/purities once for the dropdowns
         const { data: uniqueData } = await supabase.from('inventory_items').select('item_category, purity_karat, diamond_clarity').eq('company_id', appUser.company_id)
         if (uniqueData) {
           setUniqueCategories(Array.from(new Set(uniqueData.map(d => d.item_category))).filter(Boolean).sort());
@@ -428,6 +429,7 @@ export default function InventoryPage() {
     fetchInitialData()
   }, [appUser, isHQ])
 
+  // ✨ SERVER-SIDE FILTER BUILDER (Bulletproofed with sold_unbilled)
   const buildServerQuery = (queryObj: any, isSoldTabContext: boolean) => {
     let q = queryObj.eq('company_id', appUser?.company_id);
     
@@ -438,7 +440,8 @@ export default function InventoryPage() {
     if (filterClarity.length > 0) q = q.in('diamond_clarity', filterClarity);
 
     if (isSoldTabContext) {
-      q = q.in('status', ['sold', 'delivered']);
+      // ✨ FIX: Included 'sold_unbilled' which covers Delivery Challans!
+      q = q.in('status', ['sold', 'sold_unbilled']);
     } else {
       if (filterStatus.length > 0) {
         const validStatuses = filterStatus.filter(s => s !== 'repairs' && s !== 'exchanged');
@@ -463,11 +466,77 @@ export default function InventoryPage() {
     return q;
   };
 
+  // Separate Global Count Fetching Effect with Try/Catch protection
+  useEffect(() => {
+    if (!appUser) return;
+    const fetchCounts = async () => {
+      try {
+        let activeQuery = supabase.from('inventory_items').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id)
+        
+        if (selectedLocation !== 'ALL') activeQuery = activeQuery.eq('warehouse_id', selectedLocation)
+        if (debouncedSearch) activeQuery = activeQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
+        if (filterCategory.length > 0) activeQuery = activeQuery.in('item_category', filterCategory)
+        if (filterPurity.length > 0) activeQuery = activeQuery.in('purity_karat', filterPurity)
+        if (filterClarity.length > 0) activeQuery = activeQuery.in('diamond_clarity', filterClarity)
+        
+        if (filterStatus.length > 0) {
+          const validStatuses = filterStatus.filter(s => s !== 'repairs' && s !== 'exchanged');
+          let orStrings = [];
+          if (validStatuses.length > 0) orStrings.push(`status.in.(${validStatuses.join(',')})`);
+          if (filterStatus.includes('exchanged')) orStrings.push(`is_exchanged.eq.true`);
+          if (orStrings.length > 0) activeQuery = activeQuery.or(orStrings.join(','));
+        } else {
+          activeQuery = activeQuery.in('status', ['in_stock', 'transit'])
+        }
+
+        if (isPriceFilterActive && debouncedPriceRange[0] > 0) activeQuery = activeQuery.gte('mrp', debouncedPriceRange[0])
+        if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) activeQuery = activeQuery.lte('mrp', debouncedPriceRange[1])
+
+        if (filterSolitaire === 'has_solitaire') activeQuery = activeQuery.gt('solitaire_weight_cts', 0)
+        else if (filterSolitaire === 'no_solitaire') activeQuery = activeQuery.or('solitaire_weight_cts.eq.0,solitaire_weight_cts.is.null')
+
+        if (filterDiaWt === 'below_0.20') activeQuery = activeQuery.lt('total_stone_weight_cts', 0.20)
+        else if (filterDiaWt === 'above_0.20') activeQuery = activeQuery.gte('total_stone_weight_cts', 0.20)
+
+        const { count: activeCount } = await activeQuery
+        if (activeCount !== null) setGlobalTotalCount(activeCount)
+
+        // ✨ FIX: Reduced redundancy and safely included sold_unbilled
+        let soldQuery = supabase.from('inventory_items').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id)
+        
+        soldQuery = soldQuery.in('status', ['sold', 'sold_unbilled'])
+        
+        if (selectedLocation !== 'ALL') soldQuery = soldQuery.eq('warehouse_id', selectedLocation)
+        if (debouncedSearch) soldQuery = soldQuery.or(`barcode.ilike.%${debouncedSearch}%,sku_reference.ilike.%${debouncedSearch}%,item_category.ilike.%${debouncedSearch}%`)
+        if (filterCategory.length > 0) soldQuery = soldQuery.in('item_category', filterCategory)
+        if (filterPurity.length > 0) soldQuery = soldQuery.in('purity_karat', filterPurity)
+        if (filterClarity.length > 0) soldQuery = soldQuery.in('diamond_clarity', filterClarity)
+        if (isPriceFilterActive && debouncedPriceRange[0] > 0) soldQuery = soldQuery.gte('mrp', debouncedPriceRange[0])
+        if (isPriceFilterActive && debouncedPriceRange[1] < maxCatalogPrice) soldQuery = soldQuery.lte('mrp', debouncedPriceRange[1])
+
+        if (filterSolitaire === 'has_solitaire') soldQuery = soldQuery.gt('solitaire_weight_cts', 0)
+        else if (filterSolitaire === 'no_solitaire') soldQuery = soldQuery.or('solitaire_weight_cts.eq.0,solitaire_weight_cts.is.null')
+
+        if (filterDiaWt === 'below_0.20') soldQuery = soldQuery.lt('total_stone_weight_cts', 0.20)
+        else if (filterDiaWt === 'above_0.20') soldQuery = soldQuery.gte('total_stone_weight_cts', 0.20)
+
+        const { count: soldCount } = await soldQuery
+        if (soldCount !== null) setGlobalSoldCount(soldCount)
+      } catch (e) {
+        console.warn("Silent Count Fetch Error:", e);
+      }
+    }
+    fetchCounts()
+  }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, debouncedPriceRange, maxCatalogPrice, isPriceFilterActive, filterSolitaire, filterDiaWt])
+
+
+  // ✨ TRADITIONAL PAGINATION FETCH ✨
   const fetchPage = async (pageToLoad: number) => {
     if (!appUser || !selectedLocation) return;
     setLoading(true);
 
     try {
+      // 1. Fetch Inventory Items (Paginated)
       let invQuery = supabase.from('inventory_items')
         .select(`*, custom_orders (id, order_number, origin:origin_warehouse_id(name)), karigars:karigar_id (full_name, karigar_code), created_from_job_bag:job_bags (karigar_id, karigars:karigar_id (full_name, karigar_code))`, { count: 'exact' });
       
@@ -475,8 +544,14 @@ export default function InventoryPage() {
       invQuery = invQuery.order('created_at', { ascending: false }).range(pageToLoad * pageSize, (pageToLoad + 1) * pageSize - 1);
 
       const [invRes] = await Promise.all([invQuery]);
-      if (invRes.error) throw invRes.error;
+      
+      // ✨ FIX: Explicit Error message extraction so we know EXACTLY why Supabase is rejecting it
+      if (invRes.error) {
+        console.error("Database Query Failed:", invRes.error);
+        throw new Error(invRes.error.message || invRes.error.details || 'Unknown database rejection');
+      }
 
+      // 2. Fetch Repairs (Only on Page 0, if repairs are relevant)
       let repairList: any[] = [];
       const isRepairAllowed = !isPriceFilterActive && filterSolitaire === 'all' && filterDiaWt === 'all' && filterClarity.length === 0 && filterPurity.length === 0 && filterCategory.length === 0;
       const wantsRepairs = filterStatus.includes('repairs') || filterStatus.length === 0;
@@ -508,6 +583,7 @@ export default function InventoryPage() {
       const inventoryList = (invRes.data || []).map(item => ({ ...item, _type: 'inventory' as const, is_repair_ticket: false }));
       const combined = pageToLoad === 0 ? [...repairList, ...inventoryList] : inventoryList;
 
+      // STRICT OVERRIDE FOR PAGINATION
       setItems(combined as InventoryItem[]);
 
       setItemCache(prev => {
@@ -521,13 +597,16 @@ export default function InventoryPage() {
         else setGlobalTotalCount(invRes.count);
       }
 
-    } catch (error) { 
-      toast.error('Failed to load inventory');
+    } catch (error: any) { 
+      // ✨ FIX: Enhanced Error Visibility
+      console.error("Full Error Object:", error);
+      toast.error(`Database Error: ${error.message || 'Failed to fetch the inventory list.'}`);
     } finally { 
       setLoading(false);
     }
   }
 
+  // Trigger page reset when filters OR TAB changes
   useEffect(() => {
     setPage(0);
     fetchPage(0);
@@ -545,7 +624,7 @@ export default function InventoryPage() {
         let globalQuery = supabase.from('inventory_items')
           .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged, diamond_shape, diamond_color, diamond_clarity, audit_history')
           
-        globalQuery = buildServerQuery(globalQuery, false); 
+        globalQuery = buildServerQuery(globalQuery, activeTab === 'sold'); 
         globalQuery = globalQuery.eq('is_exchanged', false); 
         globalQuery = globalQuery.range(start, start + limit - 1);
 
@@ -657,7 +736,6 @@ export default function InventoryPage() {
 
     try {
       const payload: any = {
-        // ✨ FIX: Safely convert empty strings back to true NULLs to prevent unique constraint crashes
         sku_reference: fullEditForm.sku_reference?.trim() || null,
         item_category: fullEditForm.item_category,
         item_size: fullEditForm.item_size,
@@ -687,7 +765,6 @@ export default function InventoryPage() {
         updated_by: appUser.user_id || appUser.id
       };
 
-      // Detect Changes for Audit Log
       let diffs = [];
       if (Number(fullEditItem.mrp) !== payload.mrp) diffs.push(`MRP: ${fullEditItem.mrp} -> ${payload.mrp}`);
       if (Number(fullEditItem.gross_weight_g) !== payload.gross_weight_g) diffs.push(`Gross: ${fullEditItem.gross_weight_g}g -> ${payload.gross_weight_g}g`);
@@ -710,7 +787,12 @@ export default function InventoryPage() {
       }
 
       const { error } = await supabase.from('inventory_items').update(payload).eq('id', fullEditItem.id);
-      if (error) throw error;
+      if (error) {
+        if (error.code === '23505' || error.message.includes('unique constraint')) {
+           throw new Error(`The HUID Code "${payload.huid_code}" is already assigned to another item in your vault. HUIDs must be unique.`);
+        }
+        throw error;
+      }
 
       const updatedItem = { ...fullEditItem, ...payload };
       setItemCache(prev => ({ ...prev, [fullEditItem.id]: updatedItem }));
@@ -945,6 +1027,7 @@ export default function InventoryPage() {
           
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 w-full">
             
+            {/* Clean AI Search Bar */}
             <div className="relative w-full max-w-2xl group">
               <div className="absolute -inset-[2px] rounded-full bg-gradient-to-r from-[#4285F4] via-[#9b72cb] to-[#d96570] blur-md opacity-0 group-focus-within:opacity-20 transition-opacity duration-500"></div>
               
@@ -982,6 +1065,7 @@ export default function InventoryPage() {
               </div>
             </div>
 
+            {/* Vault Context Selector */}
             <div className="flex flex-col items-end w-full md:w-auto shrink-0 bg-white p-1.5 rounded-2xl border border-slate-200 shadow-sm">
               <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
                 <SelectTrigger className="h-10 border-none bg-slate-50 hover:bg-slate-100 transition-colors rounded-xl shadow-none text-xs font-bold text-slate-700 w-full md:w-[220px] focus:ring-0">
@@ -1208,10 +1292,10 @@ export default function InventoryPage() {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
           <TabsList className="bg-transparent border-b border-slate-200 rounded-none h-11 w-full justify-start p-0 gap-6 mb-2">
             <TabsTrigger value="active" className="rounded-none border-b-2 border-transparent data-[state=active]:border-indigo-600 data-[state=active]:text-indigo-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-500 transition-all hover:text-slate-800">
-              Live Stock <span className="ml-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-600">{globalTotalCount}</span>
+              Live Stock <span className="ml-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-600">{activeTab === 'sold' ? globalTotalCount : Math.max(globalTotalCount, items.length)}</span>
             </TabsTrigger>
             <TabsTrigger value="sold" className="rounded-none border-b-2 border-transparent data-[state=active]:border-slate-800 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600 data-[state=active]:text-slate-800 transition-all">
-              Archive / Sold <span className="ml-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-600">{globalSoldCount}</span>
+              Archive / Sold <span className="ml-1.5 px-2 py-0.5 rounded-full bg-slate-100 text-[10px] text-slate-600">{activeTab === 'active' ? globalSoldCount : Math.max(globalSoldCount, items.length)}</span>
             </TabsTrigger>
           </TabsList>
 
@@ -1314,8 +1398,8 @@ export default function InventoryPage() {
 
       {/* ✨ COMPREHENSIVE EDIT MODAL ✨ */}
       <Dialog open={!!fullEditItem} onOpenChange={(val) => !val && setFullEditItem(null)}>
-      <DialogContent className="sm:max-w-[600px] w-[95vw] p-0 overflow-hidden bg-white/95 backdrop-blur-xl border border-slate-200/60 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.2)] rounded-2xl ring-1 ring-black/5 transition-all">
-          <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5">
+      <DialogContent className="sm:max-w-[600px] w-[95vw] max-h-[85vh] flex flex-col p-0 overflow-hidden bg-white/85 backdrop-blur-2xl border border-slate-200/50 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] rounded-2xl ring-1 ring-black/5 z-50">
+          <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5 shrink-0">
             <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Edit2 className="w-5 h-5 text-indigo-600" />
               Edit Master Details
@@ -1325,8 +1409,8 @@ export default function InventoryPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <Tabs defaultValue="basic" className="w-full">
-            <div className="px-5 pt-3 bg-slate-50/50">
+          <Tabs defaultValue="basic" className="w-full flex-1 overflow-hidden flex flex-col">
+            <div className="px-5 pt-3 bg-slate-50/50 shrink-0">
               <TabsList className="grid w-full grid-cols-3 bg-slate-200/50">
                 <TabsTrigger value="basic" className="text-xs">Identity & Class</TabsTrigger>
                 <TabsTrigger value="metal" className="text-xs">Metal & Price</TabsTrigger>
@@ -1334,7 +1418,7 @@ export default function InventoryPage() {
               </TabsList>
             </div>
 
-            <div className="p-5 max-h-[50vh] overflow-y-auto custom-scrollbar">
+            <div className="p-5 flex-1 overflow-y-auto custom-scrollbar">
               <TabsContent value="basic" className="m-0 space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
@@ -1475,7 +1559,7 @@ export default function InventoryPage() {
               </TabsContent>
             </div>
             
-            <div className="p-5 pt-0">
+            <div className="p-5 pt-0 shrink-0">
               <div className="pt-3 border-t border-slate-200">
                 <Label className="text-[10px] font-bold text-rose-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5">
                   <FileText className="w-3 h-3" /> Reason for Update (Required for Audit Log)
@@ -1490,7 +1574,7 @@ export default function InventoryPage() {
             </div>
           </Tabs>
 
-          <DialogFooter className="bg-slate-50 p-4 border-t border-slate-100 flex gap-2">
+          <DialogFooter className="bg-slate-50 p-4 border-t border-slate-100 flex gap-2 shrink-0">
             <Button variant="outline" className="flex-1 rounded-xl h-11 font-bold text-slate-500 hover:text-slate-800" onClick={() => setFullEditItem(null)}>
               Cancel
             </Button>
@@ -1508,7 +1592,7 @@ export default function InventoryPage() {
 
       {/* BULK MRP CALCULATOR MODAL */}
       <Dialog open={isCalcModalOpen} onOpenChange={setCalcModalOpen}>
-      <DialogContent className="sm:max-w-[650px] w-[95vw] p-0 overflow-hidden bg-white/95 backdrop-blur-xl border border-slate-200/60 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.2)] rounded-2xl ring-1 ring-black/5 transition-all">
+      <DialogContent className="sm:max-w-[650px] w-[95vw] max-h-[85vh] flex flex-col p-0 overflow-hidden bg-white/85 backdrop-blur-2xl border border-slate-200/50 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] rounded-2xl ring-1 ring-black/5 z-50">
           <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5">
             <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
                <Calculator className="w-5 h-5 text-indigo-600" /> 
@@ -1520,7 +1604,7 @@ export default function InventoryPage() {
           </DialogHeader>
 
           {calcStep === 'params' ? (
-            <div className="space-y-5 p-5 bg-slate-50/50">
+            <div className="space-y-5 p-5 bg-slate-50/50 flex-1 overflow-y-auto custom-scrollbar">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
                 
                 {/* Gold Section */}
@@ -1625,7 +1709,7 @@ export default function InventoryPage() {
 
       {/* VIEW DETAILS MODAL */}
       <Dialog open={!!viewItem} onOpenChange={(val) => !val && setViewItem(null)}>
-      <DialogContent className="sm:max-w-[550px] w-[95vw] p-0 overflow-hidden bg-white/95 backdrop-blur-xl border border-slate-200/60 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.2)] rounded-2xl ring-1 ring-black/5 transition-all">
+      <DialogContent className="sm:max-w-[550px] w-[95vw] max-h-[85vh] flex flex-col p-0 overflow-hidden bg-white/85 backdrop-blur-2xl border border-slate-200/50 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] rounded-2xl ring-1 ring-black/5 z-50">
           {viewItem && (
             <>
               <DialogHeader className="bg-slate-50 p-6 border-b border-slate-100 flex flex-row items-start justify-between">
@@ -1658,7 +1742,7 @@ export default function InventoryPage() {
                 </div>
               </DialogHeader>
               
-              <div className="p-6 overflow-y-auto max-h-[70vh] custom-scrollbar space-y-6">
+              <div className="p-6 flex-1 overflow-y-auto custom-scrollbar space-y-6">
                 
                 {/* Manufacturing / Karigar Details Header */}
                 {(viewItem.karigars || viewItem.created_from_job_bag?.karigars) && (
@@ -1925,7 +2009,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                       <Checkbox 
                         checked={selectedIds.includes(item.id)} 
                         onCheckedChange={() => setSelectedIds((prev: any) => prev.includes(item.id) ? prev.filter((i: any) => i !== item.id) : [...prev, item.id])} 
-                        disabled={item.status === 'sold'} 
+                        disabled={item.status === 'sold' || item.status === 'delivered'} 
                         className="rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 disabled:opacity-30"
                       />
                     </TableCell>
@@ -1996,7 +2080,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                   <TableCell className="text-center py-3">
                      <span className={cn("inline-flex items-center justify-center px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border", 
                         item._type === 'repair' ? "bg-amber-50 text-amber-700 border-amber-200" :
-                        item.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-500 border-slate-200")}>
+                        (item.status === 'in_stock' || item.status === 'in_vault') ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-50 text-slate-500 border-slate-200")}>
                         {item.status.replace(/_/g, ' ')}
                      </span>
                      <div className="mt-1 flex items-center justify-center gap-1 text-[9px] font-bold uppercase tracking-widest text-slate-400">
@@ -2036,7 +2120,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                            </Button>
                         )}
                         
-                        {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
+                        {!isSoldTab && (item.status === 'in_stock' || item.status === 'in_vault' || item.status === 'fixed_ready_for_dispatch') && (
                            <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => handleSingleTransfer(item)} title="Transfer">
                           <Truck className="h-3.5 w-3.5" />
                         </Button>
@@ -2064,7 +2148,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                      <Checkbox 
                        checked={selectedIds.includes(item.id)} 
                        onCheckedChange={() => setSelectedIds((prev: any) => prev.includes(item.id) ? prev.filter((i: any) => i !== item.id) : [...prev, item.id])} 
-                       disabled={item.status === 'sold'}
+                       disabled={item.status === 'sold' || item.status === 'delivered'}
                        className="mt-1 rounded-[4px] border-slate-300 data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600 disabled:opacity-30"
                      />
                    )}
@@ -2159,7 +2243,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                    )}
                  </div>
                  <div className="flex gap-1.5">
-                   {!isSoldTab && (item.status === 'in_stock' || item.status === 'fixed_ready_for_dispatch') && (
+                   {!isSoldTab && (item.status === 'in_stock' || item.status === 'in_vault' || item.status === 'fixed_ready_for_dispatch') && (
                      <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
                     <Truck className="h-3.5 w-3.5" />
                   </Button>

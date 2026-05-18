@@ -71,7 +71,7 @@ export default function OverviewTab({ job }: Props) {
 
   // --- CATEGORY & SKU AUTOCOMPLETE STATE ---
   const [categories, setCategories] = useState<string[]>([
-    'Ring', 'Necklace', 'Earrings', 'Bracelet', 'Bangle', 'Pendant', 'Chain', 'Mangalsutra'
+    'LADIES RING', 'NECKLACE', 'GENTS RING', 'TOPS','BRACELET', 'PENDANT', 'GENTS STUD', 'TANMANIA','BANGLE', 'NOSE PIN'
   ])
   const [showCustomType, setShowCustomType] = useState(false)
   
