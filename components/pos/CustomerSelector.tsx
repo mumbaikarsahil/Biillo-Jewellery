@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { Search, Plus, X, IndianRupee, Gem, Info } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { Search, Plus, X, IndianRupee, Gem, Info, Loader2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -10,7 +10,7 @@ import { supabase } from '@/lib/supabaseClient'
 
 interface CustomerSelectorProps {
   mode: string
-  customers: any[]
+  customers: any[] // We keep this for backward compatibility, but we won't rely on it for searching anymore
   setCustomers: React.Dispatch<React.SetStateAction<any[]>>
   selectedCustomer: any
   setSelectedCustomer: (customer: any) => void
@@ -20,7 +20,6 @@ interface CustomerSelectorProps {
   onApplyWallet?: (type: 'credit' | 'kitty', availableAmount: number, planId?: string) => void 
 }
 
-// ✨ FIX: Safely parse DD-MM-YYYY back to DB format (YYYY-MM-DD)
 const formatToDBDate = (dateStr?: string) => {
   if (!dateStr) return null;
   const parts = dateStr.split('-');
@@ -35,30 +34,59 @@ const formatToDBDate = (dateStr?: string) => {
 };
 
 export function CustomerSelector({ 
-  mode, customers, setCustomers, selectedCustomer, setSelectedCustomer, appUser, selectedLocation, subtotal = 0, onApplyWallet 
+  mode, setCustomers, selectedCustomer, setSelectedCustomer, appUser, selectedLocation, subtotal = 0, onApplyWallet 
 }: CustomerSelectorProps) {
   
   const [searchCustomer, setSearchCustomer] = useState('')
+  const [searchResults, setSearchResults] = useState<any[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+  
   const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [newCustForm, setNewCustForm] = useState({ 
     full_name: '', phone: '', city: '', address: '', pan_no: '', birth_date: '' 
   })
 
-  // Filter logic for the dropdown
-  const filteredCustomers = searchCustomer.trim() === '' ? [] : customers.filter(c => 
-    c.full_name.toLowerCase().includes(searchCustomer.toLowerCase()) || 
-    c.phone.includes(searchCustomer)
-  )
+  // ✨ FIX: LIVE SERVER-SIDE SEARCH
+  // This pings the DB directly as you type, so it finds ANY customer, even if they aren't loaded in the parent component.
+  useEffect(() => {
+    const searchDatabase = async () => {
+      const term = searchCustomer.trim();
+      if (!term || !appUser?.company_id) {
+        setSearchResults([]);
+        setIsSearching(false);
+        return;
+      }
 
-  // ✨ FIX: Smart Date Input Handler (Auto-formats as user types)
+      setIsSearching(true);
+      try {
+        const { data, error } = await supabase
+          .from('customers')
+          .select('*, kitty_plans(*)')
+          .eq('company_id', appUser.company_id)
+          .or(`full_name.ilike.%${term}%,phone.ilike.%${term}%`)
+          .limit(15); // Limit to 15 so the dropdown doesn't get massive
+
+        if (error) throw error;
+        setSearchResults(data || []);
+      } catch (err) {
+        console.error("Search failed:", err);
+      } finally {
+        setIsSearching(false);
+      }
+    };
+
+    // Debounce: Wait 300ms after the user stops typing before hitting the database
+    const timer = setTimeout(() => searchDatabase(), 300);
+    return () => clearTimeout(timer);
+  }, [searchCustomer, appUser]);
+
   const handleDateInput = (value: string) => {
-    // Prevent formatting glitches when user hits backspace
     if (newCustForm.birth_date.length > value.length) {
       setNewCustForm(prev => ({ ...prev, birth_date: value }));
       return;
     }
-    const digits = value.replace(/\D/g, ''); // Strip all non-numbers
+    const digits = value.replace(/\D/g, ''); 
     let formatted = digits;
     if (digits.length > 2 && digits.length <= 4) {
       formatted = `${digits.slice(0, 2)}-${digits.slice(2)}`;
@@ -76,7 +104,6 @@ export function CustomerSelector({
       return toast.error('Please select a specific branch terminal first.')
     }
 
-    // Validate the manual date entry before saving
     const finalDbDate = formatToDBDate(newCustForm.birth_date);
     if (newCustForm.birth_date && !finalDbDate) {
       return toast.error('Invalid Date. Please use DD-MM-YYYY format.');
@@ -84,7 +111,6 @@ export function CustomerSelector({
 
     setIsSaving(true)
     try {
-      // Execute DB Insert
       const { data, error } = await supabase.from('customers').insert([{
         company_id: appUser?.company_id,
         warehouse_id: selectedLocation,
@@ -93,12 +119,11 @@ export function CustomerSelector({
         city: newCustForm.city || null,
         address: newCustForm.address || null,
         pan_no: newCustForm.pan_no?.toUpperCase() || null,
-        birth_date: finalDbDate // Send the strictly formatted DB date
+        birth_date: finalDbDate 
       }]).select().single()
 
       if (error) throw error
 
-      // Update local state
       setCustomers(prev => [...prev, data])
       setSelectedCustomer(data)
       setIsAddCustomerOpen(false)
@@ -117,14 +142,11 @@ export function CustomerSelector({
     const monthsPaid = Number(plan.months_paid) || 0;
     const totalMonths = Number(plan.total_months) || 12;
     
-    // Fallback: If DB doesn't return bonus_amount, assume it equals 1 month's installment if >= 3000
     const rawBonus = Number(plan.bonus_amount);
     const planBonus = !isNaN(rawBonus) ? rawBonus : (monthlyAmt >= 3000 ? monthlyAmt : 0);
     
-    // Base amount is what they actually paid
     let totalRedemptionValue = monthsPaid * monthlyAmt;
     
-    // Add the Jeweler's Bonus ONLY if the plan is fully matured
     let bonusApplied = false;
     if (monthsPaid >= totalMonths) {
       totalRedemptionValue += planBonus; 
@@ -153,7 +175,6 @@ export function CustomerSelector({
     const rawCredit = Number(selectedCustomer.store_credit_balance) || 0;
     if (rawCredit <= 0) return;
 
-    // Apply the strict 20% processing/handling fee reduction
     const netUsableCredit = Math.floor(rawCredit * 0.80);
     const deduction = rawCredit - netUsableCredit;
 
@@ -164,7 +185,6 @@ export function CustomerSelector({
     onApplyWallet?.('credit', netUsableCredit);
   }
 
-  // Check if they have ANY active or matured plan to show the badge
   const hasActivePlan = selectedCustomer?.kitty_plans && selectedCustomer.kitty_plans.some((p: any) => ['active', 'matured'].includes(p.status));
 
   return (
@@ -173,19 +193,17 @@ export function CustomerSelector({
         {mode === 'challan' ? 'SIS Partner / Destination' : 'Customer Account'}
       </Label>
       
-      {/* STATE A: Customer is Selected */}
       {selectedCustomer ? (
         <div className="flex flex-col bg-white border border-[#0078D7] p-2.5 rounded-sm shadow-sm transition-all relative overflow-hidden">
           <div className="flex items-start justify-between">
             <div className="flex items-start gap-3">
               <div className="h-9 w-9 mt-0.5 rounded-sm bg-[#0078D7] text-white flex items-center justify-center font-bold text-sm uppercase shadow-inner shrink-0">
-                {selectedCustomer.full_name.charAt(0)}
+                {(selectedCustomer.full_name || 'U').charAt(0)}
               </div>
               <div className="flex flex-col">
-                <p className="text-sm font-bold text-slate-900 leading-none">{selectedCustomer.full_name}</p>
+                <p className="text-sm font-bold text-slate-900 leading-none">{selectedCustomer.full_name || 'Unknown Name'}</p>
                 <p className="text-[10px] font-mono text-slate-500 mt-1">{selectedCustomer.phone}</p>
                 
-                {/* Badge logic uses hasActivePlan */}
                 {(selectedCustomer.customer_status === 'Kitty Member' || hasActivePlan) && (
                   <Badge className="bg-purple-50 text-purple-700 border-purple-200 text-[9px] px-1.5 py-0 h-4 rounded-sm flex items-center gap-1 font-bold mt-1.5 w-max">
                     <Gem className="w-2.5 h-2.5" /> Active Kitty Member
@@ -203,15 +221,11 @@ export function CustomerSelector({
             </Button>
           </div>
 
-          {/* --- INTERACTIVE WALLET REDEMPTION BUTTONS --- */}
           {(Number(selectedCustomer.store_credit_balance) > 0 || hasActivePlan) && (
             <div className="flex flex-col gap-1.5 mt-3 pt-3 border-t border-slate-100 w-full">
               
-              {/* 1. Kitty Plan Redeemers (Maps over active AND matured plans) */}
               {selectedCustomer.kitty_plans?.filter((p: any) => ['active', 'matured'].includes(p.status) && p.months_paid > 0).map((plan: any) => {
                 const isMatured = plan.months_paid >= plan.total_months;
-                
-                // Fallback: If DB doesn't return bonus_amount, assume it equals 1 month's installment if >= 3000
                 const rawBonus = Number(plan.bonus_amount);
                 const planBonus = !isNaN(rawBonus) ? rawBonus : (plan.plan_amount >= 3000 ? plan.plan_amount : 0);
                 
@@ -247,7 +261,6 @@ export function CustomerSelector({
                 );
               })}
 
-              {/* 2. Store Credit Redeemer */}
               {Number(selectedCustomer.store_credit_balance) > 0 && (
                 <div 
                   onClick={handleCreditRedemption}
@@ -279,7 +292,6 @@ export function CustomerSelector({
           )}
         </div>
       ) : (
-        /* STATE B: No Customer Selected (Search Mode) */
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -289,6 +301,10 @@ export function CustomerSelector({
               onChange={(e) => setSearchCustomer(e.target.value)} 
               className="h-9 pl-8 text-xs rounded-sm border-slate-300 bg-white focus-visible:ring-[#0078D7]" 
             />
+            {/* Show a mini spinner when querying Supabase */}
+            {isSearching && (
+               <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#0078D7] animate-spin" />
+            )}
           </div>
           <Button 
             variant="outline" 
@@ -300,11 +316,10 @@ export function CustomerSelector({
         </div>
       )}
 
-      {/* DROPDOWN RESULTS */}
-      {searchCustomer && !selectedCustomer && (
+      {searchCustomer && !selectedCustomer && !isSearching && (
         <div className="absolute top-full left-0 w-full bg-white border border-slate-300 shadow-lg z-50 max-h-[250px] overflow-y-auto rounded-sm mt-1 custom-scrollbar">
-          {filteredCustomers.length > 0 ? (
-            filteredCustomers.map(c => {
+          {searchResults.length > 0 ? (
+            searchResults.map(c => {
               const cHasActivePlan = c.kitty_plans && c.kitty_plans.some((p: any) => ['active', 'matured'].includes(p.status));
               
               return (
@@ -314,9 +329,9 @@ export function CustomerSelector({
                   onClick={() => { setSelectedCustomer(c); setSearchCustomer(''); }}
                 >
                   <div className="flex flex-col">
-                    <span className="font-semibold text-xs text-slate-700">{c.full_name}</span>
+                    <span className="font-semibold text-xs text-slate-700">{c.full_name || 'Unknown Name'}</span>
                     <div className="flex gap-1 mt-0.5">
-                      <span className="text-[10px] font-mono text-slate-500">{c.phone}</span>
+                      <span className="text-[10px] font-mono text-slate-500">{c.phone || 'No Phone'}</span>
                       {Number(c.store_credit_balance) > 0 && <span className="text-[9px] font-bold text-emerald-600 bg-emerald-50 px-1 rounded-sm ml-1">Credits</span>}
                       {(c.customer_status === 'Kitty Member' || cHasActivePlan) && <span className="text-[9px] font-bold text-purple-600 bg-purple-50 px-1 rounded-sm ml-0.5">Kitty</span>}
                     </div>
@@ -336,7 +351,6 @@ export function CustomerSelector({
         </div>
       )}
 
-      {/* ADD NEW CUSTOMER MODAL */}
       <Dialog open={isAddCustomerOpen} onOpenChange={setIsAddCustomerOpen}>
         <DialogContent className="sm:max-w-[450px] border border-slate-300 shadow-xl p-0 rounded-sm overflow-hidden bg-white w-[95vw] sm:w-full">
           <DialogHeader className="bg-slate-100 p-4 border-b border-slate-200">
@@ -352,7 +366,6 @@ export function CustomerSelector({
               <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.phone} onChange={(e) => setNewCustForm({...newCustForm, phone: e.target.value})} />
             </div>
             
-            {/* ✨ FIX: Smart Date Input field */}
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-slate-700">D.O.B (DD-MM-YYYY)</Label>
               <Input 
