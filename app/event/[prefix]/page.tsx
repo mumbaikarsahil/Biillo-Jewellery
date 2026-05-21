@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
-import { useReactToPrint } from 'react-to-print' // ✨ NEW: For downloading the receipt
+import { useReactToPrint } from 'react-to-print' 
 import { 
   Gift, User, Phone, MapPin, Loader2, CheckCircle2, 
   MessageCircle, X, Send, ChevronDown, HelpCircle, Calendar, Heart, Sparkles, PhoneCall, Download
@@ -95,6 +95,9 @@ export default function EventVoucherClaimPage() {
   const [loading, setLoading] = useState(false)
   const [claimedCode, setClaimedCode] = useState<string>('')
   
+  // ✨ FIX: State to hold the voucher expiry date
+  const [voucherExpiry, setVoucherExpiry] = useState<string | null>(null)
+  
   const [formData, setFormData] = useState({
     name: '', phone: '', nearestBranch: '', dob: '', anniversary: ''
   })
@@ -107,7 +110,6 @@ export default function EventVoucherClaimPage() {
   ])
   const chatEndRef = useRef<HTMLDivElement>(null)
 
-  // ✨ NEW: Print handler for the receipt
   const receiptRef = useRef<HTMLDivElement>(null);
   const handleDownloadReceipt = useReactToPrint({
     contentRef: receiptRef,
@@ -150,8 +152,10 @@ export default function EventVoucherClaimPage() {
     if (!formData.name || !formData.phone || !formData.nearestBranch || !formData.dob) {
       return toast.error("Please fill in your Name, Phone, Branch, and Date of Birth.")
     }
-    if (formData.phone.length < 10) {
-      return toast.error("Please enter a valid 10-digit phone number.")
+    
+    // ✨ FIX: Ensure exactly 10 digits
+    if (formData.phone.length !== 10) {
+      return toast.error("Please enter a valid 10-digit mobile number.")
     }
 
     setLoading(true)
@@ -168,6 +172,11 @@ export default function EventVoucherClaimPage() {
       if (error) throw error
 
       setClaimedCode(data.voucher_code)
+      // Save the expiry date if the RPC returns it
+      if (data.expiry_date) {
+        setVoucherExpiry(data.expiry_date)
+      }
+
       setStep(2) 
     } catch (err: any) {
       toast.error(err.message || "Failed to register voucher.")
@@ -304,11 +313,27 @@ export default function EventVoucherClaimPage() {
                     </div>
                   </div>
 
+                  {/* ✨ FIX: Restricted Phone Input with static +91 */}
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Mobile Number *</Label>
-                    <div className="relative">
-                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                      <Input required type="tel" inputMode="tel" className="h-12 pl-11 border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium font-mono text-sm shadow-sm transition-all" placeholder="10-digit number" value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value.replace(/\D/g, '').slice(0, 10)})} />
+                    <div className="relative flex items-center">
+                      <div className="absolute left-4 flex items-center gap-1.5 pointer-events-none">
+                        <Phone className="h-4 w-4 text-slate-400" />
+                        <span className="text-sm font-bold text-slate-600 border-r border-slate-300 pr-2">+91</span>
+                      </div>
+                      <Input 
+                        required 
+                        type="tel" 
+                        inputMode="numeric" 
+                        maxLength={10}
+                        className="h-12 pl-[84px] border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium font-mono text-sm shadow-sm transition-all" 
+                        placeholder="10-digit number" 
+                        value={formData.phone} 
+                        onChange={(e) => {
+                          const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+                          setFormData({...formData, phone: digits});
+                        }} 
+                      />
                     </div>
                   </div>
 
@@ -334,7 +359,7 @@ export default function EventVoucherClaimPage() {
                     <NativeDatePicker value={formData.anniversary} onChange={(v: string) => setFormData({...formData, anniversary: v})} label="Anniversary" icon={Heart} type="anniversary" />
                   </div>
 
-                  <Button type="submit" disabled={loading} className="w-full h-14 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-sm rounded-2xl mt-4 shadow-xl transition-all active:scale-[0.98]">
+                  <Button type="submit" disabled={loading || formData.phone.length !== 10} className="w-full h-14 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-sm rounded-2xl mt-4 shadow-xl transition-all active:scale-[0.98]">
                     {loading ? <Loader2 className="h-5 w-5 animate-spin text-amber-500" /> : "Claim Free Voucher"}
                   </Button>
                 </form>
@@ -360,8 +385,16 @@ export default function EventVoucherClaimPage() {
                   <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Your Unique Code</p>
                   <p className="text-4xl font-black text-[#881798] tracking-widest">{claimedCode}</p>
                 </div>
+                
+                {/* ✨ FIX: Dynamic Expiry Date Text */}
+                <p className="text-xs font-semibold text-rose-600 mt-4 text-center">
+                   {voucherExpiry ? (
+                      <>Valid until <b>{new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b></>
+                   ) : (
+                      <>Valid until <b>{new Date(new Date().setMonth(new Date().getMonth() + 1)).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b></>
+                   )}
+                </p>
 
-                {/* ✨ NEW: Save Receipt Button */}
                 <Button 
                   onClick={handleDownloadReceipt}
                   variant="outline"
@@ -542,8 +575,10 @@ export default function EventVoucherClaimPage() {
           <p style={{ fontSize: '10px', color: '#000', lineHeight: '1.4', fontWeight: 'bold' }}>
             Please present this code at the Pavitram Exclusive counter with a valid ID.
           </p>
+          
+          {/* ✨ FIX: Dynamic Receipt Expiry Date */}
           <p style={{ fontSize: '9px', color: '#666', lineHeight: '1.4', marginTop: '5px' }}>
-            Valid for 1 month from activation. Terms & Conditions apply.
+            {voucherExpiry ? `Valid until ${new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}` : `Valid until ${new Date(new Date().setMonth(new Date().getMonth() + 1)).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`}. Terms & Conditions apply.
           </p>
         </div>
       </div>

@@ -89,6 +89,9 @@ export default function VoucherClaimPage() {
   const [formData, setFormData] = useState({
     code: '', name: '', phone: '', nearestBranch: '', dob: '', anniversary: ''
   })
+  
+  // ✨ FIX: State to hold the voucher expiry date
+  const [voucherExpiry, setVoucherExpiry] = useState<string | null>(null)
 
   // Chatbot & FAQ State
   const [isChatOpen, setIsChatOpen] = useState(false)
@@ -120,10 +123,8 @@ export default function VoucherClaimPage() {
     setIsVerifying(true)
     
     try {
-      // 1. Minimum 1.2s delay for smooth UI animation, running parallel to the DB fetch
       const minDelay = new Promise(resolve => setTimeout(resolve, 1200));
       
-      // 2. Fetch the voucher status directly from the database
       const dbFetch = supabase
         .from('vouchers')
         .select('status, expiry_date')
@@ -135,19 +136,22 @@ export default function VoucherClaimPage() {
       if (error) throw error;
       if (!data) throw new Error("Voucher code not found. Please check your spelling.");
       
-      // 3. Strict Status Validations
+      // Strict Status Validations
       if (data.status === 'redeemed') throw new Error("This voucher has already been redeemed at the store.");
       if (data.status === 'voided') throw new Error("This voucher code has been voided by management.");
       if (data.status === 'registered') throw new Error("This voucher is already registered to a customer.");
       if (data.status === 'expired' || (data.expiry_date && new Date(data.expiry_date) < new Date())) {
         throw new Error("This voucher has expired.");
       }
-      // ✨ FIX: Accept both legacy 'distributed' and modern 'in_stock' statuses
       if (data.status !== 'distributed' && data.status !== 'in_stock') {
         throw new Error("Invalid voucher code, Please contact the support");
       }
 
-      // If it passes all checks, proceed to the details form
+      // ✨ FIX: Store the expiry date for the success screen
+      if (data.expiry_date) {
+        setVoucherExpiry(data.expiry_date);
+      }
+
       setStep(1) 
     } catch (err: any) {
       toast.error(err.message || "Invalid voucher code.", { duration: 4000 });
@@ -159,6 +163,11 @@ export default function VoucherClaimPage() {
     e.preventDefault()
     if (!formData.name || !formData.phone || !formData.nearestBranch || !formData.dob) {
       return toast.error("Please fill in your Name, Phone, Branch, and Date of Birth.")
+    }
+
+    // ✨ FIX: Ensure exactly 10 digits
+    if (formData.phone.length !== 10) {
+      return toast.error("Please enter a valid 10-digit mobile number.");
     }
 
     setLoading(true)
@@ -321,25 +330,48 @@ export default function VoucherClaimPage() {
                   <h2 className="text-xl font-serif text-slate-800 tracking-tight">
                     Please <br/> fill your details
                   </h2>
-                  <button onClick={() => setStep(0)} className="flex items-center gap-1.5 px-3 py-1.5 bg-white/80 hover:bg-white text-slate-600 rounded-full text-[10px] font-bold uppercase tracking-widest transition-colors border border-slate-200/60 shadow-sm">
-                    <Edit3 className="w-3 h-3" /> {formData.code}
-                  </button>
+                  <button 
+  onClick={() => {
+    setStep(0);
+    setIsVerifying(false); // ✨ FIX: Stops the infinite loading loop
+    setFormData({ ...formData, code: '' }); // ✨ FIX: Clears the input so they can type a new one
+  }} 
+  className="flex items-center gap-1.5 px-3 py-1.5 bg-white/80 hover:bg-white text-slate-600 rounded-full text-[10px] font-bold uppercase tracking-widest transition-colors border border-slate-200/60 shadow-sm"
+>
+  <Edit3 className="w-3 h-3" /> {formData.code}
+</button>
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-4 pt-2">
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Full Name *</Label>
-                    <div className="relative">
-                      <User className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                    <div className="relative flex items-center">
+                      <User className="absolute left-4 h-4 w-4 text-slate-400 pointer-events-none" />
                       <Input required autoFocus className="h-12 pl-11 border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium text-sm shadow-sm transition-all" placeholder="E.g. Anjali Sharma" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} />
                     </div>
                   </div>
 
+                  {/* ✨ FIX: Restricted Phone Input with static +91 */}
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Mobile Number *</Label>
-                    <div className="relative">
-                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                      <Input required type="tel" inputMode="tel" className="h-12 pl-11 border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium font-mono text-sm shadow-sm transition-all" placeholder="10-digit number" value={formData.phone} onChange={(e) => setFormData({...formData, phone: e.target.value})} />
+                    <div className="relative flex items-center">
+                      <div className="absolute left-4 flex items-center gap-1.5 pointer-events-none">
+                        <Phone className="h-4 w-4 text-slate-400" />
+                        <span className="text-sm font-bold text-slate-600 border-r border-slate-300 pr-2">+91</span>
+                      </div>
+                      <Input 
+                        required 
+                        type="tel" 
+                        inputMode="numeric" 
+                        maxLength={10}
+                        className="h-12 pl-[84px] border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium font-mono text-sm shadow-sm transition-all" 
+                        placeholder="10-digit number" 
+                        value={formData.phone} 
+                        onChange={(e) => {
+                          const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+                          setFormData({...formData, phone: digits});
+                        }} 
+                      />
                     </div>
                   </div>
 
@@ -365,7 +397,7 @@ export default function VoucherClaimPage() {
                     <NativeDatePicker value={formData.anniversary} onChange={(v: string) => setFormData({...formData, anniversary: v})} label="Anniversary" icon={Heart} type="anniversary" />
                   </div>
 
-                  <Button type="submit" disabled={loading} className="w-full h-14 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-sm rounded-2xl mt-4 shadow-xl transition-all active:scale-[0.98]">
+                  <Button type="submit" disabled={loading || formData.phone.length !== 10} className="w-full h-14 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-sm rounded-2xl mt-4 shadow-xl transition-all active:scale-[0.98]">
                     {loading ? <Loader2 className="h-5 w-5 animate-spin text-amber-500" /> : "Activate Voucher"}
                   </Button>
                 </form>
@@ -391,7 +423,14 @@ export default function VoucherClaimPage() {
                      <Sparkles className="w-3.5 h-3.5 text-emerald-500" /> How to redeem
                    </p>
                    <p className="text-sm text-slate-700 font-medium leading-snug">
-                     Visit our <b className="text-slate-900">nearest branch</b> and simply provide your Vocuher Code with a valid ID proof at the billing counter. Validity of voucher is 1 month from the date of activation.
+                     Visit our <b className="text-slate-900">nearest branch</b> and simply provide your Voucher Code with a valid ID proof at the billing counter.
+                     
+                     {/* ✨ FIX: Show the dynamic expiry date */}
+                     {voucherExpiry ? (
+                        <span className="block mt-1.5 text-rose-600">Valid until <b>{new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b>.</span>
+                     ) : (
+                        <span className="block mt-1.5 text-rose-600">Validity of voucher is 1 month from the date of activation.</span>
+                     )}
                    </p>
                 </div>
               </div>

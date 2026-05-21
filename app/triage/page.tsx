@@ -1,250 +1,313 @@
-'use client'
+"use client"
 
-import React, { useState, useEffect } from 'react'
-import { useAuth } from '@/hooks/useAuth'
-import { useStoreLocation } from '@/hooks/useStoreLocation'
-import { supabase } from '@/lib/supabaseClient'
-import { toast } from 'sonner'
-import { Loader2, Flame, Wrench, PackagePlus, CheckCircle2, RefreshCw } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { POSHeader } from '@/components/pos/POSHeader'
+import React, { useEffect, useState } from "react"
+import { useAuth } from "@/hooks/useAuth"
+import { useStoreLocation } from "@/hooks/useStoreLocation"
+import { supabase } from "@/lib/supabaseClient"
+import { toast } from "sonner"
+import { format } from "date-fns"
 
-export default function TriagePage() {
-  const { appUser, loading: authLoading } = useAuth()
-  const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
+import { 
+  Undo2, Package, Search, CheckCircle2, Wrench, Clock, ShieldAlert,
+  Loader2, RefreshCw, ChevronLeft, Flame
+} from "lucide-react"
+
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Card } from "@/components/ui/card"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import {
+  Table, TableBody, TableCell, TableHead, 
+  TableHeader, TableRow
+} from "@/components/ui/table"
+import {
+  Dialog, DialogContent, DialogHeader, 
+  DialogTitle, DialogFooter, DialogDescription
+} from "@/components/ui/dialog"
+import Link from "next/link"
+
+export default function ReturnsInboxPage() {
+  const { appUser } = useAuth()
+  const { selectedLocation } = useStoreLocation()
   
   const [items, setItems] = useState<any[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [processingId, setProcessingId] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
 
-  const fetchTriageItems = async () => {
-    if (!appUser?.company_id || !selectedLocation) return;
-    setIsLoading(true);
+  // Modal States
+  // ✨ FIX: Added 'melt' to your routing actions
+  const [actionItem, setActionItem] = useState<any>(null)
+  const [actionType, setActionType] = useState<'restock' | 'repair' | 'melt' | null>(null)
+  const [actionNotes, setActionNotes] = useState('')
+  const [isProcessing, setIsProcessing] = useState(false)
+
+  const fetchReturns = async () => {
+    if (!appUser?.company_id || !selectedLocation) return
+    setLoading(true)
     try {
-      const { data, error } = await supabase
+      // ✨ FIX: Look for items in the vault that came from a buyback/return!
+      let q = supabase
         .from('inventory_items')
-        // ✨ FIX: Updated the select query to use the exact schema column names
         .select(`
-          id, sku, barcode, item_category, metal_type, purity_karat, 
-          gross_weight_g, net_weight_g, cost_price, acquisition_method, created_at,
-          buybacks ( reference_invoice_number ),
-          invoices ( invoice_number )
+          id, barcode, item_category, purity_karat, net_weight_g, total_stone_weight_cts, status, audit_history, updated_at, is_exchanged,
+          buybacks!source_buyback_id ( reference_invoice_number, notes )
         `)
         .eq('company_id', appUser.company_id)
-        .eq('warehouse_id', selectedLocation)
-        .eq('is_for_sale', false)
-        .in('status', ['in_vault', 'received_at_ho']) // Items waiting for a decision
-        .order('created_at', { ascending: false });
+        .eq('status', 'in_vault') // Only items sitting in the vault waiting to be routed
+        .not('source_buyback_id', 'is', null) // Ensures it came from a return/buyback
+        .order('updated_at', { ascending: false })
 
-      if (error) throw error;
-      setItems(data || []);
+      if (selectedLocation !== 'ALL') q = q.eq('warehouse_id', selectedLocation)
+      if (search) q = q.ilike('barcode', `%${search}%`)
+
+      const { data, error } = await q
+      if (error) throw error
+      setItems(data || [])
     } catch (err: any) {
-      toast.error(err.message || "Failed to load triage items.");
+      toast.error("Failed to load returns inbox.")
     } finally {
-      setIsLoading(false);
+      setLoading(false)
     }
   }
 
   useEffect(() => {
-    fetchTriageItems();
-  }, [appUser?.company_id, selectedLocation])
+    const delay = setTimeout(() => fetchReturns(), 300)
+    return () => clearTimeout(delay)
+  }, [appUser, selectedLocation, search])
 
-  // ==========================================
-  // ACTION 1: RESTOCK AS FRESH INVENTORY
-  // ==========================================
-  const handleRestock = async (item: any) => {
-    if (!confirm(`Are you sure you want to move ${item.sku} to the live sales floor?`)) return;
-    setProcessingId(item.id);
-    try {
-      const { error } = await supabase
-        .from('inventory_items')
-        .update({ 
-          is_for_sale: true, 
-          status: 'in_stock',
-          acquisition_method: 'restocked' // Changes history so we know it was repurposed
-        })
-        .eq('id', item.id);
-
-      if (error) throw error;
-      toast.success(`${item.sku} is now live for sale!`);
-      setItems(items.filter(i => i.id !== item.id));
-    } catch (err: any) {
-      toast.error("Failed to restock item.");
-    } finally {
-      setProcessingId(null);
-    }
+  // Helper to grab the reason from the latest audit log OR the buyback table
+  const getReturnReason = (item: any) => {
+    if (item.buybacks?.notes) return item.buybacks.notes;
+    if (item.buybacks?.reference_invoice_number) return `Returned from Invoice: ${item.buybacks.reference_invoice_number}`;
+    if (item.audit_history && item.audit_history.length > 0) return item.audit_history[0]?.reason;
+    return "No context provided.";
   }
 
-  // ==========================================
-  // ACTION 2: SEND TO REPAIR (JOB BAG)
-  // ==========================================
-  const handleSendToRepair = async (item: any) => {
-    setProcessingId(item.id);
-    try {
-      const { error } = await supabase
-        .from('inventory_items')
-        .update({ status: 'pending_repair' })
-        .eq('id', item.id);
-
-      if (error) throw error;
-      toast.success(`${item.sku} moved to Repair Queue.`);
-      setItems(items.filter(i => i.id !== item.id));
-    } catch (err: any) {
-      toast.error("Failed to update status.");
-    } finally {
-      setProcessingId(null);
+  const executeAction = async () => {
+    if (!actionItem || !actionType || !appUser) return
+    if ((actionType === 'repair' || actionType === 'melt') && !actionNotes.trim()) {
+      return toast.error("Please provide instructions or reasoning.")
     }
-  }
 
-  // ==========================================
-  // ACTION 3: SEND FOR MELTING
-  // ==========================================
-  const handleSendToMelting = async (item: any) => {
-    // ✨ FIX: Updated variables in the prompt to match new schema keys
-    if (!confirm(`Mark ${item.gross_weight_g}g of ${item.purity_karat} for melting?`)) return;
-    setProcessingId(item.id);
+    setIsProcessing(true)
     try {
-      const { error } = await supabase
-        .from('inventory_items')
-        .update({ status: 'pending_melting' })
-        .eq('id', item.id);
+      // Map the UI action to the database enum
+      let newStatus = 'in_stock';
+      let logMessage = '';
 
-      if (error) throw error;
-      toast.success(`${item.sku} added to Melting Queue.`);
-      setItems(items.filter(i => i.id !== item.id));
+      if (actionType === 'restock') {
+        newStatus = 'in_stock';
+        logMessage = `QC Passed: Routed to Live Floor. Notes: ${actionNotes || 'None'}`;
+      } else if (actionType === 'repair') {
+        newStatus = 'repairs';
+        logMessage = `Routed to Repair. Defect: ${actionNotes}`;
+      } else if (actionType === 'melt') {
+        newStatus = 'melted'; // Make sure 'melted' is a valid status in your DB enum!
+        logMessage = `Routed to Melting/Refining. Reason: ${actionNotes}`;
+      }
+
+      const newLogEntry = {
+        timestamp: new Date().toISOString(),
+        user_name: appUser.full_name || 'Manager',
+        reason: logMessage,
+        changes: `Status: ${actionItem.status} ➝ ${newStatus}`
+      }
+
+      const currentHistory = Array.isArray(actionItem.audit_history) ? actionItem.audit_history : []
+      const updatedHistory = [newLogEntry, ...currentHistory]
+
+      // ✨ Update status, pushing it out of the 'in_vault' inbox
+      const { error } = await supabase.from('inventory_items').update({
+        status: newStatus,
+        audit_history: updatedHistory,
+        updated_by: appUser.id || appUser.user_id
+      }).eq('id', actionItem.id)
+
+      if (error) {
+        if (error.message.includes('item_status_enum')) {
+           throw new Error(`The status "${newStatus}" is not allowed in your database yet. Please add it to your Enums in Supabase.`);
+        }
+        throw error;
+      }
+
+      toast.success(`Item successfully moved to ${newStatus.replace('_', ' ')}`)
+      setActionItem(null)
+      setActionType(null)
+      setActionNotes('')
+      fetchReturns() // Refresh inbox
     } catch (err: any) {
-      toast.error("Failed to update status.");
+      toast.error(err.message || "Failed to process item.")
     } finally {
-      setProcessingId(null);
+      setIsProcessing(false)
     }
-  }
-
-  if (authLoading || !appUser) {
-    return <div className="h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-blue-600" /></div>
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col">
-      <POSHeader 
-        isHQ={isHQ} isLocked={isLocked} 
-        selectedLocation={selectedLocation} setSelectedLocation={setSelectedLocation} 
-        onWipeSession={() => {}} 
-        onWarehousesLoaded={() => {}} 
-      />
-
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
-        <div className="flex items-center justify-between mb-8">
+    <div className="min-h-screen bg-[#fafafa] p-4 md:p-6 font-sans">
+      <div className="max-w-6xl mx-auto space-y-6">
+        
+        {/* Header */}
+        <div className="flex items-center gap-4">
+          <Link href="/inventory">
+            <Button variant="outline" size="icon" className="h-9 w-9 rounded-xl bg-white">
+              <ChevronLeft className="w-4 h-4" />
+            </Button>
+          </Link>
           <div>
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight">Old Gold & Returns Triage</h1>
-            <p className="text-sm text-slate-500 font-medium mt-1">Review and process buybacks and exchanged items.</p>
+            <h1 className="text-xl font-black text-slate-900 flex items-center gap-2">
+              <Undo2 className="w-5 h-5 text-rose-600" /> 
+              Returns & Buybacks Inbox
+            </h1>
+            <p className="text-xs font-medium text-slate-500 mt-0.5">
+              Inspect returned items and route them to live floor, repairs, or melting.
+            </p>
           </div>
-          <Button onClick={fetchTriageItems} variant="outline" className="bg-white">
-            <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} /> Refresh
+        </div>
+
+        {/* Controls */}
+        <div className="flex gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-sm">
+          <div className="relative flex-1 max-w-sm">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <Input 
+              placeholder="Scan or search barcode..." 
+              className="pl-9 h-10 bg-slate-50 border-slate-200"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <Button variant="outline" size="icon" className="h-10 w-10" onClick={fetchReturns}>
+            <RefreshCw className={`w-4 h-4 text-slate-500 ${loading ? 'animate-spin' : ''}`} />
           </Button>
         </div>
 
-        {isLoading ? (
-          <div className="h-64 flex items-center justify-center">
-            <Loader2 className="w-8 h-8 animate-spin text-slate-400" />
-          </div>
-        ) : items.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center flex flex-col items-center shadow-sm">
-            <div className="w-16 h-16 bg-slate-100 text-slate-400 rounded-full flex items-center justify-center mb-4">
-              <CheckCircle2 className="w-8 h-8" />
+        {/* Inbox Table */}
+        <Card className="bg-white border-slate-200 shadow-sm overflow-hidden rounded-2xl">
+          <Table>
+            <TableHeader className="bg-rose-50/50">
+              <TableRow>
+                <TableHead className="text-[10px] font-bold uppercase tracking-widest text-slate-500 h-11">Item Details</TableHead>
+                <TableHead className="text-[10px] font-bold uppercase tracking-widest text-slate-500 h-11">Intake Context</TableHead>
+                <TableHead className="text-[10px] font-bold uppercase tracking-widest text-slate-500 h-11">Time in Inbox</TableHead>
+                <TableHead className="text-[10px] font-bold uppercase tracking-widest text-slate-500 h-11 text-right">Routing Decision</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow><TableCell colSpan={4} className="h-32 text-center text-slate-400">Loading inbox...</TableCell></TableRow>
+              ) : items.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={4} className="h-48 text-center text-slate-400">
+                    <ShieldAlert className="w-8 h-8 mx-auto mb-3 opacity-20" />
+                    <span className="text-sm font-semibold tracking-tight">Inbox Clear</span>
+                    <p className="text-xs mt-1">No pending returns or buybacks await inspection.</p>
+                  </TableCell>
+                </TableRow>
+              ) : (
+                items.map(item => (
+                  <TableRow key={item.id} className="hover:bg-slate-50">
+                    <TableCell className="py-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Package className="w-3.5 h-3.5 text-indigo-500" />
+                        <span className="font-mono font-bold text-sm text-slate-900">{item.barcode}</span>
+                        <Badge variant="outline" className="text-[9px] uppercase font-bold tracking-widest bg-rose-50 text-rose-600 border-rose-200 px-1 py-0 h-4">
+                          {item.is_exchanged ? 'OLD GOLD / BUYBACK' : 'RETURN'}
+                        </Badge>
+                      </div>
+                      <div className="text-xs text-slate-600 font-medium">
+                        {item.item_category} ({item.purity_karat}) • {item.net_weight_g}g
+                      </div>
+                    </TableCell>
+                    
+                    <TableCell className="py-3 max-w-[250px]">
+                      <div className="bg-slate-100/50 border border-slate-200 p-2 rounded-lg text-xs text-slate-700 italic truncate" title={getReturnReason(item)}>
+                        "{getReturnReason(item)}"
+                      </div>
+                    </TableCell>
+
+                    <TableCell className="py-3">
+                      <div className="flex items-center gap-1.5 text-xs font-mono font-semibold text-slate-500">
+                        <Clock className="w-3.5 h-3.5" />
+                        {format(new Date(item.updated_at), 'dd MMM, HH:mm')}
+                      </div>
+                    </TableCell>
+
+                    <TableCell className="py-3 text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button 
+                          size="sm" 
+                          className="h-8 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800 border border-emerald-200 text-xs font-bold"
+                          onClick={() => { setActionItem(item); setActionType('restock'); }}
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" /> Live Floor
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          className="h-8 bg-amber-50 text-amber-700 hover:bg-amber-100 hover:text-amber-800 border border-amber-200 text-xs font-bold"
+                          onClick={() => { setActionItem(item); setActionType('repair'); }}
+                        >
+                          <Wrench className="w-3.5 h-3.5 mr-1.5" /> Repair
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          className="h-8 bg-red-50 text-red-700 hover:bg-red-100 hover:text-red-800 border border-red-200 text-xs font-bold"
+                          onClick={() => { setActionItem(item); setActionType('melt'); }}
+                        >
+                          <Flame className="w-3.5 h-3.5 mr-1.5" /> Melt
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </Card>
+
+        {/* DECISION MODAL */}
+        <Dialog open={!!actionItem} onOpenChange={(val) => !val && setActionItem(null)}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle className={`flex items-center gap-2 ${actionType === 'restock' ? 'text-emerald-600' : actionType === 'repair' ? 'text-amber-600' : 'text-red-600'}`}>
+                {actionType === 'restock' && <CheckCircle2 className="w-5 h-5"/>}
+                {actionType === 'repair' && <Wrench className="w-5 h-5"/>}
+                {actionType === 'melt' && <Flame className="w-5 h-5"/>}
+                {actionType === 'restock' ? 'Push to Live Floor' : actionType === 'repair' ? 'Send to Repair' : 'Send to Melting'}
+              </DialogTitle>
+              <DialogDescription className="text-xs">
+                Routing <strong className="text-slate-800">{actionItem?.barcode}</strong>. 
+                The 'Buyback' history flag will be preserved permanently for audits.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="py-4">
+              <Label className="text-xs font-semibold text-slate-700 mb-2 block">
+                {actionType === 'restock' ? 'QC Notes (Optional)' : 'Reason / Instructions (Required)'}
+              </Label>
+              <Textarea 
+                className="resize-none text-xs" 
+                placeholder={actionType === 'restock' ? "e.g. Cleaned and polished." : actionType === 'repair' ? "e.g. Broken clasp, needs soldering." : "e.g. Scrap gold to be refined."}
+                value={actionNotes}
+                onChange={(e) => setActionNotes(e.target.value)}
+              />
             </div>
-            <h3 className="text-lg font-bold text-slate-900">Vault is Clear</h3>
-            <p className="text-slate-500 text-sm mt-1">There are no returned or exchanged items waiting for triage at this location.</p>
-          </div>
-        ) : (
-          <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="bg-slate-50 border-b border-slate-200 text-xs uppercase font-bold text-slate-500 tracking-wider">
-                  <tr>
-                    <th className="px-6 py-4">Item ID & Source</th>
-                    <th className="px-6 py-4">Specs</th>
-                    <th className="px-6 py-4">Weight</th>
-                    <th className="px-6 py-4">Financials</th>
-                    <th className="px-6 py-4 text-center">Triage Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {items.map((item) => {
-                    const isExchange = item.acquisition_method === 'exchange';
-                    const sourceRef = isExchange ? item.invoices?.invoice_number : item.buybacks?.reference_invoice_number;
 
-                    return (
-                      <tr key={item.id} className="hover:bg-slate-50/50 transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="font-bold text-slate-900">{item.sku}</div>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase tracking-wider ${isExchange ? 'bg-purple-100 text-purple-700' : 'bg-rose-100 text-rose-700'}`}>
-                              {isExchange ? 'Exchange' : 'Buyback'}
-                            </span>
-                            {sourceRef && <span className="text-[10px] font-mono text-slate-500 border border-slate-200 px-1.5 py-0.5 rounded bg-white">Ref: {sourceRef}</span>}
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="font-semibold text-slate-800">{item.item_category}</div>
-                          {/* ✨ FIX: Updated to purity_karat */}
-                          <div className="text-xs text-slate-500 mt-0.5">{item.purity_karat} {item.metal_type}</div>
-                        </td>
-                        <td className="px-6 py-4">
-                          {/* ✨ FIX: Updated to gross_weight_g */}
-                          <div className="font-mono font-semibold text-slate-800">{Number(item.gross_weight_g).toFixed(3)}g</div>
-                          <div className="text-[10px] text-slate-500 uppercase tracking-widest mt-0.5">Gross Wt</div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="font-bold text-slate-900">₹{Number(item.cost_price).toLocaleString()}</div>
-                          <div className="text-[10px] text-slate-500 uppercase tracking-widest mt-0.5">Acquisition Cost</div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <div className="flex items-center justify-center gap-2">
-                            
-                            {/* Action 1: Restock */}
-                            <Button 
-                              size="sm" 
-                              variant="outline" 
-                              className="h-8 px-3 border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-300 text-emerald-600 bg-emerald-50/50"
-                              onClick={() => handleRestock(item)}
-                              disabled={processingId === item.id}
-                            >
-                              <PackagePlus className="w-4 h-4 mr-1.5" /> Live Floor
-                            </Button>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setActionItem(null)} className="h-9 text-xs font-bold">Cancel</Button>
+              <Button 
+                onClick={executeAction} 
+                disabled={isProcessing || ((actionType === 'repair' || actionType === 'melt') && !actionNotes.trim())}
+                className={`h-9 text-xs font-bold text-white ${actionType === 'restock' ? 'bg-emerald-600 hover:bg-emerald-700' : actionType === 'repair' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-red-600 hover:bg-red-700'}`}
+              >
+                {isProcessing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                Confirm Routing
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-                            {/* Action 2: Repair */}
-                            <Button 
-                              size="sm" 
-                              variant="outline" 
-                              className="h-8 px-3 border-amber-200 hover:bg-amber-50 hover:text-amber-700 hover:border-amber-300 text-amber-600 bg-amber-50/50"
-                              onClick={() => handleSendToRepair(item)}
-                              disabled={processingId === item.id}
-                            >
-                              <Wrench className="w-4 h-4 mr-1.5" /> Repair
-                            </Button>
-
-                            {/* Action 3: Melt */}
-                            <Button 
-                              size="sm" 
-                              variant="outline" 
-                              className="h-8 px-3 border-rose-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-300 text-rose-600 bg-rose-50/50"
-                              onClick={() => handleSendToMelting(item)}
-                              disabled={processingId === item.id}
-                            >
-                              <Flame className="w-4 h-4 mr-1.5" /> Melt
-                            </Button>
-
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </main>
+      </div>
     </div>
   )
 }
