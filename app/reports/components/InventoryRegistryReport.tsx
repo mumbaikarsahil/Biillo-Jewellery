@@ -5,7 +5,7 @@ import { format } from 'date-fns'
 import { 
   Download, Filter, Loader2, Package, Search, 
   RefreshCw, FileText, Store, Layers, TrendingDown, TrendingUp, AlertTriangle, Sparkles, IndianRupee, MapPin,
-  CheckCircle2, Trophy, Target, PieChart, Gem, MessageCircle, Printer
+  CheckCircle2, Trophy, Target, PieChart, Gem, MessageCircle, Printer, ChevronDown, CheckSquare, Square, Check
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -56,14 +56,36 @@ export function InventoryRegistryReport() {
   const [showFilters, setShowFilters] = useState(false)
   const [showAnalytics, setShowAnalytics] = useState(false)
 
+  // ✨ UI "Draft" States (No lag while adjusting)
   const [search, setSearch] = useState('')
+  const [selectedWhs, setSelectedWhs] = useState<string[]>(['ALL'])
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterMetal, setFilterMetal] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
-  const [filterStone, setFilterStone] = useState('all') // ✨ NEW: Stone Profile Filter
-  
-  const [maxPrice, setMaxPrice] = useState(1000000)
+  const [filterStone, setFilterStone] = useState('all') 
   const [priceRange, setPriceRange] = useState<number[]>([0, 1000000])
+  const [maxPrice, setMaxPrice] = useState(1000000)
+
+  // ✨ Actual "Applied" States (Triggers math & table re-renders)
+  const [activeWhs, setActiveWhs] = useState<string[]>(['ALL'])
+  const [activeFilters, setActiveFilters] = useState({
+    search: '',
+    status: 'all',
+    metal: 'all',
+    category: 'all',
+    stone: 'all',
+    priceRange: [0, 1000000]
+  })
+
+  const [showLocDropdown, setShowLocDropdown] = useState(false)
+
+  useEffect(() => {
+    if (selectedLocation) {
+      const newLoc = selectedLocation === 'ALL' ? ['ALL'] : [selectedLocation];
+      setSelectedWhs(newLoc);
+      setActiveWhs(newLoc); // Auto-apply location if changed from global HQ wrapper
+    }
+  }, [selectedLocation])
 
   useEffect(() => {
     async function fetchWarehouses() {
@@ -71,13 +93,57 @@ export function InventoryRegistryReport() {
       const { data } = await supabase.from('warehouses')
         .select('id, name')
         .eq('company_id', appUser.company_id)
+        .eq('is_active', true)
+        .order('name')
       if (data) setWarehouses(data)
     }
     fetchWarehouses()
   }, [appUser])
 
   const getWhName = (wId: string) => {
+    if (wId === 'ALL') return 'All Locations';
     return warehouses.find((w: any) => w.id === wId)?.name || 'Global / Unassigned'
+  }
+
+  const toggleLocation = (id: string) => {
+    if (id === 'ALL') {
+      setSelectedWhs(['ALL']);
+    } else {
+      let newWhs = selectedWhs.filter(w => w !== 'ALL');
+      if (newWhs.includes(id)) {
+        newWhs = newWhs.filter(w => w !== id);
+        if (newWhs.length === 0) newWhs = ['ALL'];
+      } else {
+        newWhs.push(id);
+        if (newWhs.length === warehouses.length) newWhs = ['ALL'];
+      }
+      setSelectedWhs(newWhs);
+    }
+  }
+
+  // ✨ FIX: Apply Filters Handler
+  const handleApplyFilters = () => {
+    setActiveWhs(selectedWhs);
+    setActiveFilters({
+      search,
+      status: filterStatus,
+      metal: filterMetal,
+      category: filterCategory,
+      stone: filterStone,
+      priceRange
+    });
+  }
+
+  // ✨ FIX: Reset Filters Handler
+  const handleResetFilters = () => {
+    setSearch(''); setFilterStatus('all'); setFilterCategory('all'); setFilterMetal('all'); setFilterStone('all'); setPriceRange([0, maxPrice]);
+    const resetLoc = selectedLocation === 'ALL' ? ['ALL'] : [selectedLocation];
+    setSelectedWhs(resetLoc);
+    
+    setActiveWhs(resetLoc);
+    setActiveFilters({
+      search: '', status: 'all', metal: 'all', category: 'all', stone: 'all', priceRange: [0, maxPrice]
+    });
   }
 
   const fetchData = async () => {
@@ -98,12 +164,12 @@ export function InventoryRegistryReport() {
           .order('id', { ascending: true }) 
           .range(step * limit, (step + 1) * limit - 1)
 
-        if (selectedLocation !== 'ALL') {
-          query = query.eq('warehouse_id', selectedLocation)
+        // Use the applied activeWhs state
+        if (!activeWhs.includes('ALL') && activeWhs.length > 0) {
+          query = query.in('warehouse_id', activeWhs)
         }
 
         const { data: chunkData, error } = await query
-
         if (error) throw error
 
         if (chunkData && chunkData.length > 0) {
@@ -121,7 +187,11 @@ export function InventoryRegistryReport() {
       if (uniqueItems.length > 0) {
         const highest = Math.max(...uniqueItems.map((d: any) => Number(d.mrp) || 0), 100000);
         setMaxPrice(highest);
-        setPriceRange([0, highest]);
+        // Only reset active price bound if we are viewing everything
+        if (activeFilters.priceRange[1] === maxPrice || activeFilters.priceRange[1] > highest) {
+           setPriceRange([0, highest]);
+           setActiveFilters(prev => ({...prev, priceRange: [0, highest]}));
+        }
       }
 
     } catch (err: any) {
@@ -131,13 +201,15 @@ export function InventoryRegistryReport() {
     }
   }
 
+  // Refetch data only when applied location changes
   useEffect(() => { 
-    if (selectedLocation) fetchData() 
-  }, [appUser, selectedLocation])
+    if (activeWhs.length > 0) fetchData() 
+  }, [appUser, activeWhs])
 
   const uniqueCategories = useMemo(() => Array.from(new Set(data.map((d: any) => normalizeCategory(d.item_category)))).filter(Boolean).sort(), [data]);
   const uniqueMetals = useMemo(() => Array.from(new Set(data.map((d: any) => d.metal_type || 'Unknown Metal'))).filter(Boolean).sort(), [data]);
 
+  // ✨ FIX: Calculations now strictly depend on `activeFilters` instead of draft UI states
   const filteredData = useMemo(() => {
     return data.filter(item => {
       const cat = normalizeCategory(item.item_category); 
@@ -145,22 +217,21 @@ export function InventoryRegistryReport() {
       const bar = item.barcode || '';
       const stat = item.status || 'unknown';
 
-      if (search && !bar.toLowerCase().includes(search.toLowerCase()) && !cat.toLowerCase().includes(search.toLowerCase())) return false;
-      if (filterStatus !== 'all' && stat !== filterStatus) return false;
-      if (filterMetal !== 'all' && met !== filterMetal) return false;
-      if (filterCategory !== 'all' && cat !== filterCategory) return false;
+      if (activeFilters.search && !bar.toLowerCase().includes(activeFilters.search.toLowerCase()) && !cat.toLowerCase().includes(activeFilters.search.toLowerCase())) return false;
+      if (activeFilters.status !== 'all' && stat !== activeFilters.status) return false;
+      if (activeFilters.metal !== 'all' && met !== activeFilters.metal) return false;
+      if (activeFilters.category !== 'all' && cat !== activeFilters.category) return false;
       
-      // ✨ NEW: Stone Filter Logic
-      if (filterStone === 'solitaire' && !(Number(item.solitaire_weight_cts) > 0)) return false;
-      if (filterStone === 'melee' && !(Number(item.melee_weight_cts) > 0)) return false;
-      if (filterStone === 'plain' && (Number(item.total_stone_weight_cts) > 0)) return false;
+      if (activeFilters.stone === 'solitaire' && !(Number(item.solitaire_weight_cts) > 0)) return false;
+      if (activeFilters.stone === 'melee' && !(Number(item.melee_weight_cts) > 0)) return false;
+      if (activeFilters.stone === 'plain' && (Number(item.total_stone_weight_cts) > 0)) return false;
 
       const val = Number(item.mrp) || 0;
-      if (val < priceRange[0] || val > priceRange[1]) return false;
+      if (val < activeFilters.priceRange[0] || val > activeFilters.priceRange[1]) return false;
       
       return true;
     });
-  }, [data, search, filterStatus, filterMetal, filterCategory, filterStone, priceRange]); // ✨ Added filterStone dependency
+  }, [data, activeFilters]);
 
   const metrics = useMemo(() => {
     return filteredData.reduce((acc, curr) => ({
@@ -203,15 +274,15 @@ export function InventoryRegistryReport() {
       const met = item.metal_type || 'Unknown Metal';
       const bar = item.barcode || '';
 
-      if (search && !bar.toLowerCase().includes(search.toLowerCase()) && !cat.toLowerCase().includes(search.toLowerCase())) return;
-      if (filterMetal !== 'all' && met !== filterMetal) return;
-      if (filterCategory !== 'all' && cat !== filterCategory) return;
-      if (filterStone === 'solitaire' && !(Number(item.solitaire_weight_cts) > 0)) return;
-      if (filterStone === 'melee' && !(Number(item.melee_weight_cts) > 0)) return;
-      if (filterStone === 'plain' && (Number(item.total_stone_weight_cts) > 0)) return;
+      if (activeFilters.search && !bar.toLowerCase().includes(activeFilters.search.toLowerCase()) && !cat.toLowerCase().includes(activeFilters.search.toLowerCase())) return;
+      if (activeFilters.metal !== 'all' && met !== activeFilters.metal) return;
+      if (activeFilters.category !== 'all' && cat !== activeFilters.category) return;
+      if (activeFilters.stone === 'solitaire' && !(Number(item.solitaire_weight_cts) > 0)) return;
+      if (activeFilters.stone === 'melee' && !(Number(item.melee_weight_cts) > 0)) return;
+      if (activeFilters.stone === 'plain' && (Number(item.total_stone_weight_cts) > 0)) return;
       
       const price = Number(item.mrp) || 0;
-      if (price < priceRange[0] || price > priceRange[1]) return;
+      if (price < activeFilters.priceRange[0] || price > activeFilters.priceRange[1]) return;
 
       const loc = getWhName(item.warehouse_id); 
       const bracket = getPriceBracket(price);
@@ -279,8 +350,7 @@ export function InventoryRegistryReport() {
       deadStockWarnings: deadStockWarnings.sort((a, b) => b.lockedValue - a.lockedValue),
       marketIntel: { bestCategory, worstCategory: worstCategory.name !== 'N/A' ? worstCategory : null, sweetSpot }
     };
-  }, [data, search, filterMetal, filterCategory, filterStone, priceRange, showAnalytics, warehouses]);
-
+  }, [data, activeFilters, showAnalytics, warehouses]);
 
   const handleExport = () => {
     if (filteredData.length === 0) {
@@ -296,13 +366,13 @@ export function InventoryRegistryReport() {
       return acc;
     }, {} as Record<string, any[]>);
 
-    const locationStr = selectedLocation === 'ALL' ? 'All Locations' : getWhName(selectedLocation);
-    const statusStr = filterStatus === 'all' ? 'All Statuses' : filterStatus.replace('_', ' ').toUpperCase();
-    const catStr = filterCategory === 'all' ? 'All Categories' : filterCategory;
-    const metalStr = filterMetal === 'all' ? 'All Metals' : filterMetal;
-    const stoneStr = filterStone === 'all' ? 'All Stones' : filterStone.toUpperCase();
-    const searchStr = search ? ` | Search: "${search}"` : '';
-    const priceStr = ` | Retail: ₹${priceRange[0]} to ₹${priceRange[1]}`;
+    const locationStr = activeWhs.includes('ALL') ? 'All Locations' : activeWhs.map(id => getWhName(id)).join(' + ');
+    const statusStr = activeFilters.status === 'all' ? 'All Statuses' : activeFilters.status.replace('_', ' ').toUpperCase();
+    const catStr = activeFilters.category === 'all' ? 'All Categories' : activeFilters.category;
+    const metalStr = activeFilters.metal === 'all' ? 'All Metals' : activeFilters.metal;
+    const stoneStr = activeFilters.stone === 'all' ? 'All Stones' : activeFilters.stone.toUpperCase();
+    const searchStr = activeFilters.search ? ` | Search: "${activeFilters.search}"` : '';
+    const priceStr = ` | Retail: ₹${activeFilters.priceRange[0]} to ₹${activeFilters.priceRange[1]}`;
 
     let csvRows: string[] = [
       `"ASSET REGISTRY REPORT",,,,,,,,,,,,,`, 
@@ -405,13 +475,13 @@ export function InventoryRegistryReport() {
     csvRows.push(grandTotalRow.join(','));
 
     let fileNameParts = ['Asset_Registry'];
-    if (selectedLocation !== 'ALL') {
-      fileNameParts.push(getWhName(selectedLocation).replace(/[^a-zA-Z0-9]/g, '_'));
+    if (!activeWhs.includes('ALL')) {
+      fileNameParts.push(activeWhs.length > 1 ? 'Multiple_Locations' : getWhName(activeWhs[0]).replace(/[^a-zA-Z0-9]/g, '_'));
     } else {
       fileNameParts.push('All_Locations');
     }
-    if (filterStatus !== 'all') fileNameParts.push(filterStatus.toUpperCase());
-    if (filterCategory !== 'all') fileNameParts.push(filterCategory.replace(/[^a-zA-Z0-9]/g, '_'));
+    if (activeFilters.status !== 'all') fileNameParts.push(activeFilters.status.toUpperCase());
+    if (activeFilters.category !== 'all') fileNameParts.push(activeFilters.category.replace(/[^a-zA-Z0-9]/g, '_'));
     fileNameParts.push(format(new Date(), 'yyyyMMdd'));
 
     const dynamicFileName = fileNameParts.filter(Boolean).join('_').replace(/_+/g, '_') + '.csv';
@@ -433,7 +503,7 @@ export function InventoryRegistryReport() {
   const handleSummaryExportCSV = () => {
     if (categorySummary.length === 0) return;
 
-    const locationStr = selectedLocation === 'ALL' ? 'All Locations' : getWhName(selectedLocation);
+    const locationStr = activeWhs.includes('ALL') ? 'All Locations' : activeWhs.map(id => getWhName(id)).join(' + ');
     const headers = ['Category', 'Items Count', 'Total Gross (g)', 'Total Net (g)', 'Total Stone (cts)', 'Total Value (₹)'];
     
     let csvRows = [
@@ -467,7 +537,7 @@ export function InventoryRegistryReport() {
       return;
     }
 
-    const locationStr = selectedLocation === 'ALL' ? 'All Locations' : getWhName(selectedLocation);
+    const locationStr = activeWhs.includes('ALL') ? 'All Locations' : activeWhs.map(id => getWhName(id)).join(' + ');
     let text = `*📊 ASSET REGISTRY SUMMARY*\n`;
     text += `*Location:* ${locationStr}\n`;
     text += `*Date:* ${format(new Date(), 'dd-MMM-yyyy hh:mm a')}\n\n`;
@@ -539,15 +609,19 @@ export function InventoryRegistryReport() {
 
       <div className="space-y-5 animate-in fade-in duration-500 print:hidden">
         
-        <div className="flex flex-col gap-3 bg-white p-3 rounded-2xl border border-zinc-200 shadow-sm print:hidden">
-          <div className="flex items-center gap-2 w-full">
+        {/* ✨ FIX: Unified Action & Filter Block */}
+        <div className="flex flex-col gap-3 bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm print:hidden">
+          
+          {/* Top Control Row */}
+          <div className="flex items-center gap-3 w-full">
             <div className="relative flex-1 max-w-md">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
               <Input 
-                placeholder="Scan barcode or category..." 
+                placeholder="Scan barcode or search category..." 
                 className="pl-9 h-9 text-xs rounded-lg bg-zinc-50 border-zinc-200 focus-visible:ring-indigo-400 font-medium text-zinc-800" 
                 value={search} 
                 onChange={(e) => setSearch(e.target.value)} 
+                onKeyDown={(e) => e.key === 'Enter' && handleApplyFilters()}
               />
             </div>
             
@@ -559,6 +633,10 @@ export function InventoryRegistryReport() {
               <Filter className="h-3.5 w-3.5 mr-1.5" /> Filters
             </Button>
 
+            
+
+            <div className="flex-1" />
+
             <Button 
               variant={showAnalytics ? "default" : "outline"} 
               className={`h-9 px-4 text-xs font-bold rounded-lg hidden sm:flex transition-all ${showAnalytics ? 'bg-indigo-600 text-white hover:bg-indigo-700 border-indigo-600 shadow-md shadow-indigo-200' : 'border-indigo-200 text-indigo-600 bg-indigo-50/50 hover:bg-indigo-100'}`}
@@ -566,12 +644,7 @@ export function InventoryRegistryReport() {
             >
               <Sparkles className={`h-3.5 w-3.5 mr-1.5 ${showAnalytics ? 'text-white' : 'text-indigo-500'}`} /> 
               Matrix Analytics
-              <span className={`ml-2 px-1.5 py-0.5 rounded text-[8px] uppercase tracking-widest font-black transition-colors ${showAnalytics ? 'bg-white/20 text-white' : 'bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-sm'}`}>
-                BETA
-              </span>
             </Button>
-
-            <div className="flex-1" />
 
             <Button variant="outline" size="icon" className="h-9 w-9 rounded-lg border-zinc-200 shrink-0 hidden sm:flex text-zinc-600 hover:bg-zinc-100" onClick={fetchData}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -582,90 +655,135 @@ export function InventoryRegistryReport() {
             </Button>
           </div>
 
+          {/* Draft Filters Panel */}
           {showFilters && (
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 pt-3 border-t border-zinc-100 animate-in slide-in-from-top-2 duration-200">
-              
-              <Select value={selectedLocation} onValueChange={setSelectedLocation} disabled={isLocked}>
-                <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
-                  <Store className="w-3 h-3 mr-1.5 text-zinc-500" />
-                  <SelectValue placeholder="Location" />
-                </SelectTrigger>
-                <SelectContent className="rounded-xl shadow-xl border-zinc-200">
-                  {isHQ && <SelectItem value="ALL" className="text-xs font-medium text-indigo-600">All Locations</SelectItem>}
-                  {warehouses.map(w => <SelectItem key={w.id} value={w.id} className="text-xs font-medium">{w.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+            <div className="pt-4 border-t border-zinc-100 mt-1 animate-in slide-in-from-top-2 duration-200">
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+                
+                {isLocked ? (
+                   <Badge className="h-9 justify-center bg-zinc-100 text-zinc-600 border border-zinc-200 shadow-none font-bold text-xs">
+                     <Store className="w-3 h-3 mr-1.5" /> {getWhName(selectedWhs[0])}
+                   </Badge>
+                ) : (
+                  <div className="relative">
+                    <Button 
+                      variant="outline" 
+                      className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 w-full justify-between hover:bg-zinc-100 focus:ring-0 shadow-none"
+                      onClick={() => setShowLocDropdown(!showLocDropdown)}
+                    >
+                      <div className="flex items-center truncate">
+                        <Store className="w-3 h-3 mr-1.5 text-zinc-500 shrink-0" />
+                        <span className="truncate">
+                          {selectedWhs.includes('ALL') ? 'All Locations' : `${selectedWhs.length} Selected`}
+                        </span>
+                      </div>
+                      <ChevronDown className="w-3 h-3 text-zinc-400 shrink-0" />
+                    </Button>
 
-              <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent className="rounded-xl shadow-xl border-zinc-200">
-                  <SelectItem value="all" className="text-xs font-medium">All Statuses</SelectItem>
-                  <SelectItem value="in_stock" className="text-xs font-medium">In Stock</SelectItem>
-                  <SelectItem value="sold" className="text-xs font-medium">Sold / Delivered</SelectItem>
-                  <SelectItem value="in_transit" className="text-xs font-medium">In Transit</SelectItem>
-                </SelectContent>
-              </Select>
+                    {showLocDropdown && (
+                      <>
+                        <div className="fixed inset-0 z-40" onClick={() => setShowLocDropdown(false)} />
+                        <div className="absolute top-full left-0 mt-1 w-full sm:w-[220px] bg-white border border-zinc-200 shadow-xl rounded-xl z-50 py-1.5 flex flex-col max-h-[300px] overflow-y-auto">
+                          <div 
+                            className="flex items-center gap-2.5 px-3 py-2 hover:bg-zinc-50 cursor-pointer transition-colors"
+                            onClick={() => toggleLocation('ALL')}
+                          >
+                            {selectedWhs.includes('ALL') ? <CheckSquare className="w-4 h-4 text-indigo-600"/> : <Square className="w-4 h-4 text-zinc-300"/>}
+                            <span className="text-xs font-bold text-indigo-600">All Locations</span>
+                          </div>
+                          <div className="h-px bg-zinc-100 my-1 mx-2" />
+                          {warehouses.map(w => (
+                            <div 
+                              key={w.id}
+                              className="flex items-center gap-2.5 px-3 py-2 hover:bg-zinc-50 cursor-pointer transition-colors"
+                              onClick={() => toggleLocation(w.id)}
+                            >
+                              {selectedWhs.includes(w.id) ? <CheckSquare className="w-4 h-4 text-indigo-600"/> : <Square className="w-4 h-4 text-zinc-300"/>}
+                              <span className="text-xs font-medium text-zinc-700">{w.name}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
 
-              <Select value={filterCategory} onValueChange={setFilterCategory}>
-                <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
-                  <Package className="w-3 h-3 mr-1.5 text-zinc-500" />
-                  <SelectValue placeholder="Category" />
-                </SelectTrigger>
-                <SelectContent className="rounded-xl shadow-xl border-zinc-200">
-                  <SelectItem value="all" className="text-xs font-medium text-indigo-600">All Categories</SelectItem>
-                  {uniqueCategories.map(c => <SelectItem key={c} value={c} className="text-xs font-medium">{c}</SelectItem>)}
-                </SelectContent>
-              </Select>
+                <Select value={filterStatus} onValueChange={setFilterStatus}>
+                  <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl shadow-xl border-zinc-200">
+                    <SelectItem value="all" className="text-xs font-medium">All Statuses</SelectItem>
+                    <SelectItem value="in_stock" className="text-xs font-medium">In Stock</SelectItem>
+                    <SelectItem value="sold" className="text-xs font-medium">Sold / Delivered</SelectItem>
+                    <SelectItem value="in_transit" className="text-xs font-medium">In Transit</SelectItem>
+                  </SelectContent>
+                </Select>
 
-              <Select value={filterMetal} onValueChange={setFilterMetal}>
-                <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
-                  <Layers className="w-3 h-3 mr-1.5 text-zinc-500" />
-                  <SelectValue placeholder="Metal" />
-                </SelectTrigger>
-                <SelectContent className="rounded-xl shadow-xl border-zinc-200">
-                  <SelectItem value="all" className="text-xs font-medium">All Metals</SelectItem>
-                  {uniqueMetals.map(m => <SelectItem key={m} value={m} className="text-xs font-medium">{m}</SelectItem>)}
-                </SelectContent>
-              </Select>
+                <Select value={filterCategory} onValueChange={setFilterCategory}>
+                  <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
+                    <Package className="w-3 h-3 mr-1.5 text-zinc-500" />
+                    <SelectValue placeholder="Category" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl shadow-xl border-zinc-200">
+                    <SelectItem value="all" className="text-xs font-medium text-indigo-600">All Categories</SelectItem>
+                    {uniqueCategories.map(c => <SelectItem key={c} value={c} className="text-xs font-medium">{c}</SelectItem>)}
+                  </SelectContent>
+                </Select>
 
-              {/* ✨ NEW: Stone Profile Filter */}
-              <Select value={filterStone} onValueChange={setFilterStone}>
-                <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
-                  <Gem className="w-3 h-3 mr-1.5 text-zinc-500" />
-                  <SelectValue placeholder="Stone Profile" />
-                </SelectTrigger>
-                <SelectContent className="rounded-xl shadow-xl border-zinc-200">
-                  <SelectItem value="all" className="text-xs font-medium">All Stones</SelectItem>
-                  <SelectItem value="solitaire" className="text-xs font-medium font-bold text-blue-600">Has Solitaire</SelectItem>
-                  <SelectItem value="melee" className="text-xs font-medium">Has Melee</SelectItem>
-                  <SelectItem value="plain" className="text-xs font-medium text-zinc-500">Plain Metal</SelectItem>
-                </SelectContent>
-              </Select>
+                <Select value={filterMetal} onValueChange={setFilterMetal}>
+                  <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
+                    <Layers className="w-3 h-3 mr-1.5 text-zinc-500" />
+                    <SelectValue placeholder="Metal" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl shadow-xl border-zinc-200">
+                    <SelectItem value="all" className="text-xs font-medium">All Metals</SelectItem>
+                    {uniqueMetals.map(m => <SelectItem key={m} value={m} className="text-xs font-medium">{m}</SelectItem>)}
+                  </SelectContent>
+                </Select>
 
-              <div className="col-span-2 md:col-span-3 xl:col-span-2 bg-zinc-50/50 p-2 rounded-lg border border-zinc-200">
-                <div className="flex justify-between items-center mb-1.5">
-                  <Label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
-                    <IndianRupee className="w-3 h-3"/> Retail Value Range
-                  </Label>
-                  <span className="text-[10px] font-black text-zinc-700 font-mono tracking-tighter">
-                    ₹{(priceRange[0]/1000).toFixed(0)}k - ₹{(priceRange[1]/1000).toFixed(0)}k
-                  </span>
-                </div>
-                <div className="px-2">
-                  <Slider min={0} max={maxPrice} step={1000} value={priceRange} onValueChange={setPriceRange} />
+                <Select value={filterStone} onValueChange={setFilterStone}>
+                  <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
+                    <Gem className="w-3 h-3 mr-1.5 text-zinc-500" />
+                    <SelectValue placeholder="Stone Profile" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl shadow-xl border-zinc-200">
+                    <SelectItem value="all" className="text-xs font-medium">All Stones</SelectItem>
+                    <SelectItem value="solitaire" className="text-xs font-medium font-bold text-blue-600">Has Solitaire</SelectItem>
+                    <SelectItem value="melee" className="text-xs font-medium">Has Melee</SelectItem>
+                    <SelectItem value="plain" className="text-xs font-medium text-zinc-500">Plain Metal</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <div className="col-span-2 md:col-span-3 xl:col-span-2 bg-zinc-50/50 p-2 rounded-lg border border-zinc-200">
+                  <div className="flex justify-between items-center mb-1.5">
+                    <Label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
+                      <IndianRupee className="w-3 h-3"/> Retail Value Range
+                    </Label>
+                    <span className="text-[10px] font-black text-zinc-700 font-mono tracking-tighter">
+                      ₹{(priceRange[0]/1000).toFixed(0)}k - ₹{(priceRange[1]/1000).toFixed(0)}k
+                    </span>
+                  </div>
+                  <div className="px-2">
+                    <Slider min={0} max={maxPrice} step={1000} value={priceRange} onValueChange={setPriceRange} />
+                  </div>
                 </div>
               </div>
 
-              {/* ✨ Updated reset button logic to include filterStone */}
-              {(filterStatus !== 'all' || filterCategory !== 'all' || filterMetal !== 'all' || filterStone !== 'all' || search) && (
-                <Button variant="ghost" className="h-9 text-xs font-bold text-red-500 hover:bg-red-50 hover:text-red-600" onClick={() => {
-                  setSearch(''); setFilterStatus('all'); setFilterCategory('all'); setFilterMetal('all'); setFilterStone('all'); setPriceRange([0, maxPrice]);
-                }}>
-                  Reset Filters
+              
+
+              <div className="flex justify-end gap-3 mt-4 pt-4 border-t border-zinc-50">
+              <Button variant="ghost" className="h-9 text-xs font-bold text-red-500 hover:bg-red-50 hover:text-red-600" onClick={handleResetFilters}>
+                  Clear Settings
                 </Button>
-              )}
+              <Button 
+              onClick={handleApplyFilters}
+              className="h-9 px-5 text-xs font-bold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm shadow-indigo-200"
+            >
+               <Check className="h-3.5 w-3.5 mr-1.5" /> Apply 
+            </Button>
+                
+              </div>
             </div>
           )}
         </div>
@@ -805,7 +923,7 @@ export function InventoryRegistryReport() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
           <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl">
             <CardContent className="p-4 sm:p-5">
               <p className="text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5">
@@ -826,6 +944,13 @@ export function InventoryRegistryReport() {
             <CardContent className="p-4 sm:p-5">
               <p className="text-[11px] font-medium text-zinc-500 mb-1">Net Weight</p>
               {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-2xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">{metrics.totalNetWt.toFixed(2)}<span className="text-sm font-medium text-zinc-400 ml-1 tracking-normal">g</span></p>}
+            </CardContent>
+          </Card>
+
+          <Card className="shadow-sm border-blue-200 bg-blue-50/30 rounded-2xl">
+            <CardContent className="p-4 sm:p-5">
+              <p className="text-[11px] font-medium text-blue-600 mb-1">Stone Weight</p>
+              {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-2xl sm:text-3xl font-semibold tracking-tighter text-blue-700 mt-1">{metrics.totalStoneWt.toFixed(2)}<span className="text-sm font-medium text-blue-400 ml-1 tracking-normal">cts</span></p>}
             </CardContent>
           </Card>
 
@@ -942,7 +1067,7 @@ export function InventoryRegistryReport() {
                         <p className="text-xs font-semibold text-zinc-800">{item.metal_type || '--'} <span className="text-[10px] text-zinc-500 font-medium">{item.purity_karat || ''}</span></p>
                         {(item.diamond_shape || item.diamond_color || item.diamond_clarity) && (
                           <p className="text-[9px] text-blue-500 font-bold mt-1 uppercase tracking-wider">
-                             {[item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' • ')}
+                              {[item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' • ')}
                           </p>
                         )}
                       </div>
@@ -1053,7 +1178,6 @@ export function InventoryRegistryReport() {
       {/* ✨ EXECUTIVE PDF REPORT (HIDDEN ON SCREEN, VISIBLE ON PRINT) ✨ */}
       <div id="executive-pdf-report" className="hidden print:block w-full font-sans bg-white pb-10">
         
-        {/* REPORT HEADER */}
         <div className="flex justify-between items-end border-b-[3px] border-black pb-4 mb-6">
           <div>
             <h2 className="text-xl font-bold tracking-widest uppercase text-gray-500 mb-1">Pavitram Jewels</h2>
@@ -1061,7 +1185,7 @@ export function InventoryRegistryReport() {
           </div>
           <div className="text-right">
             <p className="text-sm font-bold uppercase tracking-widest text-gray-800 bg-gray-100 px-3 py-1 rounded inline-block">
-              {selectedLocation === 'ALL' ? 'GLOBAL INVENTORY' : getWhName(selectedLocation).toUpperCase()}
+              {activeWhs.includes('ALL') ? 'GLOBAL INVENTORY' : activeWhs.length > 1 ? 'MULTIPLE LOCATIONS' : getWhName(activeWhs[0]).toUpperCase()}
             </p>
             <p className="text-xs font-semibold text-gray-500 mt-2 uppercase tracking-widest">
               Generated: {format(new Date(), 'dd MMM yyyy • hh:mm a')}
@@ -1069,27 +1193,29 @@ export function InventoryRegistryReport() {
           </div>
         </div>
 
-        {/* FINANCIAL KPI GRID */}
-        <div className="grid grid-cols-4 border-2 border-black rounded-xl overflow-hidden mb-8 prevent-break">
-          <div className="p-4 bg-white border-r-2 border-gray-200">
-            <p className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1">Total Assets</p>
-            <p className="text-3xl font-black text-black">{metrics.totalItems}</p>
+        <div className="grid grid-cols-5 border-2 border-black rounded-xl overflow-hidden mb-8 prevent-break">
+          <div className="p-3 bg-white border-r-2 border-gray-200">
+            <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Assets</p>
+            <p className="text-2xl font-black text-black">{metrics.totalItems}</p>
           </div>
-          <div className="p-4 bg-white border-r-2 border-gray-200">
-            <p className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1">Gross Weight</p>
-            <p className="text-3xl font-black text-black">{metrics.totalGrossWt.toFixed(3)}<span className="text-lg text-gray-400 font-bold ml-1">g</span></p>
+          <div className="p-3 bg-white border-r-2 border-gray-200">
+            <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Gross Wt</p>
+            <p className="text-2xl font-black text-black">{metrics.totalGrossWt.toFixed(2)}<span className="text-sm text-gray-400 font-bold ml-1">g</span></p>
           </div>
-          <div className="p-4 bg-white border-r-2 border-gray-200">
-            <p className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1">Net Weight</p>
-            <p className="text-3xl font-black text-black">{metrics.totalNetWt.toFixed(3)}<span className="text-lg text-gray-400 font-bold ml-1">g</span></p>
+          <div className="p-3 bg-white border-r-2 border-gray-200">
+            <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Net Wt</p>
+            <p className="text-2xl font-black text-black">{metrics.totalNetWt.toFixed(2)}<span className="text-sm text-gray-400 font-bold ml-1">g</span></p>
           </div>
-          <div className="p-4 bg-black text-white">
-            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">Total Valuation</p>
-            <p className="text-3xl font-black tracking-tight">₹{metrics.totalValue.toLocaleString()}</p>
+          <div className="p-3 bg-white border-r-2 border-gray-200">
+            <p className="text-[9px] font-black uppercase tracking-widest text-blue-500 mb-1">Stone Wt</p>
+            <p className="text-2xl font-black text-blue-700">{metrics.totalStoneWt.toFixed(2)}<span className="text-sm text-blue-400 font-bold ml-1">cts</span></p>
+          </div>
+          <div className="p-3 bg-black text-white">
+            <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-1">Valuation</p>
+            <p className="text-2xl font-black tracking-tight">₹{metrics.totalValue.toLocaleString()}</p>
           </div>
         </div>
 
-        {/* AI MARKET INTELLIGENCE */}
         {analytics && (
           <div className="mb-8 prevent-break">
             <h3 className="text-sm font-black uppercase tracking-widest text-black mb-3 border-b-2 border-gray-200 pb-2">Market Intelligence</h3>
@@ -1115,7 +1241,6 @@ export function InventoryRegistryReport() {
           </div>
         )}
 
-        {/* CATEGORY VALUATION BREAKDOWN */}
         <div className="mt-8">
           <h3 className="text-sm font-black uppercase tracking-widest text-black mb-3">Category Breakdown</h3>
           <table className="w-full text-left border-collapse">
