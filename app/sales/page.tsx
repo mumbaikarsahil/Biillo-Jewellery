@@ -7,7 +7,7 @@ import {
   FileText, TrendingUp, Printer, Store, RefreshCw, Download, 
   Filter, Calendar, Search, ChevronRight, Landmark,
   Scale, BookOpen, Receipt, Eye, MoreHorizontal, Edit2, XCircle, ShieldAlert, X, Loader2,
-  CheckCircle2, Box, Wrench, ArrowRightLeft, HandCoins
+  CheckCircle2, Box, Wrench, ArrowRightLeft, HandCoins, User
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -105,7 +105,7 @@ export default function AccountsMasterPage() {
 
       // 1. SALES INVOICES
       let salesQuery = supabase.from('invoices')
-        .select(`*, customers(full_name, pan_no, id), warehouses(name), invoice_items(item_id, rate, inventory_items(item_category, purity_karat, barcode, gross_weight_g, net_weight_g, total_stone_weight_cts, huid_code, hsn_code))`)
+        .select(`*, customers(full_name, pan_no, id, phone), warehouses(name), invoice_items(item_id, rate, inventory_items(item_category, purity_karat, barcode, gross_weight_g, net_weight_g, total_stone_weight_cts, huid_code, hsn_code))`)
         .eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false })
       if (selectedLocation !== 'ALL') salesQuery = salesQuery.eq('warehouse_id', selectedLocation)
       if (search.trim()) salesQuery = salesQuery.ilike('invoice_number', `%${search.trim()}%`)
@@ -132,24 +132,38 @@ export default function AccountsMasterPage() {
       const [salesRes, estRes, customRes, buybackRes, repairRes] = await Promise.all([salesQuery, estQuery, customQuery, buybackQuery, repairQuery])
       
       const invData = salesRes.data || []
+      const eData = estRes.data || []
+      const cData = customRes.data || []
+      const bData = buybackRes.data || []
+      const rData = repairRes.data || []
       
-      // Profile Hydration for Invoices
-      if (invData.length > 0) {
-        const uniqueUserIds = [...new Set(invData.map(inv => inv.user_id).filter(Boolean))];
-        if (uniqueUserIds.length > 0) {
-          const { data: profilesData } = await supabase.from('profiles').select('id, full_name, role').in('id', uniqueUserIds);
-          if (profilesData) {
-            const profileMap = Object.fromEntries(profilesData.map(p => [p.id, p]));
-            invData.forEach(inv => { inv.profiles = profileMap[inv.user_id] || null; });
-          }
+      // ✨ GLOBAL PROFILE HYDRATION: Fetch Billed By for ALL ledgers
+      const allUserIds = [
+        ...invData.map(i => i.user_id || i.created_by),
+        ...eData.map(i => i.user_id || i.created_by),
+        ...cData.map(i => i.user_id || i.created_by),
+        ...bData.map(i => i.created_by || i.user_id),
+        ...rData.map(i => i.created_by || i.user_id)
+      ].filter(Boolean);
+
+      const uniqueUserIds = [...new Set(allUserIds)];
+      if (uniqueUserIds.length > 0) {
+        const { data: profilesData } = await supabase.from('profiles').select('id, full_name, role').in('id', uniqueUserIds);
+        if (profilesData) {
+          const profileMap = Object.fromEntries(profilesData.map(p => [p.id, p]));
+          invData.forEach(item => { item.profiles = profileMap[item.user_id || item.created_by] || null; });
+          eData.forEach(item => { item.profiles = profileMap[item.user_id || item.created_by] || null; });
+          cData.forEach(item => { item.profiles = profileMap[item.user_id || item.created_by] || null; });
+          bData.forEach(item => { item.profiles = profileMap[item.created_by || item.user_id] || null; });
+          rData.forEach(item => { item.profiles = profileMap[item.created_by || item.user_id] || null; });
         }
       }
 
       setInvoices(invData)
-      setEstimates(estRes.data || [])
-      setCustomOrders(customRes.data || [])
-      setBuybacks(buybackRes.data || [])
-      setRepairs(repairRes.data || [])
+      setEstimates(eData)
+      setCustomOrders(cData)
+      setBuybacks(bData)
+      setRepairs(rData)
 
       // Calculate KPIs from Sales
       let gross = 0; let tax = 0; let b2b = 0; let b2c = 0;
@@ -491,6 +505,8 @@ export default function AccountsMasterPage() {
           {/* ========================================================================= */}
           <TabsContent value="sales_register" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+              
+              {/* ✨ DESKTOP TABLE VIEW */}
               <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
                 <Table className="w-full whitespace-nowrap">
                   <TableHeader className="bg-zinc-50/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
@@ -500,6 +516,7 @@ export default function AccountsMasterPage() {
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50 z-20">Invoice No</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50 z-20 border-r border-zinc-200">Status</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Customer</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider border-l border-zinc-200 pl-4">Billed By</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider min-w-[200px]">Items Sold</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-50/50 border-l border-zinc-200">Subtotal</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-50/50 border-l border-zinc-200">Taxable Val</TableHead>
@@ -511,7 +528,7 @@ export default function AccountsMasterPage() {
                   </TableHeader>
                   <TableBody>
                     {invoices.length === 0 ? (
-                      <TableRow><TableCell colSpan={12} className="text-center py-12 text-zinc-400">No sales records found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={13} className="text-center py-12 text-zinc-400">No sales records found</TableCell></TableRow>
                     ) : invoices.map((inv) => {
                       const isCancelled = inv.status === 'CANCELLED'
                       return (
@@ -535,6 +552,7 @@ export default function AccountsMasterPage() {
                           <TableCell className="py-2 font-mono text-[12px] font-semibold text-zinc-900 border-r border-zinc-100">{inv.invoice_number} {isCancelled && <div className="text-[9px] text-red-500 font-bold uppercase tracking-widest mt-0.5">Voided</div>}</TableCell>
                           <TableCell className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest ${isCancelled ? 'bg-red-100 text-red-600 border border-red-200' : 'bg-emerald-50 text-emerald-600 border border-emerald-200'}`}>{inv.status || 'VALID'}</span></TableCell>
                           <TableCell className="px-4 py-2 min-w-[160px]"><span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate">{inv.customers?.full_name || 'Walk-in'}</span></TableCell>
+                          <TableCell className="px-4 py-2 border-l border-zinc-200"><span className="text-[12px] font-medium text-zinc-700 whitespace-nowrap">{inv.profiles?.full_name || 'System'}</span></TableCell>
                           <TableCell className="py-2 min-w-[200px]">
                              <div className="flex flex-col gap-1 max-h-[40px] overflow-y-auto custom-scrollbar pr-1">
                                {inv.invoice_items?.map((i: any, idx: number) => <span key={idx} className="text-[10px] font-medium text-zinc-600 bg-zinc-100/50 px-1.5 py-0.5 rounded truncate"><span className="font-mono font-bold text-zinc-400 mr-1">[{i.inventory_items?.barcode || '?'}]</span>{i.inventory_items?.item_category || 'Item'}</span>)}
@@ -552,6 +570,64 @@ export default function AccountsMasterPage() {
                   </TableBody>
                 </Table>
               </div>
+
+              {/* ✨ MOBILE & TABLET CARD VIEW */}
+              <div className="xl:hidden flex flex-col divide-y divide-zinc-100">
+                {invoices.length === 0 ? (
+                  <div className="text-center py-12 text-zinc-400 text-sm">No sales records found</div>
+                ) : invoices.map((inv) => {
+                  const isCancelled = inv.status === 'CANCELLED';
+                  return (
+                    <div key={inv.id} className={`p-4 flex flex-col gap-3 relative ${isCancelled ? 'opacity-60 bg-red-50/30' : 'bg-white'}`}>
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-mono text-sm font-bold text-zinc-900">{inv.invoice_number}</span>
+                            <Badge className={`text-[9px] uppercase tracking-widest ${isCancelled ? 'bg-red-100 text-red-600 border-red-200' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>{inv.status || 'VALID'}</Badge>
+                          </div>
+                          <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(inv.created_at), 'dd MMM yy, hh:mm a')}</div>
+                        </div>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-zinc-600 border-zinc-200"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-lg border-zinc-200">
+                            <DropdownMenuItem onClick={() => handleOpenPreview(inv, 'invoice')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View Bill</DropdownMenuItem>
+                            {!isCancelled && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => handleOpenEdit(inv)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => setInvoiceToCancel(inv)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50"><XCircle className="w-4 h-4 mr-2" /> Cancel Invoice</DropdownMenuItem>
+                              </>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                      
+                      <div className="flex justify-between bg-zinc-50/50 p-2.5 rounded-lg border border-zinc-100">
+                        <div>
+                          <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5 flex items-center gap-1"><User className="w-3 h-3"/> Customer</p>
+                          <p className="text-xs font-semibold text-zinc-800">{inv.customers?.full_name || 'Walk-in'}</p>
+                          {inv.customers?.phone && <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{inv.customers.phone}</p>}
+                        </div>
+                        <div className="text-right border-l border-zinc-200 pl-3">
+                          <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Billed By</p>
+                          <p className="text-xs font-semibold text-zinc-800">{inv.profiles?.full_name || 'System'}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-between items-end pt-2 border-t border-zinc-100">
+                        <div>
+                          <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Pay Mode</p>
+                          <span className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-600 text-[10px] font-bold uppercase tracking-wider">{inv.payment_mode || 'UNKNOWN'}</span>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Final Total</p>
+                          <p className="text-lg font-black text-indigo-600 tracking-tight">₹{(Number(inv.final_total) || 0).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </Card>
           </TabsContent>
 
@@ -560,6 +636,8 @@ export default function AccountsMasterPage() {
           {/* ========================================================================= */}
           <TabsContent value="estimates" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+              
+              {/* ✨ DESKTOP TABLE VIEW */}
               <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
                 <Table className="w-full whitespace-nowrap">
                   <TableHeader className="bg-slate-50/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
@@ -569,6 +647,7 @@ export default function AccountsMasterPage() {
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50 z-20">Estimate No</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider bg-zinc-50 z-20 border-r border-zinc-200">Status</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Customer / Contact</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider border-l border-zinc-200 pl-4">Created By</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-50/50 border-l border-zinc-200">Subtotal</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-50/50 border-l border-zinc-200">Discount</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-100 border-l border-zinc-200">Estimated Total</TableHead>
@@ -576,7 +655,7 @@ export default function AccountsMasterPage() {
                   </TableHeader>
                   <TableBody>
                     {estimates.length === 0 ? (
-                      <TableRow><TableCell colSpan={8} className="text-center py-12 text-zinc-400">No estimates found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={9} className="text-center py-12 text-zinc-400">No estimates found</TableCell></TableRow>
                     ) : estimates.map((est) => (
                         <TableRow key={est.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors">
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
@@ -589,6 +668,7 @@ export default function AccountsMasterPage() {
                             <span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate block">{est.customers?.full_name || 'Walk-in'}</span>
                             {est.customers?.phone && <span className="text-[10px] text-zinc-500 font-mono">{est.customers.phone}</span>}
                           </TableCell>
+                          <TableCell className="px-4 py-2 border-l border-zinc-200"><span className="text-[12px] font-medium text-zinc-700 whitespace-nowrap">{est.profiles?.full_name || 'System'}</span></TableCell>
                           <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-700 bg-slate-50/50 border-l border-zinc-200">₹{(Number(est.subtotal) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[12px] font-bold text-red-500 bg-slate-50/50 border-l border-zinc-200">₹{(Number(est.discount_amount) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[13px] font-black text-zinc-900 bg-slate-100 border-l border-zinc-200">₹{(Number(est.total_amount) || 0).toLocaleString()}</TableCell>
@@ -596,6 +676,51 @@ export default function AccountsMasterPage() {
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+
+              {/* ✨ MOBILE & TABLET CARD VIEW */}
+              <div className="xl:hidden flex flex-col divide-y divide-zinc-100">
+                {estimates.length === 0 ? (
+                  <div className="text-center py-12 text-zinc-400 text-sm">No estimates found</div>
+                ) : estimates.map((est) => (
+                  <div key={est.id} className="p-4 flex flex-col gap-3 bg-white">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-mono text-sm font-bold text-zinc-900">{est.estimate_number}</span>
+                          <Badge className="bg-blue-50 text-blue-600 border-blue-200 text-[9px] uppercase tracking-widest">{est.status}</Badge>
+                        </div>
+                        <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(est.created_at), 'dd MMM yy, hh:mm a')}</div>
+                      </div>
+                      <Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-indigo-600 border-zinc-200 hover:bg-indigo-50" onClick={() => handleOpenPreview(est, 'estimate')}>
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    
+                    <div className="flex justify-between bg-zinc-50/50 p-2.5 rounded-lg border border-zinc-100">
+                      <div>
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Customer</p>
+                        <p className="text-xs font-semibold text-zinc-800">{est.customers?.full_name || 'Walk-in'}</p>
+                        {est.customers?.phone && <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{est.customers.phone}</p>}
+                      </div>
+                      <div className="text-right border-l border-zinc-200 pl-3">
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Created By</p>
+                        <p className="text-xs font-semibold text-zinc-800">{est.profiles?.full_name || 'System'}</p>
+                      </div>
+                    </div>
+
+                    <div className="flex justify-between items-end pt-2 border-t border-zinc-100">
+                      <div>
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Subtotal / Discount</p>
+                        <p className="text-[10px] font-medium text-zinc-600">₹{(Number(est.subtotal) || 0).toLocaleString()} <span className="text-red-500 ml-1">(-₹{(Number(est.discount_amount) || 0).toLocaleString()})</span></p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Estimated Total</p>
+                        <p className="text-lg font-black text-zinc-900 tracking-tight">₹{(Number(est.total_amount) || 0).toLocaleString()}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </Card>
           </TabsContent>
@@ -605,6 +730,8 @@ export default function AccountsMasterPage() {
           {/* ========================================================================= */}
           <TabsContent value="custom_orders" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+              
+              {/* ✨ DESKTOP TABLE VIEW */}
               <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
                 <Table className="w-full whitespace-nowrap">
                   <TableHeader className="bg-purple-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
@@ -614,6 +741,7 @@ export default function AccountsMasterPage() {
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Order No</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider border-r border-purple-100">Status</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Customer</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider border-l border-purple-100 pl-4">Created By</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Category / Design</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100">Est. Value</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100">Advance Paid</TableHead>
@@ -621,7 +749,7 @@ export default function AccountsMasterPage() {
                   </TableHeader>
                   <TableBody>
                     {customOrders.length === 0 ? (
-                      <TableRow><TableCell colSpan={8} className="text-center py-12 text-zinc-400">No custom orders found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={9} className="text-center py-12 text-zinc-400">No custom orders found</TableCell></TableRow>
                     ) : customOrders.map((co) => (
                         <TableRow key={co.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors">
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
@@ -634,16 +762,67 @@ export default function AccountsMasterPage() {
                             <span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate block">{co.customers?.full_name || 'Walk-in'}</span>
                             {co.customers?.phone && <span className="text-[10px] text-zinc-500 font-mono">{co.customers.phone}</span>}
                           </TableCell>
+                          <TableCell className="px-4 py-2 border-l border-purple-100"><span className="text-[12px] font-medium text-zinc-700 whitespace-nowrap">{co.profiles?.full_name || 'System'}</span></TableCell>
                           <TableCell className="py-2">
                              <span className="text-[12px] font-semibold text-zinc-800 block">{co.item_category}</span>
                              <span className="text-[10px] text-zinc-500 font-mono">{co.design_reference}</span>
                           </TableCell>
-                          <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-700 border-l border-zinc-200">₹{(Number(co.estimated_value) || 0).toLocaleString()}</TableCell>
-                          <TableCell className="py-2 text-right text-[13px] font-black text-emerald-600 border-l border-zinc-200">₹{(Number(co.advance_paid) || 0).toLocaleString()}</TableCell>
+                          <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-700 border-l border-purple-100">₹{(Number(co.estimated_value) || 0).toLocaleString()}</TableCell>
+                          <TableCell className="py-2 text-right text-[13px] font-black text-emerald-600 border-l border-purple-100">₹{(Number(co.advance_paid) || 0).toLocaleString()}</TableCell>
                         </TableRow>
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+
+              {/* ✨ MOBILE & TABLET CARD VIEW */}
+              <div className="xl:hidden flex flex-col divide-y divide-zinc-100">
+                {customOrders.length === 0 ? (
+                  <div className="text-center py-12 text-zinc-400 text-sm">No custom orders found</div>
+                ) : customOrders.map((co) => (
+                  <div key={co.id} className="p-4 flex flex-col gap-3 bg-white">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-mono text-sm font-bold text-zinc-900">{co.order_number}</span>
+                          <Badge className="bg-purple-50 text-purple-700 border-purple-200 text-[9px] uppercase tracking-widest">{co.status.replace(/_/g, ' ')}</Badge>
+                        </div>
+                        <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(co.created_at), 'dd MMM yy, hh:mm a')}</div>
+                      </div>
+                      <Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-purple-600 border-zinc-200 hover:bg-purple-50" onClick={() => handleOpenPreview(co, 'custom')}>
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    
+                    <div className="flex justify-between bg-zinc-50/50 p-2.5 rounded-lg border border-zinc-100">
+                      <div>
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Customer</p>
+                        <p className="text-xs font-semibold text-zinc-800">{co.customers?.full_name || 'Walk-in'}</p>
+                        {co.customers?.phone && <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{co.customers.phone}</p>}
+                      </div>
+                      <div className="text-right border-l border-zinc-200 pl-3">
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Created By</p>
+                        <p className="text-xs font-semibold text-zinc-800">{co.profiles?.full_name || 'System'}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-1">
+                      <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Category / Design</p>
+                      <p className="text-xs font-semibold text-zinc-800">{co.item_category} <span className="text-[10px] text-zinc-500 font-mono ml-1">({co.design_reference})</span></p>
+                    </div>
+
+                    <div className="flex justify-between items-end pt-2 border-t border-zinc-100">
+                      <div>
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Est. Value</p>
+                        <p className="text-xs font-medium text-zinc-700">₹{(Number(co.estimated_value) || 0).toLocaleString()}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Advance Paid</p>
+                        <p className="text-lg font-black text-emerald-600 tracking-tight">₹{(Number(co.advance_paid) || 0).toLocaleString()}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </Card>
           </TabsContent>
@@ -653,6 +832,8 @@ export default function AccountsMasterPage() {
           {/* ========================================================================= */}
           <TabsContent value="buybacks" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+              
+              {/* ✨ DESKTOP TABLE VIEW */}
               <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
                 <Table className="w-full whitespace-nowrap">
                   <TableHeader className="bg-rose-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
@@ -661,6 +842,7 @@ export default function AccountsMasterPage() {
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider px-4">Date</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider border-r border-rose-100">Status</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider">Customer</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider border-l border-rose-100 pl-4">Handled By</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider">Physical Details</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider text-right border-l border-rose-100">Gross Value</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider text-right border-l border-rose-100">Deductions</TableHead>
@@ -669,7 +851,7 @@ export default function AccountsMasterPage() {
                   </TableHeader>
                   <TableBody>
                     {buybacks.length === 0 ? (
-                      <TableRow><TableCell colSpan={8} className="text-center py-12 text-zinc-400">No buyback records found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={9} className="text-center py-12 text-zinc-400">No buyback records found</TableCell></TableRow>
                     ) : buybacks.map((bb) => (
                         <TableRow key={bb.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors">
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
@@ -681,6 +863,7 @@ export default function AccountsMasterPage() {
                             <span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate block">{bb.customers?.full_name || 'Walk-in'}</span>
                             {bb.customers?.phone && <span className="text-[10px] text-zinc-500 font-mono">{bb.customers.phone}</span>}
                           </TableCell>
+                          <TableCell className="px-4 py-2 border-l border-rose-100"><span className="text-[12px] font-medium text-zinc-700 whitespace-nowrap">{bb.profiles?.full_name || 'System'}</span></TableCell>
                           <TableCell className="py-2">
                              <span className="text-[12px] font-semibold text-zinc-800 block">{bb.item_category} ({bb.purity_karat})</span>
                              <span className="text-[10px] text-zinc-500 font-mono">Gross Wt: {bb.gross_weight_g}g</span>
@@ -693,6 +876,56 @@ export default function AccountsMasterPage() {
                   </TableBody>
                 </Table>
               </div>
+
+              {/* ✨ MOBILE & TABLET CARD VIEW */}
+              <div className="xl:hidden flex flex-col divide-y divide-zinc-100">
+                {buybacks.length === 0 ? (
+                  <div className="text-center py-12 text-zinc-400 text-sm">No buyback records found</div>
+                ) : buybacks.map((bb) => (
+                  <div key={bb.id} className="p-4 flex flex-col gap-3 bg-white">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-mono text-sm font-bold text-zinc-900">RTN-{bb.id.substring(0,6).toUpperCase()}</span>
+                          <Badge className="bg-rose-50 text-rose-700 border-rose-200 text-[9px] uppercase tracking-widest">{bb.status}</Badge>
+                        </div>
+                        <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(bb.created_at), 'dd MMM yy, hh:mm a')}</div>
+                      </div>
+                      <Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-rose-600 border-zinc-200 hover:bg-rose-50" onClick={() => handleOpenPreview(bb, 'return')}>
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    
+                    <div className="flex justify-between bg-zinc-50/50 p-2.5 rounded-lg border border-zinc-100">
+                      <div>
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Customer</p>
+                        <p className="text-xs font-semibold text-zinc-800">{bb.customers?.full_name || 'Walk-in'}</p>
+                        {bb.customers?.phone && <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{bb.customers.phone}</p>}
+                      </div>
+                      <div className="text-right border-l border-zinc-200 pl-3">
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Handled By</p>
+                        <p className="text-xs font-semibold text-zinc-800">{bb.profiles?.full_name || 'System'}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-1">
+                      <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Physical Details</p>
+                      <p className="text-xs font-semibold text-zinc-800">{bb.item_category} ({bb.purity_karat}) <span className="text-[10px] text-zinc-500 font-mono ml-1">[{bb.gross_weight_g}g]</span></p>
+                    </div>
+
+                    <div className="flex justify-between items-end pt-2 border-t border-zinc-100">
+                      <div>
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Gross / Deduct</p>
+                        <p className="text-[10px] font-medium text-zinc-600">₹{(Number(bb.gross_value) || 0).toLocaleString()} <span className="text-rose-500 ml-1">(-₹{(Number(bb.deduction_amount) || 0).toLocaleString()})</span></p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Net Refund</p>
+                        <p className="text-lg font-black text-rose-600 tracking-tight">₹{(Number(bb.net_refund) || 0).toLocaleString()}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </Card>
           </TabsContent>
 
@@ -701,6 +934,8 @@ export default function AccountsMasterPage() {
           {/* ========================================================================= */}
           <TabsContent value="repairs" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+              
+              {/* ✨ DESKTOP TABLE VIEW */}
               <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
                 <Table className="w-full whitespace-nowrap">
                   <TableHeader className="bg-amber-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
@@ -710,6 +945,7 @@ export default function AccountsMasterPage() {
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider">Ticket No</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider border-r border-amber-100">Status</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider">Customer</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider border-l border-amber-100 pl-4">Handled By</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider">Item Details</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider text-right border-l border-amber-100">Est. Cost</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider text-right border-l border-amber-100">Advance Paid</TableHead>
@@ -717,7 +953,7 @@ export default function AccountsMasterPage() {
                   </TableHeader>
                   <TableBody>
                     {repairs.length === 0 ? (
-                      <TableRow><TableCell colSpan={8} className="text-center py-12 text-zinc-400">No repair tickets found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={9} className="text-center py-12 text-zinc-400">No repair tickets found</TableCell></TableRow>
                     ) : repairs.map((rep) => (
                         <TableRow key={rep.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors">
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
@@ -730,6 +966,7 @@ export default function AccountsMasterPage() {
                             <span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate block">{rep.customers?.full_name || 'Walk-in'}</span>
                             {rep.customers?.phone && <span className="text-[10px] text-zinc-500 font-mono">{rep.customers.phone}</span>}
                           </TableCell>
+                          <TableCell className="px-4 py-2 border-l border-amber-100"><span className="text-[12px] font-medium text-zinc-700 whitespace-nowrap">{rep.profiles?.full_name || 'System'}</span></TableCell>
                           <TableCell className="py-2">
                              <span className="text-[12px] font-semibold text-zinc-800 block">{rep.item_description}</span>
                              <span className="text-[10px] text-zinc-500 font-mono">{rep.purity} • {rep.gross_weight_g}g</span>
@@ -740,6 +977,56 @@ export default function AccountsMasterPage() {
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+
+              {/* ✨ MOBILE & TABLET CARD VIEW */}
+              <div className="xl:hidden flex flex-col divide-y divide-zinc-100">
+                {repairs.length === 0 ? (
+                  <div className="text-center py-12 text-zinc-400 text-sm">No repair tickets found</div>
+                ) : repairs.map((rep) => (
+                  <div key={rep.id} className="p-4 flex flex-col gap-3 bg-white">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-mono text-sm font-bold text-zinc-900">{rep.ticket_number}</span>
+                          <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest">{rep.status.replace(/_/g, ' ')}</Badge>
+                        </div>
+                        <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(rep.created_at), 'dd MMM yy, hh:mm a')}</div>
+                      </div>
+                      <Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-amber-600 border-zinc-200 hover:bg-amber-50" onClick={() => handleOpenPreview(rep, 'repair')}>
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    
+                    <div className="flex justify-between bg-zinc-50/50 p-2.5 rounded-lg border border-zinc-100">
+                      <div>
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Customer</p>
+                        <p className="text-xs font-semibold text-zinc-800">{rep.customers?.full_name || 'Walk-in'}</p>
+                        {rep.customers?.phone && <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{rep.customers.phone}</p>}
+                      </div>
+                      <div className="text-right border-l border-zinc-200 pl-3">
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Handled By</p>
+                        <p className="text-xs font-semibold text-zinc-800">{rep.profiles?.full_name || 'System'}</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-1">
+                      <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Item Details</p>
+                      <p className="text-xs font-semibold text-zinc-800">{rep.item_description} <span className="text-[10px] text-zinc-500 font-mono ml-1">[{rep.purity} • {rep.gross_weight_g}g]</span></p>
+                    </div>
+
+                    <div className="flex justify-between items-end pt-2 border-t border-zinc-100">
+                      <div>
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Est. Cost</p>
+                        <p className="text-xs font-medium text-zinc-700">₹{(Number(rep.estimated_cost) || 0).toLocaleString()}</p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Advance Paid</p>
+                        <p className="text-lg font-black text-emerald-600 tracking-tight">₹{(Number(rep.advance_paid) || 0).toLocaleString()}</p>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </Card>
           </TabsContent>

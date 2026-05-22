@@ -56,7 +56,11 @@ export function InventoryRegistryReport() {
   const [showFilters, setShowFilters] = useState(false)
   const [showAnalytics, setShowAnalytics] = useState(false)
 
-  // ✨ UI "Draft" States (No lag while adjusting)
+  // ✨ NEW: RBAC State
+  const [userRole, setUserRole] = useState<string>('sales_person')
+  const canFullManage = ['owner', 'manager', 'operations_manager'].includes(userRole)
+
+  // UI "Draft" States (No lag while adjusting)
   const [search, setSearch] = useState('')
   const [selectedWhs, setSelectedWhs] = useState<string[]>(['ALL'])
   const [filterStatus, setFilterStatus] = useState('all')
@@ -66,7 +70,7 @@ export function InventoryRegistryReport() {
   const [priceRange, setPriceRange] = useState<number[]>([0, 1000000])
   const [maxPrice, setMaxPrice] = useState(1000000)
 
-  // ✨ Actual "Applied" States (Triggers math & table re-renders)
+  // Actual "Applied" States (Triggers math & table re-renders)
   const [activeWhs, setActiveWhs] = useState<string[]>(['ALL'])
   const [activeFilters, setActiveFilters] = useState({
     search: '',
@@ -79,11 +83,21 @@ export function InventoryRegistryReport() {
 
   const [showLocDropdown, setShowLocDropdown] = useState(false)
 
+  // ✨ NEW: Fetch User Role
+  useEffect(() => {
+    async function fetchRole() {
+      if (!appUser) return;
+      const { data } = await supabase.from('profiles').select('role').eq('id', appUser.user_id || appUser.id).maybeSingle();
+      if (data) setUserRole(data.role);
+    }
+    fetchRole();
+  }, [appUser])
+
   useEffect(() => {
     if (selectedLocation) {
       const newLoc = selectedLocation === 'ALL' ? ['ALL'] : [selectedLocation];
       setSelectedWhs(newLoc);
-      setActiveWhs(newLoc); // Auto-apply location if changed from global HQ wrapper
+      setActiveWhs(newLoc); 
     }
   }, [selectedLocation])
 
@@ -121,9 +135,9 @@ export function InventoryRegistryReport() {
     }
   }
 
-  // ✨ FIX: Apply Filters Handler
   const handleApplyFilters = () => {
-    setActiveWhs(selectedWhs);
+    // ✨ FIX: Only allow applying selected branches if they have permission
+    setActiveWhs(canFullManage ? selectedWhs : [selectedLocation]);
     setActiveFilters({
       search,
       status: filterStatus,
@@ -134,10 +148,9 @@ export function InventoryRegistryReport() {
     });
   }
 
-  // ✨ FIX: Reset Filters Handler
   const handleResetFilters = () => {
     setSearch(''); setFilterStatus('all'); setFilterCategory('all'); setFilterMetal('all'); setFilterStone('all'); setPriceRange([0, maxPrice]);
-    const resetLoc = selectedLocation === 'ALL' ? ['ALL'] : [selectedLocation];
+    const resetLoc = (canFullManage && selectedLocation === 'ALL') ? ['ALL'] : [selectedLocation];
     setSelectedWhs(resetLoc);
     
     setActiveWhs(resetLoc);
@@ -164,9 +177,11 @@ export function InventoryRegistryReport() {
           .order('id', { ascending: true }) 
           .range(step * limit, (step + 1) * limit - 1)
 
-        // Use the applied activeWhs state
-        if (!activeWhs.includes('ALL') && activeWhs.length > 0) {
-          query = query.in('warehouse_id', activeWhs)
+        // ✨ FIX: Enforce the warehouse lock if not HQ/Manager
+        let targetLocations = canFullManage ? activeWhs : [selectedLocation];
+
+        if (!targetLocations.includes('ALL') && targetLocations.length > 0) {
+          query = query.in('warehouse_id', targetLocations)
         }
 
         const { data: chunkData, error } = await query
@@ -201,15 +216,13 @@ export function InventoryRegistryReport() {
     }
   }
 
-  // Refetch data only when applied location changes
   useEffect(() => { 
     if (activeWhs.length > 0) fetchData() 
-  }, [appUser, activeWhs])
+  }, [appUser, activeWhs, canFullManage])
 
   const uniqueCategories = useMemo(() => Array.from(new Set(data.map((d: any) => normalizeCategory(d.item_category)))).filter(Boolean).sort(), [data]);
   const uniqueMetals = useMemo(() => Array.from(new Set(data.map((d: any) => d.metal_type || 'Unknown Metal'))).filter(Boolean).sort(), [data]);
 
-  // ✨ FIX: Calculations now strictly depend on `activeFilters` instead of draft UI states
   const filteredData = useMemo(() => {
     return data.filter(item => {
       const cat = normalizeCategory(item.item_category); 
@@ -609,10 +622,8 @@ export function InventoryRegistryReport() {
 
       <div className="space-y-5 animate-in fade-in duration-500 print:hidden">
         
-        {/* ✨ FIX: Unified Action & Filter Block */}
         <div className="flex flex-col gap-3 bg-white p-4 rounded-2xl border border-zinc-200 shadow-sm print:hidden">
           
-          {/* Top Control Row */}
           <div className="flex items-center gap-3 w-full">
             <div className="relative flex-1 max-w-md">
               <Search className="absolute left-3 top-2.5 h-4 w-4 text-zinc-400" />
@@ -655,14 +666,14 @@ export function InventoryRegistryReport() {
             </Button>
           </div>
 
-          {/* Draft Filters Panel */}
           {showFilters && (
             <div className="pt-4 border-t border-zinc-100 mt-1 animate-in slide-in-from-top-2 duration-200">
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
                 
-                {isLocked ? (
-                   <Badge className="h-9 justify-center bg-zinc-100 text-zinc-600 border border-zinc-200 shadow-none font-bold text-xs">
-                     <Store className="w-3 h-3 mr-1.5" /> {getWhName(selectedWhs[0])}
+                {/* ✨ FIX: Render Location Badge for regular staff, Multi-Select for Owners/Managers */}
+                {(!canFullManage || isLocked) ? (
+                   <Badge className="h-9 justify-center bg-zinc-100 text-zinc-600 border border-zinc-200 shadow-none font-bold text-xs px-4">
+                     <Store className="w-3 h-3 mr-1.5" /> {getWhName(selectedLocation)}
                    </Badge>
                 ) : (
                   <div className="relative">
@@ -770,19 +781,16 @@ export function InventoryRegistryReport() {
                 </div>
               </div>
 
-              
-
               <div className="flex justify-end gap-3 mt-4 pt-4 border-t border-zinc-50">
-              <Button variant="ghost" className="h-9 text-xs font-bold text-red-500 hover:bg-red-50 hover:text-red-600" onClick={handleResetFilters}>
+                <Button variant="ghost" className="h-9 text-xs font-bold text-red-500 hover:bg-red-50 hover:text-red-600" onClick={handleResetFilters}>
                   Clear Settings
                 </Button>
-              <Button 
+                <Button 
               onClick={handleApplyFilters}
               className="h-9 px-5 text-xs font-bold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm shadow-indigo-200"
             >
                <Check className="h-3.5 w-3.5 mr-1.5" /> Apply 
             </Button>
-                
               </div>
             </div>
           )}
@@ -923,41 +931,43 @@ export function InventoryRegistryReport() {
           </div>
         )}
 
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 sm:gap-4">
-          <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl">
-            <CardContent className="p-4 sm:p-5">
-              <p className="text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5">
-                <Package className="h-3.5 w-3.5 text-zinc-400" /> Filtered Assets
+        {/* ON-SCREEN METRICS DASHBOARD */}
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4 w-full min-w-0">
+          <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0">
+            <CardContent className="p-4 sm:p-5 overflow-hidden">
+              <p className="text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5 truncate">
+                <Package className="h-3.5 w-3.5 text-zinc-400 shrink-0" /> Filtered Assets
               </p>
-              {loading ? <Skeleton className="h-8 w-20 mt-1" /> : <p className="text-2xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">{metrics.totalItems}</p>}
+              {loading ? <Skeleton className="h-8 w-20 mt-1" /> : <p className="text-xl sm:text-2xl xl:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1 truncate">{metrics.totalItems}</p>}
             </CardContent>
           </Card>
           
-          <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl">
-            <CardContent className="p-4 sm:p-5">
-              <p className="text-[11px] font-medium text-zinc-500 mb-1">Gross Weight</p>
-              {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-2xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">{metrics.totalGrossWt.toFixed(2)}<span className="text-sm font-medium text-zinc-400 ml-1 tracking-normal">g</span></p>}
+          <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0">
+            <CardContent className="p-4 sm:p-5 overflow-hidden">
+              <p className="text-[11px] font-medium text-zinc-500 mb-1 truncate">Gross Weight</p>
+              {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-2xl xl:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1 truncate">{metrics.totalGrossWt.toFixed(2)}<span className="text-sm font-medium text-zinc-400 ml-1 tracking-normal">g</span></p>}
             </CardContent>
           </Card>
 
-          <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl">
-            <CardContent className="p-4 sm:p-5">
-              <p className="text-[11px] font-medium text-zinc-500 mb-1">Net Weight</p>
-              {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-2xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">{metrics.totalNetWt.toFixed(2)}<span className="text-sm font-medium text-zinc-400 ml-1 tracking-normal">g</span></p>}
+          <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 md:col-span-1">
+            <CardContent className="p-4 sm:p-5 overflow-hidden">
+              <p className="text-[11px] font-medium text-zinc-500 mb-1 truncate">Net Weight</p>
+              {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-2xl xl:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1 truncate">{metrics.totalNetWt.toFixed(2)}<span className="text-sm font-medium text-zinc-400 ml-1 tracking-normal">g</span></p>}
             </CardContent>
           </Card>
 
-          <Card className="shadow-sm border-blue-200 bg-blue-50/30 rounded-2xl">
-            <CardContent className="p-4 sm:p-5">
-              <p className="text-[11px] font-medium text-blue-600 mb-1">Stone Weight</p>
-              {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-2xl sm:text-3xl font-semibold tracking-tighter text-blue-700 mt-1">{metrics.totalStoneWt.toFixed(2)}<span className="text-sm font-medium text-blue-400 ml-1 tracking-normal">cts</span></p>}
+          <Card className="shadow-sm border-blue-200 bg-blue-50/30 rounded-2xl w-full min-w-0">
+            <CardContent className="p-4 sm:p-5 overflow-hidden">
+              <p className="text-[11px] font-medium text-blue-600 mb-1 truncate">Stone Weight</p>
+              {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-2xl xl:text-3xl font-semibold tracking-tighter text-blue-700 mt-1 truncate">{metrics.totalStoneWt.toFixed(2)}<span className="text-sm font-medium text-blue-400 ml-1 tracking-normal">cts</span></p>}
             </CardContent>
           </Card>
 
-          <Card className="shadow-sm border-zinc-200 bg-zinc-50 rounded-2xl">
-            <CardContent className="p-4 sm:p-5">
-              <p className="text-[11px] font-semibold text-zinc-600 uppercase tracking-widest mb-1">Filtered Valuation</p>
-              {loading ? <Skeleton className="h-8 w-32 mt-1" /> : <p className="text-2xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{metrics.totalValue.toLocaleString()}</p>}
+          {/* Gives the valuation card extra room on mobile/tablet so large currency text doesn't overflow */}
+          <Card className="shadow-sm border-zinc-200 bg-zinc-50 rounded-2xl w-full min-w-0 col-span-2 md:col-span-2 xl:col-span-1">
+            <CardContent className="p-4 sm:p-5 overflow-hidden">
+              <p className="text-[11px] font-semibold text-zinc-600 uppercase tracking-widest mb-1 truncate">Filtered Valuation</p>
+              {loading ? <Skeleton className="h-8 w-32 mt-1" /> : <p className="text-xl sm:text-2xl xl:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1 truncate">₹{metrics.totalValue.toLocaleString()}</p>}
             </CardContent>
           </Card>
         </div>
