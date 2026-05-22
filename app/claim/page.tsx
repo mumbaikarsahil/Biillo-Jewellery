@@ -172,8 +172,9 @@ export default function VoucherClaimPage() {
 
     setLoading(true)
     try {
+      const cleanCode = formData.code.toUpperCase().trim();
       const { data, error } = await supabase.rpc('register_voucher_public', {
-        p_code: formData.code.toUpperCase().trim(),
+        p_code: cleanCode,
         p_name: formData.name,
         p_phone: formData.phone,
         p_branch: formData.nearestBranch,
@@ -182,6 +183,23 @@ export default function VoucherClaimPage() {
       })
 
       if (error) throw error
+
+      // ✨ FIX: Fetch the freshly updated expiry date from the database
+      // This immediately overrides the old "Nov 4" date fetched in Step 0
+      const { data: updatedVoucher } = await supabase
+        .from('vouchers')
+        .select('expiry_date')
+        .eq('code', cleanCode)
+        .maybeSingle();
+
+      if (updatedVoucher?.expiry_date) {
+        setVoucherExpiry(updatedVoucher.expiry_date);
+      } else {
+        // Fallback calculation just in case the DB fetch drops
+        const fallbackDate = new Date();
+        fallbackDate.setMonth(fallbackDate.getMonth() + 1);
+        setVoucherExpiry(fallbackDate.toISOString());
+      }
 
       setStep(2) 
     } catch (err: any) {
