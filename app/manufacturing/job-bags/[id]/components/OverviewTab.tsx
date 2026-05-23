@@ -81,10 +81,19 @@ export default function OverviewTab({ job }: Props) {
   // --- PRINTING STATE & REFS ---
   const [selectedPrintIds, setSelectedPrintIds] = useState<Set<string>>(new Set())
   const printRef = useRef<HTMLDivElement>(null)
+  
+  // ✨ ADDED: Ref and handler for the full document/ledger
+  const documentPrintRef = useRef<HTMLDivElement>(null)
 
   const handlePrint = useReactToPrint({
     contentRef: printRef,
     documentTitle: `JobBag-Tags-${job.job_bag_number}`,
+  })
+
+  // ✨ ADDED: Print handler for the ledger document
+  const handlePrintDocument = useReactToPrint({
+    contentRef: documentPrintRef,
+    documentTitle: `JobBag-Ledger-${job.job_bag_number}`,
   })
 
   useEffect(() => {
@@ -382,9 +391,21 @@ export default function OverviewTab({ job }: Props) {
               <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">Job Bag Reference</p>
               <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">{job.job_bag_number}</h2>
             </div>
-            <Badge variant="secondary" className="bg-gray-100 text-gray-600 uppercase tracking-widest text-[10px] font-bold px-2.5 py-1 rounded-lg">
-              {job.status}
-            </Badge>
+            
+            {/* ✨ UPDATED: Grouped Badge and Print Ledger Button */}
+            <div className="flex items-center gap-3">
+              <Button 
+                onClick={handlePrintDocument} 
+                variant="outline" 
+                size="sm" 
+                className="h-8 px-4 text-xs font-bold uppercase shadow-sm bg-white hover:bg-gray-50 text-gray-700 transition-colors hidden sm:flex border-gray-300"
+              >
+                <Printer className="w-3.5 h-3.5 mr-1.5" /> Print Ledger
+              </Button>
+              <Badge variant="secondary" className="bg-gray-100 text-gray-600 uppercase tracking-widest text-[10px] font-bold px-2.5 py-1 rounded-lg">
+                {job.status}
+              </Badge>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
@@ -747,7 +768,7 @@ export default function OverviewTab({ job }: Props) {
         </CardContent>
       </Card>
 
-      {/* HIDDEN PRINT CONTAINER */}
+      {/* HIDDEN PRINT CONTAINER (TAGS) */}
       <div className="hidden">
         <div ref={printRef} className="print:p-0 flex flex-col">
            {itemsToPrint.map((invItem) => (
@@ -758,6 +779,70 @@ export default function OverviewTab({ job }: Props) {
                onClose={() => {}} 
              />
            ))}
+        </div>
+      </div>
+
+      {/* ✨ ADDED: HIDDEN PRINT CONTAINER (FULL LEDGER DOCUMENT) */}
+      <div className="hidden">
+        <div ref={documentPrintRef} className="print:block p-8 bg-white text-black font-sans w-[210mm] min-h-[297mm]">
+           {/* Document Header */}
+           <div className="text-center mb-8 border-b-2 border-black pb-6">
+              <h1 className="text-3xl font-black uppercase tracking-[0.2em]">Job Bag Ledger</h1>
+              <p className="text-lg font-bold text-gray-600 mt-2">Ref: {job.job_bag_number}</p>
+              <p className="text-xs font-medium text-gray-500 mt-1">Generated: {new Date().toLocaleString()}</p>
+           </div>
+
+           {/* Metadata Details */}
+           <div className="flex justify-between items-center mb-8 p-4 bg-gray-50 border border-gray-200 rounded-lg text-sm">
+              <div><strong className="uppercase text-[10px] text-gray-500 block mb-1">Category</strong> <span className="font-bold">{job.product_category || 'Unspecified'}</span></div>
+              <div><strong className="uppercase text-[10px] text-gray-500 block mb-1">Design Code</strong> <span className="font-bold">{job.design_code || 'N/A'}</span></div>
+              <div><strong className="uppercase text-[10px] text-gray-500 block mb-1">Est. Total Gold</strong> <span className="font-bold">{job.gold_expected_weight_g || 0}g</span></div>
+              <div><strong className="uppercase text-[10px] text-gray-500 block mb-1">Est. Total Dia</strong> <span className="font-bold">{job.diamond_expected_weight_cts || 0}ct</span></div>
+           </div>
+
+           {/* Items Table */}
+           <table className="w-full border-collapse border border-gray-300 text-sm mb-8">
+              <thead>
+                 <tr className="bg-gray-100">
+                   <th className="border border-gray-300 p-3 text-left font-bold uppercase tracking-widest text-[10px]">#</th>
+                   <th className="border border-gray-300 p-3 text-left font-bold uppercase tracking-widest text-[10px]">SKU Ref</th>
+                   <th className="border border-gray-300 p-3 text-left font-bold uppercase tracking-widest text-[10px]">Type</th>
+                   <th className="border border-gray-300 p-3 text-right font-bold uppercase tracking-widest text-[10px]">Exp. Gold (g)</th>
+                   <th className="border border-gray-300 p-3 text-right font-bold uppercase tracking-widest text-[10px]">Exp. Dia (ct)</th>
+                   <th className="border border-gray-300 p-3 text-left font-bold uppercase tracking-widest text-[10px]">Context</th>
+                 </tr>
+              </thead>
+              <tbody>
+                 {items.length === 0 ? (
+                    <tr><td colSpan={6} className="text-center p-4 text-gray-500">No items committed to this job bag.</td></tr>
+                 ) : (
+                   items.map((item, idx) => {
+                     const tags = [
+                       item.custom_order_id && 'Custom', 
+                       item.is_repair && 'Repair', 
+                       item.store_restock_id && 'Restock'
+                     ].filter(Boolean).join(', ')
+
+                     return (
+                       <tr key={item.id}>
+                         <td className="border border-gray-300 p-3 text-center text-gray-500">{idx + 1}</td>
+                         <td className="border border-gray-300 p-3 font-mono font-bold">{item.sku_reference}</td>
+                         <td className="border border-gray-300 p-3">{item.ornament_type || '-'}</td>
+                         <td className="border border-gray-300 p-3 text-right">{item.expected_gold_weight_g || '-'}</td>
+                         <td className="border border-gray-300 p-3 text-right">{item.expected_diamond_weight_cts || '-'}</td>
+                         <td className="border border-gray-300 p-3 text-xs text-gray-600">{tags || '-'}</td>
+                       </tr>
+                     )
+                   })
+                 )}
+              </tbody>
+           </table>
+
+           {/* Footer Signatures */}
+           <div className="flex justify-between items-end mt-24 px-8">
+              <div className="text-center w-48 border-t border-black pt-2 font-bold uppercase tracking-widest text-[10px]">Issuer Signature</div>
+              <div className="text-center w-48 border-t border-black pt-2 font-bold uppercase tracking-widest text-[10px]">Karigar Signature</div>
+           </div>
         </div>
       </div>
 

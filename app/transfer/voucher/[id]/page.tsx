@@ -133,52 +133,47 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
       <div className="hidden">
         
         {/* --------------------------------------------------------- */}
-        {/* 1. MASTER LEDGER (HO COPY) - PROFESSIONAL SERIF REDESIGN */}
+        {/* 1. MASTER LEDGER (HO COPY) - HIGH DENSITY COMPACT DESIGN  */}
         {/* --------------------------------------------------------- */}
-        <div ref={masterRef} className="bg-white w-[210mm] mx-auto text-black font-serif p-8">
+        <div ref={masterRef} className="bg-white w-[210mm] mx-auto text-black font-sans p-6">
           
-          {/* HEADER SECTION */}
-          <div className="border-b-[3px] border-black pb-4 mb-6 flex justify-between items-end font-sans">
+          {/* COMPACT HEADER SECTION */}
+          <div className="border-b-2 border-black pb-2 mb-3 flex justify-between items-end">
             <div>
-              <h2 className="text-sm font-black uppercase tracking-widest text-gray-500 mb-1">Pavitram Jewels</h2>
-              <h1 className="text-3xl font-black uppercase tracking-tighter font-serif">Transfer Manifest</h1>
+              <h1 className="text-xl font-black uppercase tracking-tight leading-none">Transfer Manifest</h1>
+              <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1">Ref: {transfer.transfer_number}</p>
             </div>
             <div className="text-right flex flex-col items-end">
-              <div className="w-[40mm] h-[8mm] mb-2" style={barcodeStyle}></div>
-              <p className="font-mono text-lg font-black tracking-widest leading-none">{transfer.transfer_number}</p>
+              <div className="w-[30mm] h-[6mm]" style={barcodeStyle}></div>
             </div>
           </div>
 
-          {/* ROUTING & INFO BLOCK (Sans-Serif for labels) */}
-          <div className="flex border-2 border-black rounded-lg overflow-hidden mb-6 font-sans">
-            <div className="flex-1 p-3 bg-gray-50 border-r-2 border-black">
-              <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Dispatching Node</p>
-              <p className="font-bold text-sm font-serif">{transfer.from.name}</p>
+          {/* COMPACT ROUTING & INFO BLOCK */}
+          <div className="flex border border-black rounded mb-4 text-[10px] divide-x divide-black bg-gray-50">
+            <div className="flex-1 p-1.5">
+              <span className="font-bold uppercase text-gray-500 mr-1">From:</span> <span className="font-bold">{transfer.from.name}</span>
             </div>
-            <div className="flex-1 p-3 bg-gray-50 border-r-2 border-black">
-              <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Receiving Node</p>
-              <p className="font-bold text-sm font-serif">{transfer.to.name}</p>
+            <div className="flex-1 p-1.5">
+              <span className="font-bold uppercase text-gray-500 mr-1">To:</span> <span className="font-bold">{transfer.to.name}</span>
             </div>
-            <div className="flex-1 p-3">
-              <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Dispatch Time</p>
-              <p className="font-bold text-sm tabular-nums">{fullDate}</p>
+            <div className="flex-1 p-1.5">
+              <span className="font-bold uppercase text-gray-500 mr-1">Date:</span> <span className="font-bold tabular-nums">{fullDate}</span>
             </div>
-            <div className="flex-1 p-3 border-l-2 border-black">
-              <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Seal Number</p>
-              <p className="font-mono font-black text-sm tracking-widest">{transfer.seal_number || 'UNSEALED'}</p>
+            <div className="flex-1 p-1.5">
+              <span className="font-bold uppercase text-gray-500 mr-1">Seal:</span> <span className="font-mono font-bold tracking-widest">{transfer.seal_number || 'UNSEALED'}</span>
             </div>
           </div>
 
-          {/* ASSET TABLE (Serif body, Mono numbers) */}
-          <table className="w-full text-left border-collapse mb-8">
+          {/* HIGH-DENSITY ASSET TABLE */}
+          <table className="w-full text-left border-collapse mb-6 text-[9px]">
             <thead>
-              <tr className="border-y-2 border-black bg-gray-100 font-sans">
-                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest w-8">#</th>
-                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest">Asset Identity</th>
-                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest">Metal Specs</th>
-                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest">Stone Profile</th>
-                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest text-right">Total Stone</th>
-                <th className="py-2.5 px-2 text-[10px] font-black uppercase tracking-widest text-right">MRP (₹)</th>
+              <tr className="border-y border-black bg-gray-100">
+                <th className="py-1 px-1 font-bold uppercase tracking-wider w-6">#</th>
+                <th className="py-1 px-1 font-bold uppercase tracking-wider">Asset (Barcode / Cat)</th>
+                <th className="py-1 px-1 font-bold uppercase tracking-wider">Metal (Type / Wt)</th>
+                <th className="py-1 px-1 font-bold uppercase tracking-wider">Stone Details</th>
+                <th className="py-1 px-1 font-bold uppercase tracking-wider text-right w-12">Stn Wt</th>
+                <th className="py-1 px-1 font-bold uppercase tracking-wider text-right w-16">MRP (₹)</th>
               </tr>
             </thead>
             <tbody>
@@ -189,80 +184,68 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
                  const diamondSpecs = [item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' ') || 'Plain Metal';
                  
                  let stoneDetails = [];
-                 if (Number(item.solitaire_weight_cts) > 0) stoneDetails.push(`Sol: ${item.solitaire_weight_cts}ct (${item.solitaire_pieces || 0}p)`);
-                 if (Number(item.melee_weight_cts) > 0) stoneDetails.push(`Mel: ${item.melee_weight_cts}ct (${item.melee_pieces || 0}p)`);
+                 if (Number(item.solitaire_weight_cts) > 0) stoneDetails.push(`Sol:${item.solitaire_weight_cts}ct(${item.solitaire_pieces || 0}p)`);
+                 if (Number(item.melee_weight_cts) > 0) stoneDetails.push(`Mel:${item.melee_weight_cts}ct(${item.melee_pieces || 0}p)`);
                  
                  return (
-                  <tr key={idx} className="border-b border-gray-300 even:bg-gray-50 text-sm break-inside-avoid">
-                    <td className="py-3 px-2 text-xs font-bold text-gray-500 align-top tabular-nums">{idx + 1}.</td>
-                    <td className="py-3 px-2 align-top">
-                      <div className="font-mono font-black text-xs">{item.barcode}</div>
-                      <div className="text-[10px] text-gray-500 font-sans font-bold uppercase tracking-wider mt-0.5">{item.item_category}</div>
+                  <tr key={idx} className="border-b border-gray-200 even:bg-gray-50 break-inside-avoid leading-tight">
+                    <td className="py-0.5 px-1 font-bold text-gray-400 align-top tabular-nums">{idx + 1}.</td>
+                    <td className="py-0.5 px-1 align-top">
+                      <span className="font-mono font-bold text-[10px]">{item.barcode}</span>
+                      <span className="text-gray-500 ml-1 uppercase">({item.item_category})</span>
                     </td>
-                    <td className="py-3 px-2 align-top">
-                      <div className="font-bold text-xs">{item.metal_type} <span className="text-gray-500">{item.purity_karat}</span></div>
-                      <div className="text-[10px] text-gray-600 font-sans font-bold uppercase tracking-wider mt-0.5 tabular-nums">
-                        Gross: {(item.gross_weight_g || 0).toFixed(3)}g | Net: {(item.net_weight_g || 0).toFixed(3)}g
-                      </div>
+                    <td className="py-0.5 px-1 align-top">
+                      <span className="font-bold">{item.metal_type} {item.purity_karat}</span>
+                      <span className="text-gray-500 ml-1 tabular-nums">| G:{(item.gross_weight_g || 0).toFixed(3)}g N:{(item.net_weight_g || 0).toFixed(3)}g</span>
                     </td>
-                    <td className="py-3 px-2 align-top">
-                      <div className="font-bold text-xs">{diamondSpecs}</div>
-                      {stoneDetails.length > 0 && (
-                        <div className="text-[9px] text-gray-600 font-sans font-bold uppercase tracking-wider mt-0.5 tabular-nums">
-                          {stoneDetails.join(' • ')}
-                        </div>
-                      )}
+                    <td className="py-0.5 px-1 align-top truncate max-w-[150px]">
+                      <span className="font-bold">{diamondSpecs}</span>
+                      {stoneDetails.length > 0 && <span className="text-gray-500 ml-1 tabular-nums">| {stoneDetails.join(' ')}</span>}
                     </td>
-                    <td className="py-3 px-2 text-right font-bold align-top tabular-nums">
-                      {(item.total_stone_weight_cts || 0).toFixed(2)} ct
+                    <td className="py-0.5 px-1 text-right font-bold align-top tabular-nums">
+                      {(item.total_stone_weight_cts || 0).toFixed(2)}
                     </td>
-                    <td className="py-3 px-2 text-right font-black align-top tabular-nums">
+                    <td className="py-0.5 px-1 text-right font-bold align-top tabular-nums text-[10px]">
                       {(item.mrp || 0).toLocaleString('en-IN')}
                     </td>
                   </tr>
                  )
               })}
             </tbody>
-            {/* TABLE FOOTER / TOTALS */}
+            {/* COMPACT TABLE FOOTER */}
             <tfoot>
-              <tr className="border-y-[3px] border-black bg-gray-100 break-inside-avoid font-sans">
-                <td colSpan={2} className="py-3 px-2 text-right text-[11px] font-black uppercase tracking-widest">
-                  Grand Totals ({transfer.items?.length || 0} Assets)
+              <tr className="border-y-[2px] border-black bg-gray-100 break-inside-avoid">
+                <td colSpan={2} className="py-1 px-1 text-right font-black uppercase tracking-widest text-[10px]">
+                  Totals ({transfer.items?.length || 0} Items)
                 </td>
-                <td className="py-3 px-2 text-[10px] font-black uppercase tracking-widest text-gray-600 tabular-nums">
-                  Gross: {totalGrossWeight.toFixed(3)}g <br/> Net: {totalNetWeight.toFixed(3)}g
+                <td className="py-1 px-1 font-bold text-gray-700 tabular-nums">
+                  G: {totalGrossWeight.toFixed(3)}g | N: {totalNetWeight.toFixed(3)}g
                 </td>
-                <td colSpan={2} className="py-3 px-2 text-right font-black text-sm tabular-nums">
-                  {totalStoneWeight.toFixed(2)} cts
+                <td className="py-1 px-1 text-right"></td>
+                <td className="py-1 px-1 text-right font-black tabular-nums">
+                  {totalStoneWeight.toFixed(2)} ct
                 </td>
-                <td className="py-3 px-2 text-right font-black text-sm tabular-nums">
+                <td className="py-1 px-1 text-right font-black tabular-nums text-[10px]">
                   ₹{totalMRP.toLocaleString('en-IN')}
                 </td>
               </tr>
             </tfoot>
           </table>
 
-          {/* SIGNATURE & AUDIT BLOCKS */}
-          <div className="grid grid-cols-3 gap-6 mt-16 break-inside-avoid font-sans">
+          {/* COMPACT SIGNATURE BLOCKS */}
+          <div className="grid grid-cols-3 gap-6 mt-8 break-inside-avoid">
             <div className="flex flex-col">
-              <div className="border-b border-black h-8 mb-2"></div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-black">Dispatched By</p>
-              <p className="text-[8px] font-bold text-gray-500 mt-1 uppercase">Name / Signature / Date</p>
+              <div className="border-b border-black h-6 mb-1"></div>
+              <p className="text-[8px] font-black uppercase tracking-widest text-black">Dispatched By</p>
             </div>
             <div className="flex flex-col">
-              <div className="border-b border-black h-8 mb-2"></div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-black">HO Security Audit</p>
-              <p className="text-[8px] font-bold text-gray-500 mt-1 uppercase">Seal Intact / Signature / Date</p>
+              <div className="border-b border-black h-6 mb-1"></div>
+              <p className="text-[8px] font-black uppercase tracking-widest text-black">HO Security Audit</p>
             </div>
             <div className="flex flex-col">
-              <div className="border-b border-black h-8 mb-2"></div>
-              <p className="text-[10px] font-black uppercase tracking-widest text-black">Received By</p>
-              <p className="text-[8px] font-bold text-gray-500 mt-1 uppercase">Name / Signature / Date</p>
+              <div className="border-b border-black h-6 mb-1"></div>
+              <p className="text-[8px] font-black uppercase tracking-widest text-black">Received By</p>
             </div>
-          </div>
-
-          <div className="mt-8 text-center border-t border-gray-200 pt-4 font-sans">
-            <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400">Generated by Biillo ERP System • Internal Document</p>
           </div>
         </div>
 
