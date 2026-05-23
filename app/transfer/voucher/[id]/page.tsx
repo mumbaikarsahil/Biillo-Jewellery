@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef, use } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabaseClient'
 import { Button } from '@/components/ui/button'
-import { Printer, ArrowLeft, AlertTriangle, Scissors } from 'lucide-react'
+import { Printer, ArrowLeft, AlertTriangle, Scissors, FileText, Package } from 'lucide-react'
 import QRCode from 'react-qr-code'
 import { useReactToPrint } from 'react-to-print'
 import { Badge } from '@/components/ui/badge'
@@ -80,17 +80,18 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
           </div>
 
           <div className="flex items-center gap-2">
-            <Button onClick={handlePrintShippingLabels} className="h-8 px-4 text-xs font-bold bg-black hover:bg-slate-800 text-white shadow-sm">
-              <Printer className="w-3.5 h-3.5 mr-1.5" /> Print E-Com Labels
+            <Button onClick={handlePrintShippingLabels} className="h-8 px-4 text-xs font-bold bg-black hover:bg-slate-800 text-white shadow-sm hidden sm:flex">
+              <Printer className="w-3.5 h-3.5 mr-1.5" /> E-Com Labels
             </Button>
-            <Button onClick={handlePrintMaster} variant="outline" className="h-8 px-4 text-xs border-slate-200 text-slate-700 hover:bg-slate-50 font-bold shadow-sm">
-              <Printer className="w-3.5 h-3.5 mr-1.5" /> Print HO Ledger
+            <Button onClick={handlePrintMaster} variant="outline" className="h-8 px-4 text-xs border-slate-200 text-slate-700 hover:bg-slate-50 font-bold shadow-sm hidden sm:flex">
+              <Printer className="w-3.5 h-3.5 mr-1.5" /> HO Ledger
             </Button>
           </div>
         </div>
       </header>
 
-      <main className="max-w-4xl mx-auto p-4 sm:p-8 space-y-6 print:hidden">
+      {/* ✨ REWRITTEN MAIN SECTION: Actionable Instruction Cards */}
+      <main className="max-w-5xl mx-auto p-4 sm:p-8 space-y-6 print:hidden">
         {isDisputed && (
           <div className="bg-red-50 border-2 border-red-500 rounded-xl p-6 flex items-start gap-4 shadow-sm animate-in fade-in">
              <AlertTriangle className="h-8 w-8 text-red-600 shrink-0 mt-1" />
@@ -103,10 +104,45 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
           </div>
         )}
 
-        <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-slate-500 shadow-sm">
-          <Printer className="w-12 h-12 mx-auto mb-4 text-slate-300" />
-          <h2 className="text-lg font-bold text-slate-700 mb-2">Print Ready</h2>
-          <p className="text-sm">Click the "Print E-Com Labels" button above to generate the Amazon-style shipping label, or "Print HO Ledger" for the high-detail manifest.</p>
+        <div className="text-center mb-8 mt-4">
+           <h2 className="text-2xl font-black tracking-tight text-slate-900">Print Documents</h2>
+           <p className="text-slate-500 font-medium mt-2">Select the document format you need to generate for this transfer.</p>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+           
+           {/* Action Card 1: HO Ledger */}
+           <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 flex flex-col items-center text-center shadow-sm hover:shadow-md transition-shadow">
+              <div className="h-16 w-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-5 border border-blue-100">
+                <FileText className="h-8 w-8" strokeWidth={1.5} />
+              </div>
+              <h3 className="text-xl font-bold text-slate-900">HO Transfer Ledger</h3>
+              <p className="text-sm text-slate-500 mt-2 mb-8 leading-relaxed">
+                A high-density A4 manifest detailing every asset, its metal specs, stone weights, and MRP. Used for internal auditing, record-keeping, and physical verification.
+              </p>
+              <div className="mt-auto w-full">
+                <Button onClick={handlePrintMaster} className="w-full h-12 text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-sm transition-all active:scale-95">
+                  <Printer className="w-4 h-4 mr-2" /> Print A4 Ledger
+                </Button>
+              </div>
+           </div>
+
+           {/* Action Card 2: E-Com Labels */}
+           <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 flex flex-col items-center text-center shadow-sm hover:shadow-md transition-shadow">
+              <div className="h-16 w-16 bg-slate-900 text-white rounded-2xl flex items-center justify-center mb-5 shadow-inner">
+                <Package className="h-8 w-8" strokeWidth={1.5} />
+              </div>
+              <h3 className="text-xl font-bold text-slate-900">E-Com Shipping Labels</h3>
+              <p className="text-sm text-slate-500 mt-2 mb-8 leading-relaxed">
+                Standard 6x4 landscape labels with routing codes and security QR hashes. Includes the primary outer label and the secure inner-lock manifest.
+              </p>
+              <div className="mt-auto w-full">
+                <Button onClick={handlePrintShippingLabels} className="w-full h-12 text-sm font-bold bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-sm transition-all active:scale-95">
+                  <Printer className="w-4 h-4 mr-2" /> Print 6x4 Labels
+                </Button>
+              </div>
+           </div>
+
         </div>
       </main>
 
