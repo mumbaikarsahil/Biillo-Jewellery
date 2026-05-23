@@ -155,7 +155,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
           <div className="text-center mb-3">
             <h1 className={`text-[34px] font-serif font-black tracking-widest mb-1.5 uppercase ${isEstimate ? 'text-slate-900' : 'text-[#B254A3]'}`}>
-              Ossam Jewels Pvt. Ltd.
+              Ossam Jewels
             </h1>
             <h2 className="text-[11px] font-bold text-slate-900 tracking-[0.25em] mb-2.5 uppercase">Pavitram Diamond Jewellery</h2>
             {data.branch?.address ? (
@@ -570,7 +570,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 />
               </div>
               <div className="text-center px-6">
-                <p className="mb-6 text-[10px] text-slate-800 uppercase tracking-wider font-bold">For OSSAM JEWELS PVT. LTD.</p>
+                <p className="mb-6 text-[10px] text-slate-800 uppercase tracking-wider font-bold">For OSSAM JEWELS</p>
                 <div className="border-t border-black pt-1 text-[11px] uppercase tracking-wider">Authorised Signatory</div>
               </div>
             </div>
