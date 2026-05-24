@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import {
   Home, Server, Monitor, QrCode, Wallet, PieChart, Compass,
   SlidersHorizontal, ShoppingBag, Hammer, Layers, BookOpen, Route, Users,
-  TicketPercent, LogOut, Menu, X, ChevronRight, PanelLeft, Building2, Box
+  TicketPercent, LogOut, Menu, X, ChevronRight, PanelLeft, Building2, Box, MessageSquare
 } from 'lucide-react'
 
 // --- Configuration with Premium Icons ---
@@ -30,6 +30,7 @@ const allOperationModules = [
   { href: '/catalog', label: 'Catalog', icon: BookOpen, roles: ['owner', 'manager', 'operations_manager', 'branch_manager'] },
   { href: '/transfer', label: 'Logistics', icon: Route, roles: ['owner', 'manager', 'operations_manager', 'branch_manager', 'shadow_manager'] },
   { href: '/crm', label: 'CRM', icon: Users, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
+  { href: '/whatsapp', label: 'Whatsapp API', icon: MessageSquare, roles: ['owner', 'manager'] },
   { href: '/vouchers', label: 'Vouchers', icon: TicketPercent, roles: ['owner', 'manager', 'voucher_manager'] },
 ]
 
