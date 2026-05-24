@@ -95,7 +95,6 @@ export default function EventVoucherClaimPage() {
   const [loading, setLoading] = useState(false)
   const [claimedCode, setClaimedCode] = useState<string>('')
   
-  // ✨ FIX: State to hold the voucher expiry date
   const [voucherExpiry, setVoucherExpiry] = useState<string | null>(null)
   
   const [formData, setFormData] = useState({
@@ -153,13 +152,13 @@ export default function EventVoucherClaimPage() {
       return toast.error("Please fill in your Name, Phone, Branch, and Date of Birth.")
     }
     
-    // ✨ FIX: Ensure exactly 10 digits
     if (formData.phone.length !== 10) {
       return toast.error("Please enter a valid 10-digit mobile number.")
     }
 
     setLoading(true)
     try {
+      // 1. Claim Voucher in Database
       const { data, error } = await supabase.rpc('claim_event_voucher', {
         p_full_name: formData.name.trim(),
         p_phone: formData.phone.trim(),
@@ -172,11 +171,37 @@ export default function EventVoucherClaimPage() {
       if (error) throw error
 
       setClaimedCode(data.voucher_code)
-      // Save the expiry date if the RPC returns it
       if (data.expiry_date) {
         setVoucherExpiry(data.expiry_date)
       }
 
+      // ✨ NEW: 2. Trigger WhatsApp Auto-Reply (Silent execution)
+      try {
+        await fetch('/api/whatsapp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'message.sendDirect',
+            payload: {
+              user_id: `91${formData.phone.trim()}`,
+              create_if_not_found: "yes",
+              content: {
+                namespace: "YOUR_META_NAMESPACE_ID", // Update this in Convo360
+                name: "event_voucher_success",       // Update template name here
+                lang: "en",
+                params: {
+                  "BODY_{{1}}": formData.name.trim(),
+                  "BODY_{{2}}": data.voucher_code
+                }
+              }
+            }
+          })
+        });
+      } catch (waError) {
+        console.error("WhatsApp auto-reply failed, but registration succeeded:", waError);
+      }
+
+      // 3. Move to Success UI
       setStep(2) 
     } catch (err: any) {
       toast.error(err.message || "Failed to register voucher.")
@@ -313,7 +338,6 @@ export default function EventVoucherClaimPage() {
                     </div>
                   </div>
 
-                  {/* ✨ FIX: Restricted Phone Input with static +91 */}
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Mobile Number *</Label>
                     <div className="relative flex items-center">
@@ -386,7 +410,6 @@ export default function EventVoucherClaimPage() {
                   <p className="text-4xl font-black text-[#881798] tracking-widest">{claimedCode}</p>
                 </div>
                 
-                {/* ✨ FIX: Dynamic Expiry Date Text */}
                 <p className="text-xs font-semibold text-rose-600 mt-4 text-center">
                    {voucherExpiry ? (
                       <>Valid until <b>{new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b></>
@@ -576,7 +599,6 @@ export default function EventVoucherClaimPage() {
             Please present this code at the Pavitram Exclusive counter with a valid ID.
           </p>
           
-          {/* ✨ FIX: Dynamic Receipt Expiry Date */}
           <p style={{ fontSize: '9px', color: '#666', lineHeight: '1.4', marginTop: '5px' }}>
             {voucherExpiry ? `Valid until ${new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}` : `Valid until ${new Date(new Date().setMonth(new Date().getMonth() + 1)).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`}. Terms & Conditions apply.
           </p>

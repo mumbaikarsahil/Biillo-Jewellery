@@ -90,7 +90,6 @@ export default function VoucherClaimPage() {
     code: '', name: '', phone: '', nearestBranch: '', dob: '', anniversary: ''
   })
   
-  // ✨ FIX: State to hold the voucher expiry date
   const [voucherExpiry, setVoucherExpiry] = useState<string | null>(null)
 
   // Chatbot & FAQ State
@@ -147,7 +146,6 @@ export default function VoucherClaimPage() {
         throw new Error("Invalid voucher code, Please contact the support");
       }
 
-      // ✨ FIX: Store the expiry date for the success screen
       if (data.expiry_date) {
         setVoucherExpiry(data.expiry_date);
       }
@@ -165,7 +163,6 @@ export default function VoucherClaimPage() {
       return toast.error("Please fill in your Name, Phone, Branch, and Date of Birth.")
     }
 
-    // ✨ FIX: Ensure exactly 10 digits
     if (formData.phone.length !== 10) {
       return toast.error("Please enter a valid 10-digit mobile number.");
     }
@@ -173,6 +170,8 @@ export default function VoucherClaimPage() {
     setLoading(true)
     try {
       const cleanCode = formData.code.toUpperCase().trim();
+      
+      // 1. Register Voucher in Supabase
       const { data, error } = await supabase.rpc('register_voucher_public', {
         p_code: cleanCode,
         p_name: formData.name,
@@ -184,8 +183,7 @@ export default function VoucherClaimPage() {
 
       if (error) throw error
 
-      // ✨ FIX: Fetch the freshly updated expiry date from the database
-      // This immediately overrides the old "Nov 4" date fetched in Step 0
+      // 2. Fetch the freshly updated expiry date
       const { data: updatedVoucher } = await supabase
         .from('vouchers')
         .select('expiry_date')
@@ -195,12 +193,41 @@ export default function VoucherClaimPage() {
       if (updatedVoucher?.expiry_date) {
         setVoucherExpiry(updatedVoucher.expiry_date);
       } else {
-        // Fallback calculation just in case the DB fetch drops
         const fallbackDate = new Date();
         fallbackDate.setMonth(fallbackDate.getMonth() + 1);
         setVoucherExpiry(fallbackDate.toISOString());
       }
 
+      // ✨ NEW: 3. Trigger WhatsApp Auto-Reply
+      try {
+        await fetch('/api/whatsapp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'message.sendDirect',
+            payload: {
+              user_id: `91${formData.phone}`,
+              create_if_not_found: "yes",
+              content: {
+                // IMPORTANT: Replace these with your actual Convo360 namespace and template name
+                namespace: "YOUR_META_NAMESPACE_ID", 
+                name: "voucher_activation_success", 
+                lang: "en",
+                params: {
+                  "BODY_{{1}}": formData.name,
+                  "BODY_{{2}}": cleanCode
+                }
+              }
+            }
+          })
+        });
+        // Silent success - no need to toast the user for a background WA message
+      } catch (waError) {
+        console.error("WhatsApp auto-reply failed, but registration succeeded:", waError);
+        // Do not throw here. We don't want a WA failure to stop the success screen.
+      }
+
+      // Advance to Success Screen
       setStep(2) 
     } catch (err: any) {
       toast.error(err.message || "Failed to register voucher.")
@@ -351,8 +378,8 @@ export default function VoucherClaimPage() {
                   <button 
   onClick={() => {
     setStep(0);
-    setIsVerifying(false); // ✨ FIX: Stops the infinite loading loop
-    setFormData({ ...formData, code: '' }); // ✨ FIX: Clears the input so they can type a new one
+    setIsVerifying(false); 
+    setFormData({ ...formData, code: '' }); 
   }} 
   className="flex items-center gap-1.5 px-3 py-1.5 bg-white/80 hover:bg-white text-slate-600 rounded-full text-[10px] font-bold uppercase tracking-widest transition-colors border border-slate-200/60 shadow-sm"
 >
@@ -369,7 +396,6 @@ export default function VoucherClaimPage() {
                     </div>
                   </div>
 
-                  {/* ✨ FIX: Restricted Phone Input with static +91 */}
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Mobile Number *</Label>
                     <div className="relative flex items-center">
@@ -443,7 +469,6 @@ export default function VoucherClaimPage() {
                    <p className="text-sm text-slate-700 font-medium leading-snug">
                      Visit our <b className="text-slate-900">nearest branch</b> and simply provide your Voucher Code with a valid ID proof at the billing counter.
                      
-                     {/* ✨ FIX: Show the dynamic expiry date */}
                      {voucherExpiry ? (
                         <span className="block mt-1.5 text-rose-600">Valid until <b>{new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b>.</span>
                      ) : (

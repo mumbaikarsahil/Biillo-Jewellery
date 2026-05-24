@@ -17,7 +17,7 @@ import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
 import { 
   Users, Search, Store, Gem, FilterX, RefreshCw,
-  UserPlus, UploadCloud, Settings, ChevronLeft, ChevronRight
+  UserPlus, UploadCloud, Settings, ChevronLeft, ChevronRight, MessageSquare
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Separator } from '@radix-ui/react-separator'
@@ -29,7 +29,10 @@ import { CustomerList } from './components/CustomerList'
 import { CRMMetrics } from './components/CRMMetrics'
 import { CRMModals } from './components/CRMModals'
 
-// ✨ FIX: Robust DD-MM-YYYY Parser for CSV Uploads
+// ✨ NEW: Import the WhatsApp Sender Modal
+import { WhatsAppSenderModal } from '@/components/WhatsAppSenderModal'
+
+// Robust DD-MM-YYYY Parser for CSV Uploads
 const formatToDBDate = (dateStr?: string) => {
   if (!dateStr) return '';
   const cleanDate = dateStr.trim();
@@ -62,17 +65,21 @@ export default function CRMPage() {
 
   const [activeAiFilter, setActiveAiFilter] = useState<'none' | 'scheme' | 'cold' | 'birthday' | 'anniversary'>('none')
 
-  // ✨ NEW: Server-Side Pagination States
+  // Server-Side Pagination States
   const [activeTab, setActiveTab] = useState<string>("followups")
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState<number>(50) 
   const [globalCounts, setGlobalCounts] = useState({ followups: 0, purchased: 0, kitty: 0 })
   const [metrics, setMetrics] = useState({ total: 0, dueToday: 0, overdue: 0, schemeCount: 0, coldCount: 0 })
 
+  // ✨ NEW: WhatsApp Integration States
+  const [isSenderModalOpen, setIsSenderModalOpen] = useState(false);
+  const [messageRecipients, setMessageRecipients] = useState<any[]>([]);
+
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isAddKittyModalOpen, setIsAddKittyModalOpen] = useState(false)
-  const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false)
+  const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false) // Legacy modal state (kept to prevent CRMModals from breaking)
   const [isFollowupModalOpen, setIsFollowupModalOpen] = useState(false)
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false)
   const [isLoyaltyModalOpen, setIsLoyaltyModalOpen] = useState(false)
@@ -144,7 +151,7 @@ export default function CRMPage() {
     fetchCoreData()
   }, [appUser])
 
-  // ✨ SERVER-SIDE QUERY BUILDER
+  // SERVER-SIDE QUERY BUILDER
   const buildServerQuery = (queryObj: any, tab: string) => {
     let q = queryObj.eq('company_id', appUser?.company_id);
     
@@ -169,7 +176,7 @@ export default function CRMPage() {
     return q;
   };
 
-  // ✨ FETCH COUNTS GLOBALLY
+  // FETCH COUNTS GLOBALLY
   useEffect(() => {
     if (!appUser) return;
     const fetchCounts = async () => {
@@ -214,7 +221,7 @@ export default function CRMPage() {
     fetchCounts()
   }, [appUser, selectedLocation, debouncedSearch, activeAiFilter])
 
-  // ✨ FETCH PAGE DATA
+  // FETCH PAGE DATA
   const fetchPage = async (pageToLoad: number) => {
     if (!appUser || !selectedLocation) return;
     setIsLoading(true);
@@ -252,7 +259,7 @@ export default function CRMPage() {
     }
   }
 
-  // --- Handlers (Truncated for brevity, logic remains identical) ---
+  // --- CSV Import Handlers ---
   const handleDownloadSample = () => {
     const csvContent = "full_name,phone,city,customer_status,birth_date,anniversary_date,store_credit_balance\nJohn Doe,9876543210,Mumbai,Lead,01-01-1990,15-05-2015,0\nJane Smith,9123456789,Delhi,Purchased,20-08-1985,,1200\nRahul Sharma,9988776655,Pune,Kitty Member,10-12-1992,20-11-2020,0";
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -350,6 +357,7 @@ export default function CRMPage() {
     }
   };
 
+  // --- CRUD Handlers ---
   const handleAddCustomer = async () => {
     if (!newCustForm.full_name || !newCustForm.phone) return toast.error('Name and Phone are required.');
     
@@ -566,55 +574,32 @@ export default function CRMPage() {
     }
   }
 
-  const openWhatsAppModal = (customer: CRMCustomer, forcedTemplateId?: string) => {
-    setSelectedCustomer(customer)
-    let statusKey = 'Lead'
-    if (customer.customer_status === 'Purchased') statusKey = 'Purchased'
-    
-    const hasActivePlan = customer.kitty_plans && customer.kitty_plans.some(p => ['active', 'matured'].includes(p.status));
-    if (customer.customer_status === 'Kitty Member' || hasActivePlan) statusKey = 'Kitty'
+  // ✨ NEW: Integrated WhatsApp Sender for Single Selection
+  const openWhatsAppModal = (customer: CRMCustomer) => {
+    let phone = customer.phone.replace(/\D/g, '');
+    if (phone.length === 10) phone = '91' + phone;
 
-    const categoryTemplates = dynamicTemplates.filter(t => t.category === statusKey)
-    let defaultTemplateId = forcedTemplateId || (categoryTemplates[0]?.template_id || '')
-    
-    if (!forcedTemplateId) {
-      if (activeAiFilter === 'scheme' && statusKey === 'Purchased') defaultTemplateId = 'scheme_upsell'
-      if (activeAiFilter === 'scheme' && statusKey === 'Lead') defaultTemplateId = 'kitty_invite'
-      if (activeAiFilter === 'cold' && statusKey === 'Lead') defaultTemplateId = 'cold_lead'
-    }
-
-    const tpl = categoryTemplates.find(t => t.template_id === defaultTemplateId) || categoryTemplates[0]
-    setWaTemplateId(tpl?.template_id || '')
-    
-    if (tpl) setCustomMessage(tpl.message_text.replace(/{name}/g, customer.full_name.split(' ')[0]))
-    else setCustomMessage(`Hi ${customer.full_name.split(' ')[0]}, `)
-    
-    setIsWhatsAppModalOpen(true)
+    setMessageRecipients([{ phone: phone, name: customer.full_name }]);
+    setIsSenderModalOpen(true);
   }
 
-  const handleTemplateChange = (templateId: string) => {
-    setWaTemplateId(templateId)
-    const tpl = dynamicTemplates.find(t => t.template_id === templateId)
-    if (tpl && selectedCustomer) {
-      setCustomMessage(tpl.message_text.replace(/{name}/g, selectedCustomer.full_name.split(' ')[0]))
-    }
+  // ✨ NEW: Integrated WhatsApp Sender for Bulk Broadcasts
+  const handleBulkBroadcast = () => {
+    if (customers.length === 0) return toast.error("No customers found in the current filtered list.");
+    
+    const recipients = customers.map(c => {
+      let phone = c.phone.replace(/\D/g, '');
+      if (phone.length === 10) phone = '91' + phone;
+      return { phone: phone, name: c.full_name };
+    });
+    
+    setMessageRecipients(recipients);
+    setIsSenderModalOpen(true);
   }
 
-  const handleSendWhatsApp = () => {
-    if (!selectedCustomer) return
-    let phone = selectedCustomer.phone.replace(/\D/g, '')
-    if (phone.length === 10) phone = '91' + phone 
-    
-    const encodedMessage = encodeURIComponent(customMessage)
-    window.open(`https://wa.me/${phone}?text=${encodedMessage}`, '_blank')
-    setIsWhatsAppModalOpen(false)
-    
-    const tplLabel = dynamicTemplates.find(t => t.template_id === waTemplateId)?.label || 'Custom Message'
-    setInteractionNotes(`Sent WhatsApp: ${tplLabel}`)
-    setFollowupDate(selectedCustomer.next_followup_date || '')
-    setFollowupReason(selectedCustomer.followup_reason || '')
-    setTimeout(() => setIsFollowupModalOpen(true), 500)
-  }
+  // Fallback for legacy calls in existing subcomponents
+  const handleTemplateChange = (templateId: string) => {}
+  const handleSendWhatsApp = () => {}
 
   const openScheduleModal = (customer: CRMCustomer) => {
     setSelectedCustomer(customer); 
@@ -631,7 +616,7 @@ export default function CRMPage() {
 
   if (loading || !appUser) return null
 
-  // ✨ SERVER PAGINATION FOOTER
+  // SERVER PAGINATION FOOTER
   const PaginationFooter = () => {
     const totalCurrentCount = globalCounts[activeTab as keyof typeof globalCounts] || 0;
     return (
@@ -743,7 +728,7 @@ export default function CRMPage() {
           </div>
         </div>
 
-        {/* 3. METRICS DASHBOARD (Now driven entirely by server counts!) */}
+        {/* 3. METRICS DASHBOARD */}
         <CRMMetrics 
           totalCustomers={metrics.total} 
           reminders={{dueToday: metrics.dueToday, overdue: metrics.overdue}} 
@@ -761,6 +746,11 @@ export default function CRMPage() {
           </div>
           
           <div className="flex gap-2 flex-wrap lg:justify-end">
+            {/* ✨ NEW: Broadcast to List Button */}
+            <Button onClick={handleBulkBroadcast} className="bg-emerald-600 hover:bg-emerald-700 text-white h-8 text-xs font-semibold rounded-lg shadow-sm border-transparent transition-none">
+              <MessageSquare className="w-4 h-4 mr-1.5" /> Broadcast to List
+            </Button>
+            
             <Button 
               variant={activeAiFilter === 'scheme' ? 'default' : 'outline'} size="sm" 
               onClick={() => toggleAiFilter('scheme')}
@@ -843,7 +833,14 @@ export default function CRMPage() {
         </Card>
       </main>
 
-      {/* ALL MODALS */}
+      {/* ✨ NEW: Reusable WhatsApp Sender Modal */}
+      <WhatsAppSenderModal 
+        isOpen={isSenderModalOpen}
+        onClose={() => setIsSenderModalOpen(false)}
+        recipients={messageRecipients}
+      />
+
+      {/* LEGACY MODALS */}
       <CRMModals 
         isImportModalOpen={isImportModalOpen} setIsImportModalOpen={setIsImportModalOpen}
         isPreviewModalOpen={isPreviewModalOpen} setIsPreviewModalOpen={setIsPreviewModalOpen}

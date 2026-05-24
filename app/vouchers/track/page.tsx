@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { format, isPast } from "date-fns";
+import { format, isPast, addDays } from "date-fns";
 import { 
   Search, 
   Store, 
@@ -34,7 +34,8 @@ import {
   Download,
   Sparkles,
   Mic,
-  X
+  X,
+  BellRing
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -74,6 +75,9 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
+// ✨ NEW: Import the WhatsApp Sender Modal
+import { WhatsAppSenderModal } from "@/components/WhatsAppSenderModal";
+
 interface TrackedVoucher {
   id: string;
   code: string;
@@ -105,6 +109,7 @@ interface TrackedVoucher {
   voucher_distributors?: {
     distributor_name: string;
     distributor_type: string;
+    phone?: string;
   } | null;
   voucher_distributions?: {
     payment_status: string;
@@ -149,6 +154,11 @@ export default function TrackVoucherPage() {
   // --- CUSTOMER MODAL STATE ---
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string, full_name: string, phone: string, voucherCode: string } | null>(null);
 
+  // --- WHATSAPP SENDER STATES ---
+  const [isSenderModalOpen, setIsSenderModalOpen] = useState(false);
+  const [messageRecipients, setMessageRecipients] = useState<any[]>([]);
+  const [isQueryingExpiry, setIsQueryingExpiry] = useState(false);
+
   useEffect(() => {
     const fetchFiltersData = async () => {
       const { data: dData } = await supabase.from("voucher_distributors").select("id, distributor_name").order("distributor_name");
@@ -177,7 +187,7 @@ export default function TrackVoucherPage() {
           id, code, discount_value, handling_fee, status, expiry_date, distributed_at, redeemed_at,
           is_manual_override, updated_by_user, scan_count, last_scanned_at,
           voucher_batches (batch_no),
-          voucher_distributors (distributor_name, distributor_type),
+          voucher_distributors (distributor_name, distributor_type, phone),
           voucher_distributions (payment_status, delivery_agent),
           customers (id, full_name, phone),
           last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name)
@@ -188,7 +198,6 @@ export default function TrackVoucherPage() {
       const todayIso = new Date().toISOString();
       
       if (tabStatus === "expired") {
-        // ✨ FIX: Included 'in_stock' so newly distributed vouchers correctly show as expired when time is up
         query = query.in("status", ["distributed", "in_stock", "registered"]).lt("expiry_date", todayIso);
       } else if (tabStatus !== "all") {
         query = query.eq("status", tabStatus);
@@ -204,7 +213,6 @@ export default function TrackVoucherPage() {
       setListData((data as any) || []);
       setTotalCount(count || 0);
       
-      // Auto-clear selections when pagination or filters change
       setSelectedVouchers(new Set());
     } catch (error: any) {
       toast({ title: "Failed to load list", description: error.message, variant: "destructive" });
@@ -213,11 +221,83 @@ export default function TrackVoucherPage() {
     }
   };
 
+  // ✨ FIX: Safely typed handleRemindExpiring to prevent TS "any[]" errors
+  const handleRemindExpiring = async () => {
+    setIsQueryingExpiry(true);
+    try {
+      const today = new Date();
+      const nextWeek = addDays(today, 7);
+
+      const { data, error } = await supabase
+        .from("vouchers")
+        .select(`
+          code, 
+          expiry_date, 
+          voucher_distributors (*),
+          customers (*)
+        `)
+        .neq("status", "pending_print")
+        .gte("expiry_date", today.toISOString())
+        .lte("expiry_date", nextWeek.toISOString());
+
+      if (error) throw error;
+      
+      if (!data || data.length === 0) {
+        return toast({ 
+          title: "No Expiring Vouchers", 
+          description: "There are no active vouchers expiring within the next 7 days."
+        });
+      }
+
+      const recipientsMap = new Map();
+      
+      // FIX: Cast `v` to `any` to prevent TS from inferring arrays, and dynamically unwrap arrays if Supabase returns them
+      data.forEach((v: any) => {
+        const dist = Array.isArray(v.voucher_distributors) ? v.voucher_distributors[0] : v.voucher_distributors;
+        const cust = Array.isArray(v.customers) ? v.customers[0] : v.customers;
+
+        const rawPhone = dist?.phone || cust?.phone;
+        const name = dist?.distributor_name || cust?.full_name || 'Valued Partner';
+        
+        if (rawPhone) {
+          let cleanPhone = String(rawPhone).replace(/\D/g, '');
+          if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
+          
+          if (!recipientsMap.has(cleanPhone)) {
+            recipientsMap.set(cleanPhone, {
+              phone: cleanPhone,
+              name: name,
+              voucher_code: v.code,
+              expiry_date: v.expiry_date ? format(new Date(v.expiry_date), 'dd MMM yyyy') : ''
+            });
+          }
+        }
+      });
+
+      const recipients = Array.from(recipientsMap.values());
+      
+      if (recipients.length === 0) {
+        return toast({ 
+          title: "Missing Contact Data", 
+          description: "Found expiring vouchers, but none of the assigned distributors/customers have a valid phone number.",
+          variant: "destructive"
+        });
+      }
+
+      setMessageRecipients(recipients);
+      setIsSenderModalOpen(true);
+
+    } catch (err: any) {
+      toast({ title: "Query Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsQueryingExpiry(false);
+    }
+  };
+
   const generateAIOverview = (v: TrackedVoucher) => {
     const isExpired = v.expiry_date && isPast(new Date(v.expiry_date));
     let text = `Voucher ${v.code} is currently `;
     
-    // ✨ FIX: Included 'in_stock' in the AI summary check
     if (isExpired && (v.status === 'distributed' || v.status === 'in_stock' || v.status === 'registered')) {
        text += `expired. It carried a discount value of ₹${v.discount_value.toLocaleString()} `;
     } else {
@@ -326,7 +406,6 @@ export default function TrackVoucherPage() {
   };
 
   const getDisplayStatus = (v: { status: string; expiry_date?: string | null }) => {
-    // ✨ FIX: Included 'in_stock' to correctly output 'expired' on the UI Badge
     if ((v.status === 'distributed' || v.status === 'in_stock' || v.status === 'registered') && v.expiry_date && isPast(new Date(v.expiry_date))) return 'expired';
     return v.status;
   };
@@ -670,16 +749,27 @@ export default function TrackVoucherPage() {
               <h2 className="text-lg font-bold text-slate-900 tracking-tight">Voucher Master Ledger</h2>
               <p className="text-[13px] font-medium text-slate-500">View, filter, and track campaign engagement metrics across all distributions.</p>
             </div>
-            {/* ✨ EXPORT CSV BUTTON */}
-            <Button 
-              variant="outline" 
-              className="bg-white border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm font-bold text-xs"
-              onClick={downloadCSV}
-              disabled={listData.length === 0}
-            >
-              <Download className="w-4 h-4 mr-2 text-slate-400" />
-              Export Page ({listData.length})
-            </Button>
+            
+            <div className="flex items-center gap-2">
+              <Button 
+                onClick={handleRemindExpiring} 
+                disabled={isQueryingExpiry}
+                className="bg-amber-500 hover:bg-amber-600 text-white shadow-sm font-bold text-xs h-9"
+              >
+                {isQueryingExpiry ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <BellRing className="w-4 h-4 mr-2" />}
+                Remind Expiring (7 Days)
+              </Button>
+
+              <Button 
+                variant="outline" 
+                className="bg-white border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm font-bold text-xs h-9"
+                onClick={downloadCSV}
+                disabled={listData.length === 0}
+              >
+                <Download className="w-4 h-4 mr-2 text-slate-400" />
+                Export Page ({listData.length})
+              </Button>
+            </div>
           </div>
 
           <Card className="shadow-sm border-slate-200 overflow-hidden bg-white rounded-xl">
@@ -693,7 +783,7 @@ export default function TrackVoucherPage() {
               
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:flex lg:flex-row flex-wrap items-center gap-3 w-full">
                 
-                {/* Local Search (Now hits the database via Debounce) */}
+                {/* Local Search */}
                 <div className="relative w-full lg:w-[220px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                   <Input 
@@ -702,7 +792,7 @@ export default function TrackVoucherPage() {
                     value={localSearch}
                     onChange={(e) => {
                       setLocalSearch(e.target.value);
-                      setCurrentPage(0); // Reset page on new search
+                      setCurrentPage(0);
                     }}
                   />
                 </div>
@@ -850,12 +940,10 @@ export default function TrackVoucherPage() {
                         <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-right">Value (INR)</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-right">Fee & Pmt</TableHead>
                         
-                        {/* ✨ FIX: Added 'in_stock' array check to display logistics */}
                         {["all", "distributed", "in_stock", "registered", "redeemed", "expired"].includes(activeFilter) && (
                           <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10">Logistics & Customer</TableHead>
                         )}
                         
-                        {/* ✨ FIX: Added 'in_stock' array check to display Expiration */}
                         {["all", "distributed", "in_stock", "registered", "expired"].includes(activeFilter) && (
                           <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-center">Expiration</TableHead>
                         )}
@@ -919,7 +1007,6 @@ export default function TrackVoucherPage() {
                           </TableCell>
                           
                           {/* LOGISTICS & CUSTOMER CELL - INTERACTIVE */}
-                          {/* ✨ FIX: Included in_stock condition */}
                           {["all", "distributed", "in_stock", "registered", "redeemed", "expired"].includes(activeFilter) && (
                             <TableCell className="px-4">
                               <div className="flex flex-col items-start gap-1.5">
@@ -940,7 +1027,6 @@ export default function TrackVoucherPage() {
                             </TableCell>
                           )}
 
-                          {/* ✨ FIX: Included in_stock condition */}
                           {["all", "distributed", "in_stock", "registered", "expired"].includes(activeFilter) && (
                             <TableCell className="text-center font-bold text-[10px] text-rose-500 px-4">
                               {v.expiry_date ? format(new Date(v.expiry_date), "dd MMM yy") : "-"}
@@ -1038,6 +1124,14 @@ export default function TrackVoucherPage() {
             )}
           </DialogContent>
         </Dialog>
+
+        {/* ✨ NEW: WhatsApp Sender Modal Integration */}
+        <WhatsAppSenderModal 
+          isOpen={isSenderModalOpen}
+          onClose={() => setIsSenderModalOpen(false)}
+          recipients={messageRecipients}
+          defaultTemplateName="voucher_expiry_reminder" // Optional: Assuming you have a template with this name
+        />
 
       </main>
     </div>
