@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
 
+// ✨ IMPORTANT: Forces Vercel to use the standard Node.js runtime instead of Edge.
+export const runtime = 'nodejs';
+
 const API_BASE = 'https://omnibot.convo360.ai/api';
 
 function appendQueryParams(url: URL, payload: Record<string, any> | undefined) {
@@ -88,11 +91,16 @@ export async function POST(req: Request) {
 
     const url = new URL(`${API_BASE}${endpoint}`);
 
+    // ✨ THE FIX: Added Browser Spoofing Headers to bypass Cloudflare
     const fetchOptions: RequestInit = {
       method,
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.CONVO360_API_KEY}`,
+        'Authorization': `Bearer ${process.env.CONVO360_API_KEY}`,
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Cache-Control': 'no-cache'
       },
     };
 
@@ -102,7 +110,6 @@ export async function POST(req: Request) {
       fetchOptions.body = JSON.stringify(payload ?? {});
 
       // Keep the original behavior for template.list in case the provider expects query params.
-      // If Convo360 expects body instead, you can remove this block later.
       if (action === 'template.list' && payload && typeof payload === 'object') {
         appendQueryParams(url, payload);
       }
