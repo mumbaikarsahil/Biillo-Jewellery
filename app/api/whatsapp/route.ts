@@ -1,129 +1,159 @@
 import { NextResponse } from 'next/server';
 
-const API_BASE = "https://omnibot.convo360.ai/api";
+const API_BASE = 'https://omnibot.convo360.ai/api';
+
+function appendQueryParams(url: URL, payload: Record<string, any> | undefined) {
+  if (!payload) return;
+  Object.entries(payload).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    url.searchParams.append(key, String(value));
+  });
+}
+
+async function parseUpstreamResponse(response: Response) {
+  const rawText = await response.text();
+
+  try {
+    return { data: JSON.parse(rawText), rawText };
+  } catch {
+    return { data: null, rawText };
+  }
+}
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { action, payload } = body; 
-    
-    let endpoint = "";
-    let method = "POST";
+    const { action, payload } = body ?? {};
 
-    // Route the requested action to the correct Convo360 endpoint
+    if (!action) {
+      return NextResponse.json(
+        { message: 'Missing action' },
+        { status: 400 }
+      );
+    }
+
+    if (!process.env.CONVO360_API_KEY) {
+      return NextResponse.json(
+        { message: 'Missing CONVO360_API_KEY env variable' },
+        { status: 500 }
+      );
+    }
+
+    let endpoint = '';
+    let method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'POST';
+
     switch (action) {
-      // ==========================================
-      // TEMPLATE MANAGEMENT
-      // ==========================================
-      case 'template.list':   
-        endpoint = "/whatsapp-template/list"; 
+      case 'template.list':
+        endpoint = '/whatsapp-template/list';
+        method = 'POST';
         break;
-      case 'template.create': 
-        endpoint = "/whatsapp-template/create"; 
+      case 'template.create':
+        endpoint = '/whatsapp-template/create';
+        method = 'POST';
         break;
-      case 'template.sync':   
-        endpoint = "/whatsapp-template/sync"; 
+      case 'template.sync':
+        endpoint = '/whatsapp-template/sync';
+        method = 'POST';
         break;
-      case 'template.delete': 
-        endpoint = "/whatsapp-template/delete"; 
-        method = "DELETE"; 
-        break;
-
-      // ==========================================
-      // SUBSCRIBER MANAGEMENT
-      // ==========================================
-      case 'subscriber.create': 
-        // Payload: { name: string, phone: string, first_name?: string }
-        endpoint = "/subscriber/create"; 
-        break;
-      case 'subscriber.info':   
-        // Payload: { user_id: string }
-        endpoint = "/subscriber/get-info-by-user-id"; 
-        method = "GET"; 
+      case 'template.delete':
+        endpoint = '/whatsapp-template/delete';
+        method = 'DELETE';
         break;
 
-      // ==========================================
-      // DIRECT MESSAGING (For CRM Individual Sends)
-      // ==========================================
-      case 'message.sendDirect': 
-        /* Expected Payload format:
-          {
-            "user_id": "phone_number",
-            "create_if_not_found": "yes",
-            "content": {
-              "namespace": "string",
-              "name": "template_name",
-              "lang": "en",
-              "params": {
-                "BODY_{{1}}": "Customer Name",
-                "BODY_{{2}}": "Order Value"
-              }
-            }
-          }
-        */
-        endpoint = "/subscriber/send-whatsapp-template-by-user-id"; 
+      case 'subscriber.create':
+        endpoint = '/subscriber/create';
+        method = 'POST';
+        break;
+      case 'subscriber.info':
+        endpoint = '/subscriber/get-info-by-user-id';
+        method = 'GET';
         break;
 
-      // ==========================================
-      // BULK BROADCASTING (For Automation Page)
-      // ==========================================
-      case 'broadcast.bulk': 
-        /* Expected Payload format:
-          {
-            "user_id_list": "919876543210,919876543211", // Comma separated
-            "wa_template": {
-              "namespace": "string",
-              "name": "template_name",
-              "lang": "en",
-              "use_default_values": "yes",
-              "params": {
-                "BODY_{{1}}": "Valued Customer"
-              }
-            }
-          }
-        */
-        endpoint = "/subscriber/broadcast-whatsapp-template-by-user-id"; 
+      case 'message.sendDirect':
+        endpoint = '/subscriber/send-whatsapp-template-by-user-id';
+        method = 'POST';
+        break;
+
+      case 'broadcast.bulk':
+        endpoint = '/subscriber/broadcast-whatsapp-template-by-user-id';
+        method = 'POST';
         break;
 
       default:
-        return NextResponse.json({ message: "Invalid action routing query" }, { status: 400 });
+        return NextResponse.json(
+          { message: 'Invalid action routing query' },
+          { status: 400 }
+        );
     }
 
-    // Construct the URL
     const url = new URL(`${API_BASE}${endpoint}`);
-    let fetchOptions: RequestInit = {
-      method: method,
+
+    const fetchOptions: RequestInit = {
+      method,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.CONVO360_API_KEY}`
-      }
+        Authorization: `Bearer ${process.env.CONVO360_API_KEY}`,
+      },
     };
 
-    // Attach Payload based on HTTP Method
-    if (method === "POST" || method === "PUT" || method === "DELETE") {
-      fetchOptions.body = JSON.stringify(payload);
-      
-      // Edge case: /whatsapp-template/list uses POST but the docs say parameters are (query)
-      if (action === 'template.list' && payload) {
-         Object.keys(payload).forEach(key => url.searchParams.append(key, payload[key]));
+    if (method === 'GET') {
+      appendQueryParams(url, payload);
+    } else {
+      fetchOptions.body = JSON.stringify(payload ?? {});
+
+      // Keep the original behavior for template.list in case the provider expects query params.
+      // If Convo360 expects body instead, you can remove this block later.
+      if (action === 'template.list' && payload && typeof payload === 'object') {
+        appendQueryParams(url, payload);
       }
-    } else if (method === "GET" && payload) {
-      // Append payload parameters to URL for GET requests
-      Object.keys(payload).forEach(key => url.searchParams.append(key, payload[key]));
     }
 
-    // Execute the request to Convo360
+    console.log('Convo360 request:', {
+      action,
+      method,
+      url: url.toString(),
+      payload,
+    });
+
     const response = await fetch(url.toString(), fetchOptions);
-    const data = await response.json();
+    const { data, rawText } = await parseUpstreamResponse(response);
 
     if (!response.ok) {
-      console.error("Convo360 API Error:", data);
-      return NextResponse.json({ message: data.message || "Upstream provider error" }, { status: response.status });
+      console.error('Convo360 API Error:', {
+        status: response.status,
+        statusText: response.statusText,
+        data,
+        rawText: rawText.slice(0, 1000),
+      });
+
+      return NextResponse.json(
+        {
+          message:
+            data?.message ||
+            data?.error ||
+            'Upstream provider error',
+          details: data ?? rawText.slice(0, 1000),
+        },
+        { status: response.status }
+      );
     }
 
-    return NextResponse.json(data);
+    if (data !== null) {
+      return NextResponse.json(data);
+    }
+
+    return NextResponse.json(
+      {
+        message: 'Provider returned non-JSON response',
+        raw: rawText.slice(0, 1000),
+      },
+      { status: 502 }
+    );
   } catch (error: any) {
-    console.error("WhatsApp Route Error:", error);
-    return NextResponse.json({ message: error.message || "Internal Routing Failure" }, { status: 500 });
+    console.error('WhatsApp Route Error:', error);
+    return NextResponse.json(
+      { message: error.message || 'Internal Routing Failure' },
+      { status: 500 }
+    );
   }
 }
