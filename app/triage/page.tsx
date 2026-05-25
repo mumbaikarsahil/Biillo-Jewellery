@@ -1,6 +1,7 @@
 "use client"
 
 import React, { useEffect, useState } from "react"
+import Link from "next/link"
 import { useAuth } from "@/hooks/useAuth"
 import { useStoreLocation } from "@/hooks/useStoreLocation"
 import { supabase } from "@/lib/supabaseClient"
@@ -9,7 +10,7 @@ import { format } from "date-fns"
 
 import { 
   Undo2, Package, Search, CheckCircle2, Wrench, Clock, ShieldAlert,
-  Loader2, RefreshCw, ChevronLeft, Flame
+  Loader2, RefreshCw, ChevronLeft, Flame, Store
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -19,6 +20,10 @@ import { Card } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  Select, SelectContent, SelectItem, 
+  SelectTrigger, SelectValue 
+} from "@/components/ui/select"
+import {
   Table, TableBody, TableCell, TableHead, 
   TableHeader, TableRow
 } from "@/components/ui/table"
@@ -26,36 +31,55 @@ import {
   Dialog, DialogContent, DialogHeader, 
   DialogTitle, DialogFooter, DialogDescription
 } from "@/components/ui/dialog"
-import Link from "next/link"
 
 export default function ReturnsInboxPage() {
   const { appUser } = useAuth()
-  const { selectedLocation } = useStoreLocation()
+  const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
   
+  const [warehouses, setWarehouses] = useState<{id: string, name: string}[]>([])
   const [items, setItems] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
 
   // Modal States
-  // ✨ FIX: Added 'melt' to your routing actions
   const [actionItem, setActionItem] = useState<any>(null)
   const [actionType, setActionType] = useState<'restock' | 'repair' | 'melt' | null>(null)
   const [actionNotes, setActionNotes] = useState('')
+  const [newBarcode, setNewBarcode] = useState('') // Required for restock
   const [isProcessing, setIsProcessing] = useState(false)
+
+  useEffect(() => {
+    const init = async () => {
+      if (!appUser) return
+      try {
+        const { data: whData } = await supabase
+          .from('warehouses')
+          .select('id, name')
+          .eq('company_id', appUser.company_id)
+          .eq('is_active', true)
+          .order('name')
+
+        if (whData) setWarehouses(whData)
+      } catch (err) {
+        console.error(err)
+      }
+    }
+    init()
+  }, [appUser])
 
   const fetchReturns = async () => {
     if (!appUser?.company_id || !selectedLocation) return
     setLoading(true)
     try {
-      // ✨ FIX: Look for items in the vault that came from a buyback/return!
       let q = supabase
         .from('inventory_items')
         .select(`
-          id, barcode, item_category, purity_karat, net_weight_g, total_stone_weight_cts, status, audit_history, updated_at, is_exchanged,
+          id, barcode, item_category, purity_karat, purity_percent, gross_weight_g, net_weight_g, 
+          total_stone_weight_cts, total_stone_pieces, warehouse_id, status, audit_history, updated_at, is_exchanged,
           buybacks!source_buyback_id ( reference_invoice_number, notes )
         `)
         .eq('company_id', appUser.company_id)
-        .eq('status', 'in_vault') // Only items sitting in the vault waiting to be routed
+        .eq('status', 'in_vault') // Items sitting in vault waiting to be routed
         .not('source_buyback_id', 'is', null) // Ensures it came from a return/buyback
         .order('updated_at', { ascending: false })
 
@@ -77,7 +101,6 @@ export default function ReturnsInboxPage() {
     return () => clearTimeout(delay)
   }, [appUser, selectedLocation, search])
 
-  // Helper to grab the reason from the latest audit log OR the buyback table
   const getReturnReason = (item: any) => {
     if (item.buybacks?.notes) return item.buybacks.notes;
     if (item.buybacks?.reference_invoice_number) return `Returned from Invoice: ${item.buybacks.reference_invoice_number}`;
@@ -87,30 +110,97 @@ export default function ReturnsInboxPage() {
 
   const executeAction = async () => {
     if (!actionItem || !actionType || !appUser) return
+    
+    if (actionType === 'restock' && !newBarcode.trim()) {
+      return toast.error("A new barcode is compulsory for restocking.")
+    }
     if ((actionType === 'repair' || actionType === 'melt') && !actionNotes.trim()) {
       return toast.error("Please provide instructions or reasoning.")
     }
 
     setIsProcessing(true)
     try {
-      // Map the UI action to the database enum
       let newStatus = 'in_stock';
       let logMessage = '';
+      const uniqueSuffix = Date.now().toString().slice(-5);
 
       if (actionType === 'restock') {
         newStatus = 'in_stock';
-        logMessage = `QC Passed: Routed to Live Floor. Notes: ${actionNotes || 'None'}`;
+        logMessage = `QC Passed: Routed to Live Floor. Old Barcode was: ${actionItem.barcode}. Notes: ${actionNotes || 'None'}`;
+        
+        // Verify barcode is unique before proceeding
+        const { data: existing } = await supabase.from('inventory_items').select('id').eq('company_id', appUser.company_id).eq('barcode', newBarcode.trim()).maybeSingle();
+        if (existing) throw new Error(`Barcode ${newBarcode.trim()} is already assigned to another item.`);
+
       } else if (actionType === 'repair') {
-        newStatus = 'repairs';
+        newStatus = 'repairs'; 
         logMessage = `Routed to Repair. Defect: ${actionNotes}`;
+        
+        // 1. Create Repair Ticket
+        const { error: repError } = await supabase.from('repair_tickets').insert([{
+            company_id: appUser.company_id,
+            ticket_number: `REP-${actionItem.barcode}-${uniqueSuffix}`,
+            origin_warehouse_id: actionItem.warehouse_id,
+            current_warehouse_id: actionItem.warehouse_id,
+            item_description: actionItem.item_category || 'Returned Item',
+            gross_weight_g: actionItem.gross_weight_g || 0,
+            purity: actionItem.purity_karat || '22K',
+            defect_notes: actionNotes,
+            status: 'received_at_store'
+        }]);
+        if (repError) throw new Error("Failed to create repair ticket: " + repError.message);
+
       } else if (actionType === 'melt') {
-        newStatus = 'melted'; // Make sure 'melted' is a valid status in your DB enum!
+        newStatus = 'melted'; 
         logMessage = `Routed to Melting/Refining. Reason: ${actionNotes}`;
+
+        const goldWeight = actionItem.net_weight_g || actionItem.gross_weight_g || 0;
+        const diamondCts = actionItem.total_stone_weight_cts || 0;
+
+        // 1. Create Scrap Gold Batch
+        if (goldWeight > 0) {
+            const { error: goldError } = await supabase.from('inventory_gold_batches').insert([{
+                company_id: appUser.company_id,
+                batch_number: `MLT-G-${actionItem.barcode}-${uniqueSuffix}`,
+                purity_karat: actionItem.purity_karat || '22K',
+                purity_percent: actionItem.purity_percent || 91.6,
+                total_weight_g: goldWeight,
+                remaining_weight_g: goldWeight,
+                purchase_rate_per_g: 0, // 0 for internal reclamation
+                total_purchase_value: 0,
+                warehouse_id: actionItem.warehouse_id,
+                status: 'in_stock'
+            }]);
+            if (goldError) throw new Error("Failed to generate scrap gold batch: " + goldError.message);
+        }
+
+        // 2. Create Reclaimed Diamond Lot
+        if (diamondCts > 0) {
+            const diamondPcs = actionItem.total_stone_pieces || 1;
+            const { error: diaError } = await supabase.from('inventory_diamond_lots').insert([{
+                company_id: appUser.company_id,
+                lot_number: `MLT-D-${actionItem.barcode}-${uniqueSuffix}`,
+                lot_type: 'packet',
+                stone_type: 'DIAMOND',
+                total_pieces: diamondPcs,
+                remaining_pieces: diamondPcs,
+                total_weight_cts: diamondCts,
+                remaining_weight_cts: diamondCts,
+                purchase_currency: 'INR',
+                purchase_rate_per_ct: 0,
+                total_purchase_value: 0,
+                valuation_method: 'manual',
+                warehouse_id: actionItem.warehouse_id,
+                status: 'in_stock'
+            }]);
+            if (diaError) throw new Error("Failed to generate reclaimed diamond lot: " + diaError.message);
+        }
       }
 
+      // Finally, Update the base item's status and history
       const newLogEntry = {
         timestamp: new Date().toISOString(),
-        user_name: appUser.full_name || 'Manager',
+        user_name: appUser.full_name || 'System Auto',
         reason: logMessage,
         changes: `Status: ${actionItem.status} ➝ ${newStatus}`
       }
@@ -118,24 +208,20 @@ export default function ReturnsInboxPage() {
       const currentHistory = Array.isArray(actionItem.audit_history) ? actionItem.audit_history : []
       const updatedHistory = [newLogEntry, ...currentHistory]
 
-      // ✨ Update status, pushing it out of the 'in_vault' inbox
-      const { error } = await supabase.from('inventory_items').update({
+      const { error: updateError } = await supabase.from('inventory_items').update({
         status: newStatus,
+        barcode: actionType === 'restock' ? newBarcode.trim() : actionItem.barcode,
         audit_history: updatedHistory,
         updated_by: appUser.id || appUser.user_id
       }).eq('id', actionItem.id)
 
-      if (error) {
-        if (error.message.includes('item_status_enum')) {
-           throw new Error(`The status "${newStatus}" is not allowed in your database yet. Please add it to your Enums in Supabase.`);
-        }
-        throw error;
-      }
+      if (updateError) throw updateError;
 
-      toast.success(`Item successfully moved to ${newStatus.replace('_', ' ')}`)
+      toast.success(`Routing complete. Item moved to ${newStatus.replace('_', ' ')}`)
       setActionItem(null)
       setActionType(null)
       setActionNotes('')
+      setNewBarcode('')
       fetchReturns() // Refresh inbox
     } catch (err: any) {
       toast.error(err.message || "Failed to process item.")
@@ -149,20 +235,35 @@ export default function ReturnsInboxPage() {
       <div className="max-w-6xl mx-auto space-y-6">
         
         {/* Header */}
-        <div className="flex items-center gap-4">
-          <Link href="/inventory">
-            <Button variant="outline" size="icon" className="h-9 w-9 rounded-xl bg-white">
-              <ChevronLeft className="w-4 h-4" />
-            </Button>
-          </Link>
-          <div>
-            <h1 className="text-xl font-black text-slate-900 flex items-center gap-2">
-              <Undo2 className="w-5 h-5 text-rose-600" /> 
-              Returns & Buybacks Inbox
-            </h1>
-            <p className="text-xs font-medium text-slate-500 mt-0.5">
-              Inspect returned items and route them to live floor, repairs, or melting.
-            </p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <Link href="/inventory">
+              <Button variant="outline" size="icon" className="h-9 w-9 rounded-xl bg-white">
+                <ChevronLeft className="w-4 h-4" />
+              </Button>
+            </Link>
+            <div>
+              <h1 className="text-xl font-black text-slate-900 flex items-center gap-2">
+                <Undo2 className="w-5 h-5 text-rose-600" /> 
+                Returns & Buybacks Triage
+              </h1>
+              <p className="text-xs font-medium text-slate-500 mt-0.5">
+                Inspect returned items and route them to live floor, repairs, or melting.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 bg-white p-1 rounded-xl border border-slate-200 shadow-sm shrink-0">
+            <Store className="w-4 h-4 text-slate-400 ml-2" />
+            <Select value={selectedLocation || ''} onValueChange={setSelectedLocation} disabled={isLocked}>
+              <SelectTrigger className="h-8 border-none bg-transparent shadow-none text-xs font-bold text-slate-700 w-[200px] focus:ring-0">
+                <SelectValue placeholder="Select Warehouse..." />
+              </SelectTrigger>
+              <SelectContent className="rounded-xl border-slate-200 shadow-lg">
+                {isHQ && <SelectItem value="ALL" className="text-xs font-bold text-indigo-600">All Vaults (Global View)</SelectItem>}
+                {warehouses.map(w => <SelectItem key={w.id} value={w.id} className="text-xs font-medium">{w.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
         </div>
 
@@ -177,7 +278,7 @@ export default function ReturnsInboxPage() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Button variant="outline" size="icon" className="h-10 w-10" onClick={fetchReturns}>
+          <Button variant="outline" size="icon" className="h-10 w-10 shrink-0" onClick={fetchReturns}>
             <RefreshCw className={`w-4 h-4 text-slate-500 ${loading ? 'animate-spin' : ''}`} />
           </Button>
         </div>
@@ -212,7 +313,7 @@ export default function ReturnsInboxPage() {
                         <Package className="w-3.5 h-3.5 text-indigo-500" />
                         <span className="font-mono font-bold text-sm text-slate-900">{item.barcode}</span>
                         <Badge variant="outline" className="text-[9px] uppercase font-bold tracking-widest bg-rose-50 text-rose-600 border-rose-200 px-1 py-0 h-4">
-                          {item.is_exchanged ? 'OLD GOLD / BUYBACK' : 'RETURN'}
+                          {item.is_exchanged ? 'BUYBACK' : 'RETURN'}
                         </Badge>
                       </div>
                       <div className="text-xs text-slate-600 font-medium">
@@ -234,7 +335,7 @@ export default function ReturnsInboxPage() {
                     </TableCell>
 
                     <TableCell className="py-3 text-right">
-                      <div className="flex justify-end gap-2">
+                      <div className="flex justify-end gap-2 flex-wrap">
                         <Button 
                           size="sm" 
                           className="h-8 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800 border border-emerald-200 text-xs font-bold"
@@ -267,7 +368,7 @@ export default function ReturnsInboxPage() {
 
         {/* DECISION MODAL */}
         <Dialog open={!!actionItem} onOpenChange={(val) => !val && setActionItem(null)}>
-          <DialogContent className="sm:max-w-[425px]">
+          <DialogContent className="sm:max-w-[450px]">
             <DialogHeader>
               <DialogTitle className={`flex items-center gap-2 ${actionType === 'restock' ? 'text-emerald-600' : actionType === 'repair' ? 'text-amber-600' : 'text-red-600'}`}>
                 {actionType === 'restock' && <CheckCircle2 className="w-5 h-5"/>}
@@ -277,27 +378,49 @@ export default function ReturnsInboxPage() {
               </DialogTitle>
               <DialogDescription className="text-xs">
                 Routing <strong className="text-slate-800">{actionItem?.barcode}</strong>. 
-                The 'Buyback' history flag will be preserved permanently for audits.
+                {actionType === 'melt' && ' This will break the item down into raw Gold Batches & Diamond Lots.'}
+                {actionType === 'repair' && ' This will generate a new internal Repair Ticket.'}
               </DialogDescription>
             </DialogHeader>
 
-            <div className="py-4">
-              <Label className="text-xs font-semibold text-slate-700 mb-2 block">
-                {actionType === 'restock' ? 'QC Notes (Optional)' : 'Reason / Instructions (Required)'}
-              </Label>
-              <Textarea 
-                className="resize-none text-xs" 
-                placeholder={actionType === 'restock' ? "e.g. Cleaned and polished." : actionType === 'repair' ? "e.g. Broken clasp, needs soldering." : "e.g. Scrap gold to be refined."}
-                value={actionNotes}
-                onChange={(e) => setActionNotes(e.target.value)}
-              />
+            <div className="py-4 space-y-4">
+              
+              {actionType === 'restock' && (
+                <div className="space-y-1.5">
+                  <Label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                    New Assigned Barcode <span className="text-rose-500 text-[10px] uppercase">Required</span>
+                  </Label>
+                  <Input 
+                    placeholder="Enter completely new barcode string"
+                    className="font-mono text-sm uppercase bg-slate-50"
+                    value={newBarcode}
+                    onChange={(e) => setNewBarcode(e.target.value.toUpperCase())}
+                  />
+                  <p className="text-[10px] text-slate-500 font-medium">To prevent scanning conflicts, restocked items must receive a fresh barcode label.</p>
+                </div>
+              )}
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                  {actionType === 'restock' ? 'QC Notes' : 'Routing Instructions'}
+                  {actionType !== 'restock' && <span className="text-rose-500 text-[10px] uppercase">Required</span>}
+                </Label>
+                <Textarea 
+                  className="resize-none text-xs bg-slate-50" 
+                  rows={3}
+                  placeholder={actionType === 'restock' ? "e.g. Cleaned and polished." : actionType === 'repair' ? "e.g. Broken clasp, needs soldering." : "e.g. Scrap gold to be refined."}
+                  value={actionNotes}
+                  onChange={(e) => setActionNotes(e.target.value)}
+                />
+              </div>
+
             </div>
 
             <DialogFooter>
               <Button variant="outline" onClick={() => setActionItem(null)} className="h-9 text-xs font-bold">Cancel</Button>
               <Button 
                 onClick={executeAction} 
-                disabled={isProcessing || ((actionType === 'repair' || actionType === 'melt') && !actionNotes.trim())}
+                disabled={isProcessing || (actionType === 'restock' && !newBarcode.trim()) || ((actionType === 'repair' || actionType === 'melt') && !actionNotes.trim())}
                 className={`h-9 text-xs font-bold text-white ${actionType === 'restock' ? 'bg-emerald-600 hover:bg-emerald-700' : actionType === 'repair' ? 'bg-amber-600 hover:bg-amber-700' : 'bg-red-600 hover:bg-red-700'}`}
               >
                 {isProcessing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}

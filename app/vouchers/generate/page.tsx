@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import Link from "next/link";
 import * as XLSX from "xlsx";
 import QRCode from "react-qr-code";
@@ -8,14 +8,13 @@ import { useReactToPrint } from "react-to-print";
 import { 
   Loader2, CheckCircle2, PlusCircle, ArrowLeft, ChevronRight, 
   RefreshCw, Database, Printer, Ticket, FileSpreadsheet, Info, Share2,
-  MonitorSmartphone, QrCode, ArrowRight // ✨ Added ArrowRight
+  MonitorSmartphone, QrCode, ArrowRight 
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-// ✨ NEW: Imported Dialog Components for the Success Modal
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"; 
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
@@ -28,11 +27,12 @@ export default function GenerateVouchersPage() {
   
   const [companyName, setCompanyName] = useState("GIFT VOUCHER");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationProgress, setGenerationProgress] = useState(0); // Track 0 to 100%
+
   const [successBatch, setSuccessBatch] = useState<{ 
     batchNo: string; codes: string[]; discount: number; handlingFee: number; expiry: string 
   } | null>(null);
 
-  // ✨ NEW: State to control the Success Modal
   const [showSuccessModal, setShowSuccessModal] = useState(false);
 
   const [formData, setFormData] = useState({
@@ -63,37 +63,56 @@ export default function GenerateVouchersPage() {
     fetchInitialContext();
   }, [appUser]);
 
-  // --- BULLETPROOF SEQUENCE DETECTION ---
-  useEffect(() => {
-    async function fetchNextSequence() {
-      if (!formData.prefix.trim()) return;
-      const prefix = formData.prefix.trim().toUpperCase();
-      
-      const { data: vData, error } = await supabase
-        .from('vouchers')
-        .select('code')
-        .ilike('code', `${prefix}%`)
-        .order('code', { ascending: false }) 
-        .limit(1); 
+  // --- EXTRACTED SEQUENCE DETECTOR FOR REUSE ---
+  const fetchNextSequence = useCallback(async (prefixToSearch: string) => {
+    if (!prefixToSearch.trim()) return;
+    const prefix = prefixToSearch.trim().toUpperCase();
+    
+    const { data: vData, error } = await supabase
+      .from('vouchers')
+      .select('code')
+      .ilike('code', `${prefix}%`)
+      .order('code', { ascending: false }) 
+      .limit(1); 
 
-      if (!error && vData && vData.length > 0) {
-        const highestCode = vData[0].code;
-        const numStr = highestCode.substring(prefix.length);
-        const parsed = parseInt(numStr, 10);
-        
-        if (!isNaN(parsed)) {
-          setFormData(prev => ({ ...prev, startingNumber: parsed + 1 }));
-        } else {
-          setFormData(prev => ({ ...prev, startingNumber: 1 }));
-        }
+    if (!error && vData && vData.length > 0) {
+      const highestCode = vData[0].code;
+      const numStr = highestCode.substring(prefix.length);
+      const parsed = parseInt(numStr, 10);
+      
+      if (!isNaN(parsed)) {
+        setFormData(prev => ({ ...prev, startingNumber: parsed + 1 }));
       } else {
         setFormData(prev => ({ ...prev, startingNumber: 1 }));
       }
+    } else {
+      setFormData(prev => ({ ...prev, startingNumber: 1 }));
     }
-    
-    const timeoutId = setTimeout(() => fetchNextSequence(), 500);
+  }, []);
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => fetchNextSequence(formData.prefix), 500);
     return () => clearTimeout(timeoutId);
-  }, [formData.prefix]);
+  }, [formData.prefix, fetchNextSequence]);
+
+  // --- RESET ROUTINE ---
+  const handleResetAfterSuccess = () => {
+    setShowSuccessModal(false);
+    
+    // Clear the form to default values EXCEPT the prefix
+    setFormData(prev => ({
+      ...prev,
+      quantity: 100,
+      discountValue: 500,
+      handlingFee: 0,
+      printerName: ""
+    }));
+    
+    setGenerationProgress(0);
+    
+    // Auto-fetch the very next available sequence after the huge batch was just inserted
+    setTimeout(() => fetchNextSequence(formData.prefix), 300);
+  };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
@@ -105,6 +124,7 @@ export default function GenerateVouchersPage() {
     if (isGenerating) return; 
     
     setIsGenerating(true);
+    setGenerationProgress(0);
 
     try {
       if (!appUser || !appUser.company_id) throw new Error("Authentication error.");
@@ -121,11 +141,14 @@ export default function GenerateVouchersPage() {
       const expiryIsoStr = initialExpiryDate.toISOString().split('T')[0];
 
       const prefix = formData.prefix.trim().toUpperCase();
+      
+      // Generating arrays in memory takes <50ms even for 20,000 items
       const generatedCodes = Array.from({ length: quantity }, (_, i) => {
         const numSequence = (startNum + i).toString().padStart(4, '0');
         return `${prefix}${numSequence}`;
       });
 
+      // 1. Create the Batch Header first
       const { data: batchData, error: batchError } = await supabase.from("voucher_batches").insert({
           company_id: companyId, 
           batch_no: batchNo, 
@@ -148,19 +171,31 @@ export default function GenerateVouchersPage() {
         expiry_date: expiryIsoStr,
       }));
 
-      const chunkSize = 500;
+      // 2. Insert robustly in chunks to bypass API timeout/payload limits
+      const chunkSize = 1000; // Optimal for Supabase throughput
+      let successfulInserts = 0;
+
       for (let i = 0; i < vouchersToInsert.length; i += chunkSize) {
         const chunk = vouchersToInsert.slice(i, i + chunkSize);
-        const { error: vouchersError } = await supabase.from("vouchers").insert(chunk);
-        if (vouchersError) {
-          throw new Error(`Failed to insert batch segment. Check database limits. Details: ${vouchersError.message}`);
+        
+        // Retry logic for huge batches to handle temporary network blips
+        let retries = 3;
+        while (retries > 0) {
+           const { error: vouchersError } = await supabase.from("vouchers").insert(chunk);
+           if (vouchersError) {
+             retries--;
+             if (retries === 0) throw new Error(`Failed writing block ${i}. Network error: ${vouchersError.message}`);
+             await new Promise(res => setTimeout(res, 1500)); // wait 1.5s before retry
+           } else {
+             break; // Success, break retry loop
+           }
         }
+        
+        successfulInserts += chunk.length;
+        setGenerationProgress(Math.round((successfulInserts / quantity) * 100));
       }
 
       setSuccessBatch({ batchNo, codes: generatedCodes, discount, handlingFee, expiry: expiryIsoStr });
-      setFormData(prev => ({ ...prev, startingNumber: startNum + quantity }));
-      
-      // ✨ NEW: Trigger the Success Popup immediately!
       setShowSuccessModal(true);
 
     } catch (error: any) {
@@ -250,13 +285,18 @@ export default function GenerateVouchersPage() {
 
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-medium text-gray-500 hover:text-gray-900" 
-            onClick={() => setFormData({ prefix: "A", startingNumber: 1, quantity: 100, discountValue: 500, handlingFee: 0, printerName: "" })}>
+            onClick={() => {
+              setFormData({ prefix: "A", startingNumber: 1, quantity: 100, discountValue: 500, handlingFee: 0, printerName: "" });
+              setTimeout(() => fetchNextSequence("A"), 200);
+            }}>
             <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Reset Form
           </Button>
           <Separator orientation="vertical" className="h-4 mx-1" />
-          <Button variant="outline" size="sm" className="h-8 text-xs font-bold px-3 shadow-sm border-gray-200 bg-white text-gray-700">
-            <Database className="h-3.5 w-3.5 mr-1.5 text-gray-400" /> Voucher DB
-          </Button>
+          <Link href="/vouchers/track">
+            <Button variant="outline" size="sm" className="h-8 text-xs font-bold px-3 shadow-sm border-gray-200 bg-white text-gray-700">
+              <Database className="h-3.5 w-3.5 mr-1.5 text-gray-400" /> Voucher DB
+            </Button>
+          </Link>
         </div>
       </header>
 
@@ -342,7 +382,17 @@ export default function GenerateVouchersPage() {
                 )}
 
                 <Button type="submit" className="w-full h-12 font-bold text-sm uppercase tracking-widest rounded-lg mt-6 shadow-md hover:shadow-lg transition-all" disabled={isGenerating}>
-                  {isGenerating ? <><Loader2 className="mr-2 h-5 w-5 animate-spin" /> Commiting to Ledger...</> : "Generate Sequential Batch"}
+                  {isGenerating ? (
+                    <div className="flex flex-col items-center justify-center w-full px-4">
+                       <div className="flex items-center gap-2 mb-1.5">
+                         <Loader2 className="h-4 w-4 animate-spin text-indigo-400" />
+                         <span className="text-xs">Committing {generationProgress}%</span>
+                       </div>
+                       <div className="w-full bg-slate-700 h-1.5 rounded-full overflow-hidden">
+                         <div className="bg-emerald-400 h-full transition-all duration-300" style={{ width: `${generationProgress}%` }}></div>
+                       </div>
+                    </div>
+                  ) : "Generate Sequential Batch"}
                 </Button>
               </form>
             </CardContent>
@@ -386,10 +436,19 @@ export default function GenerateVouchersPage() {
                       </div>
                       
                       {intendedUse === 'physical' ? (
-                        <Button onClick={handlePrint} className="w-full h-11 text-xs font-semibold rounded-lg shadow-sm transition-all bg-slate-900 hover:bg-slate-800 text-white">
-                          <Printer className="mr-2 h-4 w-4" />
-                          Print Quick Strips
-                        </Button>
+                        <>
+                          {successBatch.codes.length <= 1000 ? (
+                            <Button onClick={handlePrint} className="w-full h-11 text-xs font-semibold rounded-lg shadow-sm transition-all bg-slate-900 hover:bg-slate-800 text-white">
+                              <Printer className="mr-2 h-4 w-4" />
+                              Print Quick Strips
+                            </Button>
+                          ) : (
+                            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs font-medium text-left flex items-start gap-2">
+                              <Info className="w-4 h-4 mt-0.5 shrink-0" />
+                              <span>Batch size is too large for direct browser printing. Please use the downloaded Excel file to send to a commercial printing press.</span>
+                            </div>
+                          )}
+                        </>
                       ) : (
                         <div className="space-y-2 mt-2">
                           <p className="text-[10px] text-gray-500 font-medium leading-tight">These codes are completely digital. Proceed to distribution to activate the Event QR.</p>
@@ -428,8 +487,8 @@ export default function GenerateVouchersPage() {
         </div>
       </main>
 
-      {/* ✨ NEW: Success Celebration Modal */}
-      <Dialog open={showSuccessModal} onOpenChange={setShowSuccessModal}>
+      {/* SUCCESS CELEBRATION MODAL */}
+      <Dialog open={showSuccessModal} onOpenChange={(open) => !open && handleResetAfterSuccess()}>
         <DialogContent className="sm:max-w-md text-center flex flex-col items-center border-none shadow-2xl p-6 rounded-2xl">
           <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-2 shadow-sm border border-emerald-200">
             <CheckCircle2 className="w-8 h-8" />
@@ -459,7 +518,7 @@ export default function GenerateVouchersPage() {
           <DialogFooter className="w-full sm:justify-center flex-col sm:flex-col gap-2 mt-4">
             <Button 
               className={`w-full text-white font-bold h-12 text-sm rounded-xl shadow-md transition-all ${intendedUse === 'physical' ? 'bg-slate-900 hover:bg-slate-800' : 'bg-indigo-600 hover:bg-indigo-700'}`}
-              onClick={() => setShowSuccessModal(false)}
+              onClick={handleResetAfterSuccess}
             >
               Continue to Actions <ArrowRight className="w-4 h-4 ml-2" />
             </Button>
@@ -467,51 +526,54 @@ export default function GenerateVouchersPage() {
         </DialogContent>
       </Dialog>
 
-      {/* --- HIDDEN PRINT AREA (13cm x 3.5cm Strips) --- */}
-      <div className="hidden">
-        <div ref={printRef}>
-          <style type="text/css" media="print">
-            {`
-              @page { size: 130mm 35mm; margin: 0; }
-              body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact; }
-              .ticket-strip { 
-                width: 130mm; height: 35mm; display: flex; 
-                border: 1px solid #ccc; box-sizing: border-box;
-                page-break-after: always;
-                font-family: Arial, sans-serif;
-              }
-              .ticket-left { flex: 1; padding: 3mm 4mm; display: flex; flex-direction: column; justify-content: center; }
-              .ticket-right { width: 35mm; display: flex; align-items: center; justify-content: center; border-left: 1px dashed #ccc; padding: 2mm; }
-            `}
-          </style>
-          {successBatch?.codes.map((code) => (
-            <div key={code} className="ticket-strip">
-              <div className="ticket-left">
-                <h1 style={{ fontSize: '14px', fontWeight: '900', margin: 0, color: '#000', textTransform: 'uppercase' }}>
-                  {companyName}
-                </h1>
-                <p style={{ fontSize: '7px', textTransform: 'uppercase', color: '#666', marginTop: '1px', marginBottom: '4px' }}>
-                  Exclusive Gift Voucher · Value: ₹{successBatch.discount}
-                </p>
-                <p style={{ fontSize: '16px', fontWeight: 'bold', fontFamily: 'monospace', letterSpacing: '2px', margin: '4px 0' }}>
-                  {code}
-                </p>
-                <div style={{ backgroundColor: '#f0f0f0', padding: '2px 4px', borderRadius: '2px', marginTop: 'auto' }}>
-                  <p style={{ fontSize: '6px', fontWeight: 'bold', margin: 0, textTransform: 'uppercase' }}>
-                    ⚠️ Valid ONLY after claiming online. Scan QR to register.
+      {/* --- HIDDEN PRINT AREA --- */}
+      {/* We only render this div if the batch is <= 1000 items to save the DOM from freezing! */}
+      {(successBatch && successBatch.codes.length <= 1000) && (
+        <div className="hidden">
+          <div ref={printRef}>
+            <style type="text/css" media="print">
+              {`
+                @page { size: 130mm 35mm; margin: 0; }
+                body { margin: 0; padding: 0; background: white; -webkit-print-color-adjust: exact; }
+                .ticket-strip { 
+                  width: 130mm; height: 35mm; display: flex; 
+                  border: 1px solid #ccc; box-sizing: border-box;
+                  page-break-after: always;
+                  font-family: Arial, sans-serif;
+                }
+                .ticket-left { flex: 1; padding: 3mm 4mm; display: flex; flex-direction: column; justify-content: center; }
+                .ticket-right { width: 35mm; display: flex; align-items: center; justify-content: center; border-left: 1px dashed #ccc; padding: 2mm; }
+              `}
+            </style>
+            {successBatch.codes.map((code) => (
+              <div key={code} className="ticket-strip">
+                <div className="ticket-left">
+                  <h1 style={{ fontSize: '14px', fontWeight: '900', margin: 0, color: '#000', textTransform: 'uppercase' }}>
+                    {companyName}
+                  </h1>
+                  <p style={{ fontSize: '7px', textTransform: 'uppercase', color: '#666', marginTop: '1px', marginBottom: '4px' }}>
+                    Exclusive Gift Voucher · Value: ₹{successBatch.discount}
                   </p>
-                  <p style={{ fontSize: '5px', margin: '1px 0 0 0', color: '#666' }}>
-                    Valid for 6 months. Post-registration validity is 2 months. T&C Apply.
+                  <p style={{ fontSize: '16px', fontWeight: 'bold', fontFamily: 'monospace', letterSpacing: '2px', margin: '4px 0' }}>
+                    {code}
                   </p>
+                  <div style={{ backgroundColor: '#f0f0f0', padding: '2px 4px', borderRadius: '2px', marginTop: 'auto' }}>
+                    <p style={{ fontSize: '6px', fontWeight: 'bold', margin: 0, textTransform: 'uppercase' }}>
+                      ⚠️ Valid ONLY after claiming online. Scan QR to register.
+                    </p>
+                    <p style={{ fontSize: '5px', margin: '1px 0 0 0', color: '#666' }}>
+                      Valid for 6 months. Post-registration validity is 2 months. T&C Apply.
+                    </p>
+                  </div>
+                </div>
+                <div className="ticket-right">
+                  <QRCode value={`${baseUrl}/claim?code=${code}`} size={90} level="M" style={{ height: "26mm", width: "26mm" }} />
                 </div>
               </div>
-              <div className="ticket-right">
-                <QRCode value={`${baseUrl}/claim?code=${code}`} size={90} level="M" style={{ height: "26mm", width: "26mm" }} />
-              </div>
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
