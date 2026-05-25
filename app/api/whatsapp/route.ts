@@ -97,13 +97,14 @@ export async function POST(req: Request) {
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${process.env.CONVO360_API_KEY}`,
+        
+        // Browser spoofing headers
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache',
-        // Domain headers for Cloudflare WAF Whitelisting
-        'Origin': 'https://www.biillojewel.co.in',
-        'Referer': 'https://www.biillojewel.co.in/'
+        
+        // ✨ THE SECRET CLOUDFLARE BYPASS HEADER
+        'x-api-bypass': 'biillo_verified_server'
       },
     };
 
