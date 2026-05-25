@@ -91,7 +91,7 @@ export async function POST(req: Request) {
 
     const url = new URL(`${API_BASE}${endpoint}`);
 
-    // ✨ THE FIX: Added Browser Spoofing Headers to bypass Cloudflare
+    // ✨ THE FIX: Added Browser Spoofing & Domain Whitelist Headers
     const fetchOptions: RequestInit = {
       method,
       headers: {
@@ -100,7 +100,10 @@ export async function POST(req: Request) {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Cache-Control': 'no-cache'
+        'Cache-Control': 'no-cache',
+        // Domain headers for Cloudflare WAF Whitelisting
+        'Origin': 'https://www.biillojewel.co.in',
+        'Referer': 'https://www.biillojewel.co.in/'
       },
     };
 
