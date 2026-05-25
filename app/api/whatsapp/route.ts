@@ -1,9 +1,29 @@
 import { NextResponse } from 'next/server';
 
-// ✨ IMPORTANT: Forces Vercel to use the standard Node.js runtime instead of Edge.
+// Forces Vercel to use the standard Node.js runtime instead of Edge.
 export const runtime = 'nodejs';
 
 const API_BASE = 'https://omnibot.convo360.ai/api';
+const BYPASS_HEADER_VALUE = 'biillo_verified_server';
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function short(value: any, maxLen = 500) {
+  try {
+    const str = typeof value === 'string' ? value : JSON.stringify(value);
+    return str.length > maxLen ? `${str.slice(0, maxLen)}... [truncated]` : str;
+  } catch {
+    return '[unserializable]';
+  }
+}
+
+function maskKey(value: string | undefined | null) {
+  if (!value) return '[missing]';
+  if (value.length <= 8) return '***';
+  return `${value.slice(0, 4)}...${value.slice(-4)}`;
+}
 
 function appendQueryParams(url: URL, payload: Record<string, any> | undefined) {
   if (!payload) return;
@@ -14,30 +34,77 @@ function appendQueryParams(url: URL, payload: Record<string, any> | undefined) {
 }
 
 async function parseUpstreamResponse(response: Response) {
+  const contentType = response.headers.get('content-type') || '';
   const rawText = await response.text();
 
+  let data: any = null;
+  let parseError: string | null = null;
+
   try {
-    return { data: JSON.parse(rawText), rawText };
-  } catch {
-    return { data: null, rawText };
+    data = JSON.parse(rawText);
+  } catch (err: any) {
+    parseError = err?.message || 'Failed to parse JSON';
   }
+
+  return {
+    data,
+    rawText,
+    contentType,
+    parseError,
+  };
 }
 
 export async function POST(req: Request) {
+  const startedAt = Date.now();
+  const requestId = crypto.randomUUID();
+
+  console.log('========================================');
+  console.log(`[${nowIso()}] [${requestId}] /api/whatsapp inbound request received`);
+
   try {
-    const body = await req.json();
+    const reqHeaders = Object.fromEntries(req.headers.entries());
+
+    console.log(`[${requestId}] Incoming request meta:`, {
+      method: req.method,
+      url: req.url,
+      contentType: req.headers.get('content-type'),
+      userAgent: req.headers.get('user-agent'),
+      referer: req.headers.get('referer'),
+      host: req.headers.get('host'),
+      xForwardedFor: req.headers.get('x-forwarded-for'),
+      xRealIp: req.headers.get('x-real-ip'),
+      headerCount: Object.keys(reqHeaders).length,
+    });
+
+    const body = await req.json().catch((err) => {
+      console.error(`[${requestId}] Failed to parse incoming JSON body:`, err);
+      return null;
+    });
+
+    console.log(`[${requestId}] Incoming body:`, short(body, 2000));
+
     const { action, payload } = body ?? {};
 
     if (!action) {
+      console.error(`[${requestId}] Missing action in request body`);
       return NextResponse.json(
-        { message: 'Missing action' },
+        { message: 'Missing action', requestId },
         { status: 400 }
       );
     }
 
-    if (!process.env.CONVO360_API_KEY) {
+    const apiKey = process.env.CONVO360_API_KEY;
+
+    console.log(`[${requestId}] Env check:`, {
+      CONVO360_API_KEY: maskKey(apiKey),
+      apiBase: API_BASE,
+      bypassHeaderExpected: BYPASS_HEADER_VALUE,
+    });
+
+    if (!apiKey) {
+      console.error(`[${requestId}] Missing CONVO360_API_KEY env variable`);
       return NextResponse.json(
-        { message: 'Missing CONVO360_API_KEY env variable' },
+        { message: 'Missing CONVO360_API_KEY env variable', requestId },
         { status: 500 }
       );
     }
@@ -83,58 +150,116 @@ export async function POST(req: Request) {
         break;
 
       default:
+        console.error(`[${requestId}] Invalid action routing query:`, action);
         return NextResponse.json(
-          { message: 'Invalid action routing query' },
+          { message: 'Invalid action routing query', requestId },
           { status: 400 }
         );
     }
 
     const url = new URL(`${API_BASE}${endpoint}`);
 
-    // ✨ THE FIX: Added Browser Spoofing & Domain Whitelist Headers
+    console.log(`[${requestId}] Routing decision:`, {
+      action,
+      endpoint,
+      method,
+      finalUrlBeforeQuery: url.toString(),
+    });
+
     const fetchOptions: RequestInit = {
       method,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.CONVO360_API_KEY}`,
-        
-        // Browser spoofing headers
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*',
+        Authorization: `Bearer ${apiKey}`,
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
-        
-        // ✨ THE SECRET CLOUDFLARE BYPASS HEADER
-        'x-api-bypass': 'biillo_verified_server'
+        'x-api-bypass': BYPASS_HEADER_VALUE,
       },
     };
 
+    console.log(`[${requestId}] Outgoing headers:`, {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${maskKey(apiKey)}`,
+      'x-api-bypass': BYPASS_HEADER_VALUE,
+      Accept: 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...',
+    });
+
     if (method === 'GET') {
       appendQueryParams(url, payload);
+      console.log(`[${requestId}] GET query params appended:`, url.searchParams.toString());
     } else {
       fetchOptions.body = JSON.stringify(payload ?? {});
+      console.log(`[${requestId}] Outgoing body:`, short(payload ?? {}, 2000));
 
-      // Keep the original behavior for template.list in case the provider expects query params.
       if (action === 'template.list' && payload && typeof payload === 'object') {
         appendQueryParams(url, payload);
+        console.log(
+          `[${requestId}] template.list query params appended:`,
+          url.searchParams.toString()
+        );
       }
     }
 
-    console.log('Convo360 request:', {
-      action,
-      method,
+    console.log(`[${requestId}] Final upstream request:`, {
       url: url.toString(),
-      payload,
+      method,
+      hasBody: Boolean(fetchOptions.body),
     });
 
-    const response = await fetch(url.toString(), fetchOptions);
-    const { data, rawText } = await parseUpstreamResponse(response);
+    const fetchStartedAt = Date.now();
+
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), fetchOptions);
+    } catch (fetchErr: any) {
+      console.error(`[${requestId}] Fetch threw before response:`, fetchErr);
+      return NextResponse.json(
+        {
+          message: 'Fetch failed before upstream response',
+          requestId,
+          error: fetchErr?.message || String(fetchErr),
+        },
+        { status: 502 }
+      );
+    }
+
+    const fetchDurationMs = Date.now() - fetchStartedAt;
+
+    const {
+      data,
+      rawText,
+      contentType,
+      parseError,
+    } = await parseUpstreamResponse(response);
+
+    console.log(`[${requestId}] Upstream response meta:`, {
+      status: response.status,
+      statusText: response.statusText,
+      ok: response.ok,
+      contentType,
+      fetchDurationMs,
+      responseUrl: response.url,
+      parseError,
+      rawLength: rawText?.length ?? 0,
+    });
+
+    console.log(
+      `[${requestId}] Upstream raw preview:`,
+      short(rawText, 2000)
+    );
 
     if (!response.ok) {
-      console.error('Convo360 API Error:', {
+      console.error(`[${requestId}] Convo360 API Error:`, {
+        action,
+        endpoint,
         status: response.status,
         statusText: response.statusText,
-        data,
-        rawText: rawText.slice(0, 1000),
+        parsedData: data,
+        rawPreview: short(rawText, 2000),
       });
 
       return NextResponse.json(
@@ -143,28 +268,46 @@ export async function POST(req: Request) {
             data?.message ||
             data?.error ||
             'Upstream provider error',
-          details: data ?? rawText.slice(0, 1000),
+          details: data ?? rawText.slice(0, 2000),
+          requestId,
+          upstreamStatus: response.status,
         },
         { status: response.status }
       );
     }
 
     if (data !== null) {
+      console.log(`[${requestId}] Success response parsed as JSON`);
+      console.log(`[${requestId}] Total duration: ${Date.now() - startedAt}ms`);
       return NextResponse.json(data);
     }
+
+    console.warn(`[${requestId}] Upstream returned non-JSON success response`);
+    console.log(`[${requestId}] Total duration: ${Date.now() - startedAt}ms`);
 
     return NextResponse.json(
       {
         message: 'Provider returned non-JSON response',
-        raw: rawText.slice(0, 1000),
+        raw: rawText.slice(0, 2000),
+        requestId,
+        upstreamStatus: response.status,
+        contentType,
       },
       { status: 502 }
     );
   } catch (error: any) {
-    console.error('WhatsApp Route Error:', error);
+    console.error(`[${requestId}] WhatsApp Route Error:`, error);
+    console.log(`[${requestId}] Total duration before crash: ${Date.now() - startedAt}ms`);
+
     return NextResponse.json(
-      { message: error.message || 'Internal Routing Failure' },
+      {
+        message: error.message || 'Internal Routing Failure',
+        requestId,
+      },
       { status: 500 }
     );
+  } finally {
+    console.log(`[${requestId}] /api/whatsapp request finished`);
+    console.log('========================================');
   }
 }
