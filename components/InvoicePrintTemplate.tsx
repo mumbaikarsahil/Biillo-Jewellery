@@ -599,7 +599,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
             {!isEstimate && (
               <div className="w-full h-[140px] rounded-xl overflow-hidden border border-slate-200 relative">
                 <img 
-                  src={data.bannerUrl || "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/brand-assets/invoice-banner.jpg"} 
+                  src={data.bannerUrl || "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/brand-assets/invoice-banner1.jpg"} 
                   alt="Pavitram Promotional Banner" 
                   className="w-full h-full object-cover object-center"
                   crossOrigin="anonymous" 

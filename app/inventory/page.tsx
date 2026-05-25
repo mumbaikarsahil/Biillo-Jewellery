@@ -9,11 +9,12 @@ import html2canvas from "html2canvas"
 import QRCode from "react-qr-code"
 import { Badge } from "@/components/ui/badge"
 
+// ✨ ADDED ZoomIn for the full screen view
 import { 
   Search, Printer, Edit2, Check, X, Store, Truck, 
   RefreshCw, Database, Package, Calculator, Gem, Hammer, 
   Upload, Eye, Image as ImageIcon, CheckCircle2, Box, Layers, Wrench, Clock, CalendarDays,
-  Loader2, Filter, IndianRupee, UserCircle, CheckSquare, Sparkles, Mic, ChevronDown, Download, FileText, History, ArrowRightLeft, ChevronLeft, ChevronRight
+  Loader2, Filter, IndianRupee, UserCircle, CheckSquare, Sparkles, Mic, ChevronDown, Download, FileText, History, ArrowRightLeft, ChevronLeft, ChevronRight, ZoomIn
 } from "lucide-react"
 
 import { useAuth } from "@/hooks/useAuth"
@@ -41,10 +42,13 @@ import {
 import { cn } from "@/lib/utils"
 import { ItemTagPreview } from "@/components/ItemTagPreview"
 
+// ✨ NEW: Import the compression library
+import imageCompression from 'browser-image-compression'
+
 const PAGE_SIZE = 50;
 
 // ===========================================================================
-// ✨ GLOBAL HELPER: SMART STONE FALLBACK
+// GLOBAL HELPER: SMART STONE FALLBACK
 // ===========================================================================
 const getStoneTotals = (item: any) => {
   if (!item) return { solWt: 0, solPcs: 0, meleeWt: 0, meleePcs: 0, aggWt: 0, aggPcs: 0, stnWt: 0, stnPcs: 0 };
@@ -166,7 +170,7 @@ export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([])
   const [itemCache, setItemCache] = useState<Record<string, InventoryItem>>({})
 
-  // ✨ STRICT PAGINATION STATE
+  // PAGINATION STATE
   const [loading, setLoading] = useState(true)
   const [isFetchingMore, setIsFetchingMore] = useState(false)
   const [page, setPage] = useState(0)
@@ -183,13 +187,16 @@ export default function InventoryPage() {
   const [editingMrpId, setEditingId] = useState<string | null>(null)
   const [editingMrpVal, setEditingMrpVal] = useState<string>('')
   
-  // ✨ COMPREHENSIVE EDIT STATE
+  // COMPREHENSIVE EDIT STATE
   const [fullEditItem, setFullEditItem] = useState<InventoryItem | null>(null)
   const [fullEditForm, setFullEditForm] = useState<any>({})
   const [isSavingFullEdit, setIsSavingFullEdit] = useState(false)
 
   const [tagItem, setTagItem] = useState<InventoryItem | null>(null)
   const [viewItem, setViewItem] = useState<InventoryItem | null>(null)
+  
+  // ✨ NEW: Full Screen Image State
+  const [fullScreenImage, setFullScreenImage] = useState<string | null>(null)
 
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('') 
@@ -210,7 +217,6 @@ export default function InventoryPage() {
 
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
 
-  // ✨ NEW: Dedicated Count Map for all 5 Tabs
   const [counts, setCounts] = useState({ active: 0, exchange: 0, buyback: 0, repair: 0, sold: 0 })
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false)
 
@@ -414,7 +420,6 @@ export default function InventoryPage() {
           if (companyData.current_rate_diamond) setCalcParams(prev => ({ ...prev, diamondRatePerCt: companyData.current_rate_diamond }))
         }
         
-        // Fetch globally unique categories/purities once for the dropdowns
         const { data: uniqueData } = await supabase.from('inventory_items').select('item_category, purity_karat, diamond_clarity').eq('company_id', appUser.company_id)
         if (uniqueData) {
           setUniqueCategories(Array.from(new Set(uniqueData.map(d => d.item_category))).filter(Boolean).sort());
@@ -427,7 +432,6 @@ export default function InventoryPage() {
     fetchInitialData()
   }, [appUser, isHQ])
 
-  // ✨ NEW: Multi-Tab Server Query Builder
   const buildServerQuery = (queryObj: any, tab: string) => {
     let q = queryObj.eq('company_id', appUser?.company_id);
     
@@ -437,7 +441,6 @@ export default function InventoryPage() {
     if (filterPurity.length > 0) q = q.in('purity_karat', filterPurity);
     if (filterClarity.length > 0) q = q.in('diamond_clarity', filterClarity);
 
-    // Apply the specific Tab rules!
     if (tab === 'sold') {
       q = q.in('status', ['sold']);
     } else {
@@ -470,7 +473,6 @@ export default function InventoryPage() {
     return q;
   };
 
-  // ✨ NEW: Concurrent Tab Counting
   useEffect(() => {
     if (!appUser) return;
     const fetchCounts = async () => {
@@ -500,8 +502,6 @@ export default function InventoryPage() {
     fetchCounts()
   }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, debouncedPriceRange, maxCatalogPrice, isPriceFilterActive, filterSolitaire, filterDiaWt])
 
-
-  // ✨ TRADITIONAL PAGINATION FETCH ✨
   const fetchPage = async (pageToLoad: number) => {
     if (!appUser || !selectedLocation) return;
     setLoading(true);
@@ -529,10 +529,7 @@ export default function InventoryPage() {
             is_exchanged: false, is_custom_order: false, is_repair_ticket: true, custom_order_id: null, origin_name: rep.origin?.name || 'Unknown Branch', 
             karigars: null, created_from_job_bag: null, huid_code: null, hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: rep.stone_shape || null, diamond_color: null,
             diamond_clarity: null, cost_metal: 0, cost_stone: 0, cost_making: rep.labor_charges || 0, cost_total: rep.actual_cost || 0, wastage_weight_g: 0,
-            // ✨ FIX: Added the 3 missing schema fields for TypeScript
-            cost_price: null,
-            label_1: null,
-            label_2: null,
+            cost_price: null, label_1: null, label_2: null,
             created_at: rep.created_at, updated_at: rep.updated_at, expected_delivery_date: rep.expected_delivery_date, last_status_change_at: rep.updated_at,
             audit_history: null 
           }));
@@ -569,13 +566,11 @@ export default function InventoryPage() {
     }
   }
 
-  // Trigger page reset when filters OR TAB changes
   useEffect(() => {
     setPage(0);
     fetchPage(0);
   }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, filterSolitaire, filterDiaWt, debouncedPriceRange, isPriceFilterActive, activeTab, pageSize])
 
-  // ✨ FIX: Multi-tab select all global logic
   const handleSelectAllGlobal = async () => {
     if (!appUser) return;
     setIsFetchingGlobal(true)
@@ -601,10 +596,7 @@ export default function InventoryPage() {
               is_exchanged: false, is_custom_order: false, is_repair_ticket: true, custom_order_id: null, origin_name: '', 
               karigars: null, created_from_job_bag: null, huid_code: null, hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: rep.stone_shape || null, diamond_color: null,
               diamond_clarity: null, cost_metal: 0, cost_stone: 0, cost_making: rep.labor_charges || 0, cost_total: rep.actual_cost || 0, wastage_weight_g: 0,
-              // ✨ FIX: Added the 3 missing schema fields for TypeScript
-              cost_price: null,
-              label_1: null,
-              label_2: null,
+              cost_price: null, label_1: null, label_2: null,
               created_at: rep.created_at, updated_at: rep.updated_at, expected_delivery_date: rep.expected_delivery_date, last_status_change_at: rep.updated_at,
               audit_history: null 
             }));
@@ -632,7 +624,6 @@ export default function InventoryPage() {
         return nextCache;
       });
       
-      // ✨ FIX: This safely ADDS to the current selection, keeping cross-tab selection intact!
       setSelectedIds(prev => Array.from(new Set([...prev, ...allFetchedData.map(item => item.id)])));
       toast.success(`Selected ${allFetchedData.length} valid items in this tab.`)
     } catch (error) {
@@ -873,6 +864,7 @@ export default function InventoryPage() {
     }
   }
 
+  // ✨ UPDATED: Image Compression integrated
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, itemId: string, itemType: string) => {
     if (!canEdit) return toast.error("Unauthorized to update images");
     const file = e.target.files?.[0]
@@ -880,11 +872,22 @@ export default function InventoryPage() {
 
     setIsUploadingImage(true)
     try {
-      const fileExt = file.name.split('.').pop()
+      // Image Compression Options
+      const compressionOptions = {
+        maxSizeMB: 0.5,           // Maximum file size in MB (500KB)
+        maxWidthOrHeight: 1024,   // Max width or height, scales down proportionally
+        useWebWorker: true,       // Uses multi-threading for faster compression
+      }
+
+      // Compress the file before uploading
+      const compressedFile = await imageCompression(file, compressionOptions)
+
+      // Use the compressed file for the upload process
+      const fileExt = compressedFile.name.split('.').pop()
       const fileName = `${itemId}-${Date.now()}.${fileExt}`
       const filePath = `${appUser.company_id}/${fileName}`
 
-      const { error: uploadError } = await supabase.storage.from('inventory-images').upload(filePath, file)
+      const { error: uploadError } = await supabase.storage.from('inventory-images').upload(filePath, compressedFile)
       if (uploadError) throw uploadError
 
       const { data: { publicUrl } } = supabase.storage.from('inventory-images').getPublicUrl(filePath)
@@ -901,7 +904,7 @@ export default function InventoryPage() {
       setItems(prev => prev.map(i => i.id === itemId ? { ...i, image_url: publicUrl } : i))
       if (viewItem && viewItem.id === itemId) setViewItem({ ...viewItem, image_url: publicUrl })
       
-      toast.success("Image updated successfully!")
+      toast.success("Image compressed and updated successfully!")
     } catch (error: any) {
       toast.error(error.message || "Failed to upload image")
     } finally {
@@ -1271,7 +1274,6 @@ export default function InventoryPage() {
 
         </div>
 
-        {/* ✨ FIX: NEW COMPREHENSIVE TABS DESIGN ✨ */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4 w-full">
           <div className="w-full overflow-x-auto no-scrollbar pb-2">
             <TabsList className="bg-transparent border-b border-slate-200 rounded-none h-11 w-max justify-start p-0 gap-6 mb-2">
@@ -1319,7 +1321,6 @@ export default function InventoryPage() {
           ))}
         </Tabs>
 
-        {/* FLOATING BULK BAR */}
         {selectedIds.length > 0 && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white p-1.5 rounded-[1.25rem] shadow-2xl flex items-center gap-2 border border-slate-700/50 animate-in slide-in-from-bottom-8">
             <div className="flex items-center gap-2 pl-3 pr-4 border-r border-slate-700">
@@ -1364,7 +1365,6 @@ export default function InventoryPage() {
         )}
       </main>
 
-      {/* ✨ FIX: HIDDEN BULK PRINT CONTAINER WITH PAGE-BREAKS ✨ */}
       <div style={{ position: 'absolute', top: '-9999px', left: '-9999px', zIndex: -50 }}>
         <div ref={printRef} className="print:p-0 flex flex-col gap-4">
           <style dangerouslySetInnerHTML={{__html: `
@@ -1387,7 +1387,7 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* ✨ COMPREHENSIVE EDIT MODAL ✨ */}
+      {/* COMPREHENSIVE EDIT MODAL */}
       <Dialog open={!!fullEditItem} onOpenChange={(val) => !val && setFullEditItem(null)}>
       <DialogContent className="sm:max-w-[600px] w-[95vw] max-h-[85vh] flex flex-col p-0 overflow-hidden bg-white/85 backdrop-blur-2xl border border-slate-200/50 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] rounded-2xl ring-1 ring-black/5 z-50">
           <DialogHeader className="bg-slate-50 border-b border-slate-100 p-5 shrink-0">
@@ -1771,7 +1771,7 @@ export default function InventoryPage() {
 
                 <div className="flex flex-col md:flex-row gap-6">
                   
-                  {/* INTERACTIVE IMAGE UPLOAD OVERLAY */}
+                  {/* ✨ UPDATED: INTERACTIVE IMAGE UPLOAD OVERLAY ✨ */}
                   <div className="relative w-full md:w-48 h-48 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-center shrink-0 overflow-hidden shadow-sm group">
                     {isUploadingImage ? (
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/80 z-10">
@@ -1786,16 +1786,27 @@ export default function InventoryPage() {
                         <span className="text-[10px] font-bold uppercase tracking-widest">No Image</span>
                       </div>
                     )}
-                    
-                    {/* EDIT IMAGE BUTTON */}
-                    {canEdit && (
-                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                        <label className="cursor-pointer bg-white text-slate-900 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-widest shadow-lg hover:bg-slate-100">
-                          Upload Photo
+
+                    {/* ✨ NEW: HOVER ACTIONS FOR FULL SCREEN AND UPLOAD ✨ */}
+                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-2 transition-opacity z-20">
+                      {viewItem.image_url && (
+                        <Button 
+                          size="sm" 
+                          variant="secondary" 
+                          className="h-8 text-xs font-bold w-32 shadow-lg" 
+                          onClick={() => setFullScreenImage(viewItem.image_url!)}
+                        >
+                          <ZoomIn className="w-3.5 h-3.5 mr-1.5" /> View Full
+                        </Button>
+                      )}
+                      
+                      {canEdit && (
+                        <label className="cursor-pointer bg-white text-slate-900 h-8 flex items-center justify-center rounded-md text-xs font-bold shadow-lg hover:bg-slate-100 w-32">
+                          <Upload className="w-3.5 h-3.5 mr-1.5" /> {viewItem.image_url ? 'Change Photo' : 'Upload Photo'}
                           <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, viewItem.id, viewItem._type)} />
                         </label>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
 
                   <div className="flex-1 grid grid-cols-2 gap-4">
@@ -1951,6 +1962,27 @@ export default function InventoryPage() {
 
               </div>
             </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ✨ NEW: FULL SCREEN IMAGE MODAL ✨ */}
+      <Dialog open={!!fullScreenImage} onOpenChange={(val) => !val && setFullScreenImage(null)}>
+        <DialogContent className="sm:max-w-[800px] w-[95vw] h-[85vh] p-0 overflow-hidden bg-black/95 backdrop-blur-2xl border border-white/10 flex items-center justify-center shadow-2xl z-[60] group">
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            className="absolute top-4 right-4 z-50 bg-black/50 hover:bg-white text-white hover:text-black rounded-full transition-colors" 
+            onClick={() => setFullScreenImage(null)}
+          >
+            <X className="w-5 h-5" />
+          </Button>
+          {fullScreenImage && (
+            <img 
+              src={fullScreenImage} 
+              alt="Full Size" 
+              className="w-full h-full object-contain pointer-events-none select-none transition-transform duration-500 hover:scale-105" 
+            />
           )}
         </DialogContent>
       </Dialog>
@@ -2250,7 +2282,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
             </div>
            )
         })}
-        {/* ✨ OBSERVER TARGET FOR INFINITE SCROLL (MOBILE) ✨ */}
+        {/* OBSERVER TARGET FOR INFINITE SCROLL (MOBILE) */}
         <div ref={observerRef} className="h-12 w-full flex items-center justify-center mt-2"></div>
       </div>
     </div>
