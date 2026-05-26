@@ -118,14 +118,15 @@ export function WhatsAppSenderModal({
     );
   }, [recipients, resolvedRecipients, searchQuery, step]);
 
+  // Only count missing IDs among currently SELECTED recipients
   const missingCount = useMemo(
-    () => recipients.filter(r => !r.user_id).length,
-    [recipients]
+    () => recipients.filter(r => selectedPhones.has(r.phone) && !r.user_id).length,
+    [recipients, selectedPhones]
   );
 
   const resolvedMissingCount = useMemo(
-    () => resolvedRecipients.filter(r => !r.user_id).length,
-    [resolvedRecipients]
+    () => resolvedRecipients.filter(r => selectedPhones.has(r.phone) && !r.user_id).length,
+    [resolvedRecipients, selectedPhones]
   );
 
   const resolveVariables = (recipient: Recipient) => {
@@ -365,12 +366,12 @@ export function WhatsAppSenderModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !isBusy && !open && onClose()}>
-      <DialogContent className="sm:max-w-5xl h-[85vh] md:h-[700px] flex flex-col p-0 overflow-hidden bg-slate-50 border-slate-200 shadow-2xl rounded-2xl">
+      <DialogContent className="sm:max-w-5xl h-[80vh] max-h-[680px] mt-10 flex flex-col p-0 overflow-hidden bg-slate-50 border-slate-200 shadow-2xl rounded-2xl">
 
         {/* HEADER */}
         <DialogHeader className="bg-white border-b border-slate-200 px-6 py-4 shrink-0 flex flex-row items-center justify-between">
           <div>
-            <DialogTitle className="text-lg font-black text-slate-900 flex items-center gap-2">
+            <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <MessageCircle className="w-5 h-5 text-[#25D366]" />
               WhatsApp Broadcast Studio
             </DialogTitle>
@@ -378,9 +379,7 @@ export function WhatsAppSenderModal({
               Select a template, resolve subscriber IDs, then broadcast.
             </DialogDescription>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} disabled={isBusy} className="text-slate-400 hover:text-slate-700">
-            <X className="w-5 h-5" />
-          </Button>
+      
         </DialogHeader>
 
         {/* RESOLVE PROGRESS OVERLAY */}
@@ -388,7 +387,7 @@ export function WhatsAppSenderModal({
           <div className="absolute inset-0 z-50 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center gap-6 rounded-2xl">
             <div className="flex flex-col items-center gap-3 text-center px-8">
               <UserPlus className="w-10 h-10 text-indigo-500 animate-pulse" />
-              <p className="text-base font-black text-slate-900">Creating Convo360 Subscribers</p>
+              <p className="text-base font-bold text-slate-900">Creating Convo360 Subscribers</p>
               <p className="text-xs text-slate-500 font-medium max-w-xs">
                 Registering {resolveProgress.total} new contacts and saving their IDs to your database. Do not close this window.
               </p>
@@ -413,8 +412,8 @@ export function WhatsAppSenderModal({
           <div className="bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-start gap-2 shrink-0">
             <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
             <p className="text-xs font-semibold text-amber-700">
-              <span className="font-black">{missingCount} recipient{missingCount !== 1 ? "s" : ""}</span> have no Convo360 ID yet.
-              Click <span className="font-black">Resolve & Continue</span> below — they'll be auto-created and saved to your database before sending.
+              <span className="font-black">{missingCount} of your {selectedPhones.size} selected recipient{missingCount !== 1 ? "s" : ""}</span> have no Convo360 ID yet.
+              Click <span className="font-black">Resolve & Continue</span> — they'll be auto-created and saved to your database before sending.
             </p>
           </div>
         )}
@@ -599,7 +598,7 @@ export function WhatsAppSenderModal({
                 className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-10 px-6 rounded-xl shadow-md text-xs uppercase tracking-widest"
               >
                 <UserPlus className="w-4 h-4 mr-2" />
-                Resolve & Continue ({missingCount} pending)
+                Resolve & Continue ({missingCount} of {selectedPhones.size} pending)
               </Button>
             )}
 
