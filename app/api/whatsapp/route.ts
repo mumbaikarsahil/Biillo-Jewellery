@@ -54,6 +54,72 @@ async function parseUpstreamResponse(response: Response) {
   };
 }
 
+/**
+ * Converts a flat parameters array to the BODY_{{n}} object format
+ * that Convo360 requires, e.g. ["Alice", "2025-12-31"] →
+ * { "BODY_{{1}}": "Alice", "BODY_{{2}}": "2025-12-31" }
+ */
+function buildParamsObject(parameters: string[]): Record<string, string> {
+  const paramsObj: Record<string, string> = {};
+  parameters.forEach((val, idx) => {
+    paramsObj[`BODY_{{${idx + 1}}}`] = val;
+  });
+  return paramsObj;
+}
+
+/**
+ * Transforms the incoming flat payload into the nested structure
+ * Convo360 strictly requires before forwarding to their API.
+ */
+function buildFinalPayload(action: string, payload: Record<string, any>): Record<string, any> {
+  if (action === 'message.sendDirect') {
+    const { user_id, template_name, lang, namespace, parameters = [] } = payload;
+
+    return {
+      user_id,
+      content: {
+        name: template_name,
+        lang: lang || 'en',
+        namespace: namespace || '',
+        params: buildParamsObject(parameters),
+      },
+    };
+  }
+
+  if (action === 'broadcast.bulk') {
+    const { user_id_list, template_name, lang, namespace, parameters = [] } = payload;
+
+    return {
+      user_id_list,
+      wa_template: {
+        name: template_name,
+        lang: lang || 'en',
+        namespace: namespace || '',
+        params: buildParamsObject(parameters),
+        use_default_values: 'yes',
+      },
+    };
+  }
+
+  if (action === 'subscriber.createByPhone') {
+    // Convo360 requires top-level `phone` (not `user_id`) on creation.
+    // The `user_id` is returned in their response after the subscriber is created.
+    const { phone, name } = payload;
+    const nameParts = (name || '').trim().split(' ');
+    return {
+      phone,
+      contact: {
+        user_name: name || phone,
+        first_name: nameParts[0] || '',
+        last_name: nameParts.slice(1).join(' ') || '',
+      },
+    };
+  }
+
+  // All other actions pass through as-is (template CRUD, subscriber ops, etc.)
+  return payload ?? {};
+}
+
 export async function POST(req: Request) {
   const startedAt = Date.now();
   const requestId = crypto.randomUUID();
@@ -134,6 +200,12 @@ export async function POST(req: Request) {
         endpoint = '/subscriber/create';
         method = 'POST';
         break;
+      case 'subscriber.createByPhone':
+        // Creates a new Convo360 subscriber from a phone number + name.
+        // Returns { user_id } which must be saved back to your DB.
+        endpoint = '/subscriber/create';
+        method = 'POST';
+        break;
       case 'subscriber.info':
         endpoint = '/subscriber/get-info-by-user-id';
         method = 'GET';
@@ -165,6 +237,11 @@ export async function POST(req: Request) {
       method,
       finalUrlBeforeQuery: url.toString(),
     });
+
+    // ✨ Build the correctly-nested payload Convo360 requires
+    const finalPayload = buildFinalPayload(action, payload);
+
+    console.log(`[${requestId}] Transformed payload for Convo360:`, short(finalPayload, 2000));
 
     const fetchOptions: RequestInit = {
       method,
@@ -200,8 +277,8 @@ export async function POST(req: Request) {
       appendQueryParams(url, payload);
       console.log(`[${requestId}] GET query params appended:`, url.searchParams.toString());
     } else {
-      fetchOptions.body = JSON.stringify(payload ?? {});
-      console.log(`[${requestId}] Outgoing body:`, short(payload ?? {}, 2000));
+      fetchOptions.body = JSON.stringify(finalPayload);
+      console.log(`[${requestId}] Outgoing body:`, short(finalPayload, 2000));
 
       if (action === 'template.list' && payload && typeof payload === 'object') {
         appendQueryParams(url, payload);

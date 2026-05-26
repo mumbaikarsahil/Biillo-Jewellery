@@ -35,7 +35,8 @@ import {
   Sparkles,
   Mic,
   X,
-  BellRing
+  BellRing,
+  Megaphone // ✨ Added Megaphone for the Broadcast button
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -75,7 +76,6 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
-// ✨ NEW: Import the WhatsApp Sender Modal
 import { WhatsAppSenderModal } from "@/components/WhatsAppSenderModal";
 
 interface TrackedVoucher {
@@ -99,6 +99,7 @@ interface TrackedVoucher {
     id: string;
     full_name: string;
     phone: string;
+    convo360_user_id?: string | null;
   } | null;
 
   voucher_batches: {
@@ -158,6 +159,8 @@ export default function TrackVoucherPage() {
   const [isSenderModalOpen, setIsSenderModalOpen] = useState(false);
   const [messageRecipients, setMessageRecipients] = useState<any[]>([]);
   const [isQueryingExpiry, setIsQueryingExpiry] = useState(false);
+  const [isQueryingRegistered, setIsQueryingRegistered] = useState(false); // ✨ NEW
+  const [activeTemplateContext, setActiveTemplateContext] = useState<"reminder" | "welcome">("reminder"); // ✨ NEW
 
   useEffect(() => {
     const fetchFiltersData = async () => {
@@ -170,11 +173,10 @@ export default function TrackVoucherPage() {
     fetchFiltersData();
   }, []);
 
-  // Server-side debounced fetching triggered by filter/search/page changes
   useEffect(() => {
     const timer = setTimeout(() => {
       fetchVoucherList(activeFilter, currentPage, localSearch);
-    }, 400); // 400ms debounce
+    }, 400); 
     return () => clearTimeout(timer);
   }, [activeFilter, selectedFilterDistributor, selectedFilterBatch, currentPage, localSearch]);
 
@@ -189,7 +191,7 @@ export default function TrackVoucherPage() {
           voucher_batches (batch_no),
           voucher_distributors (distributor_name, distributor_type, phone),
           voucher_distributions (payment_status, delivery_agent),
-          customers (id, full_name, phone),
+          customers (id, full_name, phone, convo360_user_id),
           last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name)
         `, { count: 'exact' })
         .order('code', { ascending: true }) 
@@ -221,7 +223,7 @@ export default function TrackVoucherPage() {
     }
   };
 
-  // ✨ FIX: Safely typed handleRemindExpiring to prevent TS "any[]" errors
+  // ✨ UPDATED: Added proper parameter mapping for the Template variables
   const handleRemindExpiring = async () => {
     setIsQueryingExpiry(true);
     try {
@@ -251,24 +253,30 @@ export default function TrackVoucherPage() {
 
       const recipientsMap = new Map();
       
-      // FIX: Cast `v` to `any` to prevent TS from inferring arrays, and dynamically unwrap arrays if Supabase returns them
       data.forEach((v: any) => {
         const dist = Array.isArray(v.voucher_distributors) ? v.voucher_distributors[0] : v.voucher_distributors;
         const cust = Array.isArray(v.customers) ? v.customers[0] : v.customers;
 
-        const rawPhone = dist?.phone || cust?.phone;
-        const name = dist?.distributor_name || cust?.full_name || 'Valued Partner';
+        const rawPhone = cust?.phone || dist?.phone;
+        const name = cust?.full_name || dist?.distributor_name || 'Valued Customer';
         
         if (rawPhone) {
           let cleanPhone = String(rawPhone).replace(/\D/g, '');
           if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
           
+          const formattedExpiry = v.expiry_date ? format(new Date(v.expiry_date), 'dd MMM yyyy') : 'soon';
+
           if (!recipientsMap.has(cleanPhone)) {
             recipientsMap.set(cleanPhone, {
               phone: cleanPhone,
               name: name,
+              // ✨ Pass the Convo360 user_id if we already have it stored
+              user_id: cust?.convo360_user_id || undefined,
+              // ✨ Pass the Supabase customers.id so WhatsAppSenderModal can write the user_id back
+              customer_db_id: cust?.id || undefined,
               voucher_code: v.code,
-              expiry_date: v.expiry_date ? format(new Date(v.expiry_date), 'dd MMM yyyy') : ''
+              expiry_date: formattedExpiry,
+              templateParams: [name, formattedExpiry],
             });
           }
         }
@@ -279,18 +287,91 @@ export default function TrackVoucherPage() {
       if (recipients.length === 0) {
         return toast({ 
           title: "Missing Contact Data", 
-          description: "Found expiring vouchers, but none of the assigned distributors/customers have a valid phone number.",
+          description: "Found expiring vouchers, but none have a valid phone number.",
           variant: "destructive"
         });
       }
 
       setMessageRecipients(recipients);
+      setActiveTemplateContext("reminder");
       setIsSenderModalOpen(true);
 
     } catch (err: any) {
       toast({ title: "Query Failed", description: err.message, variant: "destructive" });
     } finally {
       setIsQueryingExpiry(false);
+    }
+  };
+
+  // ✨ NEW: Broadcast specific to "Registered" status customers
+  const handleBroadcastRegistered = async () => {
+    setIsQueryingRegistered(true);
+    try {
+      const { data, error } = await supabase
+        .from("vouchers")
+        .select(`
+          code, 
+          expiry_date, 
+          customers (*)
+        `)
+        .eq("status", "registered");
+
+      if (error) throw error;
+      
+      if (!data || data.length === 0) {
+        return toast({ 
+          title: "No Registered Vouchers", 
+          description: "There are no vouchers currently in the registered state."
+        });
+      }
+
+      const recipientsMap = new Map();
+      
+      data.forEach((v: any) => {
+        const cust = Array.isArray(v.customers) ? v.customers[0] : v.customers;
+        const rawPhone = cust?.phone;
+        const name = cust?.full_name || 'Valued Customer';
+        
+        if (rawPhone) {
+          let cleanPhone = String(rawPhone).replace(/\D/g, '');
+          if (cleanPhone.length === 10) cleanPhone = '91' + cleanPhone;
+          
+          const formattedExpiry = v.expiry_date ? format(new Date(v.expiry_date), 'dd MMM yyyy') : 'soon';
+
+          if (!recipientsMap.has(cleanPhone)) {
+            recipientsMap.set(cleanPhone, {
+              phone: cleanPhone,
+              name: name,
+              // ✨ Pass the Convo360 user_id if already stored
+              user_id: cust?.convo360_user_id || undefined,
+              // ✨ Pass Supabase customers.id for writing the resolved user_id back
+              customer_db_id: cust?.id || undefined,
+              voucher_code: v.code,
+              expiry_date: formattedExpiry,
+              templateParams: [name, formattedExpiry],
+            });
+          }
+        }
+      });
+
+      const recipients = Array.from(recipientsMap.values());
+      
+      if (recipients.length === 0) {
+        return toast({ 
+          title: "Missing Contact Data", 
+          description: "Found registered vouchers, but none have a valid phone number.",
+          variant: "destructive"
+        });
+      }
+
+      setMessageRecipients(recipients);
+      setActiveTemplateContext("welcome");
+      setIsSenderModalOpen(true);
+
+    } catch (err: any) {
+      toast({ title: "Query Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsQueryingRegistered(false);
     }
   };
 
@@ -744,13 +825,14 @@ export default function TrackVoucherPage() {
 
         {/* --- 2. MASTER FILTERABLE LIST SECTION --- */}
         <section className="space-y-4 animate-in fade-in duration-300">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div className="flex flex-col gap-1">
               <h2 className="text-lg font-bold text-slate-900 tracking-tight">Voucher Master Ledger</h2>
               <p className="text-[13px] font-medium text-slate-500">View, filter, and track campaign engagement metrics across all distributions.</p>
             </div>
             
-            <div className="flex items-center gap-2">
+            {/* ✨ UPDATED ACTION BUTTONS ✨ */}
+            <div className="flex flex-wrap items-center gap-2">
               <Button 
                 onClick={handleRemindExpiring} 
                 disabled={isQueryingExpiry}
@@ -758,6 +840,15 @@ export default function TrackVoucherPage() {
               >
                 {isQueryingExpiry ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <BellRing className="w-4 h-4 mr-2" />}
                 Remind Expiring (7 Days)
+              </Button>
+
+              <Button 
+                onClick={handleBroadcastRegistered} 
+                disabled={isQueryingRegistered}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm font-bold text-xs h-9"
+              >
+                {isQueryingRegistered ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Megaphone className="w-4 h-4 mr-2" />}
+                Broadcast to Registered
               </Button>
 
               <Button 
@@ -775,8 +866,8 @@ export default function TrackVoucherPage() {
           <Card className="shadow-sm border-slate-200 overflow-hidden bg-white rounded-xl">
             
             {/* --- ADVANCED UNIFIED FILTER BAR --- */}
-            <div className="bg-slate-50 border-b border-slate-200 p-4 flex flex-col md:flex-row items-center gap-4">
-              <div className="flex items-center gap-2 text-slate-500 w-full md:w-auto shrink-0">
+            <div className="bg-slate-50 border-b border-slate-200 p-4 flex flex-col xl:flex-row items-start xl:items-center gap-4">
+              <div className="flex items-center gap-2 text-slate-500 w-full xl:w-auto shrink-0">
                 <Filter className="w-4 h-4 text-[#0052FF]" />
                 <span className="text-[11px] font-bold uppercase tracking-widest text-[#0052FF]">Database Filters:</span>
               </div>
@@ -1130,7 +1221,7 @@ export default function TrackVoucherPage() {
           isOpen={isSenderModalOpen}
           onClose={() => setIsSenderModalOpen(false)}
           recipients={messageRecipients}
-          defaultTemplateName="voucher_expiry_reminder" // Optional: Assuming you have a template with this name
+          defaultTemplateName={activeTemplateContext === "welcome" ? "welcome_registered_voucher" : "voucher_expiry_reminder"} 
         />
 
       </main>
