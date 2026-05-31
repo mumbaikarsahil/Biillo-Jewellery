@@ -75,12 +75,15 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
   if (action === 'message.sendDirect') {
     const { user_id, template_name, lang, namespace, parameters = [] } = payload;
 
+    if (!namespace) {
+      console.error(`[buildFinalPayload] namespace is empty for template "${template_name}". Check your template list response.`);
+    }
     return {
       user_id,
       content: {
         name: template_name,
         lang: lang || 'en',
-        namespace: namespace || '',
+        namespace: namespace, // must be non-empty — Convo360 requires this field
         params: buildParamsObject(parameters),
       },
     };

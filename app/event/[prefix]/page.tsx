@@ -32,7 +32,7 @@ const QUICK_QUESTIONS = [
 const BOT_ANSWERS: Record<string, string> = {
   "minimum": "There is no restriction, you can buy whatever you love to buy. Our range starts from Rs 8,500/- only.",
   "timing": "Our store timings are 11:00am – 8:30pm. Yes, we are definitely open on Sundays.",
-  "gold": "Sorry, we don’t sell plain gold. We have 14 carat & 18 carats of gold available in our diamond jewellery.",
+  "gold": "Sorry, we don't sell plain gold. We have 14 carat & 18 carats of gold available in our diamond jewellery.",
   "lab": "No. We do not deal in Lab grown diamonds. We deal only into natural, Real diamond jewellery."
 };
 
@@ -94,7 +94,6 @@ export default function EventVoucherClaimPage() {
   const [step, setStep] = useState(1) 
   const [loading, setLoading] = useState(false)
   const [claimedCode, setClaimedCode] = useState<string>('')
-  
   const [voucherExpiry, setVoucherExpiry] = useState<string | null>(null)
   
   const [formData, setFormData] = useState({
@@ -118,20 +117,14 @@ export default function EventVoucherClaimPage() {
   useEffect(() => {
     const initializeEvent = async () => {
       try {
-        const { data, error } = await supabase.rpc('check_event_validity', {
-          p_prefix: prefix
-        });
-
-        if (error || data === false) {
-          setIsInvalidEvent(true);
-        }
+        const { data, error } = await supabase.rpc('check_event_validity', { p_prefix: prefix });
+        if (error || data === false) setIsInvalidEvent(true);
       } catch (err) {
         setIsInvalidEvent(true);
       } finally {
         setTimeout(() => setIsBooting(false), 1200);
       }
     };
-
     initializeEvent();
   }, [prefix]);
 
@@ -146,63 +139,121 @@ export default function EventVoucherClaimPage() {
       )
     : QUICK_QUESTIONS;
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN HANDLER
+  // Flow: claim_event_voucher RPC → subscriber.createByPhone → save user_id
+  //       → send WhatsApp template → success screen
+  // Steps 2–4 are fully non-fatal: failures never block the success screen.
+  // Template variables: {{1}} = Name, {{2}} = Voucher Code, {{3}} = Expiry Date
+  // ─────────────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.name || !formData.phone || !formData.nearestBranch || !formData.dob) {
       return toast.error("Please fill in your Name, Phone, Branch, and Date of Birth.")
     }
-    
     if (formData.phone.length !== 10) {
       return toast.error("Please enter a valid 10-digit mobile number.")
     }
 
     setLoading(true)
     try {
-      // 1. Claim Voucher in Database
+      const fullPhone = `91${formData.phone.trim()}`;
+      const cleanName = formData.name.trim();
+
+      // ── 1. Claim voucher via stored procedure ─────────────────────────
       const { data, error } = await supabase.rpc('claim_event_voucher', {
-        p_full_name: formData.name.trim(),
+        p_full_name: cleanName,
         p_phone: formData.phone.trim(),
         p_prefix: prefix,
         p_branch: formData.nearestBranch,
-        p_dob: formData.dob || null, 
+        p_dob: formData.dob || null,
         p_anniversary: formData.anniversary || null
       })
-
       if (error) throw error
 
-      setClaimedCode(data.voucher_code)
-      if (data.expiry_date) {
-        setVoucherExpiry(data.expiry_date)
+      const voucherCode: string = data.voucher_code;
+      const expiryDate = data.expiry_date
+        ? new Date(data.expiry_date)
+        : (() => { const d = new Date(); d.setMonth(d.getMonth() + 1); return d; })();
+
+      // Format for template variable {{3}}: "26 Jun 2026"
+      const formattedExpiry = expiryDate.toLocaleDateString('en-IN', {
+        day: '2-digit', month: 'short', year: 'numeric'
+      });
+
+      setClaimedCode(voucherCode);
+      setVoucherExpiry(expiryDate.toISOString());
+
+      // ── 2. Create Convo360 subscriber (non-fatal) ─────────────────────
+      let convo360UserId: string = fullPhone; // safe fallback
+
+      try {
+        const createRes = await fetch('/api/whatsapp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'subscriber.createByPhone',
+            payload: { phone: fullPhone, name: cleanName }
+          })
+        });
+
+        if (createRes.ok) {
+          const createJson = await createRes.json();
+          convo360UserId =
+            createJson.data?.user_id  ||
+            createJson.user_id        ||
+            createJson.subscriber?.user_id ||
+            createJson.id             ||
+            fullPhone;
+
+          // ── 3. Persist user_id to customers table (non-fatal) ─────────
+          // data.customer_id is returned by claim_event_voucher if your
+          // procedure exposes it — adjust the key name if needed
+          const customerId = data.customer_id;
+          if (customerId) {
+            const { error: dbErr } = await supabase
+              .from('customers')
+              .update({ convo360_user_id: convo360UserId })
+              .eq('id', customerId);
+            if (dbErr) console.warn('Could not save convo360_user_id:', dbErr.message);
+          }
+        }
+      } catch (subscriberErr) {
+        console.warn('Convo360 subscriber create failed (non-fatal):', subscriberErr);
       }
 
-      // ✨ NEW: 2. Trigger WhatsApp Auto-Reply (Silent execution)
+      // ── 4. Send WhatsApp welcome template (non-fatal) ─────────────────
+      // {{1}} = Name  |  {{2}} = Voucher Code  |  {{3}} = Expiry Date
       try {
-        await fetch('/api/whatsapp', {
+        const sendRes = await fetch('/api/whatsapp', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: 'message.sendDirect',
             payload: {
-              user_id: `91${formData.phone.trim()}`,
-              create_if_not_found: "yes",
-              content: {
-                namespace: "YOUR_META_NAMESPACE_ID", // Update this in Convo360
-                name: "event_voucher_success",       // Update template name here
-                lang: "en",
-                params: {
-                  "BODY_{{1}}": formData.name.trim(),
-                  "BODY_{{2}}": data.voucher_code
-                }
-              }
+              user_id: convo360UserId,
+              template_name: 'voucher_resgistration_sucess', // ← same approved template as claim page
+              lang: 'en',
+              namespace: 'bfbb14c4_778e_453b_97c2_92f60bb9e978',
+              parameters: [
+                cleanName,        // {{1}} Name
+                voucherCode,      // {{2}} Voucher Code
+                formattedExpiry,  // {{3}} Expiry Date e.g. "30 Jun 2026"
+              ]
             }
           })
         });
-      } catch (waError) {
-        console.error("WhatsApp auto-reply failed, but registration succeeded:", waError);
+        if (!sendRes.ok) {
+          const errJson = await sendRes.json().catch(() => ({}));
+          console.warn('WhatsApp send non-OK (non-fatal):', errJson);
+        }
+      } catch (waErr) {
+        console.warn('WhatsApp send failed (non-fatal):', waErr);
       }
 
-      // 3. Move to Success UI
-      setStep(2) 
+      // ── 5. Show success screen ────────────────────────────────────────
+      setStep(2)
+
     } catch (err: any) {
       toast.error(err.message || "Failed to register voucher.")
     } finally {
@@ -222,56 +273,36 @@ export default function EventVoucherClaimPage() {
   const handleChatSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
-
     const lowerInput = chatInput.toLowerCase();
-    
     const match = QUICK_QUESTIONS.find(q => 
       q.q.toLowerCase().includes(lowerInput) || 
       lowerInput.includes(q.short.toLowerCase().replace('?', ''))
     );
-
     const isPleasantry = lowerInput.match(/\b(ok|okay|thank you|thanks|thx|great|awesome|perfect|good)\b/);
-
     setChatMessages(prev => [...prev, { sender: 'user', text: chatInput }]);
     setChatInput("");
-
     setTimeout(() => {
       if (isPleasantry) {
         setChatMessages(prev => [...prev, { sender: 'bot', text: "You're very welcome! Let me know if you need anything else. 😊" }]);
       } else if (match) {
         setChatMessages(prev => [...prev, { sender: 'bot', text: BOT_ANSWERS[match.id] }]);
       } else {
-        setChatMessages(prev => [...prev, { 
-          sender: 'bot', 
-          text: "I'm still learning! For this specific query, please connect with our human support team:",
-          isFallback: true 
-        }]);
+        setChatMessages(prev => [...prev, { sender: 'bot', text: "I'm still learning! For this specific query, please connect with our human support team:", isFallback: true }]);
       }
     }, 600);
   }
 
   const handleWhatsAppRedirect = () => {
-    const text = encodeURIComponent("Hi Ossam Jewels, I need some help regarding my event gift voucher.")
-    window.open(`https://wa.me/918779628339?text=${text}`, '_blank') 
+    window.open(`https://wa.me/918779628339?text=${encodeURIComponent("Hi Ossam Jewels, I need some help regarding my event gift voucher.")}`, '_blank') 
   }
-
-  const handleCallRedirect = () => {
-    window.open(`tel:+918779628339`, '_self') 
-  }
+  const handleCallRedirect = () => window.open(`tel:+918779628339`, '_self')
 
   if (isBooting) {
     return (
       <div className="min-h-screen bg-[#fafafa] flex items-center justify-center">
         <div className="flex flex-col items-center justify-center animate-pulse">
-          <img 
-            src="/pavitram-logo.png" 
-            alt="Pavitram Jewels" 
-            className="h-24 w-auto object-contain mix-blend-multiply" 
-            onError={(e) => {
-              e.currentTarget.style.display = 'none';
-              e.currentTarget.parentElement?.insertAdjacentHTML('afterbegin', '<h1 class="text-4xl font-serif text-slate-900 tracking-tight">OSSAM JEWELS</h1>');
-            }}
-          />
+          <img src="/pavitram-logo.png" alt="Pavitram Jewels" className="h-24 w-auto object-contain mix-blend-multiply" 
+            onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.insertAdjacentHTML('afterbegin', '<h1 class="text-4xl font-serif text-slate-900 tracking-tight">OSSAM JEWELS</h1>'); }} />
         </div>
       </div>
     );
@@ -284,9 +315,7 @@ export default function EventVoucherClaimPage() {
           <X className="w-8 h-8" />
         </div>
         <h2 className="text-2xl font-serif text-slate-800">Event Unavailable</h2>
-        <p className="text-slate-500 mt-2 max-w-xs">
-          This event link is either invalid or all available gift vouchers have already been claimed.
-        </p>
+        <p className="text-slate-500 mt-2 max-w-xs">This event link is either invalid or all available gift vouchers have already been claimed.</p>
       </div>
     )
   }
@@ -301,31 +330,21 @@ export default function EventVoucherClaimPage() {
       <div className="w-full max-w-[460px] space-y-8 z-10 flex flex-col items-center">
         
         <div className="text-center space-y-3 flex flex-col items-center">
-          <img 
-            src="/pavitram-logo.png" 
-            alt="Pavitram Jewels" 
-            className="h-16 sm:h-20 w-auto object-contain drop-shadow-sm mix-blend-multiply" 
-            onError={(e) => {
-              e.currentTarget.style.display = 'none';
-              e.currentTarget.parentElement?.insertAdjacentHTML('afterbegin', '<h1 class="text-3xl font-serif text-slate-900 tracking-tight mb-2">OSSAM JEWELS</h1>');
-            }}
-          />
-          <div className="space-y-0.5">
-             <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-amber-700/80">Exclusive Event Gift</p>
-          </div>
+          <img src="/pavitram-logo.png" alt="Pavitram Jewels" className="h-16 sm:h-20 w-auto object-contain drop-shadow-sm mix-blend-multiply" 
+            onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.insertAdjacentHTML('afterbegin', '<h1 class="text-3xl font-serif text-slate-900 tracking-tight mb-2">OSSAM JEWELS</h1>'); }} />
+          <p className="text-[11px] font-bold uppercase tracking-[0.25em] text-amber-700/80">Exclusive Event Gift</p>
         </div>
 
         <Card className="w-full bg-white/70 backdrop-blur-2xl border border-white/50 shadow-[0_8px_30px_rgb(0,0,0,0.04)] rounded-3xl overflow-hidden relative">
           <CardContent className="p-6 sm:p-10 min-h-[300px] flex flex-col justify-center">
             
+            {/* ── STEP 1: Form ── */}
             {step === 1 && (
               <div className="space-y-6 w-full animate-in fade-in duration-500">
                 <div className="flex items-center justify-between mb-2">
-                  <h2 className="text-xl font-serif text-slate-800 tracking-tight">
-                    Please <br/> fill your details
-                  </h2>
+                  <h2 className="text-xl font-serif text-slate-800 tracking-tight">Please <br/> fill your details</h2>
                   <div className="w-10 h-10 bg-amber-100/50 text-amber-600 rounded-full flex items-center justify-center border border-amber-200/50">
-                     <Gift className="w-5 h-5" />
+                    <Gift className="w-5 h-5" />
                   </div>
                 </div>
 
@@ -334,7 +353,7 @@ export default function EventVoucherClaimPage() {
                     <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Full Name *</Label>
                     <div className="relative">
                       <User className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
-                      <Input required autoFocus className="h-12 pl-11 border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium text-sm shadow-sm transition-all" placeholder="E.g. Anjali Sharma" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} />
+                      <Input required autoFocus className="h-12 pl-11 border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium text-sm shadow-sm" placeholder="E.g. Anjali Sharma" value={formData.name} onChange={(e) => setFormData({...formData, name: e.target.value})} />
                     </div>
                   </div>
 
@@ -345,35 +364,24 @@ export default function EventVoucherClaimPage() {
                         <Phone className="h-4 w-4 text-slate-400" />
                         <span className="text-sm font-bold text-slate-600 border-r border-slate-300 pr-2">+91</span>
                       </div>
-                      <Input 
-                        required 
-                        type="tel" 
-                        inputMode="numeric" 
-                        maxLength={10}
-                        className="h-12 pl-[84px] border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium font-mono text-sm shadow-sm transition-all" 
-                        placeholder="10-digit number" 
-                        value={formData.phone} 
-                        onChange={(e) => {
-                          const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
-                          setFormData({...formData, phone: digits});
-                        }} 
-                      />
+                      <Input required type="tel" inputMode="numeric" maxLength={10}
+                        className="h-12 pl-[84px] border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium font-mono text-sm shadow-sm" 
+                        placeholder="10-digit number" value={formData.phone} 
+                        onChange={(e) => setFormData({...formData, phone: e.target.value.replace(/\D/g, '').slice(0, 10)})} />
                     </div>
                   </div>
 
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Nearest Branch *</Label>
                     <Select value={formData.nearestBranch} onValueChange={(val) => setFormData({...formData, nearestBranch: val})} required>
-                      <SelectTrigger className="w-full h-12 pl-4 pr-3 border-slate-200/60 focus:ring-amber-500/30 rounded-2xl bg-white/80 font-medium text-sm text-slate-700 shadow-sm transition-all">
+                      <SelectTrigger className="w-full h-12 pl-4 pr-3 border-slate-200/60 focus:ring-amber-500/30 rounded-2xl bg-white/80 font-medium text-sm text-slate-700 shadow-sm">
                         <div className="flex items-center gap-2">
                           <MapPin className="h-4 w-4 text-slate-400" />
                           <SelectValue placeholder="Select showroom..." />
                         </div>
                       </SelectTrigger>
                       <SelectContent className="max-h-[250px] rounded-2xl border-slate-200/60 bg-white/95 backdrop-blur-xl">
-                        {BRANCHES.map(branch => (
-                          <SelectItem key={branch} value={branch} className="text-sm font-medium py-2.5 cursor-pointer">{branch}</SelectItem>
-                        ))}
+                        {BRANCHES.map(branch => <SelectItem key={branch} value={branch} className="text-sm font-medium py-2.5">{branch}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>
@@ -390,6 +398,7 @@ export default function EventVoucherClaimPage() {
               </div>
             )}
 
+            {/* ── STEP 2: Success ── */}
             {step === 2 && (
               <div className="animate-in zoom-in-95 fade-in duration-500 flex flex-col items-center text-center w-full pb-2">
                 <div className="relative mb-6">
@@ -403,6 +412,10 @@ export default function EventVoucherClaimPage() {
                   <p className="text-sm text-slate-600 leading-relaxed max-w-[280px] mx-auto mt-2">
                     Show this screen at the counter to receive your physical gift card.
                   </p>
+                  <p className="text-[11px] text-slate-400 flex items-center justify-center gap-1.5 mt-1">
+                    <MessageCircle className="w-3.5 h-3.5 text-[#25D366]" />
+                    Details sent to your WhatsApp
+                  </p>
                 </div>
 
                 <div className="bg-slate-50 border-2 border-dashed border-slate-300 rounded-xl p-6 mt-6 w-full">
@@ -411,21 +424,16 @@ export default function EventVoucherClaimPage() {
                 </div>
                 
                 <p className="text-xs font-semibold text-rose-600 mt-4 text-center">
-                   {voucherExpiry ? (
-                      <>Valid until <b>{new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b></>
-                   ) : (
-                      <>Valid until <b>{new Date(new Date().setMonth(new Date().getMonth() + 1)).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b></>
-                   )}
+                  {voucherExpiry
+                    ? <>Valid until <b>{new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b></>
+                    : <>Valid until <b>{new Date(new Date().setMonth(new Date().getMonth() + 1)).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b></>
+                  }
                 </p>
 
-                <Button 
-                  onClick={handleDownloadReceipt}
-                  variant="outline"
-                  className="w-full mt-4 h-12 rounded-xl border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 font-bold tracking-widest text-xs uppercase transition-colors"
-                >
+                <Button onClick={handleDownloadReceipt} variant="outline"
+                  className="w-full mt-4 h-12 rounded-xl border-emerald-200 text-emerald-700 bg-emerald-50 hover:bg-emerald-100 font-bold tracking-widest text-xs uppercase">
                   <Download className="w-4 h-4 mr-2" /> Save Receipt
                 </Button>
-
               </div>
             )}
 
@@ -435,10 +443,9 @@ export default function EventVoucherClaimPage() {
         {step !== 2 && (
           <div className="w-full pt-4 space-y-3">
             <div className="flex items-center justify-center gap-2 mb-4">
-               <HelpCircle className="w-4 h-4 text-slate-400" />
-               <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500">Frequently Asked Questions</h3>
+              <HelpCircle className="w-4 h-4 text-slate-400" />
+              <h3 className="text-xs font-bold uppercase tracking-widest text-slate-500">Frequently Asked Questions</h3>
             </div>
-            
             <div className="space-y-2">
               {[
                 { q: "What products are covered?", a: "The voucher is applicable on all our jewellery which is hallmarked gold studded with real diamond jewellery. We do not sell plain gold." },
@@ -446,11 +453,8 @@ export default function EventVoucherClaimPage() {
                 { q: "Is there a minimum purchase requirement?", a: "There is no restriction, you can buy whatever you love. Our real diamond jewellery range starts from Rs 8,500/- only." },
                 { q: "Can I combine it with other offers or get cash?", a: "No, this voucher is not valid with other offers or discounts, and it is not redeemable for cash. It must be used in a single transaction." },
               ].map((faq, idx) => (
-                <div key={idx} className="bg-white/60 backdrop-blur-md border border-white/40 rounded-2xl overflow-hidden shadow-[0_4px_20px_rgb(0,0,0,0.02)] transition-all">
-                  <button 
-                    onClick={() => toggleFaq(idx)} 
-                    className="w-full flex items-center justify-between p-4 text-left focus:outline-none active:bg-white/80 touch-manipulation"
-                  >
+                <div key={idx} className="bg-white/60 backdrop-blur-md border border-white/40 rounded-2xl overflow-hidden shadow-[0_4px_20px_rgb(0,0,0,0.02)]">
+                  <button onClick={() => toggleFaq(idx)} className="w-full flex items-center justify-between p-4 text-left focus:outline-none active:bg-white/80 touch-manipulation">
                     <span className="font-serif text-slate-800 font-semibold pr-4 text-sm leading-snug">{faq.q}</span>
                     <ChevronDown className={`w-4 h-4 text-amber-600 transition-transform duration-300 shrink-0 ${openFaq === idx ? 'rotate-180' : ''}`} />
                   </button>
@@ -464,33 +468,28 @@ export default function EventVoucherClaimPage() {
         )}
       </div>
 
-      {/* =========================================================
-          PREDICTIVE CHATBOT WIDGET
-          ========================================================= */}
+      {/* ── CHATBOT WIDGET ── */}
       <div className="fixed bottom-4 right-4 sm:bottom-6 sm:right-6 z-50 flex flex-col items-end">
-        
         <div className={`mb-4 w-[320px] sm:w-[350px] max-w-[calc(100vw-2rem)] bg-white/95 backdrop-blur-2xl rounded-3xl shadow-2xl border border-white overflow-hidden transition-all duration-300 origin-bottom-right flex flex-col ${isChatOpen ? 'scale-100 opacity-100 h-[500px]' : 'scale-0 opacity-0 h-0 pointer-events-none'}`}>
-          
           <div className="bg-slate-900 p-3 sm:p-4 text-white flex items-center justify-between shrink-0 shadow-md relative z-20">
             <div className="flex items-center gap-3">
-               <div className="w-8 h-8 bg-white/10 rounded-full flex items-center justify-center border border-white/20">
-                 <img src="/pavitram-logo.jpg" alt="Logo" className="w-5 h-5 object-contain rounded-full bg-white" onError={(e) => e.currentTarget.style.display = 'none'} />
-               </div>
-               <div>
-                 <p className="font-bold text-sm leading-tight tracking-wide">Pavitram help bot</p>
-                 <p className="text-[10px] text-amber-300/80 flex items-center gap-1 font-medium tracking-widest uppercase mt-0.5">
-                   <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span> Online
-                 </p>
-               </div>
+              <div className="w-8 h-8 bg-white/10 rounded-full flex items-center justify-center border border-white/20">
+                <img src="/pavitram-logo.jpg" alt="Logo" className="w-5 h-5 object-contain rounded-full bg-white" onError={(e) => e.currentTarget.style.display = 'none'} />
+              </div>
+              <div>
+                <p className="font-bold text-sm leading-tight tracking-wide">Pavitram help bot</p>
+                <p className="text-[10px] text-amber-300/80 flex items-center gap-1 font-medium tracking-widest uppercase mt-0.5">
+                  <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span> Online
+                </p>
+              </div>
             </div>
-            <button onClick={() => setIsChatOpen(false)} className="text-white/60 hover:text-white p-1 transition-colors"><X className="w-5 h-5" /></button>
+            <button onClick={() => setIsChatOpen(false)} className="text-white/60 hover:text-white p-1"><X className="w-5 h-5" /></button>
           </div>
           
           <div className="flex-1 bg-slate-50/50 p-4 overflow-y-auto flex flex-col gap-3 relative custom-scrollbar">
             {chatMessages.map((msg, idx) => (
-              <div key={idx} className={`p-3 shadow-sm max-w-[85%] text-xs sm:text-sm relative z-10 ${msg.sender === 'bot' ? 'bg-white rounded-2xl rounded-tl-sm self-start border border-slate-100 text-slate-800' : 'bg-slate-900 rounded-2xl rounded-tr-sm self-end text-white'}`}>
+              <div key={idx} className={`p-3 shadow-sm max-w-[85%] text-xs sm:text-sm ${msg.sender === 'bot' ? 'bg-white rounded-2xl rounded-tl-sm self-start border border-slate-100 text-slate-800' : 'bg-slate-900 rounded-2xl rounded-tr-sm self-end text-white'}`}>
                 <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
-                
                 {msg.isFallback && (
                   <div className="flex flex-col gap-2 mt-3 pt-3 border-t border-slate-100">
                     <Button onClick={handleCallRedirect} size="sm" className="w-full bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold text-[10px] uppercase shadow-none border border-slate-200 h-8 rounded-lg">
@@ -501,63 +500,47 @@ export default function EventVoucherClaimPage() {
                     </Button>
                   </div>
                 )}
-
-                <p className={`text-[9px] text-right mt-1.5 font-mono flex justify-end items-center gap-1 ${msg.sender === 'bot' ? 'text-slate-400' : 'text-slate-400'}`}>
+                <p className="text-[9px] text-right mt-1.5 font-mono flex justify-end items-center gap-1 text-slate-400">
                   Just now {msg.sender === 'user' && <CheckCircle2 className="w-3 h-3 text-amber-400"/>}
                 </p>
               </div>
             ))}
-            
             {!chatInput.trim() && chatMessages.length < 3 && (
               <div className="mt-2 animate-in fade-in slide-in-from-bottom-2 duration-500">
                 <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mb-2 text-center">Suggested Topics</p>
                 <div className="flex flex-wrap gap-2 justify-center">
                   {QUICK_QUESTIONS.map(qq => (
-                    <button 
-                      key={qq.id}
-                      onClick={() => handleQuickQuestion(qq.id, qq.q)}
-                      className="bg-white border border-slate-200 text-slate-600 text-[11px] font-semibold px-3 py-2 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-colors shadow-sm text-left flex-1 min-w-[120px] active:scale-95"
-                    >
+                    <button key={qq.id} onClick={() => handleQuickQuestion(qq.id, qq.q)}
+                      className="bg-white border border-slate-200 text-slate-600 text-[11px] font-semibold px-3 py-2 rounded-xl hover:bg-slate-50 transition-colors shadow-sm text-left flex-1 min-w-[120px] active:scale-95">
                       {qq.short}
                     </button>
                   ))}
                 </div>
               </div>
             )}
-            
             <div ref={chatEndRef} />
           </div>
 
           <div className="bg-white/80 backdrop-blur-md p-2 pt-0 shrink-0 flex flex-col">
-            
             {chatInput.trim() && filteredQuestions.length > 0 && (
               <div className="flex flex-col gap-1 mb-2 max-h-[100px] overflow-y-auto custom-scrollbar px-1">
                 {filteredQuestions.map(qq => (
-                   <button 
-                     key={qq.id} 
-                     onClick={() => { setChatInput(''); handleQuickQuestion(qq.id, qq.q); }} 
-                     className="text-left text-[11px] bg-slate-50 hover:bg-slate-100 text-slate-700 p-2.5 rounded-xl border border-slate-200/60 transition-colors font-medium"
-                   >
-                     {qq.q}
-                   </button>
+                  <button key={qq.id} onClick={() => { setChatInput(''); handleQuickQuestion(qq.id, qq.q); }}
+                    className="text-left text-[11px] bg-slate-50 hover:bg-slate-100 text-slate-700 p-2.5 rounded-xl border border-slate-200/60 transition-colors font-medium">
+                    {qq.q}
+                  </button>
                 ))}
               </div>
             )}
-
             <form onSubmit={handleChatSubmit} className="flex items-center gap-2 p-1 border-t border-slate-100 pt-2">
-              <Input 
-                value={chatInput} 
-                onChange={e => setChatInput(e.target.value)} 
-                placeholder="Ask anything..." 
-                className="h-10 text-xs sm:text-sm bg-slate-100/50 border-slate-200 focus-visible:ring-slate-300 rounded-xl" 
-              />
-              <Button type="submit" size="icon" className="h-10 w-10 rounded-xl bg-slate-900 hover:bg-slate-800 text-white shrink-0 shadow-sm transition-all active:scale-95">
+              <Input value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="Ask anything..."
+                className="h-10 text-xs sm:text-sm bg-slate-100/50 border-slate-200 focus-visible:ring-slate-300 rounded-xl" />
+              <Button type="submit" size="icon" className="h-10 w-10 rounded-xl bg-slate-900 hover:bg-slate-800 text-white shrink-0 shadow-sm active:scale-95">
                 <Send className="h-4 w-4 ml-0.5" />
               </Button>
             </form>
-            
             <div className="text-center pt-1.5 pb-0.5">
-               <p className="text-[8px] font-bold text-slate-300 uppercase tracking-[0.2em]">⚡ Powered by Biillo</p>
+              <p className="text-[8px] font-bold text-slate-300 uppercase tracking-[0.2em]">⚡ Powered by Biillo</p>
             </div>
           </div>
         </div>
@@ -565,42 +548,37 @@ export default function EventVoucherClaimPage() {
         <div className="relative flex items-center">
           {!isChatOpen && (
             <div className="absolute right-full mr-4 top-1/2 -translate-y-1/2 animate-bounce flex items-center z-50">
-              <div className="bg-white text-slate-800 text-[11px] font-bold px-3.5 py-2 rounded-full shadow-lg border border-slate-100 whitespace-nowrap">
-                Need Support? 👋
-              </div>
+              <div className="bg-white text-slate-800 text-[11px] font-bold px-3.5 py-2 rounded-full shadow-lg border border-slate-100 whitespace-nowrap">Need Support? 👋</div>
               <div className="w-0 h-0 border-y-[6px] border-y-transparent border-l-[6px] border-l-white -ml-[1px]"></div>
             </div>
           )}
-          <button 
-            onClick={() => setIsChatOpen(!isChatOpen)} 
-            className="bg-slate-900 text-white p-4 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.2)] hover:scale-105 hover:shadow-[0_8px_30px_rgb(0,0,0,0.3)] transition-all duration-300 flex items-center justify-center group border border-slate-700 relative z-50"
-          >
-             {isChatOpen ? <X size={24} className="animate-in spin-in-180 duration-300 text-amber-50" /> : <MessageCircle size={24} className="group-hover:animate-pulse text-amber-50" />}
+          <button onClick={() => setIsChatOpen(!isChatOpen)}
+            className="bg-slate-900 text-white p-4 rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.2)] hover:scale-105 transition-all duration-300 flex items-center justify-center group border border-slate-700 relative z-50">
+            {isChatOpen ? <X size={24} className="animate-in spin-in-180 duration-300 text-amber-50" /> : <MessageCircle size={24} className="group-hover:animate-pulse text-amber-50" />}
           </button>
         </div>
       </div>
 
-      {/* ✨ NEW: HIDDEN RECEIPT TEMPLATE FOR DOWNLOADING */}
+      {/* ── HIDDEN RECEIPT FOR PRINT/DOWNLOAD ── */}
       <div className="hidden">
         <div ref={receiptRef} className="bg-white text-black p-8 font-sans text-center" style={{ width: '80mm', margin: '0 auto' }}>
           <img src="/pavitram-logo.png" alt="Pavitram Jewels" style={{ width: '120px', margin: '0 auto 10px', mixBlendMode: 'multiply' }} />
           <h2 style={{ fontSize: '13px', fontWeight: 'bold', margin: '0 0 10px', textTransform: 'uppercase', letterSpacing: '2px' }}>Event Voucher</h2>
-          
           <div style={{ borderTop: '2px dashed #000', borderBottom: '2px dashed #000', padding: '20px 0', margin: '15px 0' }}>
             <p style={{ fontSize: '11px', color: '#555', textTransform: 'uppercase', marginBottom: '5px', fontWeight: 'bold' }}>Your Claim Code</p>
             <p style={{ fontSize: '28px', fontWeight: '900', color: '#000', letterSpacing: '4px', margin: 0 }}>{claimedCode}</p>
           </div>
-          
           <p style={{ fontSize: '14px', fontWeight: 'bold', margin: '0 0 5px' }}>{formData.name}</p>
           <p style={{ fontSize: '12px', color: '#444', margin: '0 0 5px' }}>{formData.phone}</p>
           <p style={{ fontSize: '11px', color: '#666', margin: '0 0 25px' }}>Date: {new Date().toLocaleDateString('en-IN')}</p>
-          
           <p style={{ fontSize: '10px', color: '#000', lineHeight: '1.4', fontWeight: 'bold' }}>
             Please present this code at the Pavitram Exclusive counter with a valid ID.
           </p>
-          
           <p style={{ fontSize: '9px', color: '#666', lineHeight: '1.4', marginTop: '5px' }}>
-            {voucherExpiry ? `Valid until ${new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}` : `Valid until ${new Date(new Date().setMonth(new Date().getMonth() + 1)).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`}. Terms & Conditions apply.
+            {voucherExpiry
+              ? `Valid until ${new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`
+              : `Valid until ${new Date(new Date().setMonth(new Date().getMonth() + 1)).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}`
+            }. Terms & Conditions apply.
           </p>
         </div>
       </div>
