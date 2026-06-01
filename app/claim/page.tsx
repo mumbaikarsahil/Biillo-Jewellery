@@ -238,9 +238,9 @@ export default function VoucherClaimPage() {
       try {
         const customerId = rpcData?.customer_id;
         if (customerId) {
-          const intervalHours = 1; // 4 Days
+          const interval_minutes = 1; // 4 Days
           const nextSendDate = new Date();
-          nextSendDate.setHours(nextSendDate.getHours() + intervalHours);
+          nextSendDate.setMinutes(nextSendDate.getMinutes() + interval_minutes);
 
           const { error: seqErr } = await supabase
             .from('voucher_message_sequences')
@@ -249,7 +249,7 @@ export default function VoucherClaimPage() {
               voucher_code: cleanCode,
               convo360_user_id: convo360UserId,
               current_step: 2,
-              interval_hours: intervalHours,
+              interval_minutes: interval_minutes,
               next_send_at: nextSendDate.toISOString(),
               status: 'active'
             });
