@@ -148,6 +148,14 @@ export default function VoucherClaimPage() {
   // Flow: RPC → fetch expiry → create Convo360 subscriber → save user_id → send WhatsApp
   // Steps 3–5 are fully non-fatal: a WhatsApp failure never blocks the success screen.
   // ─────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN REGISTRATION HANDLER
+  // Flow: RPC → fetch expiry → create Convo360 subscriber → save user_id → send WhatsApps
+  // ─────────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // MAIN REGISTRATION HANDLER
+  // Flow: RPC → fetch expiry → create Convo360 subscriber → Init Drip Campaign → Send WhatsApps
+  // ─────────────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.name || !formData.phone || !formData.nearestBranch || !formData.dob) {
@@ -160,7 +168,7 @@ export default function VoucherClaimPage() {
     setLoading(true)
     try {
       const cleanCode = formData.code.toUpperCase().trim();
-      const fullPhone = `91${formData.phone}`; // Convo360 expects country code, no +
+      const fullPhone = `91${formData.phone}`; 
 
       // ── 1. Register voucher via stored procedure ──────────────────────
       const { data: rpcData, error } = await supabase.rpc('register_voucher_public', {
@@ -184,7 +192,6 @@ export default function VoucherClaimPage() {
         ? new Date(updatedVoucher.expiry_date)
         : (() => { const d = new Date(); d.setMonth(d.getMonth() + 1); return d; })();
 
-      // Format for template variable {{3}}: "26 Jun 2026"
       const formattedExpiry = expiryDate.toLocaleDateString('en-IN', {
         day: '2-digit', month: 'short', year: 'numeric'
       });
@@ -192,9 +199,7 @@ export default function VoucherClaimPage() {
       setVoucherExpiry(expiryDate.toISOString());
 
       // ── 3. Create Convo360 subscriber (non-fatal) ─────────────────────
-      // Convo360's /subscriber/create needs top-level `phone`.
-      // On success it returns a user_id we persist to customers.convo360_user_id.
-      let convo360UserId: string = fullPhone; // fallback — phone IS a valid user_id in Convo360
+      let convo360UserId: string = fullPhone; 
 
       try {
         const createRes = await fetch('/api/whatsapp', {
@@ -215,8 +220,7 @@ export default function VoucherClaimPage() {
             createJson.id             ||
             fullPhone;
 
-          // ── 4. Persist user_id back to customers row ──────────────────
-          // rpcData.customer_id is returned by the stored procedure's json_build_object
+          // Persist user_id back to customers row
           const customerId = rpcData?.customer_id;
           if (customerId) {
             const { error: updateErr } = await supabase
@@ -225,48 +229,88 @@ export default function VoucherClaimPage() {
               .eq('id', customerId);
             if (updateErr) console.warn('Could not save convo360_user_id to DB:', updateErr.message);
           }
-        } else {
-          console.warn('Convo360 subscriber create returned non-OK:', createRes.status);
         }
       } catch (subscriberErr) {
         console.warn('Convo360 subscriber create threw (non-fatal):', subscriberErr);
       }
 
-      // ── 5. Send welcome WhatsApp template (non-fatal) ─────────────────
-      // Template variable mapping:
-      //   {{1}} → Customer Name
-      //   {{2}} → Voucher Code
-      //   {{3}} → Expiry Date
+      // ── 4. Initialize Drip Campaign Sequence ──────────────────────────
       try {
-        const sendRes = await fetch('/api/whatsapp', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'message.sendDirect',
-            payload: {
-              user_id: convo360UserId,
-              // route.ts buildFinalPayload will nest these into { content: { name, lang, namespace, params } }
-              template_name: 'voucher_resgistration_sucess', // ← must match your approved Convo360 template name exactly
-              lang: 'en',
-              namespace: 'bfbb14c4_778e_453b_97c2_92f60bb9e978', // ← your Convo360 Meta namespace
-              parameters: [
-                formData.name,   // {{1}} Name
-                cleanCode,       // {{2}} Voucher Code
-                formattedExpiry, // {{3}} Expiry Date e.g. "26 Jun 2026"
-              ]
-            }
-          })
-        });
+        const customerId = rpcData?.customer_id;
+        if (customerId) {
+          const intervalHours = 96; // 4 Days
+          const nextSendDate = new Date();
+          nextSendDate.setHours(nextSendDate.getHours() + intervalHours);
 
-        if (!sendRes.ok) {
-          const errJson = await sendRes.json().catch(() => ({}));
-          console.warn('WhatsApp send non-OK (non-fatal):', errJson);
+          const { error: seqErr } = await supabase
+            .from('voucher_message_sequences')
+            .insert({
+              customer_id: customerId,
+              voucher_code: cleanCode,
+              convo360_user_id: convo360UserId,
+              current_step: 2,
+              interval_hours: intervalHours,
+              next_send_at: nextSendDate.toISOString(),
+              status: 'active'
+            });
+
+          if (seqErr) console.warn('Could not start drip sequence:', seqErr.message);
         }
-      } catch (waErr) {
-        console.warn('WhatsApp send threw (non-fatal):', waErr);
+      } catch (seqCatch) {
+        console.warn('Sequence initialization failed (non-fatal):', seqCatch);
       }
 
-      // ── 6. Show success screen ────────────────────────────────────────
+      // ── 5. Send WhatsApp templates sequentially IN THE BACKGROUND ───────
+      const sendWhatsAppMessages = async () => {
+        try {
+          const namespace = 'bfbb14c4_778e_453b_97c2_92f60bb9e978'; // Your Meta namespace
+
+          console.log("[WhatsApp] Dispatching Marketing Template (Msg 1)...");
+          await fetch('/api/whatsapp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'message.sendDirect',
+              payload: {
+                user_id: convo360UserId,
+                template_name: 'voucher_registration_final', 
+                lang: 'en',
+                namespace: namespace,
+                parameters: [formData.name, cleanCode, formattedExpiry]
+              }
+            })
+          });
+
+          // ⏳ Wait 8 seconds to guarantee Meta clears the Marketing queue
+          console.log("[WhatsApp] Waiting 8 seconds for Meta to process...");
+          await new Promise(resolve => setTimeout(resolve, 8000));
+
+          console.log("[WhatsApp] Dispatching Utility Template (Msg 2)...");
+          await fetch('/api/whatsapp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'message.sendDirect',
+              payload: {
+                user_id: convo360UserId,
+                template_name: 'voucher_utility', 
+                lang: 'en',
+                namespace: namespace,
+                parameters: [] 
+              }
+            })
+          });
+          console.log("[WhatsApp] Sequence Complete!");
+
+        } catch (waErr) {
+          console.warn('Background WhatsApp send failed:', waErr);
+        }
+      };
+
+      // 🔥 Fire the background process instantly without 'await'
+      sendWhatsAppMessages();
+
+      // ── 6. Show success screen INSTANTLY ────────────────────────────────
       setStep(2)
 
     } catch (err: any) {

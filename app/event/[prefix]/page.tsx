@@ -207,8 +207,6 @@ export default function EventVoucherClaimPage() {
             fullPhone;
 
           // ── 3. Persist user_id to customers table (non-fatal) ─────────
-          // data.customer_id is returned by claim_event_voucher if your
-          // procedure exposes it — adjust the key name if needed
           const customerId = data.customer_id;
           if (customerId) {
             const { error: dbErr } = await supabase
@@ -222,31 +220,51 @@ export default function EventVoucherClaimPage() {
         console.warn('Convo360 subscriber create failed (non-fatal):', subscriberErr);
       }
 
-      // ── 4. Send WhatsApp welcome template (non-fatal) ─────────────────
-      // {{1}} = Name  |  {{2}} = Voucher Code  |  {{3}} = Expiry Date
+      // ── 4. Send TWO WhatsApp templates sequentially (non-fatal) ───────
       try {
-        const sendRes = await fetch('/api/whatsapp', {
+        const namespace = 'bfbb14c4_778e_453b_97c2_92f60bb9e978';
+
+        // Template 1: Registration Success (with parameters)
+        const welcomeRes = await fetch('/api/whatsapp', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             action: 'message.sendDirect',
             payload: {
               user_id: convo360UserId,
-              template_name: 'voucher_resgistration_sucess', // ← same approved template as claim page
+              template_name: 'voucher_registration_final', 
               lang: 'en',
-              namespace: 'bfbb14c4_778e_453b_97c2_92f60bb9e978',
-              parameters: [
-                cleanName,        // {{1}} Name
-                voucherCode,      // {{2}} Voucher Code
-                formattedExpiry,  // {{3}} Expiry Date e.g. "30 Jun 2026"
-              ]
+              namespace: namespace,
+              parameters: [cleanName, voucherCode, formattedExpiry] 
             }
           })
         });
-        if (!sendRes.ok) {
-          const errJson = await sendRes.json().catch(() => ({}));
-          console.warn('WhatsApp send non-OK (non-fatal):', errJson);
-        }
+
+        if (!welcomeRes.ok) console.warn('Welcome message failed to send.');
+
+        // ⏳ Wait 8 seconds to guarantee Meta clears the Marketing queue
+        console.log("[WhatsApp] Waiting 8 seconds for Meta to process...");
+        await new Promise(resolve => setTimeout(resolve, 8000));
+
+        // Template 2: Simple Utility Message (NO parameters)
+        // 👉 Replace 'your_utility_template_name' with the actual template name from Convo360
+        const utilityRes = await fetch('/api/whatsapp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'message.sendDirect',
+            payload: {
+              user_id: convo360UserId,
+              template_name: 'voucher_utility', 
+              lang: 'en',
+              namespace: namespace,
+              parameters: [] // Empty array for utility template
+            }
+          })
+        });
+
+        if (!utilityRes.ok) console.warn('Utility message failed to send.');
+
       } catch (waErr) {
         console.warn('WhatsApp send failed (non-fatal):', waErr);
       }
