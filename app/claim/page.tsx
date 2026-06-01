@@ -238,7 +238,7 @@ export default function VoucherClaimPage() {
       try {
         const customerId = rpcData?.customer_id;
         if (customerId) {
-          const intervalHours = 96; // 4 Days
+          const intervalHours = 1; // 4 Days
           const nextSendDate = new Date();
           nextSendDate.setHours(nextSendDate.getHours() + intervalHours);
 
