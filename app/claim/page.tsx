@@ -234,31 +234,45 @@ export default function VoucherClaimPage() {
         console.warn('Convo360 subscriber create threw (non-fatal):', subscriberErr);
       }
 
-      // ── 4. Initialize Drip Campaign Sequence ──────────────────────────
-      try {
-        const customerId = rpcData?.customer_id;
-        if (customerId) {
-          const interval_minutes = 1; // 4 Days
-          const nextSendDate = new Date();
-          nextSendDate.setMinutes(nextSendDate.getMinutes() + interval_minutes);
-
-          const { error: seqErr } = await supabase
-            .from('voucher_message_sequences')
-            .insert({
-              customer_id: customerId,
-              voucher_code: cleanCode,
-              convo360_user_id: convo360UserId,
-              current_step: 2,
-              interval_minutes: interval_minutes,
-              next_send_at: nextSendDate.toISOString(),
-              status: 'active'
-            });
-
-          if (seqErr) console.warn('Could not start drip sequence:', seqErr.message);
-        }
-      } catch (seqCatch) {
-        console.warn('Sequence initialization failed (non-fatal):', seqCatch);
+     // ── 4. Initialize Drip Campaign Sequence ──────────────────────────
+     try {
+      // Fallback: If RPC doesn't return the ID, fetch it manually using the phone number
+      let customerId = rpcData?.customer_id;
+      
+      if (!customerId) {
+        const { data: customerRecord } = await supabase
+          .from('customers')
+          .select('id')
+          .eq('phone', formData.phone)
+          .maybeSingle();
+          
+        customerId = customerRecord?.id;
       }
+
+      if (customerId) {
+        const interval_minutes = 1; 
+        const nextSendDate = new Date();
+        nextSendDate.setMinutes(nextSendDate.getMinutes() + interval_minutes);
+
+        const { error: seqErr } = await supabase
+          .from('voucher_message_sequences')
+          .insert({
+            customer_id: customerId,
+            voucher_code: cleanCode,
+            convo360_user_id: convo360UserId,
+            current_step: 2,
+            interval_minutes: interval_minutes,
+            next_send_at: nextSendDate.toISOString(),
+            status: 'active'
+          });
+
+        if (seqErr) console.warn('Could not start drip sequence:', seqErr.message);
+      } else {
+        console.warn('Skipped drip sequence: Could not find customer ID in database.');
+      }
+    } catch (seqCatch) {
+      console.warn('Sequence initialization failed (non-fatal):', seqCatch);
+    }
 
       // ── 5. Send WhatsApp templates sequentially IN THE BACKGROUND ───────
       const sendWhatsAppMessages = async () => {

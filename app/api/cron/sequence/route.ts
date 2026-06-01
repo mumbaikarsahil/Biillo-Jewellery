@@ -58,7 +58,7 @@ export async function GET(req: Request) {
       // 4. Send the message via Convo360
       const templateName = SEQUENCE_TEMPLATES[seq.current_step] || SEQUENCE_TEMPLATES[2];
       
-      const convoRes = await fetch(`${process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'}/api/whatsapp`, {
+      const convoRes = await fetch('https://www.biillojewel.co.in/api/whatsapp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
