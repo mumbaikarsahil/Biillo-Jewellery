@@ -142,9 +142,7 @@ export default function EventVoucherClaimPage() {
   // ─────────────────────────────────────────────────────────────────────────
   // MAIN HANDLER
   // Flow: claim_event_voucher RPC → subscriber.createByPhone → save user_id
-  //       → send WhatsApp template → success screen
-  // Steps 2–4 are fully non-fatal: failures never block the success screen.
-  // Template variables: {{1}} = Name, {{2}} = Voucher Code, {{3}} = Expiry Date
+  //       → Initialize Drip Campaign → send WhatsApp templates in background → success screen
   // ─────────────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -220,56 +218,98 @@ export default function EventVoucherClaimPage() {
         console.warn('Convo360 subscriber create failed (non-fatal):', subscriberErr);
       }
 
-      // ── 4. Send TWO WhatsApp templates sequentially (non-fatal) ───────
+      // ── 4. Initialize Drip Campaign Sequence ──────────────────────────
       try {
-        const namespace = 'bfbb14c4_778e_453b_97c2_92f60bb9e978';
+        let customerId = data?.customer_id;
+        
+        if (!customerId) {
+          const { data: customerRecord } = await supabase
+            .from('customers')
+            .select('id')
+            .eq('phone', formData.phone.trim())
+            .maybeSingle();
+            
+          customerId = customerRecord?.id;
+        }
 
-        // Template 1: Registration Success (with parameters)
-        const welcomeRes = await fetch('/api/whatsapp', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'message.sendDirect',
-            payload: {
-              user_id: convo360UserId,
-              template_name: 'voucher_registration_final', 
-              lang: 'en',
-              namespace: namespace,
-              parameters: [cleanName, voucherCode, formattedExpiry] 
-            }
-          })
-        });
+        if (customerId) {
+          const interval_hours = 96; 
+          const nextSendDate = new Date();
+          nextSendDate.setHours(nextSendDate.getHours() + interval_hours);
 
-        if (!welcomeRes.ok) console.warn('Welcome message failed to send.');
+          const { error: seqErr } = await supabase
+            .from('voucher_message_sequences')
+            .insert({
+              customer_id: customerId,
+              voucher_code: voucherCode,
+              convo360_user_id: convo360UserId,
+              current_step: 2,
+              interval_hours: interval_hours,
+              next_send_at: nextSendDate.toISOString(),
+              status: 'active'
+            });
 
-        // ⏳ Wait 8 seconds to guarantee Meta clears the Marketing queue
-        console.log("[WhatsApp] Waiting 8 seconds for Meta to process...");
-        await new Promise(resolve => setTimeout(resolve, 8000));
-
-        // Template 2: Simple Utility Message (NO parameters)
-        // 👉 Replace 'your_utility_template_name' with the actual template name from Convo360
-        const utilityRes = await fetch('/api/whatsapp', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            action: 'message.sendDirect',
-            payload: {
-              user_id: convo360UserId,
-              template_name: 'voucher_utility', 
-              lang: 'en',
-              namespace: namespace,
-              parameters: [] // Empty array for utility template
-            }
-          })
-        });
-
-        if (!utilityRes.ok) console.warn('Utility message failed to send.');
-
-      } catch (waErr) {
-        console.warn('WhatsApp send failed (non-fatal):', waErr);
+          if (seqErr) console.warn('Could not start drip sequence:', seqErr.message);
+        } else {
+          console.warn('Skipped drip sequence: Could not find customer ID in database.');
+        }
+      } catch (seqCatch) {
+        console.warn('Sequence initialization failed (non-fatal):', seqCatch);
       }
 
-      // ── 5. Show success screen ────────────────────────────────────────
+      // ── 5. Send WhatsApp templates sequentially IN THE BACKGROUND ───────
+      const sendWhatsAppMessages = async () => {
+        try {
+          const namespace = 'bfbb14c4_778e_453b_97c2_92f60bb9e978';
+
+          // Template 1: Registration Success (with parameters)
+          console.log("[WhatsApp] Dispatching Event Registration Template...");
+          await fetch('/api/whatsapp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'message.sendDirect',
+              payload: {
+                user_id: convo360UserId,
+                template_name: 'voucher_registration_final', 
+                lang: 'en',
+                namespace: namespace,
+                parameters: [cleanName, voucherCode, formattedExpiry] 
+              }
+            })
+          });
+
+          // ⏳ Wait 8 seconds to guarantee Meta clears the Marketing queue
+          console.log("[WhatsApp] Waiting 8 seconds for Meta to process...");
+          await new Promise(resolve => setTimeout(resolve, 8000));
+
+          // Template 2: Simple Utility Message (NO parameters)
+          console.log("[WhatsApp] Dispatching Utility Template (Msg 2)...");
+          await fetch('/api/whatsapp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'message.sendDirect',
+              payload: {
+                user_id: convo360UserId,
+                template_name: 'voucher_utility', 
+                lang: 'en',
+                namespace: namespace,
+                parameters: [] 
+              }
+            })
+          });
+          
+          console.log("[WhatsApp] Event Sequence Complete!");
+        } catch (waErr) {
+          console.warn('Background WhatsApp send failed:', waErr);
+        }
+      };
+
+      // 🔥 Fire the background process instantly without 'await'
+      sendWhatsAppMessages();
+
+      // ── 6. Show success screen INSTANTLY ────────────────────────────────
       setStep(2)
 
     } catch (err: any) {

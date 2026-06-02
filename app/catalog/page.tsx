@@ -74,8 +74,9 @@ export default function CatalogPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(50);
 
-  // Restock Modal State
+  // Modal States
   const [selectedSku, setSelectedSku] = useState<CatalogItem | null>(null);
+  const [zoomImg, setZoomImg] = useState<string | null>(null); // State for full-res image
   const [quantity, setQuantity] = useState("1");
   const [requiredDate, setRequiredDate] = useState("");
   const [remarks, setRemarks] = useState("");
@@ -450,16 +451,35 @@ export default function CatalogPage() {
                 
                 return (
                   <Card key={item.sku} className="overflow-hidden border-gray-200/60 shadow-sm hover:shadow-md transition-all group bg-white flex flex-col">
-                    <div className="aspect-square bg-gray-50 relative border-b border-gray-100 flex items-center justify-center overflow-hidden">
+                    
+                    {/* IMAGE CONTAINER WITH ZOOM OVERLAY */}
+                    <div 
+                      className="aspect-square bg-gray-50 relative border-b border-gray-100 flex items-center justify-center overflow-hidden cursor-pointer group/img"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (item.image) setZoomImg(item.image);
+                      }}
+                    >
                       {item.image ? (
-                        <img src={item.image} alt={item.sku} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" />
+                        <>
+                          <img src={item.image} alt={item.sku} className="w-full h-full object-cover group-hover/img:scale-105 transition-transform duration-500" />
+                          
+                          {/* Hover Overlay */}
+                          <div className="absolute inset-0 bg-black/10 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center z-20">
+                            <div className="bg-white/90 backdrop-blur-sm text-gray-900 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-lg transform translate-y-2 group-hover/img:translate-y-0 transition-all">
+                              <Search className="w-3 h-3" /> View
+                            </div>
+                          </div>
+                        </>
                       ) : (
                         <div className="flex flex-col items-center text-gray-300">
                           <ImageIcon className="w-8 h-8 mb-2" />
                           <span className="text-[10px] font-bold uppercase tracking-widest">No Image</span>
                         </div>
                       )}
-                      <div className="absolute top-2 left-2 flex flex-col gap-1 z-10">
+
+                      {/* Stock Badges */}
+                      <div className="absolute top-2 left-2 flex flex-col gap-1 z-30 pointer-events-none">
                         <Badge variant="secondary" className="bg-white/95 backdrop-blur-md text-gray-700 border-gray-200 text-[9px] uppercase tracking-widest shadow-sm">
                           Global: {item.global_stock}
                         </Badge>
@@ -551,6 +571,25 @@ export default function CatalogPage() {
           </div>
         )}
       </main>
+
+      {/* FULL RESOLUTION IMAGE MODAL */}
+      <Dialog open={zoomImg !== null} onOpenChange={(open) => !open && setZoomImg(null)}>
+        <DialogContent className="max-w-[90vw] md:max-w-[800px] p-0 bg-transparent border-none shadow-none flex justify-center items-center overflow-visible">
+          <DialogHeader className="sr-only">
+            <DialogTitle>Full Resolution View</DialogTitle>
+          </DialogHeader>
+          
+          {zoomImg && (
+            <div className="relative w-full flex justify-center mt-6">
+              <img 
+                src={zoomImg} 
+                alt="Full resolution view" 
+                className="max-w-full max-h-[80vh] object-contain rounded-xl drop-shadow-2xl" 
+              />
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* RESTOCK MODAL */}
       <Dialog open={!!selectedSku} onOpenChange={(open) => !open && setSelectedSku(null)}>
