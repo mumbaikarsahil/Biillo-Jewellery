@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { supabase } from '@/lib/supabaseClient'
 import { useAuth } from '@/hooks/useAuth'
 import { useReactToPrint } from 'react-to-print'
-import QRCode from 'react-qr-code' // ✨ NEW: Import QR Code generator
+import QRCode from 'react-qr-code' 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,7 +21,7 @@ import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { 
   Loader2, FileText, CheckCircle2, CalendarDays, IndianRupee, Send, 
-  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer, QrCode, Download
+  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer, QrCode as QrCodeIcon, Download
 } from 'lucide-react'
 import { addMonths, format } from 'date-fns'
 
@@ -62,7 +62,7 @@ export default function DistributeVouchersPage() {
   const [viewSequence, setViewSequence] = useState<{start: string, end: string} | null>(null)
   const [isLoadingSequence, setIsLoadingSequence] = useState(false)
   
-  // ✨ NEW: Event QR Modal State
+  // Event QR Modal State
   const [eventQrData, setEventQrData] = useState<{ url: string, prefix: string, count: number } | null>(null)
 
   const printRef = useRef<HTMLDivElement>(null)
@@ -84,26 +84,36 @@ export default function DistributeVouchersPage() {
       const { data: agentData } = await supabase.from('delivery_agents').select('*').eq('company_id', appUser.company_id).order('name')
       if (agentData) setAgents(agentData)
 
+      // ─── ✨ UPDATED BATCH FETCHING LOGIC ✨ ───
+      // Removed nested `vouchers(status)` array query to avoid the 1000 row truncation
       const { data: batchData } = await supabase
         .from("voucher_batches")
-        .select(`id, batch_no, discount_value, handling_fee, status, vouchers ( status )`)
+        .select(`id, batch_no, prefix, discount_value, handling_fee, status`)
         .eq('company_id', appUser.company_id)
         .order('created_at', { ascending: false }); 
 
       if (batchData) {
-        const formattedBatches = (batchData as any[])
-          .map(b => {
-            const inStockCount = b.vouchers?.filter((v: any) => v.status === 'in_stock').length || 0;
+        // Run a fast exact count query per batch to bypass any limits
+        const formattedBatchesRaw = await Promise.all(
+          batchData.map(async (b) => {
+            const { count } = await supabase
+              .from('vouchers')
+              .select('id', { count: 'exact', head: true }) // head: true means do not download the rows, just return the number
+              .eq('batch_id', b.id)
+              .eq('status', 'in_stock');
+
             return {
               id: b.id,
               batch_no: b.batch_no,
+              prefix: b.prefix,
               discount_value: b.discount_value,
               handling_fee: b.handling_fee || 0,
-              available_stock: inStockCount
+              available_stock: count || 0
             };
           })
-          .filter(b => b.available_stock > 0); 
-          
+        );
+        
+        const formattedBatches = formattedBatchesRaw.filter(b => b.available_stock > 0); 
         setBatches(formattedBatches);
       }
 
@@ -268,7 +278,6 @@ export default function DistributeVouchersPage() {
           description: `${numQuantity} vouchers are now live for QR claims.`
         })
 
-        // ✨ Trigger the QR Modal!
         setEventQrData({
           url: eventUrl,
           prefix: detectedPrefix,
@@ -292,7 +301,6 @@ export default function DistributeVouchersPage() {
     }
   }
 
-  // ✨ NEW: Convert SVG QR code to a downloadable PNG file
   const handleDownloadQr = () => {
     const svg = document.getElementById("event-qr-code");
     if (!svg) return;
@@ -303,7 +311,6 @@ export default function DistributeVouchersPage() {
     const img = new Image();
     
     img.onload = () => {
-      // Add a white padding border so the QR scans easily when printed
       const padding = 24; 
       canvas.width = img.width + (padding * 2);
       canvas.height = img.height + (padding * 2);
@@ -430,7 +437,7 @@ export default function DistributeVouchersPage() {
                     <Store className="w-3.5 h-3.5 mr-1.5" /> Vendor
                   </TabsTrigger>
                   <TabsTrigger value="event" className="text-xs font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                    <QrCode className="w-3.5 h-3.5 mr-1.5" /> Event (QR)
+                    <QrCodeIcon className="w-3.5 h-3.5 mr-1.5" /> Event (QR)
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -458,7 +465,7 @@ export default function DistributeVouchersPage() {
 
               {allocationType === 'event' && (
                 <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-lg flex items-start gap-2.5 animate-in fade-in slide-in-from-top-2">
-                  <QrCode className="w-4 h-4 text-indigo-500 mt-0.5 shrink-0" />
+                  <QrCodeIcon className="w-4 h-4 text-indigo-500 mt-0.5 shrink-0" />
                   <p className="text-[11px] font-medium text-indigo-800 leading-snug">
                     <strong className="block text-xs text-indigo-900 mb-0.5">Digital Event Pool</strong>
                     These vouchers will bypass physical delivery and instantly become available for customers to claim themselves via the public QR code.
@@ -475,7 +482,10 @@ export default function DistributeVouchersPage() {
                     {batches.map(batch => (
                       <SelectItem key={batch.id} value={batch.id} className="text-sm font-medium py-2">
                         <div className="flex justify-between items-center w-full min-w-[300px]">
-                          <span className="flex items-center gap-2 font-bold text-slate-800"><Package className="w-3.5 h-3.5 text-indigo-500" /> {batch.batch_no}</span>
+                          <span className="flex items-center gap-2 font-bold text-slate-800">
+                            <Package className="w-3.5 h-3.5 text-indigo-500" /> 
+                            {batch.batch_no} {batch.prefix && <span className="text-indigo-400">({batch.prefix})</span>}
+                          </span>
                           <div className="flex items-center gap-2">
                             <span className="text-[10px] font-bold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-100 hidden sm:inline-block">
                                ₹{batch.discount_value} Val / ₹{batch.handling_fee} Fee
@@ -617,7 +627,7 @@ export default function DistributeVouchersPage() {
                 onClick={handleProcessAllocation}
                 disabled={isSubmitting || !isValidQuantity}
               >
-                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : (allocationType === 'vendor' ? <FileText className="w-4 h-4 mr-2" /> : <QrCode className="w-4 h-4 mr-2" />)}
+                {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : (allocationType === 'vendor' ? <FileText className="w-4 h-4 mr-2" /> : <QrCodeIcon className="w-4 h-4 mr-2" />)}
                 {allocationType === 'vendor' ? 'Generate Delivery Challan' : 'Push to Live QR Pool'}
               </Button>
             </div>
@@ -732,7 +742,7 @@ export default function DistributeVouchersPage() {
         <DialogContent className="sm:max-w-sm text-center flex flex-col items-center bg-white shadow-2xl rounded-2xl overflow-hidden p-0 border-none">
           <div className="w-full bg-indigo-600 p-6 flex flex-col items-center relative overflow-hidden">
             <div className="absolute inset-0 bg-[url('/noise.png')] opacity-10 mix-blend-overlay"></div>
-            <QrCode className="w-10 h-10 text-white mb-2 relative z-10" />
+            <QrCodeIcon className="w-10 h-10 text-white mb-2 relative z-10" />
             <DialogTitle className="text-xl font-bold text-white relative z-10">Event QR Code Ready!</DialogTitle>
             <DialogDescription className="text-indigo-100 mt-1 relative z-10">
               {eventQrData?.count} vouchers allocated to series <strong className="text-white">{eventQrData?.prefix}</strong>.
