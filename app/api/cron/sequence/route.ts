@@ -46,11 +46,15 @@ export async function GET(req: Request) {
         .eq('code', seq.voucher_code)
         .single();
 
-      // Stop sequence if redeemed, voided, or expiring within 7 days
-      const isExpiringSoon = voucher?.expiry_date && 
-        (new Date(voucher.expiry_date).getTime() - new Date().getTime()) < (7 * 24 * 60 * 60 * 1000);
+      // 🛑 KILL SWITCH 1: Is the voucher expired?
+      const isExpired = voucher?.expiry_date && 
+        new Date(voucher.expiry_date).getTime() <= new Date().getTime();
 
-      if (!voucher || voucher.status === 'redeemed' || voucher.status === 'voided' || isExpiringSoon) {
+      // 🛑 KILL SWITCH 2: Is the voucher redeemed or voided?
+      const isRedeemedOrVoided = voucher?.status === 'redeemed' || voucher?.status === 'voided';
+
+      // If missing, redeemed, voided, or expired -> Mark completed and SKIP sending
+      if (!voucher || isRedeemedOrVoided || isExpired) {
         await supabase.from('voucher_message_sequences').update({ status: 'completed' }).eq('id', seq.id);
         continue;
       }
@@ -67,27 +71,35 @@ export async function GET(req: Request) {
             user_id: seq.convo360_user_id,
             template_name: templateName,
             lang: 'en',
-            namespace: 'bfbb14c4_778e_453b_97c2_92f60bb9e978', // Your Meta Namespace
-            parameters: [] // Add parameter mapping here if these templates require variables
+            namespace: 'bfbb14c4_778e_453b_97c2_92f60bb9e978',
+            parameters: [] 
           }
         })
       });
 
       if (convoRes.ok) {
-        // 5. Advance the sequence
-        const nextStep = seq.current_step >= 7 ? 2 : seq.current_step + 1;
-        const nextSendDate = new Date();
-        
-        // 👇 Changed to get/set Minutes
-        nextSendDate.setMinutes(nextSendDate.getMinutes() + seq.interval_minutes);
+        // 5. Advance the sequence OR terminate it
+        if (seq.current_step >= 7) {
+          // 🛑 KILL SWITCH 3: Sequence reached the final message (Step 7)
+          await supabase
+            .from('voucher_message_sequences')
+            .update({ status: 'completed' })
+            .eq('id', seq.id);
+        } else {
+          // Advance to the next step in the sequence
+          const nextStep = seq.current_step + 1;
+          const nextSendDate = new Date();
+          
+          nextSendDate.setHours(nextSendDate.getHours() + seq.interval_hours);
 
-        await supabase
-          .from('voucher_message_sequences')
-          .update({
-            current_step: nextStep,
-            next_send_at: nextSendDate.toISOString()
-          })
-          .eq('id', seq.id);
+          await supabase
+            .from('voucher_message_sequences')
+            .update({
+              current_step: nextStep,
+              next_send_at: nextSendDate.toISOString()
+            })
+            .eq('id', seq.id);
+        }
           
         processed++;
       }

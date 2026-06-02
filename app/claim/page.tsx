@@ -250,9 +250,9 @@ export default function VoucherClaimPage() {
       }
 
       if (customerId) {
-        const interval_minutes = 1; 
+        const interval_hours = 96; 
         const nextSendDate = new Date();
-        nextSendDate.setMinutes(nextSendDate.getMinutes() + interval_minutes);
+        nextSendDate.setHours(nextSendDate.getHours() + interval_hours);
 
         const { error: seqErr } = await supabase
           .from('voucher_message_sequences')
@@ -261,7 +261,7 @@ export default function VoucherClaimPage() {
             voucher_code: cleanCode,
             convo360_user_id: convo360UserId,
             current_step: 2,
-            interval_minutes: interval_minutes,
+            interval_hours: interval_hours,
             next_send_at: nextSendDate.toISOString(),
             status: 'active'
           });
