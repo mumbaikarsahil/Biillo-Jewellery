@@ -416,7 +416,7 @@ export default function EventVoucherClaimPage() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Mobile Number *</Label>
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Whatsapp Number *</Label>
                     <div className="relative flex items-center">
                       <div className="absolute left-4 flex items-center gap-1.5 pointer-events-none">
                         <Phone className="h-4 w-4 text-slate-400" />

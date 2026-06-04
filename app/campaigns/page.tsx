@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
 import { 
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow 
@@ -15,16 +16,18 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter 
 } from "@/components/ui/dialog"
 import { 
-  Loader2, Clock, CheckCircle2, PlayCircle, StopCircle, Edit3, MessageCircle, CalendarClock 
+  Loader2, Clock, CheckCircle2, PlayCircle, StopCircle, Edit3, MessageCircle, Settings2, CalendarClock
 } from 'lucide-react'
 
 export default function CampaignManagerPage() {
   const [sequences, setSequences] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
   
-  // Modal states for editing interval
+  // Modal states for editing sequence
   const [editingSeq, setEditingSeq] = useState<any | null>(null)
   const [newInterval, setNewInterval] = useState<string>('')
+  const [newStep, setNewStep] = useState<string>('2')
+  const [newNextSendAt, setNewNextSendAt] = useState<string>('')
   const [isUpdating, setIsUpdating] = useState(false)
 
   const fetchSequences = async () => {
@@ -34,7 +37,7 @@ export default function CampaignManagerPage() {
         .from('voucher_message_sequences')
         .select(`
           *,
-          customers ( full_name, phone ) // 👈 Changed 'name' to 'full_name'
+          customers ( full_name, phone )
         `)
         .order('next_send_at', { ascending: true })
 
@@ -53,7 +56,7 @@ export default function CampaignManagerPage() {
 
   // ── Stop Sequence Action ──────────────────────────────────────────────
   const handleStopSequence = async (id: string) => {
-    if (!confirm("Are you sure you want to stop this drip campaign?")) return;
+    if (!confirm("Are you sure you want to completely stop this drip campaign?")) return;
 
     try {
       const { error } = await supabase
@@ -87,37 +90,63 @@ export default function CampaignManagerPage() {
     }
   }
 
-  // ── Update Interval Action ────────────────────────────────────────────
-  const handleUpdateInterval = async (e: React.FormEvent) => {
+  // ── Update Sequence Configuration Action ──────────────────────────────
+  const handleUpdateSequence = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!editingSeq) return
 
     const hours = parseInt(newInterval)
+    const step = parseInt(newStep)
+
     if (isNaN(hours) || hours <= 0) return toast.error("Please enter a valid number of hours.")
+    if (isNaN(step) || step < 2 || step > 7) return toast.error("Step must be between 2 and 7.")
+    if (!newNextSendAt) return toast.error("Please select a valid next send date.")
 
     setIsUpdating(true)
     try {
+      // Convert local datetime-local string back to proper UTC ISO string for Supabase
+      const nextSendAtISO = new Date(newNextSendAt).toISOString()
+
       const { error } = await supabase
         .from('voucher_message_sequences')
-        .update({ interval_hours: hours })
+        .update({ 
+          interval_hours: hours,
+          current_step: step,
+          next_send_at: nextSendAtISO
+        })
         .eq('id', editingSeq.id)
 
       if (error) throw error
 
-      toast.success(`Interval updated to ${hours} hours.`)
-      setSequences(prev => prev.map(s => s.id === editingSeq.id ? { ...s, interval_hours: hours } : s))
+      toast.success("Sequence configuration updated!")
+      
+      // Update local state to reflect changes instantly
+      setSequences(prev => prev.map(s => s.id === editingSeq.id ? { 
+        ...s, 
+        interval_hours: hours,
+        current_step: step,
+        next_send_at: nextSendAtISO
+      } : s))
+      
       setEditingSeq(null)
-      setNewInterval('')
     } catch (err: any) {
-      toast.error("Failed to update interval: " + err.message)
+      toast.error("Failed to update sequence: " + err.message)
     } finally {
       setIsUpdating(false)
     }
   }
 
+  // Helper to open modal and parse data into form inputs
   const openEditModal = (seq: any) => {
     setEditingSeq(seq)
     setNewInterval(seq.interval_hours.toString())
+    setNewStep(seq.current_step.toString())
+    
+    // Convert UTC ISO to Local time format required by <input type="datetime-local" /> (YYYY-MM-DDThh:mm)
+    const d = new Date(seq.next_send_at)
+    const tzOffset = d.getTimezoneOffset() * 60000
+    const localISOTime = (new Date(d.getTime() - tzOffset)).toISOString().slice(0,16)
+    setNewNextSendAt(localISOTime)
   }
 
   // ── Helper Formatting ─────────────────────────────────────────────────
@@ -171,11 +200,11 @@ export default function CampaignManagerPage() {
                       <TableRow key={seq.id} className="hover:bg-gray-50/50 transition-colors">
                         <TableCell className="px-6 py-4">
                           <div className="font-bold text-sm text-gray-900 flex items-center gap-2">
-                          {seq.customers?.full_name || "Unknown User"} 
-                            <span className="text-[10px] font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">{seq.voucher_code}</span>
+                            {seq.customers?.full_name || "Unknown User"} 
+                            <span className="text-[10px] font-mono bg-gray-100 px-1.5 py-0.5 rounded border border-gray-200 text-gray-600">{seq.voucher_code}</span>
                           </div>
                           <div className="text-xs text-gray-500 flex items-center gap-1 mt-1">
-                            <MessageCircle className="w-3 h-3" /> {seq.convo360_user_id}
+                            <MessageCircle className="w-3 h-3 text-emerald-500" /> {seq.convo360_user_id}
                           </div>
                         </TableCell>
                         
@@ -192,43 +221,46 @@ export default function CampaignManagerPage() {
                             <div className="flex flex-col items-center">
                               <span className="text-sm font-bold text-gray-900">{formatDate(seq.next_send_at)}</span>
                               {new Date(seq.next_send_at) < new Date() && (
-                                <span className="text-[9px] font-bold uppercase tracking-widest text-rose-500">Overdue</span>
+                                <span className="text-[9px] font-bold uppercase tracking-widest text-rose-500 bg-rose-50 px-1 rounded mt-0.5">Overdue</span>
                               )}
                             </div>
                           )}
                         </TableCell>
 
                         <TableCell className="text-center py-4">
-                          <div className="flex items-center justify-center gap-1.5">
-                            <span className="font-mono text-xs font-bold bg-gray-100 px-2 py-1 rounded text-gray-700">{seq.interval_hours}H</span>
-                            <Button size="icon" variant="ghost" className="h-6 w-6 text-gray-400 hover:text-indigo-600" onClick={() => openEditModal(seq)}>
-                              <Edit3 className="w-3 h-3" />
-                            </Button>
-                          </div>
+                          <span className="font-mono text-xs font-bold bg-gray-100 px-2 py-1 rounded text-gray-700">{seq.interval_hours}H</span>
                         </TableCell>
 
                         <TableCell className="text-center py-4">
                           {seq.status === 'active' ? (
-                            <Badge variant="secondary" className="bg-emerald-50 text-emerald-600 border-emerald-200">
+                            <Badge variant="secondary" className="bg-emerald-50 text-emerald-600 border-emerald-200 shadow-none">
                               <PlayCircle className="w-3 h-3 mr-1" /> Active
                             </Badge>
                           ) : (
-                            <Badge variant="secondary" className="bg-gray-100 text-gray-500 border-gray-200">
+                            <Badge variant="secondary" className="bg-gray-100 text-gray-500 border-gray-200 shadow-none">
                               <CheckCircle2 className="w-3 h-3 mr-1" /> Completed
                             </Badge>
                           )}
                         </TableCell>
 
                         <TableCell className="text-right pr-6 py-4">
-                          {seq.status === 'active' ? (
-                            <Button size="sm" variant="outline" className="h-8 border-rose-200 text-rose-600 hover:bg-rose-50 font-bold uppercase tracking-widest text-[10px]" onClick={() => handleStopSequence(seq.id)}>
-                              <StopCircle className="w-3.5 h-3.5 mr-1.5" /> Stop
+                          <div className="flex items-center justify-end gap-2">
+                            {/* NEW: Edit Configuration Button */}
+                            <Button size="icon" variant="outline" className="h-8 w-8 text-indigo-600 border-indigo-200 hover:bg-indigo-50" onClick={() => openEditModal(seq)}>
+                              <Settings2 className="w-3.5 h-3.5" />
                             </Button>
-                          ) : (
-                            <Button size="sm" variant="outline" className="h-8 border-gray-200 text-gray-500 hover:bg-gray-50 font-bold uppercase tracking-widest text-[10px]" onClick={() => handleResumeSequence(seq.id)}>
-                              <PlayCircle className="w-3.5 h-3.5 mr-1.5" /> Resume
-                            </Button>
-                          )}
+
+                            {/* Play/Stop Button */}
+                            {seq.status === 'active' ? (
+                              <Button size="sm" variant="outline" className="h-8 border-rose-200 text-rose-600 hover:bg-rose-50 font-bold uppercase tracking-widest text-[10px]" onClick={() => handleStopSequence(seq.id)}>
+                                <StopCircle className="w-3.5 h-3.5 mr-1.5" /> Stop
+                              </Button>
+                            ) : (
+                              <Button size="sm" variant="outline" className="h-8 border-gray-200 text-gray-500 hover:bg-gray-50 font-bold uppercase tracking-widest text-[10px]" onClick={() => handleResumeSequence(seq.id)}>
+                                <PlayCircle className="w-3.5 h-3.5 mr-1.5" /> Resume
+                              </Button>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -240,34 +272,68 @@ export default function CampaignManagerPage() {
         </Card>
       </main>
 
-      {/* Edit Interval Modal */}
+      {/* ── Edit Sequence Configuration Modal ── */}
       <Dialog open={!!editingSeq} onOpenChange={(open) => !open && setEditingSeq(null)}>
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-[450px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-indigo-900">
-              <CalendarClock className="w-5 h-5 text-indigo-500" /> Update Interval
+              <CalendarClock className="w-5 h-5 text-indigo-500" /> Sequence Configuration
             </DialogTitle>
             <DialogDescription>
-              Change how long the system waits before sending the <b>next</b> message for voucher {editingSeq?.voucher_code}.
+              Modify the queue behavior for voucher <b>{editingSeq?.voucher_code}</b>.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleUpdateInterval} className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label className="text-xs font-bold uppercase tracking-widest text-gray-500">Wait Time (in Hours)</Label>
+          <form onSubmit={handleUpdateSequence} className="space-y-5 py-4">
+            
+            {/* Row 1: Next Step and Interval */}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Next Step (Msg #)</Label>
+                <Select value={newStep} onValueChange={setNewStep}>
+                  <SelectTrigger className="h-11 bg-gray-50 border-gray-200">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="2">Step 2 (Msg 1)</SelectItem>
+                    <SelectItem value="3">Step 3 (Msg 2)</SelectItem>
+                    <SelectItem value="4">Step 4 (Msg 3)</SelectItem>
+                    <SelectItem value="5">Step 5 (Msg 4)</SelectItem>
+                    <SelectItem value="6">Step 6 (Msg 5)</SelectItem>
+                    <SelectItem value="7">Step 7 (Final Msg)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Interval (Hours)</Label>
+                <Input 
+                  type="number" 
+                  min="1" 
+                  required 
+                  value={newInterval} 
+                  onChange={(e) => setNewInterval(e.target.value)} 
+                  className="font-mono text-sm font-bold h-11 bg-gray-50 border-gray-200"
+                />
+              </div>
+            </div>
+
+            {/* Row 2: Next Send Date Picker */}
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Next Send Date & Time</Label>
               <Input 
-                type="number" 
-                min="1" 
+                type="datetime-local" 
                 required 
-                value={newInterval} 
-                onChange={(e) => setNewInterval(e.target.value)} 
-                className="font-mono text-lg font-bold"
+                value={newNextSendAt} 
+                onChange={(e) => setNewNextSendAt(e.target.value)} 
+                className="h-11 text-sm font-medium bg-gray-50 border-gray-200"
               />
             </div>
-            <DialogFooter>
+
+            <DialogFooter className="pt-2">
               <Button type="button" variant="outline" onClick={() => setEditingSeq(null)} disabled={isUpdating}>Cancel</Button>
               <Button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white" disabled={isUpdating}>
                 {isUpdating ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                Save Interval
+                Save Configuration
               </Button>
             </DialogFooter>
           </form>
