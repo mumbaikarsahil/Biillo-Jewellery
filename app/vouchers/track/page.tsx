@@ -33,10 +33,10 @@ import {
   ExternalLink,
   Download,
   Sparkles,
-  Mic,
   X,
   BellRing,
-  Megaphone // ✨ Added Megaphone for the Broadcast button
+  Megaphone,
+  Trash2
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -73,8 +73,9 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
+import { Label } from "@/components/ui/label";
 
 import { WhatsAppSenderModal } from "@/components/WhatsAppSenderModal";
 
@@ -118,8 +119,6 @@ interface TrackedVoucher {
   } | null;
 }
 
-const PAGE_SIZE = 50;
-
 export default function TrackVoucherPage() {
   const { toast } = useToast();
   const { appUser } = useAuth(); 
@@ -136,6 +135,7 @@ export default function TrackVoucherPage() {
   const [isListLoading, setIsListLoading] = useState(false);
   const [localSearch, setLocalSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(0);
+  const [pageSize, setPageSize] = useState(50); // ✨ NEW: Dynamic Page Size
   const [totalCount, setTotalCount] = useState(0);
 
   // --- ADVANCED FILTERS STATE ---
@@ -152,6 +152,11 @@ export default function TrackVoucherPage() {
   const [bulkOverrideReason, setBulkOverrideReason] = useState("");
   const [isUpdatingBulk, setIsUpdatingBulk] = useState(false);
 
+  // ✨ NEW: BULK VOID MODAL STATE
+  const [isVoidModalOpen, setIsVoidModalOpen] = useState(false);
+  const [bulkVoidReason, setBulkVoidReason] = useState("");
+  const [isVoidingBulk, setIsVoidingBulk] = useState(false);
+
   // --- CUSTOMER MODAL STATE ---
   const [selectedCustomer, setSelectedCustomer] = useState<{ id: string, full_name: string, phone: string, voucherCode: string } | null>(null);
 
@@ -159,8 +164,14 @@ export default function TrackVoucherPage() {
   const [isSenderModalOpen, setIsSenderModalOpen] = useState(false);
   const [messageRecipients, setMessageRecipients] = useState<any[]>([]);
   const [isQueryingExpiry, setIsQueryingExpiry] = useState(false);
-  const [isQueryingRegistered, setIsQueryingRegistered] = useState(false); // ✨ NEW
-  const [activeTemplateContext, setActiveTemplateContext] = useState<"reminder" | "welcome">("reminder"); // ✨ NEW
+  const [isQueryingRegistered, setIsQueryingRegistered] = useState(false);
+  const [activeTemplateContext, setActiveTemplateContext] = useState<"reminder" | "welcome">("reminder");
+
+  // ✨ NEW: CUSTOM EXPIRY REMINDER MODAL STATE
+  const [isRemindModalOpen, setIsRemindModalOpen] = useState(false);
+  const [remindDays, setRemindDays] = useState("7");
+  const [remindStatus, setRemindStatus] = useState("both"); // "registered", "distributed", "both"
+  const [remindError, setRemindError] = useState<string | null>(null); // ✨ INLINE ERROR STATE
 
   useEffect(() => {
     const fetchFiltersData = async () => {
@@ -178,7 +189,7 @@ export default function TrackVoucherPage() {
       fetchVoucherList(activeFilter, currentPage, localSearch);
     }, 400); 
     return () => clearTimeout(timer);
-  }, [activeFilter, selectedFilterDistributor, selectedFilterBatch, currentPage, localSearch]);
+  }, [activeFilter, selectedFilterDistributor, selectedFilterBatch, currentPage, localSearch, pageSize]);
 
   const fetchVoucherList = async (tabStatus: string, page: number, searchKeyword: string) => {
     setIsListLoading(true);
@@ -195,7 +206,7 @@ export default function TrackVoucherPage() {
           last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name)
         `, { count: 'exact' })
         .order('code', { ascending: true }) 
-        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+        .range(page * pageSize, (page + 1) * pageSize - 1);
 
       const todayIso = new Date().toISOString();
       
@@ -223,32 +234,41 @@ export default function TrackVoucherPage() {
     }
   };
 
-  // ✨ UPDATED: Added proper parameter mapping for the Template variables
-  const handleRemindExpiring = async () => {
+  // ✨ UPDATED: Custom Remind Expiring Action
+  const executeRemindExpiring = async () => {
     setIsQueryingExpiry(true);
+    setRemindError(null); // Clear previous errors
+    
     try {
       const today = new Date();
-      const nextWeek = addDays(today, 7);
+      const targetDate = addDays(today, parseInt(remindDays));
 
-      const { data, error } = await supabase
+      let query = supabase
         .from("vouchers")
         .select(`
           code, 
           expiry_date, 
+          status,
           voucher_distributors (*),
           customers (*)
         `)
-        .neq("status", "pending_print")
         .gte("expiry_date", today.toISOString())
-        .lte("expiry_date", nextWeek.toISOString());
+        .lte("expiry_date", targetDate.toISOString());
+
+      if (remindStatus === 'both') {
+        query = query.in("status", ["distributed", "registered"]);
+      } else {
+        query = query.eq("status", remindStatus);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       
       if (!data || data.length === 0) {
-        return toast({ 
-          title: "No Expiring Vouchers", 
-          description: "There are no active vouchers expiring within the next 7 days."
-        });
+        // Show inline error inside modal instead of toast
+        setRemindError(`No vouchers found expiring within the next ${remindDays} days for the selected statuses.`);
+        return;
       }
 
       const recipientsMap = new Map();
@@ -257,8 +277,9 @@ export default function TrackVoucherPage() {
         const dist = Array.isArray(v.voucher_distributors) ? v.voucher_distributors[0] : v.voucher_distributors;
         const cust = Array.isArray(v.customers) ? v.customers[0] : v.customers;
 
-        const rawPhone = cust?.phone || dist?.phone;
-        const name = cust?.full_name || dist?.distributor_name || 'Valued Customer';
+        // Prioritize customer over distributor if status is registered, else use whoever has a phone
+        const rawPhone = v.status === 'registered' ? cust?.phone : (dist?.phone || cust?.phone);
+        const name = v.status === 'registered' ? cust?.full_name : (dist?.distributor_name || cust?.full_name || 'Valued Customer');
         
         if (rawPhone) {
           let cleanPhone = String(rawPhone).replace(/\D/g, '');
@@ -270,9 +291,7 @@ export default function TrackVoucherPage() {
             recipientsMap.set(cleanPhone, {
               phone: cleanPhone,
               name: name,
-              // ✨ Pass the Convo360 user_id if we already have it stored
               user_id: cust?.convo360_user_id || undefined,
-              // ✨ Pass the Supabase customers.id so WhatsAppSenderModal can write the user_id back
               customer_db_id: cust?.id || undefined,
               voucher_code: v.code,
               expiry_date: formattedExpiry,
@@ -285,25 +304,23 @@ export default function TrackVoucherPage() {
       const recipients = Array.from(recipientsMap.values());
       
       if (recipients.length === 0) {
-        return toast({ 
-          title: "Missing Contact Data", 
-          description: "Found expiring vouchers, but none have a valid phone number.",
-          variant: "destructive"
-        });
+        setRemindError("Found expiring vouchers, but none have a valid phone number associated with them.");
+        return;
       }
 
+      // Success - We have recipients, so we close the Remind Modal and open the Sender Modal
+      setIsRemindModalOpen(false);
       setMessageRecipients(recipients);
       setActiveTemplateContext("reminder");
       setIsSenderModalOpen(true);
 
     } catch (err: any) {
-      toast({ title: "Query Failed", description: err.message, variant: "destructive" });
+      setRemindError(err.message || "A database error occurred.");
     } finally {
       setIsQueryingExpiry(false);
     }
   };
 
-  // ✨ NEW: Broadcast specific to "Registered" status customers
   const handleBroadcastRegistered = async () => {
     setIsQueryingRegistered(true);
     try {
@@ -321,7 +338,8 @@ export default function TrackVoucherPage() {
       if (!data || data.length === 0) {
         return toast({ 
           title: "No Registered Vouchers", 
-          description: "There are no vouchers currently in the registered state."
+          description: "There are no vouchers currently in the registered state.",
+          variant: "destructive"
         });
       }
 
@@ -342,9 +360,7 @@ export default function TrackVoucherPage() {
             recipientsMap.set(cleanPhone, {
               phone: cleanPhone,
               name: name,
-              // ✨ Pass the Convo360 user_id if already stored
               user_id: cust?.convo360_user_id || undefined,
-              // ✨ Pass Supabase customers.id for writing the resolved user_id back
               customer_db_id: cust?.id || undefined,
               voucher_code: v.code,
               expiry_date: formattedExpiry,
@@ -474,6 +490,35 @@ export default function TrackVoucherPage() {
     }
   };
 
+  const handleBulkVoid = async () => {
+    if (selectedVouchers.size === 0) return;
+    if (bulkVoidReason.trim() === "") return toast({ title: "Reason Required", description: "Provide a reason for voiding these vouchers.", variant: "destructive" });
+
+    setIsVoidingBulk(true);
+    try {
+      const userIdent = appUser?.email?.split('@')[0] || 'Staff';
+      const updates = {
+        status: 'voided',
+        is_manual_override: true,
+        updated_by_user: `${userIdent} (VOIDED): ${bulkVoidReason.trim()}`
+      };
+
+      const idsToUpdate = Array.from(selectedVouchers);
+      const { error } = await supabase.from("vouchers").update(updates).in("id", idsToUpdate);
+      if (error) throw error;
+
+      toast({ title: "Vouchers Voided", description: `Successfully voided ${idsToUpdate.length} vouchers.` });
+      fetchVoucherList(activeFilter, currentPage, localSearch);
+      setSelectedVouchers(new Set());
+      setBulkVoidReason("");
+      setIsVoidModalOpen(false);
+    } catch (error: any) {
+      toast({ title: "Void Failed", description: error.message, variant: "destructive" });
+    } finally {
+      setIsVoidingBulk(false);
+    }
+  };
+
   const toggleSelection = (id: string) => {
     const newSet = new Set(selectedVouchers);
     if (newSet.has(id)) newSet.delete(id);
@@ -557,7 +602,7 @@ export default function TrackVoucherPage() {
   };
 
   const canBulkUpdate = ["all", "pending_print", "in_stock", "distributed", "registered", "expired"].includes(activeFilter);
-  const totalPages = Math.ceil(totalCount / PAGE_SIZE);
+  const totalPages = Math.ceil(totalCount / pageSize);
 
   return (
     <div className="flex flex-col min-h-screen bg-transparent font-sans selection:bg-indigo-100">
@@ -831,15 +876,17 @@ export default function TrackVoucherPage() {
               <p className="text-[13px] font-medium text-slate-500">View, filter, and track campaign engagement metrics across all distributions.</p>
             </div>
             
-            {/* ✨ UPDATED ACTION BUTTONS ✨ */}
             <div className="flex flex-wrap items-center gap-2">
               <Button 
-                onClick={handleRemindExpiring} 
+                onClick={() => {
+                  setRemindError(null);
+                  setIsRemindModalOpen(true);
+                }} 
                 disabled={isQueryingExpiry}
                 className="bg-amber-500 hover:bg-amber-600 text-white shadow-sm font-bold text-xs h-9"
               >
-                {isQueryingExpiry ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <BellRing className="w-4 h-4 mr-2" />}
-                Remind Expiring (7 Days)
+                <BellRing className="w-4 h-4 mr-2" />
+                Remind Expiring
               </Button>
 
               <Button 
@@ -900,6 +947,7 @@ export default function TrackVoucherPage() {
                     <SelectItem value="registered" className="text-xs font-medium">Registered (App)</SelectItem>
                     <SelectItem value="redeemed" className="text-xs font-medium">Redeemed</SelectItem>
                     <SelectItem value="expired" className="text-xs font-medium">Expired</SelectItem>
+                    <SelectItem value="voided" className="text-xs font-medium">Voided</SelectItem>
                   </SelectContent>
                 </Select>
 
@@ -951,7 +999,7 @@ export default function TrackVoucherPage() {
               <div className="bg-blue-50/80 border-b border-blue-100 p-4 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 animate-in slide-in-from-top-2">
                 <div className="flex items-center gap-2 shrink-0">
                   <CheckSquare className="h-4 w-4 text-[#0052FF]" />
-                  <span className="text-sm font-bold text-blue-900">{selectedVouchers.size} Vouchers Selected</span>
+                  <span className="text-sm font-bold text-blue-900">{selectedVouchers.size} Selected</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto">
                   <div className="relative">
@@ -990,6 +1038,16 @@ export default function TrackVoucherPage() {
                     onClick={handleBulkUpdate}
                   >
                     {isUpdatingBulk ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Apply Override"}
+                  </Button>
+                  
+                  {/* ✨ BULK VOID ACTION */}
+                  <Button 
+                    size="sm" 
+                    variant="destructive"
+                    className="h-9 text-xs font-bold w-full sm:w-auto shadow-sm rounded-lg"
+                    onClick={() => setIsVoidModalOpen(true)}
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Void Vouchers
                   </Button>
                 </div>
               </div>
@@ -1138,12 +1196,30 @@ export default function TrackVoucherPage() {
               )}
             </CardContent>
             
-            {/* SERVER-SIDE PAGINATION FOOTER */}
+            {/* SERVER-SIDE PAGINATION FOOTER - UPDATED WITH SELECTOR */}
             {totalCount > 0 && (
-              <div className="bg-slate-50 border-t border-slate-200 px-4 py-3 flex items-center justify-between">
-                <span className="text-xs font-semibold text-slate-500">
-                  Showing <span className="text-slate-900">{currentPage * PAGE_SIZE + 1}</span> to <span className="text-slate-900">{Math.min((currentPage + 1) * PAGE_SIZE, totalCount)}</span> of <span className="text-slate-900">{totalCount}</span> entries
-                </span>
+              <div className="bg-slate-50 border-t border-slate-200 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="flex items-center gap-4 text-xs font-semibold text-slate-500">
+                  <div className="flex items-center gap-2">
+                    <span>Rows per page:</span>
+                    <Select value={pageSize.toString()} onValueChange={(v) => { setPageSize(Number(v)); setCurrentPage(0); }}>
+                      <SelectTrigger className="h-8 w-[70px] bg-white border-slate-200 shadow-sm text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="50">50</SelectItem>
+                        <SelectItem value="100">100</SelectItem>
+                        <SelectItem value="200">200</SelectItem>
+                        <SelectItem value="500">500</SelectItem>
+                        <SelectItem value="1000">1000</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <span className="hidden sm:inline">
+                    Showing <span className="text-slate-900">{currentPage * pageSize + 1}</span> to <span className="text-slate-900">{Math.min((currentPage + 1) * pageSize, totalCount)}</span> of <span className="text-slate-900">{totalCount}</span> entries
+                  </span>
+                </div>
+
                 <div className="flex items-center gap-2">
                   <Button 
                     variant="outline" 
@@ -1152,7 +1228,7 @@ export default function TrackVoucherPage() {
                     onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
                     disabled={currentPage === 0 || isListLoading}
                   >
-                    <ChevronLeft className="w-4 h-4 mr-1" /> Previous
+                    <ChevronLeft className="w-4 h-4 mr-1" /> Prev
                   </Button>
                   <div className="text-xs font-bold text-slate-400 px-2">
                     Page {currentPage + 1} of {totalPages}
@@ -1162,7 +1238,7 @@ export default function TrackVoucherPage() {
                     size="sm" 
                     className="h-8 text-xs font-bold text-slate-600 bg-white"
                     onClick={() => setCurrentPage(p => p + 1)}
-                    disabled={(currentPage + 1) * PAGE_SIZE >= totalCount || isListLoading}
+                    disabled={(currentPage + 1) * pageSize >= totalCount || isListLoading}
                   >
                     Next <ChevronRight className="w-4 h-4 ml-1" />
                   </Button>
@@ -1216,7 +1292,96 @@ export default function TrackVoucherPage() {
           </DialogContent>
         </Dialog>
 
-        {/* ✨ NEW: WhatsApp Sender Modal Integration */}
+        {/* ✨ CUSTOM REMINDER MODAL */}
+        <Dialog open={isRemindModalOpen} onOpenChange={setIsRemindModalOpen}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-amber-600">
+                <BellRing className="w-5 h-5" /> Target Expiring Vouchers
+              </DialogTitle>
+              <DialogDescription>
+                Select which vouchers to target for the expiry broadcast.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Target Status</Label>
+                <Select value={remindStatus} onValueChange={(val) => { setRemindStatus(val); setRemindError(null); }}>
+                  <SelectTrigger className="h-11">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="both">Both Registered & Distributed</SelectItem>
+                    <SelectItem value="registered">Registered Only (Direct to Customer)</SelectItem>
+                    <SelectItem value="distributed">Distributed Only (Direct to Partner)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Expiring Within (Days)</Label>
+                <Select value={remindDays} onValueChange={(val) => { setRemindDays(val); setRemindError(null); }}>
+                  <SelectTrigger className="h-11">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[1,2,3,4,5,6,7].map(d => (
+                      <SelectItem key={d} value={d.toString()}>{d} Day{d > 1 ? 's' : ''}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* ✨ INLINE ERROR DISPLAY */}
+              {remindError && (
+                <div className="bg-red-50 text-red-600 p-3 rounded-lg border border-red-100 flex items-start gap-2.5 animate-in slide-in-from-top-2 duration-300">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <p className="text-xs font-semibold leading-relaxed">{remindError}</p>
+                </div>
+              )}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsRemindModalOpen(false)}>Cancel</Button>
+              <Button onClick={executeRemindExpiring} disabled={isQueryingExpiry} className="bg-amber-500 hover:bg-amber-600 text-white">
+                {isQueryingExpiry ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                Generate Broadcast List
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* ✨ BULK VOID MODAL */}
+        <Dialog open={isVoidModalOpen} onOpenChange={setIsVoidModalOpen}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-rose-600">
+                <ShieldAlert className="w-5 h-5" /> Void Selected Vouchers
+              </DialogTitle>
+              <DialogDescription>
+                You are about to permanently void <strong className="text-slate-900">{selectedVouchers.size}</strong> vouchers. This action cannot be reversed.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="void-reason">Reason for Voiding (Required)</Label>
+                <Input 
+                  id="void-reason" 
+                  placeholder="e.g. Lost in transit, printed incorrectly..." 
+                  value={bulkVoidReason}
+                  onChange={(e) => setBulkVoidReason(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsVoidModalOpen(false)}>Cancel</Button>
+              <Button variant="destructive" onClick={handleBulkVoid} disabled={isVoidingBulk || !bulkVoidReason.trim()}>
+                {isVoidingBulk ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                Confirm Void
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* --- WHATSAPP SENDER MODAL --- */}
         <WhatsAppSenderModal 
           isOpen={isSenderModalOpen}
           onClose={() => setIsSenderModalOpen(false)}
