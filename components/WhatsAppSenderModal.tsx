@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import {
   X, MessageCircle, Loader2, Search,
-  Phone, FileText, CheckCircle2, AlertCircle, UserPlus, Send
+  Phone, FileText, CheckCircle2, AlertCircle, UserPlus, Send, Link as LinkIcon
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription
@@ -22,13 +22,10 @@ import { supabase } from "@/lib/supabaseClient";
 interface Recipient {
   phone: string;
   name: string;
-  /** Convo360's internal user_id — resolved during pre-flight if absent */
   user_id?: string;
-  /** The Supabase customers.id — needed to write user_id back to DB */
   customer_db_id?: string;
   voucher_code?: string;
   expiry_date?: string;
-  templateParams?: string[];
 }
 
 interface WhatsAppSenderModalProps {
@@ -38,7 +35,6 @@ interface WhatsAppSenderModalProps {
   defaultTemplateName?: string;
 }
 
-// Step in the modal flow
 type ModalStep = "compose" | "resolving" | "ready" | "sending";
 
 export function WhatsAppSenderModal({
@@ -53,6 +49,13 @@ export function WhatsAppSenderModal({
   const [templates, setTemplates] = useState<any[]>([]);
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
   const [selectedTemplateName, setSelectedTemplateName] = useState<string>("");
+
+  // --- Variable Mapping State ---
+  const [paramMapping, setParamMapping] = useState<Record<number, string>>({
+    1: "name",
+    2: "voucher_code",
+    3: "expiry_date"
+  });
 
   // --- Recipient state ---
   const [resolvedRecipients, setResolvedRecipients] = useState<Recipient[]>([]);
@@ -83,12 +86,18 @@ export function WhatsAppSenderModal({
       const res = await fetch("/api/whatsapp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "template.list" }),
+        // 👇 ADDED: payload: { limit: 100 } to fetch all templates
+        body: JSON.stringify({ 
+          action: "template.list", 
+          payload: { limit: 100 } 
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.message || "Failed to fetch templates");
+      
       const fetched = Array.isArray(json.data) ? json.data : (json.templates || []);
       setTemplates(fetched);
+      
       if (defaultTemplateName && fetched.find((t: any) => t.name === defaultTemplateName)) {
         setSelectedTemplateName(defaultTemplateName);
       } else if (fetched.length > 0) {
@@ -101,11 +110,24 @@ export function WhatsAppSenderModal({
     }
   };
 
-  // --- Derived ---
+  // --- Derived Data ---
   const activeTemplate = useMemo(
     () => templates.find(t => t.name === selectedTemplateName) || null,
     [templates, selectedTemplateName]
   );
+
+  // Auto-detect the number of required parameters via Regex
+  const expectedVarCount = useMemo(() => {
+    if (!activeTemplate) return 0;
+    const texts = [
+      activeTemplate.components?.find((c: any) => c.type === "BODY")?.text || "",
+      activeTemplate.components?.find((c: any) => c.type === "HEADER")?.text || "",
+    ].join(" ");
+    
+    const matches = [...texts.matchAll(/\{\{(\d+)\}\}/g)];
+    if (matches.length === 0) return 0;
+    return Math.max(...matches.map(m => parseInt(m[1], 10)));
+  }, [activeTemplate]);
 
   const filteredRecipients = useMemo(() => {
     const list = step === "compose" ? recipients : resolvedRecipients;
@@ -118,7 +140,6 @@ export function WhatsAppSenderModal({
     );
   }, [recipients, resolvedRecipients, searchQuery, step]);
 
-  // Only count missing IDs among currently SELECTED recipients
   const missingCount = useMemo(
     () => recipients.filter(r => selectedPhones.has(r.phone) && !r.user_id).length,
     [recipients, selectedPhones]
@@ -129,26 +150,29 @@ export function WhatsAppSenderModal({
     [resolvedRecipients, selectedPhones]
   );
 
-  const resolveVariables = (recipient: Recipient) => {
-    if (recipient.templateParams && recipient.templateParams.length > 0) {
-      return recipient.templateParams;
+  // Resolves the exact array needed for the current template
+  const resolveDynamicVariables = (recipient: Recipient) => {
+    const vars: string[] = [];
+    for (let i = 1; i <= expectedVarCount; i++) {
+      const mappedField = paramMapping[i];
+      if (mappedField === "name") vars.push(recipient.name || "Customer");
+      else if (mappedField === "voucher_code") vars.push(recipient.voucher_code || "N/A");
+      else if (mappedField === "expiry_date") vars.push(recipient.expiry_date || "N/A");
+      else if (mappedField === "phone") vars.push(recipient.phone || "N/A");
+      else vars.push("N/A");
     }
-    return [
-      recipient.name || "Valued Customer",
-      recipient.expiry_date || "soon",
-      recipient.voucher_code || "",
-    ];
+    return vars;
   };
 
   const getPreviewText = () => {
     if (!activeTemplate) return "No template selected.";
     const body = activeTemplate.components?.find((c: any) => c.type === "BODY");
-    if (!body) return activeTemplate.name;
-    let text = body.text || "";
-    const preview =
-      recipients.find(r => selectedPhones.has(r.phone)) || recipients[0];
-    if (!preview) return text;
-    const vars = resolveVariables(preview);
+    let text = body?.text || activeTemplate.name;
+
+    const preview = recipients.find(r => selectedPhones.has(r.phone)) || recipients[0];
+    if (!preview || expectedVarCount === 0) return text;
+
+    const vars = resolveDynamicVariables(preview);
     return text.replace(/\{\{(\d+)\}\}/g, (_: string, n: string) => {
       const i = parseInt(n, 10) - 1;
       return vars[i] !== undefined ? `[${vars[i]}]` : `{{${n}}}`;
@@ -167,18 +191,12 @@ export function WhatsAppSenderModal({
     else setSelectedPhones(new Set(filteredRecipients.map(r => r.phone)));
   };
 
-  // ─────────────────────────────────────────────────────────────
-  // STEP 1 — Resolve missing Convo360 user_ids
-  // For each recipient without a user_id:
-  //   1. Call subscriber.createByPhone (creates in Convo360 or returns existing)
-  //   2. Save the returned user_id back to customers table in Supabase
-  // ─────────────────────────────────────────────────────────────
+  // --- Broadcast Engine ---
   const handleResolveIds = async () => {
     const targets = recipients.filter(r => selectedPhones.has(r.phone));
     const needsResolve = targets.filter(r => !r.user_id);
 
     if (needsResolve.length === 0) {
-      // Everyone already has an ID — skip straight to sending
       setResolvedRecipients(targets);
       setStep("ready");
       return;
@@ -189,15 +207,14 @@ export function WhatsAppSenderModal({
 
     const updated = [...recipients.map(r => ({ ...r }))];
     let failed = 0;
-
     const chunkSize = 5;
+
     for (let i = 0; i < needsResolve.length; i += chunkSize) {
       const chunk = needsResolve.slice(i, i + chunkSize);
 
       await Promise.all(
         chunk.map(async (recipient) => {
           try {
-            // 1. Create subscriber in Convo360
             const res = await fetch("/api/whatsapp", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -208,41 +225,17 @@ export function WhatsAppSenderModal({
             });
 
             const json = await res.json();
+            if (!res.ok) { failed++; return; }
 
-            if (!res.ok) {
-              console.error(`Convo360 create failed for ${recipient.phone}:`, json);
-              failed++;
-              return;
-            }
+            const convo360UserId: string = json.user_id || json.data?.user_id || json.subscriber?.user_id || json.id || recipient.phone;
 
-            // Convo360 returns the subscriber's user_id after creation.
-            // Try every known response shape; fall back to phone as last resort.
-            const convo360UserId: string =
-              json.user_id          // direct top-level
-              || json.data?.user_id // nested under data
-              || json.subscriber?.user_id
-              || json.id
-              || recipient.phone;   // safe fallback — phone IS the user_id in Convo360
-
-            // 2. Write user_id back to Supabase customers table
             if (recipient.customer_db_id) {
-              const { error: dbError } = await supabase
-                .from("customers")
-                .update({ convo360_user_id: convo360UserId })
-                .eq("id", recipient.customer_db_id);
-
-              if (dbError) {
-                console.error(`Supabase update failed for customer ${recipient.customer_db_id}:`, dbError);
-                // Non-fatal: we still have the ID in memory for this session
-              }
+              await supabase.from("customers").update({ convo360_user_id: convo360UserId }).eq("id", recipient.customer_db_id);
             }
 
-            // 3. Patch our in-memory copy
             const idx = updated.findIndex(r => r.phone === recipient.phone);
             if (idx !== -1) updated[idx].user_id = convo360UserId;
-
           } catch (e: any) {
-            console.error(`Network error resolving ${recipient.phone}:`, e);
             failed++;
           }
         })
@@ -254,56 +247,32 @@ export function WhatsAppSenderModal({
         failed,
       }));
 
-      if (i + chunkSize < needsResolve.length) {
-        await new Promise(r => setTimeout(r, 300));
-      }
+      if (i + chunkSize < needsResolve.length) await new Promise(r => setTimeout(r, 300));
     }
 
     setResolvedRecipients(updated);
     setStep("ready");
-
-    if (failed > 0) {
-      toast({
-        title: `${failed} subscriber${failed > 1 ? "s" : ""} could not be created`,
-        description: "They will be skipped during broadcast. Check the console for details.",
-        variant: "destructive",
-      });
-    } else {
-      toast({
-        title: "All subscribers resolved",
-        description: `${needsResolve.length} new subscriber${needsResolve.length > 1 ? "s" : ""} created in Convo360 and saved to your database.`,
-      });
-    }
+    if (failed > 0) toast({ title: `${failed} subscribers failed creation`, variant: "destructive" });
   };
 
-  // ─────────────────────────────────────────────────────────────
-  // STEP 2 — Broadcast
-  // ─────────────────────────────────────────────────────────────
   const handleBroadcast = async () => {
     if (!activeTemplate) return toast({ title: "No template selected", variant: "destructive" });
 
-    const targets = resolvedRecipients.filter(
-      r => selectedPhones.has(r.phone) && r.user_id
-    );
-
-    if (targets.length === 0) {
-      return toast({ title: "No valid recipients", description: "All selected recipients are missing a Convo360 user_id.", variant: "destructive" });
-    }
+    const targets = resolvedRecipients.filter(r => selectedPhones.has(r.phone) && r.user_id);
+    if (targets.length === 0) return toast({ title: "No valid recipients", variant: "destructive" });
 
     setStep("sending");
     setSendProgress({ current: 0, total: targets.length });
 
-    let successCount = 0;
-    let failCount = 0;
-    let lastError = "";
-
+    let successCount = 0, failCount = 0, lastError = "";
     const chunkSize = 10;
+
     for (let i = 0; i < targets.length; i += chunkSize) {
       const chunk = targets.slice(i, i + chunkSize);
 
       await Promise.all(
         chunk.map(async (recipient) => {
-          const variables = resolveVariables(recipient);
+          const variables = resolveDynamicVariables(recipient); // Resolves exact count
           try {
             const res = await fetch("/api/whatsapp", {
               method: "POST",
@@ -315,49 +284,34 @@ export function WhatsAppSenderModal({
                   template_name: activeTemplate.name,
                   lang: activeTemplate.language || "en",
                   namespace: activeTemplate.namespace || "",
-                  parameters: variables,
+                  parameters: variables, // If count is 0, this sends []
                 },
               }),
             });
 
             if (!res.ok) {
               const err = await res.json().catch(() => ({}));
-              console.error(`Send failed for user_id ${recipient.user_id}:`, err);
               failCount++;
-              lastError = err.message || err.details?.message || JSON.stringify(err);
+              lastError = err.message || JSON.stringify(err);
             } else {
               successCount++;
             }
           } catch (e: any) {
-            console.error(`Network crash for user_id ${recipient.user_id}:`, e);
             failCount++;
             lastError = e.message;
           }
         })
       );
 
-      setSendProgress(prev => ({
-        current: Math.min(prev.current + chunk.length, targets.length),
-        total: targets.length,
-      }));
-
-      if (i + chunkSize < targets.length) {
-        await new Promise(r => setTimeout(r, 500));
-      }
+      setSendProgress(prev => ({ current: Math.min(prev.current + chunk.length, targets.length), total: targets.length }));
+      if (i + chunkSize < targets.length) await new Promise(r => setTimeout(r, 500));
     }
 
     if (failCount > 0) {
-      toast({
-        title: "Broadcast finished with errors",
-        description: `${successCount} sent. ${failCount} failed. Last error: ${lastError}`,
-        variant: "destructive",
-      });
+      toast({ title: "Broadcast finished with errors", description: `${successCount} sent. ${failCount} failed.`, variant: "destructive" });
       setStep("ready");
     } else {
-      toast({
-        title: "Broadcast complete",
-        description: `Successfully sent to ${successCount} recipient${successCount !== 1 ? "s" : ""}.`,
-      });
+      toast({ title: "Broadcast complete", description: `Successfully sent to ${successCount} recipients.` });
       setTimeout(onClose, 1500);
     }
   };
@@ -366,78 +320,68 @@ export function WhatsAppSenderModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !isBusy && !open && onClose()}>
-      <DialogContent className="sm:max-w-5xl h-[80vh] max-h-[680px] mt-16 flex flex-col p-0 overflow-hidden bg-slate-50 border-slate-200 shadow-2xl rounded-2xl">
+      {/* MOBILE-OPTIMIZED CONTAINER */}
+      <DialogContent className="w-full max-w-5xl h-[100dvh] sm:h-[85vh] sm:max-h-[800px] m-0 sm:m-auto rounded-none sm:rounded-2xl flex flex-col p-0 overflow-hidden bg-slate-50 border-slate-200 shadow-2xl">
 
         {/* HEADER */}
-        <DialogHeader className="bg-white border-b border-slate-200 px-6 py-4 shrink-0 flex flex-row items-center justify-between">
+        <DialogHeader className="bg-white border-b border-slate-200 px-4 sm:px-6 py-4 shrink-0 flex flex-row items-center justify-between z-10">
           <div>
-            <DialogTitle className="text-lg font-black text-slate-900 flex items-center gap-2">
+            <DialogTitle className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
               <MessageCircle className="w-5 h-5 text-[#25D366]" />
-              WhatsApp Broadcast Studio
+              WhatsApp Broadcast
             </DialogTitle>
-            <DialogDescription className="text-xs font-medium text-slate-500 mt-1">
-              Select a template, resolve subscriber IDs, then broadcast.
+            <DialogDescription className="text-[11px] sm:text-xs font-medium text-slate-500 mt-1 hidden sm:block">
+              Select a template, map variables, resolve IDs, and broadcast.
             </DialogDescription>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose} disabled={isBusy} className="text-slate-400 hover:text-slate-700">
+          <Button variant="ghost" size="icon" onClick={onClose} disabled={isBusy} className="text-slate-400 hover:text-slate-700 h-8 w-8">
             <X className="w-5 h-5" />
           </Button>
         </DialogHeader>
 
-        {/* RESOLVE PROGRESS OVERLAY */}
+        {/* PROGRESS OVERLAYS */}
         {step === "resolving" && (
-          <div className="absolute inset-0 z-50 bg-white/90 backdrop-blur-sm flex flex-col items-center justify-center gap-6 rounded-2xl">
+          <div className="absolute inset-0 z-50 bg-white/95 backdrop-blur-sm flex flex-col items-center justify-center gap-6">
             <div className="flex flex-col items-center gap-3 text-center px-8">
               <UserPlus className="w-10 h-10 text-indigo-500 animate-pulse" />
-              <p className="text-base font-black text-slate-900">Creating Convo360 Subscribers</p>
+              <p className="text-base font-black text-slate-900">Creating Subscribers</p>
               <p className="text-xs text-slate-500 font-medium max-w-xs">
-                Registering {resolveProgress.total} new contacts and saving their IDs to your database. Do not close this window.
+                Registering {resolveProgress.total} contacts. Do not close this window.
               </p>
             </div>
-            <div className="w-72 bg-slate-100 rounded-full h-2.5 overflow-hidden">
-              <div
-                className="bg-indigo-500 h-2.5 rounded-full transition-all duration-300"
-                style={{ width: `${resolveProgress.total ? (resolveProgress.current / resolveProgress.total) * 100 : 0}%` }}
-              />
+            <div className="w-64 sm:w-72 bg-slate-100 rounded-full h-2.5 overflow-hidden">
+              <div className="bg-indigo-500 h-2.5 rounded-full transition-all duration-300" style={{ width: `${resolveProgress.total ? (resolveProgress.current / resolveProgress.total) * 100 : 0}%` }} />
             </div>
-            <p className="text-sm font-bold text-slate-700">
-              {resolveProgress.current} / {resolveProgress.total}
-              {resolveProgress.failed > 0 && (
-                <span className="text-rose-500 ml-2">({resolveProgress.failed} failed)</span>
-              )}
-            </p>
+            <p className="text-sm font-bold text-slate-700">{resolveProgress.current} / {resolveProgress.total}</p>
           </div>
         )}
 
-        {/* WARNING BANNER — missing IDs in compose step */}
+        {/* BANNERS */}
         {step === "compose" && missingCount > 0 && (
-          <div className="bg-amber-50 border-b border-amber-200 px-6 py-2.5 flex items-start gap-2 shrink-0">
+          <div className="bg-amber-50 border-b border-amber-200 px-4 sm:px-6 py-2.5 flex items-start gap-2 shrink-0 z-10">
             <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-            <p className="text-xs font-semibold text-amber-700">
-              <span className="font-black">{missingCount} of your {selectedPhones.size} selected recipient{missingCount !== 1 ? "s" : ""}</span> have no Convo360 ID yet.
-              Click <span className="font-black">Resolve & Continue</span> — they'll be auto-created and saved to your database before sending.
+            <p className="text-[11px] sm:text-xs font-semibold text-amber-700 leading-tight">
+              <span className="font-black">{missingCount} of {selectedPhones.size}</span> selected recipients need a Convo360 ID. Click Resolve & Continue to auto-generate them.
             </p>
           </div>
         )}
-
-        {/* SUCCESS BANNER — all IDs resolved */}
         {step === "ready" && resolvedMissingCount === 0 && (
-          <div className="bg-emerald-50 border-b border-emerald-200 px-6 py-2.5 flex items-center gap-2 shrink-0">
+          <div className="bg-emerald-50 border-b border-emerald-200 px-4 sm:px-6 py-2.5 flex items-center gap-2 shrink-0 z-10">
             <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-            <p className="text-xs font-semibold text-emerald-700">
-              All subscribers resolved. Ready to broadcast to{" "}
-              <span className="font-black">{resolvedRecipients.filter(r => selectedPhones.has(r.phone) && r.user_id).length}</span> recipients.
+            <p className="text-[11px] sm:text-xs font-semibold text-emerald-700 leading-tight">
+              All subscribers resolved. Ready to broadcast to <span className="font-black">{resolvedRecipients.filter(r => selectedPhones.has(r.phone) && r.user_id).length}</span> recipients.
             </p>
           </div>
         )}
 
-        {/* SPLIT CONTENT */}
-        <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
+        {/* SPLIT CONTENT FOR DESKTOP / STACKED FOR MOBILE */}
+        <div className="flex flex-col md:flex-row flex-1 overflow-y-auto md:overflow-hidden">
 
-          {/* LEFT PANE — Template & Preview */}
-          <div className="w-full md:w-[40%] bg-white border-r border-slate-200 flex flex-col overflow-y-auto">
-            <div className="p-6 flex-1 space-y-6">
+          {/* LEFT PANE — Template & Mapping */}
+          <div className="w-full md:w-[40%] bg-white border-b md:border-b-0 md:border-r border-slate-200 shrink-0 md:flex md:flex-col overflow-y-auto">
+            <div className="p-4 sm:p-6 space-y-6">
 
+              {/* 1. Template Selection */}
               <div className="space-y-2.5">
                 <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
                   <FileText className="w-3.5 h-3.5" /> 1. Select Template
@@ -445,24 +389,23 @@ export function WhatsAppSenderModal({
                 {isLoadingTemplates ? (
                   <div className="h-10 border border-slate-200 rounded-lg flex items-center px-3 bg-slate-50">
                     <Loader2 className="w-4 h-4 animate-spin text-slate-400 mr-2" />
-                    <span className="text-xs text-slate-500">Syncing with WhatsApp...</span>
+                    <span className="text-xs text-slate-500">Syncing with Meta...</span>
                   </div>
                 ) : (
                   <Select value={selectedTemplateName} onValueChange={setSelectedTemplateName} disabled={isBusy}>
                     <SelectTrigger className="h-10 bg-white border-slate-200 shadow-sm font-semibold text-sm">
                       <SelectValue placeholder="Select a template" />
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="max-h-[300px] overflow-y-auto custom-scrollbar">
                       {templates.map(t => (
-                        <SelectItem key={t.name} value={t.name} className="font-medium text-sm">
-                          {t.name}
-                        </SelectItem>
+                        <SelectItem key={t.name} value={t.name} className="font-medium text-sm">{t.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 )}
               </div>
 
+              {/* 2. Live Preview */}
               <div className="space-y-2.5">
                 <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> 2. Live Preview
@@ -473,36 +416,75 @@ export function WhatsAppSenderModal({
                     <span className="block text-right text-[9px] text-slate-400 mt-2">Just now</span>
                   </div>
                 </div>
-                <div className="bg-blue-50 border border-blue-100 p-3 rounded-lg flex gap-2">
-                  <AlertCircle className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
-                  <p className="text-[10px] text-blue-700 font-medium leading-tight">
-                    Variables are mapped from each recipient's Name and Expiry Date automatically.
-                  </p>
-                </div>
               </div>
+
+              {/* 3. Variable Mapping (Only shown if template has parameters) */}
+              {expectedVarCount > 0 ? (
+                <div className="space-y-3 pt-4 border-t border-slate-100">
+                  <div className="flex justify-between items-center">
+                    <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                      <LinkIcon className="w-3.5 h-3.5 text-indigo-500" /> 3. Map Variables
+                    </Label>
+                    <Badge variant="outline" className="text-[9px] bg-slate-50">{expectedVarCount} Required</Badge>
+                  </div>
+                  
+                  <div className="space-y-2.5 bg-slate-50/50 p-3 rounded-xl border border-slate-200 border-dashed">
+                    {Array.from({ length: expectedVarCount }).map((_, idx) => {
+                      const varIndex = idx + 1;
+                      return (
+                        <div key={varIndex} className="flex items-center gap-3">
+                          <Badge variant="secondary" className="bg-slate-200/50 text-slate-600 font-mono shrink-0 shadow-none border border-slate-200">
+                            {`{{${varIndex}}}`}
+                          </Badge>
+                          <Select
+                            value={paramMapping[varIndex] || ""}
+                            onValueChange={(val) => setParamMapping(prev => ({ ...prev, [varIndex]: val }))}
+                            disabled={isBusy}
+                          >
+                            <SelectTrigger className="h-8 text-xs bg-white border-slate-200 shadow-sm">
+                              <SelectValue placeholder="Select data field" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="name">Customer Name</SelectItem>
+                              <SelectItem value="voucher_code">Voucher Code</SelectItem>
+                              <SelectItem value="expiry_date">Expiry Date</SelectItem>
+                              <SelectItem value="phone">Phone Number</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-lg flex items-center gap-2 mt-4">
+                   <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                   <p className="text-[10px] text-emerald-700 font-medium">This template requires no variables. It is ready to send as-is.</p>
+                </div>
+              )}
             </div>
           </div>
 
           {/* RIGHT PANE — Recipient Table */}
-          <div className="w-full md:w-[60%] flex flex-col bg-slate-50">
-            <div className="p-4 border-b border-slate-200 bg-white shrink-0 flex items-center justify-between gap-4">
+          <div className="w-full md:w-[60%] flex flex-col bg-slate-50 shrink-0 min-h-[400px] md:min-h-0">
+            <div className="p-3 sm:p-4 border-b border-slate-200 bg-white shrink-0 flex items-center justify-between gap-3">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <Input
-                  placeholder="Search name, phone, or code..."
+                  placeholder="Search name, phone..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-9 h-9 text-xs bg-slate-50 border-slate-200 focus-visible:ring-[#25D366]"
+                  className="pl-9 h-9 text-xs sm:text-sm bg-slate-50 border-slate-200 focus-visible:ring-[#25D366]"
                 />
               </div>
-              <Badge variant="secondary" className="bg-[#25D366]/10 text-[#25D366] border-[#25D366]/20 font-bold shrink-0">
+              <Badge variant="secondary" className="bg-[#25D366]/10 text-[#25D366] border-[#25D366]/20 font-bold shrink-0 shadow-none text-[10px] sm:text-xs py-1">
                 {selectedPhones.size} / {filteredRecipients.length} Selected
               </Badge>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-2">
-              <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                <table className="w-full text-left text-xs">
+            <div className="flex-1 overflow-y-auto p-2 sm:p-3">
+              <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto shadow-sm">
+                <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead className="bg-slate-50 border-b border-slate-200 sticky top-0 z-10">
                     <tr>
                       <th className="p-3 w-10 text-center">
@@ -514,23 +496,18 @@ export function WhatsAppSenderModal({
                         />
                       </th>
                       <th className="p-3 font-bold text-slate-500 uppercase tracking-widest">Recipient</th>
-                      <th className="p-3 font-bold text-slate-500 uppercase tracking-widest">Variables</th>
-                      <th className="p-3 font-bold text-slate-500 uppercase tracking-widest text-center">ID Status</th>
+                      {expectedVarCount > 0 && <th className="p-3 font-bold text-slate-500 uppercase tracking-widest hidden sm:table-cell">Variables Preview</th>}
+                      <th className="p-3 font-bold text-slate-500 uppercase tracking-widest text-center border-l border-slate-100">ID Status</th>
                     </tr>
                   </thead>
                   <tbody>
                     {filteredRecipients.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="p-8 text-center text-slate-400 font-medium">No recipients found.</td>
-                      </tr>
+                      <tr><td colSpan={4} className="p-8 text-center text-slate-400 font-medium">No recipients found.</td></tr>
                     ) : (
                       filteredRecipients.map(r => {
                         const isSelected = selectedPhones.has(r.phone);
-                        const vars = resolveVariables(r);
-                        // In "ready"/"sending" step show resolved data
-                        const displayRecipient = step !== "compose"
-                          ? resolvedRecipients.find(rr => rr.phone === r.phone) || r
-                          : r;
+                        const vars = resolveDynamicVariables(r);
+                        const displayRecipient = step !== "compose" ? resolvedRecipients.find(rr => rr.phone === r.phone) || r : r;
                         const hasId = Boolean(displayRecipient.user_id);
 
                         return (
@@ -554,22 +531,24 @@ export function WhatsAppSenderModal({
                                 <Phone className="w-3 h-3" /> {r.phone}
                               </p>
                             </td>
-                            <td className="p-3">
-                              <div className="flex flex-col gap-1">
-                                {vars.map((v, idx) => (
-                                  <span key={idx} className="inline-flex max-w-[150px] truncate text-[9px] font-bold uppercase tracking-widest text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">
-                                    {`{{${idx + 1}}}: `}<span className="text-slate-700 ml-1 truncate">{v}</span>
-                                  </span>
-                                ))}
-                              </div>
-                            </td>
-                            <td className="p-3 text-center">
+                            {expectedVarCount > 0 && (
+                              <td className="p-3 hidden sm:table-cell">
+                                <div className="flex flex-col gap-1">
+                                  {vars.map((v, idx) => (
+                                    <span key={idx} className="inline-flex max-w-[120px] truncate text-[9px] font-bold uppercase tracking-widest text-indigo-600 bg-indigo-50 border border-indigo-100 px-1.5 py-0.5 rounded">
+                                      {`{{${idx + 1}}}: `}<span className="text-slate-700 ml-1 truncate">{v}</span>
+                                    </span>
+                                  ))}
+                                </div>
+                              </td>
+                            )}
+                            <td className="p-3 text-center border-l border-slate-100">
                               {hasId ? (
-                                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase bg-emerald-50 text-emerald-600 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase bg-emerald-50 text-emerald-600 border border-emerald-200 px-1.5 py-0.5 rounded shadow-none">
                                   <CheckCircle2 className="w-3 h-3" /> Ready
                                 </span>
                               ) : (
-                                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase bg-amber-50 text-amber-600 border border-amber-200 px-1.5 py-0.5 rounded">
+                                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase bg-amber-50 text-amber-600 border border-amber-200 px-1.5 py-0.5 rounded shadow-none">
                                   <UserPlus className="w-3 h-3" /> Pending
                                 </span>
                               )}
@@ -585,53 +564,51 @@ export function WhatsAppSenderModal({
           </div>
         </div>
 
-        {/* FOOTER */}
-        <DialogFooter className="bg-white border-t border-slate-200 px-6 py-4 shrink-0 sm:justify-between items-center flex-row">
-          <Button variant="ghost" onClick={onClose} disabled={isBusy} className="text-slate-500 font-semibold text-xs">
+        {/* FOOTER ACTIONS */}
+        <DialogFooter className="bg-white border-t border-slate-200 p-3 sm:px-6 sm:py-4 shrink-0 sm:justify-between items-center flex-row flex-wrap gap-2 z-10">
+          <Button variant="outline" onClick={onClose} disabled={isBusy} className="h-9 sm:h-10 text-slate-500 font-bold text-xs bg-white">
             Cancel
           </Button>
 
-          <div className="flex items-center gap-3">
-            {/* STEP 1 button — shown when in compose and there are missing IDs */}
+          <div className="flex items-center gap-2 sm:gap-3 flex-1 sm:flex-none justify-end">
             {step === "compose" && missingCount > 0 && (
               <Button
                 onClick={handleResolveIds}
                 disabled={selectedPhones.size === 0 || !activeTemplate}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-10 px-6 rounded-xl shadow-md text-xs uppercase tracking-widest"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-9 sm:h-10 px-4 sm:px-6 rounded-lg sm:rounded-xl shadow-md text-[10px] sm:text-xs uppercase tracking-widest w-full sm:w-auto"
               >
-                <UserPlus className="w-4 h-4 mr-2" />
-                Resolve & Continue ({missingCount} of {selectedPhones.size} pending)
+                <UserPlus className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">Resolve & Continue ({missingCount})</span>
+                <span className="sm:hidden ml-1.5">Resolve ({missingCount})</span>
               </Button>
             )}
 
-            {/* STEP 1 skip — shown when compose and no missing IDs */}
             {step === "compose" && missingCount === 0 && (
               <Button
                 onClick={handleResolveIds}
                 disabled={selectedPhones.size === 0 || !activeTemplate}
-                className="bg-[#25D366] hover:bg-[#20bd5a] text-white font-bold h-10 px-6 rounded-xl shadow-md text-xs uppercase tracking-widest"
+                className="bg-[#25D366] hover:bg-[#20bd5a] text-white font-bold h-9 sm:h-10 px-4 sm:px-6 rounded-lg sm:rounded-xl shadow-md text-[10px] sm:text-xs uppercase tracking-widest w-full sm:w-auto"
               >
-                <Send className="w-4 h-4 mr-2" />
-                Continue to Broadcast
+                <Send className="w-4 h-4 sm:mr-2" />
+                <span className="hidden sm:inline">Continue to Broadcast</span>
+                <span className="sm:hidden ml-1.5">Broadcast</span>
               </Button>
             )}
 
-            {/* STEP 2 button — shown when ready */}
             {step === "ready" && (
               <Button
                 onClick={handleBroadcast}
                 disabled={resolvedRecipients.filter(r => selectedPhones.has(r.phone) && r.user_id).length === 0}
-                className="bg-[#25D366] hover:bg-[#20bd5a] text-white font-bold h-10 px-6 rounded-xl shadow-md text-xs uppercase tracking-widest min-w-[200px]"
+                className="bg-[#25D366] hover:bg-[#20bd5a] text-white font-bold h-9 sm:h-10 px-4 sm:px-6 rounded-lg sm:rounded-xl shadow-md text-[10px] sm:text-xs uppercase tracking-widest w-full sm:w-auto min-w-0 sm:min-w-[200px]"
               >
-                <MessageCircle className="w-4 h-4 mr-2" />
-                Broadcast to {resolvedRecipients.filter(r => selectedPhones.has(r.phone) && r.user_id).length}
+                <MessageCircle className="w-4 h-4 mr-1.5 sm:mr-2" />
+                Send ({resolvedRecipients.filter(r => selectedPhones.has(r.phone) && r.user_id).length})
               </Button>
             )}
 
-            {/* Sending progress */}
             {step === "sending" && (
-              <Button disabled className="bg-[#25D366] text-white font-bold h-10 px-6 rounded-xl min-w-[200px] text-xs">
-                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              <Button disabled className="bg-[#25D366] text-white font-bold h-9 sm:h-10 px-4 sm:px-6 rounded-lg sm:rounded-xl text-[10px] sm:text-xs w-full sm:w-auto min-w-0 sm:min-w-[200px]">
+                <Loader2 className="w-4 h-4 animate-spin mr-1.5 sm:mr-2" />
                 Sending {sendProgress.current} / {sendProgress.total}
               </Button>
             )}

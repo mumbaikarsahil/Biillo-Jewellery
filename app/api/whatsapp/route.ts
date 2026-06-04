@@ -78,29 +78,43 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
     if (!namespace) {
       console.error(`[buildFinalPayload] namespace is empty for template "${template_name}". Check your template list response.`);
     }
+    
+    const content: any = {
+      name: template_name,
+      lang: lang || 'en',
+      namespace: namespace, // must be non-empty — Convo360 requires this field
+    };
+
+    // ✨ CRITICAL FIX: Only attach the 'params' object if there are actual parameters.
+    // Sending an empty 'params: {}' causes Meta to fail delivery for templates without variables.
+    if (parameters.length > 0) {
+      content.params = buildParamsObject(parameters);
+    }
+
     return {
       user_id,
-      content: {
-        name: template_name,
-        lang: lang || 'en',
-        namespace: namespace, // must be non-empty — Convo360 requires this field
-        params: buildParamsObject(parameters),
-      },
+      content,
     };
   }
 
   if (action === 'broadcast.bulk') {
     const { user_id_list, template_name, lang, namespace, parameters = [] } = payload;
 
+    const wa_template: any = {
+      name: template_name,
+      lang: lang || 'en',
+      namespace: namespace || '',
+      use_default_values: 'yes',
+    };
+
+    // ✨ CRITICAL FIX: Strip params if empty for bulk broadcasts too
+    if (parameters.length > 0) {
+      wa_template.params = buildParamsObject(parameters);
+    }
+
     return {
       user_id_list,
-      wa_template: {
-        name: template_name,
-        lang: lang || 'en',
-        namespace: namespace || '',
-        params: buildParamsObject(parameters),
-        use_default_values: 'yes',
-      },
+      wa_template,
     };
   }
 
@@ -116,6 +130,16 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
         first_name: nameParts[0] || '',
         last_name: nameParts.slice(1).join(' ') || '',
       },
+    };
+  }
+
+  if (action === 'template.list') {
+    // ✨ CRITICAL FIX: Force maximum pagination limits in the JSON body
+    return {
+      limit: 100,
+      page_size: 100,
+      pageSize: 100,
+      ...(payload ?? {})
     };
   }
 
@@ -164,12 +188,6 @@ export async function POST(req: Request) {
 
     const apiKey = process.env.CONVO360_API_KEY;
 
-    console.log(`[${requestId}] Env check:`, {
-      CONVO360_API_KEY: maskKey(apiKey),
-      apiBase: API_BASE,
-      bypassHeaderExpected: BYPASS_HEADER_VALUE,
-    });
-
     if (!apiKey) {
       console.error(`[${requestId}] Missing CONVO360_API_KEY env variable`);
       return NextResponse.json(
@@ -204,8 +222,6 @@ export async function POST(req: Request) {
         method = 'POST';
         break;
       case 'subscriber.createByPhone':
-        // Creates a new Convo360 subscriber from a phone number + name.
-        // Returns { user_id } which must be saved back to your DB.
         endpoint = '/subscriber/create';
         method = 'POST';
         break;
@@ -234,17 +250,8 @@ export async function POST(req: Request) {
 
     const url = new URL(`${API_BASE}${endpoint}`);
 
-    console.log(`[${requestId}] Routing decision:`, {
-      action,
-      endpoint,
-      method,
-      finalUrlBeforeQuery: url.toString(),
-    });
-
-    // ✨ Build the correctly-nested payload Convo360 requires
+    // Build the correctly-nested payload Convo360 requires
     const finalPayload = buildFinalPayload(action, payload);
-
-    console.log(`[${requestId}] Transformed payload for Convo360:`, short(finalPayload, 2000));
 
     const fetchOptions: RequestInit = {
       method,
@@ -254,27 +261,8 @@ export async function POST(req: Request) {
         'x-api-bypass': BYPASS_HEADER_VALUE,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         Accept: 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-        'Origin': 'https://omnibot.convo360.ai',
-        'Referer': 'https://omnibot.convo360.ai/',
       },
     };
-
-    console.log(`[${requestId}] Outgoing headers:`, {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${maskKey(apiKey)}`,
-      'x-api-bypass': BYPASS_HEADER_VALUE,
-      Accept: 'application/json, text/plain, */*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...',
-    });
 
     if (method === 'GET') {
       appendQueryParams(url, payload);
@@ -283,20 +271,15 @@ export async function POST(req: Request) {
       fetchOptions.body = JSON.stringify(finalPayload);
       console.log(`[${requestId}] Outgoing body:`, short(finalPayload, 2000));
 
-      if (action === 'template.list' && payload && typeof payload === 'object') {
-        appendQueryParams(url, payload);
+      if (action === 'template.list') {
+        // ✨ CRITICAL FIX: Also force max limit in the URL query string just in case Convo360 looks there instead of the body
+        appendQueryParams(url, { limit: 100, page_size: 100, ...(payload && typeof payload === 'object' ? payload : {}) });
         console.log(
           `[${requestId}] template.list query params appended:`,
           url.searchParams.toString()
         );
       }
     }
-
-    console.log(`[${requestId}] Final upstream request:`, {
-      url: url.toString(),
-      method,
-      hasBody: Boolean(fetchOptions.body),
-    });
 
     const fetchStartedAt = Date.now();
 
@@ -324,38 +307,17 @@ export async function POST(req: Request) {
       parseError,
     } = await parseUpstreamResponse(response);
 
-    console.log(`[${requestId}] Upstream response meta:`, {
-      status: response.status,
-      statusText: response.statusText,
-      ok: response.ok,
-      contentType,
-      fetchDurationMs,
-      responseUrl: response.url,
-      parseError,
-      rawLength: rawText?.length ?? 0,
-    });
-
-    console.log(
-      `[${requestId}] Upstream raw preview:`,
-      short(rawText, 2000)
-    );
-
     if (!response.ok) {
       console.error(`[${requestId}] Convo360 API Error:`, {
         action,
-        endpoint,
         status: response.status,
-        statusText: response.statusText,
         parsedData: data,
         rawPreview: short(rawText, 2000),
       });
 
       return NextResponse.json(
         {
-          message:
-            data?.message ||
-            data?.error ||
-            'Upstream provider error',
+          message: data?.message || data?.error || 'Upstream provider error',
           details: data ?? rawText.slice(0, 2000),
           requestId,
           upstreamStatus: response.status,
@@ -365,13 +327,9 @@ export async function POST(req: Request) {
     }
 
     if (data !== null) {
-      console.log(`[${requestId}] Success response parsed as JSON`);
-      console.log(`[${requestId}] Total duration: ${Date.now() - startedAt}ms`);
+      console.log(`[${requestId}] Success response parsed as JSON. Duration: ${Date.now() - startedAt}ms`);
       return NextResponse.json(data);
     }
-
-    console.warn(`[${requestId}] Upstream returned non-JSON success response`);
-    console.log(`[${requestId}] Total duration: ${Date.now() - startedAt}ms`);
 
     return NextResponse.json(
       {
@@ -379,13 +337,11 @@ export async function POST(req: Request) {
         raw: rawText.slice(0, 2000),
         requestId,
         upstreamStatus: response.status,
-        contentType,
       },
       { status: 502 }
     );
   } catch (error: any) {
     console.error(`[${requestId}] WhatsApp Route Error:`, error);
-    console.log(`[${requestId}] Total duration before crash: ${Date.now() - startedAt}ms`);
 
     return NextResponse.json(
       {
