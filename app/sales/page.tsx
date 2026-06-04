@@ -350,10 +350,18 @@ export default function AccountsMasterPage() {
     }
   };
 
+  // --- EDIT LEDGER ENTRY (UPDATED) ---
   const handleOpenEdit = (inv: any) => {
     setInvoiceToEdit(inv);
+    
+    // Convert UTC Date from Supabase to Local string for <input type="datetime-local">
+    const d = new Date(inv.created_at);
+    const tzOffset = d.getTimezoneOffset() * 60000; // offset in milliseconds
+    const localISOTime = (new Date(d.getTime() - tzOffset)).toISOString().slice(0,16);
+
     setEditForm({
-      created_at: inv.created_at.split('T')[0],
+      invoice_number: inv.invoice_number || '',
+      created_at: localISOTime,
       subtotal: inv.subtotal,
       discount_amount: inv.discount_amount,
       taxable_value: inv.taxable_value,
@@ -366,9 +374,32 @@ export default function AccountsMasterPage() {
 
   const executeEditInvoice = async () => {
     if (!invoiceToEdit || !appUser) return;
+    
+    const newInvoiceNo = editForm.invoice_number?.trim().toUpperCase();
+    if (!newInvoiceNo) return toast.error("Invoice number cannot be empty.");
+
     setIsEditing(true);
     try {
+      // 1. Anti-Duplicate Check
+      if (newInvoiceNo !== invoiceToEdit.invoice_number) {
+        const { data: existing, error: checkErr } = await supabase
+          .from('invoices')
+          .select('id')
+          .eq('company_id', appUser.company_id)
+          .eq('invoice_number', newInvoiceNo)
+          .maybeSingle();
+
+        if (existing) {
+          toast.error(`Invoice number ${newInvoiceNo} is already in use!`);
+          setIsEditing(false);
+          return;
+        }
+        if (checkErr) throw checkErr;
+      }
+
+      // 2. Process Update
       const { error } = await supabase.from('invoices').update({
+        invoice_number: newInvoiceNo,
         created_at: new Date(editForm.created_at).toISOString(),
         subtotal: Number(editForm.subtotal),
         discount_amount: Number(editForm.discount_amount),
@@ -381,7 +412,7 @@ export default function AccountsMasterPage() {
 
       if (error) throw error;
 
-      toast.success("Invoice financials updated successfully.");
+      toast.success("Invoice financials and metadata updated successfully.");
       setInvoiceToEdit(null);
       fetchAccountingData();
     } catch (err: any) {
@@ -1065,29 +1096,36 @@ export default function AccountsMasterPage() {
 
         {/* --- EDIT FINANCIALS MODAL --- */}
         <Dialog open={!!invoiceToEdit} onOpenChange={(open) => !open && setInvoiceToEdit(null)}>
-          <DialogContent className="sm:max-w-[600px] border-zinc-200/60 shadow-2xl rounded-2xl p-0 overflow-hidden bg-white">
+          <DialogContent className="sm:max-w-[850px] md:mt-8 h-auto max-h-[85vh] border-zinc-200/60 shadow-2xl rounded-2xl p-0 overflow-hidden bg-white flex flex-col">
             <DialogHeader className="bg-zinc-50 border-b border-zinc-100 p-5 shrink-0 select-none">
               <DialogTitle className="flex items-center gap-2 text-indigo-600 text-lg font-bold">
                 <Edit2 className="w-5 h-5" /> Edit Ledger Entry
               </DialogTitle>
               <DialogDescription className="text-xs font-medium text-zinc-500 mt-1.5">
-                Modify financial details for <strong className="text-zinc-900">{invoiceToEdit?.invoice_number}</strong>. This updates the ledger in-place without generating a new invoice number.
+                Modify financial details and metadata for <strong className="text-zinc-900">{invoiceToEdit?.invoice_number}</strong>. This updates the ledger in-place.
               </DialogDescription>
             </DialogHeader>
             
-            <div className="p-5 max-h-[60vh] overflow-y-auto custom-scrollbar">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+            <div className="p-5 flex-1 overflow-y-auto custom-scrollbar">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                
+                {/* ROW 1: Identifiers & Dates */}
                 <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Invoice Date</Label>
-                  <Input type="date" className="h-10 bg-zinc-50/50" value={editForm.created_at} onChange={(e) => setEditForm({...editForm, created_at: e.target.value})} />
+                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Invoice Number</Label>
+                  <Input className="h-10 font-mono font-bold bg-white border-zinc-200" value={editForm.invoice_number} onChange={(e) => setEditForm({...editForm, invoice_number: e.target.value.toUpperCase()})} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Payment Remarks / Reference</Label>
-                  <Input className="h-10 bg-zinc-50/50" value={editForm.payment_remarks} onChange={(e) => setEditForm({...editForm, payment_remarks: e.target.value})} />
+                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Date & Time</Label>
+                  <Input type="datetime-local" className="h-10 bg-zinc-50/50 border-zinc-200" value={editForm.created_at} onChange={(e) => setEditForm({...editForm, created_at: e.target.value})} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Payment Remarks</Label>
+                  <Input className="h-10 bg-zinc-50/50 border-zinc-200" value={editForm.payment_remarks} onChange={(e) => setEditForm({...editForm, payment_remarks: e.target.value})} />
                 </div>
 
-                <div className="col-span-1 sm:col-span-2 border-t border-zinc-100 my-1"></div>
+                <div className="col-span-1 md:col-span-3 border-t border-zinc-100 my-1"></div>
 
+                {/* ROW 2: Core Financials */}
                 <div className="space-y-1.5">
                   <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Subtotal</Label>
                   <Input type="number" className="h-10 font-mono font-medium" value={editForm.subtotal} onChange={(e) => setEditForm({...editForm, subtotal: e.target.value})} />
@@ -1101,26 +1139,28 @@ export default function AccountsMasterPage() {
                   <Input type="number" className="h-10 font-mono font-medium bg-zinc-50" value={editForm.taxable_value} onChange={(e) => setEditForm({...editForm, taxable_value: e.target.value})} />
                 </div>
                 
-                <div className="space-y-1.5 col-span-1 sm:col-span-2 mt-2">
-                   <div className="grid grid-cols-2 gap-4 bg-emerald-50/50 p-4 rounded-xl border border-emerald-100">
-                     <div className="space-y-1.5">
-                        <Label className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">CGST Amount</Label>
-                        <Input type="number" className="h-10 font-mono font-medium bg-white border-emerald-200" value={editForm.cgst_amount} onChange={(e) => setEditForm({...editForm, cgst_amount: e.target.value})} />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">SGST Amount</Label>
-                        <Input type="number" className="h-10 font-mono font-medium bg-white border-emerald-200" value={editForm.sgst_amount} onChange={(e) => setEditForm({...editForm, sgst_amount: e.target.value})} />
-                      </div>
-                   </div>
-                </div>
+                {/* ROW 3: Taxes & Final Total */}
+                <div className="col-span-1 md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-5 items-end">
+                  <div className="grid grid-cols-2 gap-4 bg-emerald-50/50 p-4 rounded-xl border border-emerald-100 h-fit">
+                    <div className="space-y-1.5">
+                      <Label className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">CGST Amount</Label>
+                      <Input type="number" className="h-10 font-mono font-medium bg-white border-emerald-200" value={editForm.cgst_amount} onChange={(e) => setEditForm({...editForm, cgst_amount: e.target.value})} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">SGST Amount</Label>
+                      <Input type="number" className="h-10 font-mono font-medium bg-white border-emerald-200" value={editForm.sgst_amount} onChange={(e) => setEditForm({...editForm, sgst_amount: e.target.value})} />
+                    </div>
+                  </div>
 
-                <div className="space-y-1.5 col-span-1 sm:col-span-2 mt-2">
-                  <Label className="text-[11px] font-black uppercase tracking-widest text-indigo-600 mb-2 block">Net Final Total</Label>
-                  <Input type="number" className="h-14 font-mono font-black text-2xl border-indigo-200 bg-indigo-50/30 shadow-inner" value={editForm.final_total} onChange={(e) => setEditForm({...editForm, final_total: e.target.value})} />
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] font-black uppercase tracking-widest text-indigo-600 mb-2 block">Net Final Total</Label>
+                    <Input type="number" className="h-14 font-mono font-black text-2xl border-indigo-200 bg-indigo-50/30 shadow-inner" value={editForm.final_total} onChange={(e) => setEditForm({...editForm, final_total: e.target.value})} />
+                  </div>
                 </div>
               </div>
             </div>
-            <DialogFooter className="p-4 bg-zinc-50 border-t border-zinc-100 sm:justify-between flex-row">
+            
+            <DialogFooter className="p-4 bg-zinc-50 border-t border-zinc-100 sm:justify-between flex-row shrink-0">
               <Button variant="ghost" className="h-10 font-bold text-zinc-500 hover:text-zinc-800 rounded-lg" onClick={() => setInvoiceToEdit(null)}>Discard</Button>
               <Button className="h-10 px-8 font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm" onClick={executeEditInvoice} disabled={isEditing}>
                 {isEditing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
