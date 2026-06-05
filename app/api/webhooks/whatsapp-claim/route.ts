@@ -123,7 +123,7 @@ export async function POST(req: Request) {
       });
     }, 8000);
 
-    // Return success to Convo360 so it moves to the next node in the visual builder
+    // Return success to Convo360 so it moves to the next node in the visual builders
     return NextResponse.json({ 
       success: true, 
       voucher_code: cleanCode,
