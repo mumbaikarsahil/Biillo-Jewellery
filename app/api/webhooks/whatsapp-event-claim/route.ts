@@ -118,7 +118,7 @@ export async function POST(req: Request) {
           }
         })
       });
-    }, 8000);
+    }, 5000);
 
     return NextResponse.json({ 
       success: true, 
