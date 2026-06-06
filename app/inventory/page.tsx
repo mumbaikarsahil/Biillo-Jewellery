@@ -176,6 +176,8 @@ export default function InventoryPage() {
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState<number>(50) 
   const [hasMore, setHasMore] = useState(true)
+  const tableScrollRef = useRef<HTMLDivElement>(null);
+  const scrollPositionRef = useRef<number>(0);
 
   const [warehouses, setWarehouses] = useState<any[]>([])
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
@@ -667,6 +669,36 @@ export default function InventoryPage() {
     toast.success('Price updated')
   }
 
+  const handleStatusChange = async (item: InventoryItem, newStatus: string) => {
+    if (!canEdit) return toast.error("Unauthorized to change status");
+    
+    const { error } = await supabase
+      .from('inventory_items')
+      .update({ 
+        status: newStatus, 
+        last_status_change_at: new Date().toISOString() 
+      })
+      .eq('id', item.id);
+  
+    if (error) return toast.error('Failed to update status');
+  
+    setItemCache(prev => ({ 
+      ...prev, 
+      [item.id]: { ...prev[item.id], status: newStatus, last_status_change_at: new Date().toISOString() } 
+    }));
+    setItems(prev => {
+      const idx = prev.findIndex(i => i.id === item.id);
+      if (idx === -1) return prev;
+      const copy = [...prev];
+      copy[idx] = { ...copy[idx], status: newStatus, last_status_change_at: new Date().toISOString() };
+      return copy;
+    });
+    if (viewItem?.id === item.id) {
+      setViewItem(v => v ? { ...v, status: newStatus } : v);
+    }
+    toast.success(`Status updated to "${newStatus.replace(/_/g, ' ')}"`);
+  };
+
   const handleOpenFullEdit = (item: InventoryItem) => {
     if (!canEdit) return toast.error("Unauthorized to edit master details.");
     setFullEditItem(item);
@@ -901,9 +933,17 @@ export default function InventoryPage() {
       }
 
       setItemCache(prev => ({ ...prev, [itemId]: { ...prev[itemId], image_url: publicUrl }}));
-      setItems(prev => prev.map(i => i.id === itemId ? { ...i, image_url: publicUrl } : i))
-      if (viewItem && viewItem.id === itemId) setViewItem({ ...viewItem, image_url: publicUrl })
-      
+      setItems(prev => {
+        const idx = prev.findIndex(i => i.id === itemId);
+        if (idx === -1) return prev;
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], image_url: publicUrl };
+        return copy;
+      });
+      if (viewItem && viewItem.id === itemId) {
+        setViewItem(v => v ? { ...v, image_url: publicUrl } : v);
+      }
+
       toast.success("Image compressed and updated successfully!")
     } catch (error: any) {
       toast.error(error.message || "Failed to upload image")
@@ -1310,6 +1350,7 @@ export default function InventoryPage() {
                     editingMrpVal={editingMrpVal} 
                     setEditingMrpVal={setEditingMrpVal} 
                     handleSaveMrp={handleSaveMrp} 
+                    handleStatusChange={handleStatusChange}
                     handleOpenFullEdit={handleOpenFullEdit} 
                     handleSingleTransfer={handleSingleTransfer} 
                     setViewItem={setViewItem} 
@@ -1992,7 +2033,7 @@ export default function InventoryPage() {
 }
 
 // --- HYBRID RENDER TABLE ---
-function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, handleOpenFullEdit, handleSingleTransfer, setViewItem, canEdit, observerRef }: any) {
+function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, handleStatusChange, handleOpenFullEdit, handleSingleTransfer, setViewItem, canEdit, observerRef }: any) {
   const getWarehouseName = (wId: string) => warehouses.find((w: any) => w.id === wId)?.name || 'Unknown Vault'
 
   return (
@@ -2137,6 +2178,29 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                   
                   <TableCell className="text-right px-6 py-3">
                      <div className="flex justify-end gap-1.5">
+                     {canEdit && !item.is_repair_ticket && (
+  <Select
+    value={item.status}
+    onValueChange={(val) => handleStatusChange(item, val)}
+  >
+    <SelectTrigger className="h-8 w-[130px] text-[10px] font-bold border-slate-200 bg-white rounded-md focus:ring-indigo-500 shadow-sm">
+      <SelectValue />
+    </SelectTrigger>
+    <SelectContent className="rounded-xl border-slate-200 shadow-xl z-50">
+      <SelectItem value="in_stock"          className="text-xs font-medium">In Stock</SelectItem>
+      <SelectItem value="in_vault"          className="text-xs font-medium">In Vault</SelectItem>
+      <SelectItem value="transit"           className="text-xs font-medium">In Transit</SelectItem>
+      <SelectItem value="received_at_ho"    className="text-xs font-medium">Received at HO</SelectItem>
+      <SelectItem value="job_work_out"      className="text-xs font-medium">Job Work Out</SelectItem>
+      <SelectItem value="pending_repair"    className="text-xs font-medium">Pending Repair</SelectItem>
+      <SelectItem value="pending_melting"   className="text-xs font-medium">Pending Melting</SelectItem>
+      <SelectItem value="melting"           className="text-xs font-medium">Melting</SelectItem>
+      <SelectItem value="disputed"          className="text-xs font-medium">Disputed</SelectItem>
+      <SelectItem value="written_off_lost"  className="text-xs font-medium">Written Off / Lost</SelectItem>
+      <SelectItem value="sold"              className="text-xs font-medium text-rose-600">Sold</SelectItem>
+    </SelectContent>
+  </Select>
+)}
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => setViewItem(item)} title="View Full Details">
                           <Eye className="h-4 w-4" />
                         </Button>
@@ -2272,6 +2336,30 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                    )}
                  </div>
                  <div className="flex gap-1.5">
+                 {canEdit && !item.is_repair_ticket && (
+  <Select
+    value={item.status}
+    onValueChange={(val) => handleStatusChange(item, val)}
+  >
+    <SelectTrigger className="h-8 w-[120px] text-[10px] font-bold border-slate-200 bg-white rounded-md focus:ring-indigo-500">
+      <SelectValue />
+    </SelectTrigger>
+    <SelectContent className="rounded-xl border-slate-200 shadow-xl z-50">
+      <SelectItem value="in_stock"          className="text-xs font-medium">In Stock</SelectItem>
+      <SelectItem value="in_vault"          className="text-xs font-medium">In Vault</SelectItem>
+      <SelectItem value="transit"           className="text-xs font-medium">In Transit</SelectItem>
+      <SelectItem value="received_at_ho"    className="text-xs font-medium">Received at HO</SelectItem>
+      <SelectItem value="job_work_out"      className="text-xs font-medium">Job Work Out</SelectItem>
+      <SelectItem value="pending_repair"    className="text-xs font-medium">Pending Repair</SelectItem>
+      <SelectItem value="pending_melting"   className="text-xs font-medium">Pending Melting</SelectItem>
+      <SelectItem value="melting"           className="text-xs font-medium">Melting</SelectItem>
+      <SelectItem value="disputed"          className="text-xs font-medium">Disputed</SelectItem>
+      <SelectItem value="written_off_lost"  className="text-xs font-medium">Written Off / Lost</SelectItem>
+      <SelectItem value="sold"              className="text-xs font-medium text-rose-600">Sold</SelectItem>
+    </SelectContent>
+  </Select>
+)}
+                  
                    {!isSoldTab && (item.status === 'in_stock' || item.status === 'in_vault' || item.status === 'fixed_ready_for_dispatch') && (
                      <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
                     <Truck className="h-3.5 w-3.5" />
