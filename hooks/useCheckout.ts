@@ -594,28 +594,33 @@ export function useCheckout({
             barcode: uniqueRef
           });
 
-       } else if (returnDetails.selectedSystemItems?.length > 0) {
-          // Internal System Return
-          const itemIdsToReturn = returnDetails.selectedSystemItems.map((i:any) => i.item_id);
-          
-          // A. Update current item status back to vault
-          const { error: updateErr } = await supabase.from('inventory_items').update({
-            status: 'in_vault',
-            warehouse_id: selectedLocation
-          }).in('id', itemIdsToReturn);
-          
-          if (updateErr) throw updateErr;
+       // Look for this section inside the `else if (mode === 'return')` block
+// in your useCheckout hook:
 
-          // B. Log every item permanently in the junction table
-          const historyPayload = returnDetails.selectedSystemItems.map((i:any) => ({
-            buyback_id: buybackData.id,
-            inventory_item_id: i.item_id,
-            barcode: i.inventory_items?.barcode || 'UNKNOWN'
-          }));
+} else if (returnDetails.selectedSystemItems?.length > 0) {
+  // Internal System Return
+  const itemIdsToReturn = returnDetails.selectedSystemItems.map((i:any) => i.item_id);
+  
+  // A. Update current item status back to vault
+  const { error: updateErr } = await supabase.from('inventory_items').update({
+    status: 'in_vault',
+    warehouse_id: selectedLocation
+  }).in('id', itemIdsToReturn);
+  
+  if (updateErr) throw updateErr;
 
-          const { error: historyErr } = await supabase.from('buyback_items').insert(historyPayload);
-          if (historyErr) throw historyErr;
-       }
+  // B. Log every item permanently in the junction table
+  // ✨ FIX: Added company_id injection here!
+  const historyPayload = returnDetails.selectedSystemItems.map((i:any) => ({
+    company_id: appUser?.company_id, // 👈 CRITICAL FIX
+    buyback_id: buybackData.id,
+    inventory_item_id: i.item_id,
+    barcode: i.inventory_items?.barcode || 'UNKNOWN'
+  }));
+
+  const { error: historyErr } = await supabase.from('buyback_items').insert(historyPayload);
+  if (historyErr) throw historyErr;
+}
         
         toast.success("Return processed & Items sent to Vault!")
       }

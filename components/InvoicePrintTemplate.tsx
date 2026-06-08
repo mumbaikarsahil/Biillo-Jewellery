@@ -120,12 +120,17 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
       legalDisclaimer = "BUYBACK VOUCHER: We acknowledge the receipt of the returned item(s) listed above. The valuation is based on standard buyback policies and current market rates. The total refund amount constitutes full and final settlement for the surrendered items. Ownership of the item transfers back to the company."
     }
 
-    const tableColCount = mode === 'normal' ? 6 : 5;
+    // ✨ INCREMENTED COL COUNT BY 1 TO ACCOMMODATE THE NEW IMAGE COLUMN
+    const tableColCount = mode === 'normal' ? 7 : 6;
     const currentItemCount = data.items?.length || 0;
     const emptyRowsToFill = Math.max(0, 2 - currentItemCount); 
 
     const branchGstin = data.branch?.gstin || '27AAOPM1004A1ZB';
     const branchPan = branchGstin.length >= 12 ? branchGstin.substring(2, 12) : 'AAOPM1004A';
+
+    // ✨ WAREHOUSE-SPECIFIC DYNAMIC VARIABLES
+    const guaranteeText = data.branch?.exchange_policy_text || "* Lifetime 100% Exchange guarantee. And Lifetime 70% Buyback on actual paid amount.";
+    const bannerImage = data.branch?.invoice_banner_url || data.bannerUrl || "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/brand-assets/invoice-banner1.jpg";
 
     return (
       <div ref={ref} className="w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
@@ -272,6 +277,9 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 <thead className={isEstimate ? "bg-slate-800 text-white" : "bg-[#E8A5D8] text-white"}>
                   <tr>
                     <th className="p-2.5 text-center font-semibold w-12 rounded-tl-md">Sr.</th>
+                    {/* ✨ NEW IMAGE COLUMN */}
+                    <th className="p-2.5 text-center font-semibold w-16">Image</th>
+                    
                     <th className="p-2.5 text-left font-semibold">Description</th>
                     {mode === 'normal' && <th className="p-2.5 text-center font-semibold w-20">HSN Code</th>}
                     
@@ -290,10 +298,23 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     const gw = item.gross_weight_g || item.gross_weight || item.gross_wt || 0;
                     const nw = item.net_weight_g || item.net_weight || item.net_wt || gw; 
                     const dw = item.total_stone_weight_cts || item.diamond_weight_cts || item.dia_wt || item.stone_weight || 0;
+                    
+                    // Support standard image keys from the database
+                    const imageUrl = item.image_url || item.image || null;
 
                     return (
                       <tr key={idx} className="bg-white border-b border-slate-100">
                         <td className="p-2.5 text-center font-bold text-slate-800 pt-3">{idx + 1}</td>
+                        
+                        {/* ✨ NEW IMAGE CELL */}
+                        <td className="p-2.5 text-center pt-2">
+                          {imageUrl ? (
+                            <img src={imageUrl} alt="Item" className="w-10 h-10 object-cover rounded mx-auto border border-slate-200" crossOrigin="anonymous" />
+                          ) : (
+                            <div className="w-10 h-10 bg-slate-50 rounded mx-auto border border-slate-100 flex items-center justify-center text-[8px] text-slate-300 font-medium">N/A</div>
+                          )}
+                        </td>
+
                         <td className="p-2.5 pt-3">
                           <span className="font-bold block text-[13px] text-slate-800">
                             {isRepair ? 'Repair & Maintenance Service' : `[${item.purity_karat || item.purity || '22K'}] Gold Diamond Jewellery`}
@@ -364,7 +385,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     <span>₹ {customBaseEstimate.toLocaleString('en-IN')}</span>
                   </div>
                   
-                  {/* ✨ FIX: Added the manual discount deduction to the print template */}
                   {manualDiscount > 0 && (
                     <div className="flex justify-between text-slate-600">
                       <span> Discount</span>
@@ -586,9 +606,10 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   
                 </div>
               )}
-              {mode === 'normal' && (
+              {/* ✨ RENDER THE DYNAMIC GUARANTEE TEXT */}
+              {mode === 'normal' && guaranteeText && (
                  <p className="text-[7.5px] leading-snug text-justify text-slate-900 font-black uppercase tracking-tight mb-1 border-b border-slate-200 pb-1 inline-block w-max">
-                   * Lifetime 100% Exchange guarantee. And Lifetime 70% Buyback on actual paid amount.
+                   {guaranteeText}
                  </p>
               )}
               <p className="text-[7.5px] leading-snug text-justify text-slate-500 font-bold uppercase tracking-tight">
@@ -598,8 +619,9 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
             {!isEstimate && (
               <div className="w-full h-[140px] rounded-xl overflow-hidden border border-slate-200 relative">
+                {/* ✨ RENDER THE DYNAMIC BANNER IMAGE */}
                 <img 
-                  src={data.bannerUrl || "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/brand-assets/invoice-banner1.jpg"} 
+                  src={bannerImage} 
                   alt="Pavitram Promotional Banner" 
                   className="w-full h-full object-cover object-center"
                   crossOrigin="anonymous" 

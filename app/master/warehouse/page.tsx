@@ -43,8 +43,9 @@ import {
 } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
-import { Plus, Warehouse, Search, Edit2, MapPin, Phone, ShieldCheck, Store, Loader2 } from 'lucide-react'
+import { Plus, Warehouse, Search, Edit2, MapPin, Phone, ShieldCheck, Store, Loader2, Image as ImageIcon, FileText } from 'lucide-react'
 
+// ✨ ADDED: exchange_policy_text and invoice_banner_url
 const warehouseSchema = z.object({
   warehouse_code: z.string().min(2, 'Code required'),
   name: z.string().min(2, 'Name required'),
@@ -52,6 +53,8 @@ const warehouseSchema = z.object({
   address: z.string().optional().nullable(),
   contact_number: z.string().optional().nullable(),
   gstin: z.string().optional().nullable(),
+  exchange_policy_text: z.string().optional().nullable(),
+  invoice_banner_url: z.string().url('Must be a valid URL').optional().nullable().or(z.literal('')),
   is_active: z.boolean().default(true) 
 })
 
@@ -65,6 +68,7 @@ export default function WarehousePage() {
   
   const [editingId, setEditingId] = useState<string | null>(null)
 
+  // ✨ ADDED: new defaults
   const defaultValues = {
     warehouse_code: '',
     name: '',
@@ -72,6 +76,8 @@ export default function WarehousePage() {
     address: '',
     contact_number: '',
     gstin: '',
+    exchange_policy_text: '',
+    invoice_banner_url: '',
     is_active: true
   }
 
@@ -105,10 +111,11 @@ export default function WarehousePage() {
       warehouse_code: w.warehouse_code || '',
       name: w.name || '',
       warehouse_type: w.warehouse_type || 'branch',
-      // ✨ FIX: Guarantee these are strings so the form inputs are always controlled
       address: w.address || '',
       contact_number: w.contact_number || '',
       gstin: w.gstin || '',
+      exchange_policy_text: w.exchange_policy_text || '',
+      invoice_banner_url: w.invoice_banner_url || '',
       is_active: w.is_active
     })
     setIsSheetOpen(true)
@@ -124,7 +131,6 @@ export default function WarehousePage() {
     }
   }
 
-  // ✨ HELPER: Safely convert empty strings to actual nulls for Supabase
   const sanitizeValue = (val: string | null | undefined) => {
     if (val === undefined || val === null) return null;
     if (typeof val === 'string' && val.trim() === '') return null;
@@ -137,7 +143,7 @@ export default function WarehousePage() {
 
     try {
       if (editingId) {
-        // --- STRICT RPC UPDATE (Bypasses RLS blocks) ---
+        // ✨ ADDED: Passing new fields to update_warehouse RPC
         const { error } = await supabase.rpc('update_warehouse', {
           _warehouse_id: editingId,
           _company_id: appUser.company_id,
@@ -147,6 +153,8 @@ export default function WarehousePage() {
           _address: sanitizeValue(values.address),
           _contact_number: sanitizeValue(values.contact_number),
           _gstin: sanitizeValue(values.gstin),
+          _exchange_policy_text: sanitizeValue(values.exchange_policy_text),
+          _invoice_banner_url: sanitizeValue(values.invoice_banner_url),
           _is_active: values.is_active
         })
 
@@ -154,7 +162,7 @@ export default function WarehousePage() {
         toast.success('Location Updated Successfully')
         
       } else {
-        // --- CREATE NEW WAREHOUSE ---
+        // ✨ ADDED: Passing new fields to create_warehouse RPC
         const { error } = await supabase.rpc('create_warehouse', {
           _user_id: appUser.user_id,
           _warehouse_code: values.warehouse_code,
@@ -162,7 +170,9 @@ export default function WarehousePage() {
           _warehouse_type: values.warehouse_type,
           _address: sanitizeValue(values.address),            
           _contact_number: sanitizeValue(values.contact_number), 
-          _gstin: sanitizeValue(values.gstin)                 
+          _gstin: sanitizeValue(values.gstin),
+          _exchange_policy_text: sanitizeValue(values.exchange_policy_text),
+          _invoice_banner_url: sanitizeValue(values.invoice_banner_url)
         })
 
         if (error) throw error
@@ -222,7 +232,7 @@ export default function WarehousePage() {
               </Button>
             </SheetTrigger>
 
-            <SheetContent side="right" className="w-full sm:w-[450px] overflow-y-auto border-l border-zinc-200 shadow-2xl p-0">
+            <SheetContent side="right" className="w-full sm:w-[450px] overflow-y-auto border-l border-zinc-200 shadow-2xl p-0 custom-scrollbar">
               <SheetHeader className="p-6 border-b border-zinc-100 bg-zinc-50/50">
                 <SheetTitle className="text-xl font-bold tracking-tight text-zinc-900">
                   {editingId ? 'Edit Location' : 'New Location'}
@@ -338,6 +348,56 @@ export default function WarehousePage() {
                           )}
                         />
                       </div>
+                    </div>
+
+                    {/* ✨ ADDED: Invoice Customization Box */}
+                    <div className="pt-4 border-t border-zinc-100 space-y-5">
+                      <div className="flex items-center gap-2 mb-2">
+                        <FileText className="w-4 h-4 text-zinc-400" />
+                        <h3 className="text-xs font-bold uppercase tracking-widest text-zinc-800">Invoice Customization</h3>
+                      </div>
+                      
+                      <FormField
+                        control={form.control}
+                        name="exchange_policy_text"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="text-[11px] font-bold uppercase tracking-widest text-zinc-500">Exchange / Guarantee Policy</FormLabel>
+                            <FormControl>
+                              <Textarea 
+                                {...field} 
+                                value={field.value || ''}
+                                placeholder="e.g. * Lifetime 100% Exchange guarantee. And Lifetime 70% Buyback..." 
+                                className="resize-none h-16 text-xs bg-zinc-50" 
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name="invoice_banner_url"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel className="text-[11px] font-bold uppercase tracking-widest text-zinc-500">Promotional Banner Image URL</FormLabel>
+                            <div className="relative">
+                              <ImageIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+                              <FormControl>
+                                <Input 
+                                  {...field} 
+                                  value={field.value || ''} 
+                                  type="url"
+                                  className="h-10 pl-9 bg-zinc-50 text-sm" 
+                                  placeholder="https://your-bucket.../banner.jpg" 
+                                />
+                              </FormControl>
+                            </div>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
                     </div>
 
                     {/* Status Toggle (Only show in edit mode) */}
