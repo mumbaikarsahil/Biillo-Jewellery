@@ -10,7 +10,7 @@ import { toast } from 'sonner'
 import { useReactToPrint } from 'react-to-print' 
 import { 
   Gift, User, Phone, MapPin, Loader2, CheckCircle2, 
-  MessageCircle, X, Send, ChevronDown, HelpCircle, Calendar, Heart, Sparkles, PhoneCall, Download
+  MessageCircle, X, Send, ChevronDown, HelpCircle, Calendar, Heart, Sparkles, PhoneCall, Download, Mail
 } from 'lucide-react'
 import { supabase } from '@/lib/supabaseClient'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -96,8 +96,9 @@ export default function EventVoucherClaimPage() {
   const [claimedCode, setClaimedCode] = useState<string>('')
   const [voucherExpiry, setVoucherExpiry] = useState<string | null>(null)
   
+  // ✨ FIX: Added 'email' to the state
   const [formData, setFormData] = useState({
-    name: '', phone: '', nearestBranch: '', dob: '', anniversary: ''
+    name: '', phone: '', email: '', nearestBranch: '', dob: '', anniversary: ''
   })
 
   const [isChatOpen, setIsChatOpen] = useState(false)
@@ -139,11 +140,6 @@ export default function EventVoucherClaimPage() {
       )
     : QUICK_QUESTIONS;
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // MAIN HANDLER
-  // Flow: claim_event_voucher RPC → subscriber.createByPhone → save user_id
-  //       → Initialize Drip Campaign → send WhatsApp templates in background → success screen
-  // ─────────────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.name || !formData.phone || !formData.nearestBranch || !formData.dob) {
@@ -164,6 +160,7 @@ export default function EventVoucherClaimPage() {
         p_phone: formData.phone.trim(),
         p_prefix: prefix,
         p_branch: formData.nearestBranch,
+        p_email: formData.email.trim() || null, // ✨ FIX: Added email parameter here
         p_dob: formData.dob || null,
         p_anniversary: formData.anniversary || null
       })
@@ -174,7 +171,6 @@ export default function EventVoucherClaimPage() {
         ? new Date(data.expiry_date)
         : (() => { const d = new Date(); d.setMonth(d.getMonth() + 1); return d; })();
 
-      // Format for template variable {{3}}: "26 Jun 2026"
       const formattedExpiry = expiryDate.toLocaleDateString('en-IN', {
         day: '2-digit', month: 'short', year: 'numeric'
       });
@@ -429,6 +425,21 @@ export default function EventVoucherClaimPage() {
                     </div>
                   </div>
 
+                  {/* ✨ FIX: Added the new Email field here */}
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Email Address <span className="font-normal text-slate-400">(Opt)</span></Label>
+                    <div className="relative flex items-center">
+                      <Mail className="absolute left-4 h-4 w-4 text-slate-400 pointer-events-none" />
+                      <Input 
+                        type="email" 
+                        className="h-12 pl-11 border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium text-sm shadow-sm transition-all" 
+                        placeholder="E.g. anjali@example.com" 
+                        value={formData.email} 
+                        onChange={(e) => setFormData({...formData, email: e.target.value})} 
+                      />
+                    </div>
+                  </div>
+
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Nearest Branch *</Label>
                     <Select value={formData.nearestBranch} onValueChange={(val) => setFormData({...formData, nearestBranch: val})} required>
@@ -439,7 +450,7 @@ export default function EventVoucherClaimPage() {
                         </div>
                       </SelectTrigger>
                       <SelectContent className="max-h-[250px] rounded-2xl border-slate-200/60 bg-white/95 backdrop-blur-xl">
-                        {BRANCHES.map(branch => <SelectItem key={branch} value={branch} className="text-sm font-medium py-2.5">{branch}</SelectItem>)}
+                        {BRANCHES.map(branch => <SelectItem key={branch} value={branch} className="text-sm font-medium py-2.5 cursor-pointer">{branch}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>
@@ -558,7 +569,7 @@ export default function EventVoucherClaimPage() {
                     </Button>
                   </div>
                 )}
-                <p className="text-[9px] text-right mt-1.5 font-mono flex justify-end items-center gap-1 text-slate-400">
+                <p className={`text-[9px] text-right mt-1.5 font-mono flex justify-end items-center gap-1 text-slate-400`}>
                   Just now {msg.sender === 'user' && <CheckCircle2 className="w-3 h-3 text-amber-400"/>}
                 </p>
               </div>

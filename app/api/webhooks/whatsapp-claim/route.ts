@@ -18,6 +18,7 @@ export async function POST(req: Request) {
       phone, 
       code, 
       name, 
+      email, // ✨ NEW: Extract email from the webhook payload
       branch, 
       dob, 
       anniversary 
@@ -36,6 +37,7 @@ export async function POST(req: Request) {
       p_name: name,
       p_phone: cleanPhone,
       p_branch: branch,
+      p_email: email ? email.trim() : null, // ✨ NEW: Pass email to the database
       p_dob: dob,
       p_anniversary: anniversary || null
     });
@@ -105,7 +107,7 @@ export async function POST(req: Request) {
       })
     });
 
-    // Wait 8 seconds, then fire the utility template
+    // Wait 5 seconds, then fire the utility template
     setTimeout(async () => {
       await fetch(`${baseUrl}/api/whatsapp`, {
         method: 'POST',
@@ -123,7 +125,7 @@ export async function POST(req: Request) {
       });
     }, 5000);
 
-    // Return success to Convo360 so it moves to the next node in the visual builders
+    // Return success to Convo360 so it moves to the next node in the visual builder
     return NextResponse.json({ 
       success: true, 
       voucher_code: cleanCode,

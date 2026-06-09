@@ -8,7 +8,7 @@ import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
 import { 
   Ticket, User, Phone, MapPin, Loader2, CheckCircle2, 
-  MessageCircle, X, Send, ChevronDown, HelpCircle, Calendar, Heart, ArrowRight, Edit3, Sparkles, PhoneCall
+  MessageCircle, X, Send, ChevronDown, HelpCircle, Calendar, Heart, ArrowRight, Edit3, Sparkles, PhoneCall, Mail
 } from 'lucide-react'
 import { supabase } from '@/lib/supabaseClient'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -85,8 +85,9 @@ export default function VoucherClaimPage() {
   const [step, setStep] = useState(0) 
   const [isVerifying, setIsVerifying] = useState(false) 
   const [loading, setLoading] = useState(false)
+  // ✨ FIX: Added 'email' to the state
   const [formData, setFormData] = useState({
-    code: '', name: '', phone: '', nearestBranch: '', dob: '', anniversary: ''
+    code: '', name: '', phone: '', email: '', nearestBranch: '', dob: '', anniversary: ''
   })
   const [voucherExpiry, setVoucherExpiry] = useState<string | null>(null)
 
@@ -132,8 +133,8 @@ export default function VoucherClaimPage() {
       if (data.status === 'expired' || (data.expiry_date && new Date(data.expiry_date) < new Date())) {
         throw new Error("This voucher has expired.");
       }
-      if (data.status !== 'distributed' && data.status !== 'in_stock') {
-        throw new Error("Invalid voucher code, Please contact the support");
+      if (data.status !== 'distributed') {
+        throw new Error("This voucher is not yet ready for registration. Please contact support.");
       }
       if (data.expiry_date) setVoucherExpiry(data.expiry_date);
       setStep(1) 
@@ -143,15 +144,6 @@ export default function VoucherClaimPage() {
     }
   }
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // MAIN REGISTRATION HANDLER
-  // Flow: RPC → fetch expiry → create Convo360 subscriber → save user_id → send WhatsApp
-  // Steps 3–5 are fully non-fatal: a WhatsApp failure never blocks the success screen.
-  // ─────────────────────────────────────────────────────────────────────────
-  // ─────────────────────────────────────────────────────────────────────────
-  // MAIN REGISTRATION HANDLER
-  // Flow: RPC → fetch expiry → create Convo360 subscriber → save user_id → send WhatsApps
-  // ─────────────────────────────────────────────────────────────────────────
   // ─────────────────────────────────────────────────────────────────────────
   // MAIN REGISTRATION HANDLER
   // Flow: RPC → fetch expiry → create Convo360 subscriber → Init Drip Campaign → Send WhatsApps
@@ -176,6 +168,7 @@ export default function VoucherClaimPage() {
         p_name: formData.name,
         p_phone: formData.phone,
         p_branch: formData.nearestBranch,
+        p_email: formData.email.trim() || null, // ✨ FIX: Added email parameter here
         p_dob: formData.dob,
         p_anniversary: formData.anniversary || null
       })
@@ -498,6 +491,21 @@ export default function VoucherClaimPage() {
                           const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
                           setFormData({...formData, phone: digits});
                         }} 
+                      />
+                    </div>
+                  </div>
+
+                  {/* ✨ FIX: Added the new Email field here */}
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest ml-1">Email Address <span className="font-normal text-slate-400">(Opt)</span></Label>
+                    <div className="relative flex items-center">
+                      <Mail className="absolute left-4 h-4 w-4 text-slate-400 pointer-events-none" />
+                      <Input 
+                        type="email" 
+                        className="h-12 pl-11 border-slate-200/60 focus-visible:ring-amber-500/30 rounded-2xl bg-white/80 font-medium text-sm shadow-sm transition-all" 
+                        placeholder="E.g. anjali@example.com" 
+                        value={formData.email} 
+                        onChange={(e) => setFormData({...formData, email: e.target.value})} 
                       />
                     </div>
                   </div>

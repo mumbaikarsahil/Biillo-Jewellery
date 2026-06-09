@@ -16,6 +16,7 @@ export async function POST(req: Request) {
       phone, 
       prefix, // The user types "EXPO" or "SHAHA"
       name, 
+      email,  // ✨ NEW: Extract email from the webhook payload
       branch, 
       dob, 
       anniversary 
@@ -35,6 +36,7 @@ export async function POST(req: Request) {
       p_phone: cleanPhone,
       p_prefix: cleanPrefix,
       p_branch: branch || 'Unspecified',
+      p_email: email ? email.trim() : null, // ✨ NEW: Pass email to the database
       p_dob: dob || null,
       p_anniversary: anniversary || null
     });
