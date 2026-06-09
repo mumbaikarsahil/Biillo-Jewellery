@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     const cleanName = name.trim();
 
     // ── 1. Claim an available event voucher via RPC ─────────────────────
-    const { data: rpcData, error: rpcError } = await supabase.rpc('register_voucher_public', {
+    const { data: rpcData, error: rpcError } = await supabase.rpc('claim_event_voucher', {
       p_full_name: cleanName,
       p_phone: cleanPhone,
       p_prefix: cleanPrefix,
