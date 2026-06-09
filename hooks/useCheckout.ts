@@ -16,10 +16,11 @@ interface CheckoutConfig {
   allBranches: any[];
   callRpc: Function;
   customBillingDate?: string; 
+  billedBy?: string; // ✨ NEW PROP
 }
 
 export function useCheckout({ 
-  appUser, selectedLocation, cart, subtotal, mode, selectedCustomer, customOrderDetails, repairDetails, returnDetails, allBranches, callRpc, customBillingDate 
+  appUser, selectedLocation, cart, subtotal, mode, selectedCustomer, customOrderDetails, repairDetails, returnDetails, allBranches, callRpc, customBillingDate, billedBy
 }: CheckoutConfig) {
   
   // Payment States
@@ -333,6 +334,9 @@ export function useCheckout({
     let finalNo = ''
     try {
       
+      // Determine the final user attributing the sale
+      const finalizingUserId = billedBy || appUser?.user_id || appUser?.id;
+
       const effectiveKittyAmt = customTransactionContext?.applied_kitty || customTransactionContext?.appliedKitty || appliedKittyAmount;
       const effectiveKittyPlanId = customTransactionContext?.kitty_plan_id || customTransactionContext?.kittyPlanId || appliedKittyPlanId;
       const effectiveCreditAmt = customTransactionContext?.applied_credit || customTransactionContext?.appliedCredit || appliedCreditAmount;
@@ -352,15 +356,11 @@ export function useCheckout({
         setIsProcessing(false); return { success: false };
       }
 
-      // Pre-compute the exact draft data we are printing to ensure identical math
       const finalDraftData = generateDraftData(isEstimate);
 
-      // =================================================================
-      // ✨ NEW: SAVE PROFORMA ESTIMATES TO THE DATABASE
-      // =================================================================
       if (isEstimate) {
         finalNo = `EST-${Date.now().toString().slice(-6)}`
-        finalDraftData.invoice_number = finalNo; // Update payload for the print screen
+        finalDraftData.invoice_number = finalNo; 
 
         const { data: estData, error: estError } = await supabase.from('estimates').insert({
           company_id: appUser?.company_id,
@@ -374,14 +374,12 @@ export function useCheckout({
           sgst: finalDraftData.sgstAmount,
           round_off: finalDraftData.roundOffAmount,
           total_amount: finalDraftData.finalTotal,
-          // ✨ FIX: Safely grab the billing remarks directly from context without throwing a TS error
           remarks: customTransactionContext?.billing_remarks || customTransactionContext?.payment_remarks || null,
-          created_by: appUser?.user_id
+          created_by: finalizingUserId // ✨ Replaced appUser logic
         }).select('id').single();
 
         if (estError) throw new Error("Failed to save estimate: " + estError.message);
 
-        // Map standard cart items to the estimate items table
         if (cart && cart.length > 0 && mode === 'normal') {
            const estItems = cart.map((item: any) => ({
                 estimate_id: estData.id,
@@ -417,7 +415,6 @@ export function useCheckout({
 
         const preTaxDeductions = standardDiscount + exchangeNum + appliedVoucherAmount;
 
-        // 1. Build the base payload WITHOUT the exchange details keys
         const invoiceData: any = {
           created_at: effectiveDateISO,
           customer_id: selectedCustomer?.id, 
@@ -437,7 +434,7 @@ export function useCheckout({
           voucher_code: activeVoucher?.code || null,
           voucher_discount: appliedVoucherAmount, 
           Voucher_handling_fee: handlingAmt,
-          exchange_value: exchangeNum || 0, // Ensure strictly 0
+          exchange_value: exchangeNum || 0, 
           
           kitty_payment: effectiveKittyAmt, 
           wallet_payment: effectiveCreditAmt,
@@ -452,13 +449,16 @@ export function useCheckout({
           transfer_type: customTransactionContext?.transfer_type || null
         };
         
-        // 2. ONLY attach these keys to the payload if a real exchange occurred!
         if (exchangeNum > 0 && exchangePhysicalDetails) {
            invoiceData.exchange_notes = exchangeNotes;
            invoiceData.exchange_physical_details = exchangePhysicalDetails;
         }
 
-        const { data, error } = await callRpc('pos_confirm_sale', { p_invoice_json: invoiceData, p_user_id: appUser?.user_id })
+        // ✨ Pass the finalized billedBy user ID to the RPC
+        const { data, error } = await callRpc('pos_confirm_sale', { 
+           p_invoice_json: invoiceData, 
+           p_user_id: finalizingUserId 
+        })
         
         finalNo = data?.invoice_number || `INV-${Date.now().toString().slice(-6)}`
         
@@ -520,7 +520,8 @@ export function useCheckout({
           advance_paid: Number(repairDetails.advancePaid) || 0,
           condition_photo_url: repairDetails.conditionPhotoUrl,
           expected_delivery_date: repairDetails.expectedDelivery || null,
-          status: 'received_at_store'
+          status: 'received_at_store',
+          created_by: finalizingUserId // ✨ Replaced appUser logic
         })
         if (error) throw error
         toast.success("Repair Ticket Generated!")
@@ -535,7 +536,7 @@ export function useCheckout({
           company_id: appUser?.company_id,
           warehouse_id: selectedLocation,
           customer_id: selectedCustomer?.id || null,
-          invoice_id: returnDetails.invoiceId || null, // ✨ Linked to actual Invoice DB Row
+          invoice_id: returnDetails.invoiceId || null, 
           reference_invoice_number: returnDetails.invoiceNo || null,
           
           is_external_item: isExternal,
@@ -555,19 +556,17 @@ export function useCheckout({
           buyback_percent: Number(returnDetails.returnPercent) || 100,
           net_refund: Number(returnDetails.calculatedRefund) || 0,
           status: 'received',
-          created_by: appUser?.user_id
+          created_by: finalizingUserId // ✨ Replaced appUser logic
         }).select('id').single()
         
         if (buybackErr) throw buybackErr
 
         // 2. Handle the Physical Inventory 
         if (isExternal) {
-          // External Old Gold -> Mint a new RTN barcode
           const uniqueRef = `RTN-${Date.now().toString().slice(-6)}`;
           const grossWt = Number(returnDetails.physicalDetails?.gross_weight_g) || 0.001;
           const netWt = Number(returnDetails.physicalDetails?.net_weight_g) || grossWt;
 
-          // A. Create the item in inventory
           const { data: newItem, error: invError } = await supabase.from('inventory_items').insert({
             company_id: appUser?.company_id,
             warehouse_id: selectedLocation,
@@ -587,40 +586,33 @@ export function useCheckout({
           
           if (invError) throw invError;
 
-          // B. Log it permanently in the junction table
           await supabase.from('buyback_items').insert({
+            company_id: appUser?.company_id,
             buyback_id: buybackData.id,
             inventory_item_id: newItem.id,
             barcode: uniqueRef
           });
 
-       // Look for this section inside the `else if (mode === 'return')` block
-// in your useCheckout hook:
+        } else if (returnDetails.selectedSystemItems?.length > 0) {
+          const itemIdsToReturn = returnDetails.selectedSystemItems.map((i:any) => i.item_id);
+          
+          const { error: updateErr } = await supabase.from('inventory_items').update({
+            status: 'in_vault',
+            warehouse_id: selectedLocation
+          }).in('id', itemIdsToReturn);
+          
+          if (updateErr) throw updateErr;
 
-} else if (returnDetails.selectedSystemItems?.length > 0) {
-  // Internal System Return
-  const itemIdsToReturn = returnDetails.selectedSystemItems.map((i:any) => i.item_id);
-  
-  // A. Update current item status back to vault
-  const { error: updateErr } = await supabase.from('inventory_items').update({
-    status: 'in_vault',
-    warehouse_id: selectedLocation
-  }).in('id', itemIdsToReturn);
-  
-  if (updateErr) throw updateErr;
+          const historyPayload = returnDetails.selectedSystemItems.map((i:any) => ({
+            company_id: appUser?.company_id,
+            buyback_id: buybackData.id,
+            inventory_item_id: i.item_id,
+            barcode: i.inventory_items?.barcode || 'UNKNOWN'
+          }));
 
-  // B. Log every item permanently in the junction table
-  // ✨ FIX: Added company_id injection here!
-  const historyPayload = returnDetails.selectedSystemItems.map((i:any) => ({
-    company_id: appUser?.company_id, // 👈 CRITICAL FIX
-    buyback_id: buybackData.id,
-    inventory_item_id: i.item_id,
-    barcode: i.inventory_items?.barcode || 'UNKNOWN'
-  }));
-
-  const { error: historyErr } = await supabase.from('buyback_items').insert(historyPayload);
-  if (historyErr) throw historyErr;
-}
+          const { error: historyErr } = await supabase.from('buyback_items').insert(historyPayload);
+          if (historyErr) throw historyErr;
+        }
         
         toast.success("Return processed & Items sent to Vault!")
       }
@@ -646,7 +638,8 @@ export function useCheckout({
           estimated_value: Number(customOrderDetails.estimated_value) || 0,
           advance_paid: (Number(customOrderDetails.advance_paid) || 0) + appliedVoucherAmount,
           
-          status: 'pending_manufacturing' 
+          status: 'pending_manufacturing',
+          created_by: finalizingUserId // ✨ Replaced appUser logic
         }
         const { error } = await supabase.from('custom_orders').insert(payload)
         if (error) throw error

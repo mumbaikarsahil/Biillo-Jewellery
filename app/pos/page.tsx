@@ -48,6 +48,9 @@ export default function POSPage() {
   const [billingDate, setBillingDate] = useState(new Date().toISOString().split('T')[0])
   const isAdmin = appUser?.role === 'owner' || appUser?.role === 'manager' || appUser?.role === 'operations_manager';
   
+  // ✨ NEW: Billed By State
+  const [billedBy, setBilledBy] = useState<string>('')
+
   const [allBranches, setAllBranches] = useState<any[]>([])
 
   const [repairDetails, setRepairDetails] = useState<any>({
@@ -155,14 +158,16 @@ export default function POSPage() {
     returnDetails,    
     allBranches,
     
-    // NEW: Pass the selected date to the checkout engine
-    customBillingDate: isAdmin ? billingDate : undefined 
+    customBillingDate: isAdmin ? billingDate : undefined,
+    // ✨ NEW: Pass billedBy to the checkout hook
+    billedBy: billedBy
   })
 
   const handleWipeSession = () => {
     clearCart()
     checkoutHook.resetCheckoutState()
     setSelectedCustomer(null)
+    setBilledBy('') // Reset billed by on wipe
     setCustomOrderDetails({ design_reference: '', item_category: '', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '' })
     setReturnDetails({ invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0 })
     setRepairDetails({ itemDescription: '', grossWeight: '', purity: '22K', defectNotes: '', estimatedCost: '', advancePaid: '', expectedDelivery: '', conditionPhotoUrl: null })
@@ -192,6 +197,10 @@ export default function POSPage() {
         isAdmin={isAdmin}
         billingDate={billingDate}
         setBillingDate={setBillingDate}
+        // ✨ NEW: Passed props to Header
+        userRole={appUser?.role}
+        billedBy={billedBy}
+        setBilledBy={setBilledBy}
       />
 
       <ModeTabs mode={mode} setMode={setMode} />
@@ -235,7 +244,6 @@ export default function POSPage() {
               details={returnDetails} 
               setDetails={setReturnDetails}
               appUser={appUser} 
-              // ✨ FIX: Typed refundValue as a number, and added ts-ignore to bypass the prop check temporarily
               // @ts-ignore
               onApplyReturn={(refundValue: number) => {
                 toast.success(`₹${refundValue.toLocaleString()} refund verified! Please select a Refund Method (e.g. Cash, UPI) on the right sidebar to finalize.`);
@@ -282,7 +290,6 @@ export default function POSPage() {
         </div>
 
         {/* RIGHT PANEL */}
-        {/* RIGHT PANEL */}
         <CheckoutSidebar 
           mode={mode}
           cartLength={cart.length}
@@ -328,8 +335,6 @@ export default function POSPage() {
             setShowPreviewModal(false)
             
             // 3. Short delay before showing print modal. 
-            // This guarantees the hidden Print Template has time to re-render with the new state 
-            // before the user can click the "Print" button.
             setTimeout(() => {
                 setShowPrintModal(true)
                 handleWipeSession()

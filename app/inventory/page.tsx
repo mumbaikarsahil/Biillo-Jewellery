@@ -9,12 +9,11 @@ import html2canvas from "html2canvas"
 import QRCode from "react-qr-code"
 import { Badge } from "@/components/ui/badge"
 
-// ✨ ADDED ZoomIn for the full screen view
 import { 
   Search, Printer, Edit2, Check, X, Store, Truck, 
   RefreshCw, Database, Package, Calculator, Gem, Hammer, 
   Upload, Eye, Image as ImageIcon, CheckCircle2, Box, Layers, Wrench, Clock, CalendarDays,
-  Loader2, Filter, IndianRupee, UserCircle, CheckSquare, Sparkles, Mic, ChevronDown, Download, FileText, History, ArrowRightLeft, ChevronLeft, ChevronRight, ZoomIn
+  Loader2, Filter, IndianRupee, UserCircle, CheckSquare, Sparkles, Mic, ChevronDown, Download, FileText, History, ArrowRightLeft, ChevronLeft, ChevronRight, ZoomIn, ShieldAlert
 } from "lucide-react"
 
 import { useAuth } from "@/hooks/useAuth"
@@ -42,7 +41,6 @@ import {
 import { cn } from "@/lib/utils"
 import { ItemTagPreview } from "@/components/ItemTagPreview"
 
-// ✨ NEW: Import the compression library
 import imageCompression from 'browser-image-compression'
 
 const PAGE_SIZE = 50;
@@ -170,7 +168,6 @@ export default function InventoryPage() {
   const [items, setItems] = useState<InventoryItem[]>([])
   const [itemCache, setItemCache] = useState<Record<string, InventoryItem>>({})
 
-  // PAGINATION STATE
   const [loading, setLoading] = useState(true)
   const [isFetchingMore, setIsFetchingMore] = useState(false)
   const [page, setPage] = useState(0)
@@ -189,15 +186,11 @@ export default function InventoryPage() {
   const [editingMrpId, setEditingId] = useState<string | null>(null)
   const [editingMrpVal, setEditingMrpVal] = useState<string>('')
   
-  // COMPREHENSIVE EDIT STATE
   const [fullEditItem, setFullEditItem] = useState<InventoryItem | null>(null)
   const [fullEditForm, setFullEditForm] = useState<any>({})
   const [isSavingFullEdit, setIsSavingFullEdit] = useState(false)
 
-  const [tagItem, setTagItem] = useState<InventoryItem | null>(null)
   const [viewItem, setViewItem] = useState<InventoryItem | null>(null)
-  
-  // ✨ NEW: Full Screen Image State
   const [fullScreenImage, setFullScreenImage] = useState<string | null>(null)
 
   const [searchTerm, setSearchTerm] = useState('')
@@ -219,7 +212,8 @@ export default function InventoryPage() {
 
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
 
-  const [counts, setCounts] = useState({ active: 0, exchange: 0, buyback: 0, repair: 0, sold: 0 })
+  // ✨ ADDED 'others' to the counts state
+  const [counts, setCounts] = useState({ active: 0, exchange: 0, buyback: 0, repair: 0, others: 0, sold: 0 })
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false)
 
   const [diamondRates, setDiamondRates] = useState<Record<string, number>>({})
@@ -434,6 +428,7 @@ export default function InventoryPage() {
     fetchInitialData()
   }, [appUser, isHQ])
 
+  // ✨ UPDATED: buildServerQuery updated to handle 'others' tab
   const buildServerQuery = (queryObj: any, tab: string) => {
     let q = queryObj.eq('company_id', appUser?.company_id);
     
@@ -445,6 +440,13 @@ export default function InventoryPage() {
 
     if (tab === 'sold') {
       q = q.in('status', ['sold']);
+    } else if (tab === 'others') {
+      // Capture all irregular / WIP states
+      q = q.in('status', [
+        'received_at_ho', 'job_work_out', 'pending_repair', 
+        'pending_melting', 'melting', 'disputed', 'written_off_lost', 
+        'delivered', 'sold_unbilled'
+      ]);
     } else {
       q = q.in('status', ['in_stock', 'in_vault', 'transit']);
       
@@ -475,6 +477,7 @@ export default function InventoryPage() {
     return q;
   };
 
+  // ✨ UPDATED: Fetch counts now includes 'others' tab
   useEffect(() => {
     if (!appUser) return;
     const fetchCounts = async () => {
@@ -486,8 +489,8 @@ export default function InventoryPage() {
         if (selectedLocation !== 'ALL') repQ = repQ.eq('origin_warehouse_id', selectedLocation);
         if (debouncedSearch) repQ = repQ.or(`ticket_number.ilike.%${debouncedSearch}%,item_description.ilike.%${debouncedSearch}%`);
 
-       const [a, e, b, s, r] = await Promise.all([
-          getQ('active'), getQ('exchange'), getQ('buyback'), getQ('sold'), repQ
+        const [a, e, b, s, r, o] = await Promise.all([
+          getQ('active'), getQ('exchange'), getQ('buyback'), getQ('sold'), repQ, getQ('others')
         ]);
 
         setCounts({
@@ -495,7 +498,8 @@ export default function InventoryPage() {
           exchange: e.count || 0,
           buyback: b.count || 0,
           sold: s.count || 0,
-          repair: r.count || 0
+          repair: r.count || 0,
+          others: o.count || 0
         });
       } catch (e) {
         console.warn("Count Fetch Error:", e);
@@ -896,7 +900,6 @@ export default function InventoryPage() {
     }
   }
 
-  // ✨ UPDATED: Image Compression integrated
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, itemId: string, itemType: string) => {
     if (!canEdit) return toast.error("Unauthorized to update images");
     const file = e.target.files?.[0]
@@ -904,17 +907,13 @@ export default function InventoryPage() {
 
     setIsUploadingImage(true)
     try {
-      // Image Compression Options
       const compressionOptions = {
         maxSizeMB: 0.5,           // Maximum file size in MB (500KB)
         maxWidthOrHeight: 1024,   // Max width or height, scales down proportionally
         useWebWorker: true,       // Uses multi-threading for faster compression
       }
 
-      // Compress the file before uploading
       const compressedFile = await imageCompression(file, compressionOptions)
-
-      // Use the compressed file for the upload process
       const fileExt = compressedFile.name.split('.').pop()
       const fileName = `${itemId}-${Date.now()}.${fileExt}`
       const filePath = `${appUser.company_id}/${fileName}`
@@ -1329,13 +1328,17 @@ export default function InventoryPage() {
               <TabsTrigger value="repair" className="rounded-none border-b-2 border-transparent data-[state=active]:border-indigo-600 data-[state=active]:text-indigo-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-500 transition-all hover:text-slate-800">
                 Repairs <Badge className="ml-1.5 bg-slate-100 text-slate-600 shadow-none px-1.5">{counts.repair}</Badge>
               </TabsTrigger>
+              {/* ✨ NEW OTHERS TAB */}
+              <TabsTrigger value="others" className="rounded-none border-b-2 border-transparent data-[state=active]:border-amber-600 data-[state=active]:text-amber-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-500 transition-all hover:text-slate-800">
+                Other Statuses <Badge className="ml-1.5 bg-slate-100 text-slate-600 shadow-none px-1.5">{counts.others}</Badge>
+              </TabsTrigger>
               <TabsTrigger value="sold" className="rounded-none border-b-2 border-transparent data-[state=active]:border-slate-800 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-slate-600 data-[state=active]:text-slate-800 transition-all">
                 Sold / Archive <Badge className="ml-1.5 bg-slate-100 text-slate-600 shadow-none px-1.5">{counts.sold}</Badge>
               </TabsTrigger>
             </TabsList>
           </div>
 
-          {['active', 'exchange', 'buyback', 'repair', 'sold'].map(tab => (
+          {['active', 'exchange', 'buyback', 'repair', 'others', 'sold'].map(tab => (
              <TabsContent key={tab} value={tab}>
                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative">
                   {loading && <GeminiLoader />}
@@ -1812,7 +1815,6 @@ export default function InventoryPage() {
 
                 <div className="flex flex-col md:flex-row gap-6">
                   
-                  {/* ✨ UPDATED: INTERACTIVE IMAGE UPLOAD OVERLAY ✨ */}
                   <div className="relative w-full md:w-48 h-48 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-center shrink-0 overflow-hidden shadow-sm group">
                     {isUploadingImage ? (
                       <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/80 z-10">
@@ -1828,7 +1830,6 @@ export default function InventoryPage() {
                       </div>
                     )}
 
-                    {/* ✨ NEW: HOVER ACTIONS FOR FULL SCREEN AND UPLOAD ✨ */}
                     <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex flex-col items-center justify-center gap-2 transition-opacity z-20">
                       {viewItem.image_url && (
                         <Button 
@@ -2007,7 +2008,6 @@ export default function InventoryPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ✨ NEW: FULL SCREEN IMAGE MODAL ✨ */}
       <Dialog open={!!fullScreenImage} onOpenChange={(val) => !val && setFullScreenImage(null)}>
         <DialogContent className="sm:max-w-[800px] w-[95vw] h-[85vh] p-0 overflow-hidden bg-black/95 backdrop-blur-2xl border border-white/10 flex items-center justify-center shadow-2xl z-[60] group">
           <Button 
@@ -2196,8 +2196,10 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
       <SelectItem value="pending_melting"   className="text-xs font-medium">Pending Melting</SelectItem>
       <SelectItem value="melting"           className="text-xs font-medium">Melting</SelectItem>
       <SelectItem value="disputed"          className="text-xs font-medium">Disputed</SelectItem>
-      <SelectItem value="written_off_lost"  className="text-xs font-medium">Written Off / Lost</SelectItem>
-      <SelectItem value="sold"              className="text-xs font-medium text-rose-600">Sold</SelectItem>
+      <SelectItem value="written_off_lost"  className="text-xs font-medium text-rose-600">Written Off / Lost</SelectItem>
+      {isSoldTab && <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>}
+      {isSoldTab && <SelectItem value="sold_unbilled" className="text-xs font-medium text-rose-600">Sold Unbilled</SelectItem>}
+      {isSoldTab && <SelectItem value="delivered" className="text-xs font-medium text-rose-600">Delivered</SelectItem>}
     </SelectContent>
   </Select>
 )}
@@ -2354,8 +2356,10 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
       <SelectItem value="pending_melting"   className="text-xs font-medium">Pending Melting</SelectItem>
       <SelectItem value="melting"           className="text-xs font-medium">Melting</SelectItem>
       <SelectItem value="disputed"          className="text-xs font-medium">Disputed</SelectItem>
-      <SelectItem value="written_off_lost"  className="text-xs font-medium">Written Off / Lost</SelectItem>
-      <SelectItem value="sold"              className="text-xs font-medium text-rose-600">Sold</SelectItem>
+      <SelectItem value="written_off_lost"  className="text-xs font-medium text-rose-600">Written Off / Lost</SelectItem>
+      {isSoldTab && <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>}
+      {isSoldTab && <SelectItem value="sold_unbilled" className="text-xs font-medium text-rose-600">Sold Unbilled</SelectItem>}
+      {isSoldTab && <SelectItem value="delivered" className="text-xs font-medium text-rose-600">Delivered</SelectItem>}
     </SelectContent>
   </Select>
 )}
@@ -2370,7 +2374,6 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
             </div>
            )
         })}
-        {/* OBSERVER TARGET FOR INFINITE SCROLL (MOBILE) */}
         <div ref={observerRef} className="h-12 w-full flex items-center justify-center mt-2"></div>
       </div>
     </div>

@@ -7,7 +7,7 @@ import {
   FileText, TrendingUp, Printer, Store, RefreshCw, Download, 
   Filter, Calendar, Search, ChevronRight, Landmark,
   Scale, BookOpen, Receipt, Eye, MoreHorizontal, Edit2, XCircle, ShieldAlert, X, Loader2,
-  CheckCircle2, Box, Wrench, ArrowRightLeft, HandCoins, User
+  CheckCircle2, Box, Wrench, ArrowRightLeft, HandCoins, User, ChevronLeft
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -48,6 +48,10 @@ export default function AccountsMasterPage() {
   const [showFilters, setShowFilters] = useState(false)
   const [loading, setLoading] = useState(true)
   
+  // --- PAGINATION STATES ---
+  const [page, setPage] = useState(1)
+  const [recordLimit, setRecordLimit] = useState(100)
+  
   const [warehouses, setWarehouses] = useState<any[]>([])
   const [startDate, setStartDate] = useState(() => {
     const d = new Date(); d.setDate(1); return d.toISOString().split('T')[0]; 
@@ -62,7 +66,12 @@ export default function AccountsMasterPage() {
   const [buybacks, setBuybacks] = useState<any[]>([])
   const [repairs, setRepairs] = useState<any[]>([])
   
-  const [kpis, setKpis] = useState({ grossSales: 0, taxCollected: 0, b2bSales: 0, b2cSales: 0 })
+  // --- DYNAMIC KPI STATES ---
+  const [salesKpis, setSalesKpis] = useState({ grossSales: 0, taxCollected: 0, b2bSales: 0, b2cSales: 0 })
+  const [estimateKpis, setEstimateKpis] = useState({ totalValue: 0, count: 0 })
+  const [customKpis, setCustomKpis] = useState({ totalValue: 0, advance: 0, pending: 0 })
+  const [buybackKpis, setBuybackKpis] = useState({ gross: 0, deductions: 0, netRefund: 0 })
+  const [repairKpis, setRepairKpis] = useState({ estCost: 0, advance: 0, count: 0 })
 
   const printRef = useRef<HTMLDivElement>(null)
   const [invoiceToPrint, setInvoiceToPrint] = useState<any>(null)
@@ -103,29 +112,33 @@ export default function AccountsMasterPage() {
       safeEndDate.setDate(safeEndDate.getDate() + 1)
       const safeEndDateStr = safeEndDate.toISOString().split('T')[0]
 
+      // Pagination calculation
+      const from = (page - 1) * recordLimit
+      const to = from + recordLimit - 1
+
       // 1. SALES INVOICES
       let salesQuery = supabase.from('invoices')
         .select(`*, customers(full_name, pan_no, id, phone), warehouses(name), invoice_items(item_id, rate, inventory_items(item_category, purity_karat, barcode, gross_weight_g, net_weight_g, total_stone_weight_cts, huid_code, hsn_code))`)
-        .eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false })
+        .eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') salesQuery = salesQuery.eq('warehouse_id', selectedLocation)
       if (search.trim()) salesQuery = salesQuery.ilike('invoice_number', `%${search.trim()}%`)
 
       // 2. ESTIMATES
-      let estQuery = supabase.from('estimates').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false })
+      let estQuery = supabase.from('estimates').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') estQuery = estQuery.eq('warehouse_id', selectedLocation)
       if (search.trim()) estQuery = estQuery.ilike('estimate_number', `%${search.trim()}%`)
 
       // 3. CUSTOM ORDERS
-      let customQuery = supabase.from('custom_orders').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false })
+      let customQuery = supabase.from('custom_orders').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') customQuery = customQuery.eq('origin_warehouse_id', selectedLocation)
       if (search.trim()) customQuery = customQuery.ilike('order_number', `%${search.trim()}%`)
 
       // 4. BUYBACKS / RETURNS
-      let buybackQuery = supabase.from('buybacks').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false })
+      let buybackQuery = supabase.from('buybacks').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') buybackQuery = buybackQuery.eq('warehouse_id', selectedLocation)
       
       // 5. REPAIRS
-      let repairQuery = supabase.from('repair_tickets').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false })
+      let repairQuery = supabase.from('repair_tickets').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') repairQuery = repairQuery.eq('origin_warehouse_id', selectedLocation)
       if (search.trim()) repairQuery = repairQuery.ilike('ticket_number', `%${search.trim()}%`)
 
@@ -165,17 +178,47 @@ export default function AccountsMasterPage() {
       setBuybacks(bData)
       setRepairs(rData)
 
-      // Calculate KPIs from Sales
-      let gross = 0; let tax = 0; let b2b = 0; let b2c = 0;
+      // --- CALCULATE TABS KPIs ---
+      // Sales
+      let sGross = 0; let sTax = 0; let sB2b = 0; let sB2c = 0;
       invData.forEach(inv => {
         if (inv.status === 'CANCELLED') return;
-        const total = Number(inv.final_total) || 0
-        gross += total
-        const baseValue = total / 1.03
-        tax += (total - baseValue)
-        if (inv.customers?.pan_no) b2b += total; else b2c += total;
+        const total = Number(inv.final_total) || 0;
+        sGross += total;
+        sTax += (total - (total / 1.03));
+        if (inv.customers?.pan_no) sB2b += total; else sB2c += total;
       })
-      setKpis({ grossSales: gross, taxCollected: tax, b2bSales: b2b, b2cSales: b2c })
+      setSalesKpis({ grossSales: sGross, taxCollected: sTax, b2bSales: sB2b, b2cSales: sB2c })
+
+      // Estimates
+      let eTotal = 0;
+      eData.forEach(est => eTotal += (Number(est.total_amount) || 0));
+      setEstimateKpis({ totalValue: eTotal, count: eData.length })
+
+      // Custom Orders
+      let coTotal = 0; let coAdv = 0;
+      cData.forEach(co => {
+        coTotal += (Number(co.estimated_value) || 0);
+        coAdv += (Number(co.advance_paid) || 0);
+      });
+      setCustomKpis({ totalValue: coTotal, advance: coAdv, pending: Math.max(0, coTotal - coAdv) })
+
+      // Buybacks
+      let bbGross = 0; let bbDed = 0; let bbNet = 0;
+      bData.forEach(bb => {
+        bbGross += (Number(bb.gross_value) || 0);
+        bbDed += (Number(bb.deduction_amount) || 0);
+        bbNet += (Number(bb.net_refund) || 0);
+      });
+      setBuybackKpis({ gross: bbGross, deductions: bbDed, netRefund: bbNet })
+
+      // Repairs
+      let repCost = 0; let repAdv = 0;
+      rData.forEach(rep => {
+        repCost += (Number(rep.estimated_cost) || 0);
+        repAdv += (Number(rep.advance_paid) || 0);
+      });
+      setRepairKpis({ estCost: repCost, advance: repAdv, count: rData.length })
 
     } catch (err: any) {
       toast.error("Failed to load accounting data")
@@ -184,10 +227,15 @@ export default function AccountsMasterPage() {
     }
   }
 
+  // Reset page to 1 when filters change
+  useEffect(() => {
+    setPage(1)
+  }, [selectedLocation, startDate, endDate, search, recordLimit, activeTab])
+
   useEffect(() => {
     const delay = setTimeout(() => { fetchAccountingData() }, 300)
     return () => clearTimeout(delay)
-  }, [appUser, selectedLocation, startDate, endDate, search])
+  }, [appUser, selectedLocation, startDate, endDate, search, page, recordLimit])
 
   // --- CSV EXPORT LOGIC ---
   const downloadBlob = (headers: string[], rows: any[][], filename: string) => {
@@ -217,9 +265,12 @@ export default function AccountsMasterPage() {
         "Exchange Value", "Exchange Notes", 
         "Taxable Value", "CGST", "SGST", "Discounted Total", "Round Off", 
         "Kitty Payment", "Wallet Payment", "Advance Adjusted", "Final Total",
-        "Payment Mode", "Split Payments JSON", "Transfer Type", "Transaction Reference", "Payment Remarks", "Cancellation Reason"
+        "Payment Mode", "Split Payments JSON", "Transfer Type", "Transaction Reference", "Payment Remarks", 
+        "Cancellation Reason", "Cancelled Original Value"
       ];
+      
       const csvRows = invoices.map(inv => {
+        const isCancelled = inv.status === 'CANCELLED';
         const barcodes = inv.invoice_items?.map((i:any) => i.inventory_items?.barcode).filter(Boolean).join(', ') || '';
         const categories = inv.invoice_items?.map((i:any) => i.inventory_items?.item_category).filter(Boolean).join(', ') || '';
         const totalGross = inv.invoice_items?.reduce((sum:number, i:any) => sum + (Number(i.inventory_items?.gross_weight_g) || 0), 0) || 0;
@@ -228,14 +279,34 @@ export default function AccountsMasterPage() {
         const huids = inv.invoice_items?.map((i:any) => i.inventory_items?.huid_code).filter(Boolean).join(', ') || '';
 
         return [
-          format(new Date(inv.created_at), 'yyyy-MM-dd HH:mm:ss'), inv.invoice_number, inv.status || 'VALID', inv.warehouses?.name || 'Unknown',
+          format(new Date(inv.created_at), 'yyyy-MM-dd HH:mm:ss'), 
+          isCancelled ? `*** CANCELLED *** ${inv.invoice_number}` : inv.invoice_number, 
+          inv.status || 'VALID', 
+          inv.warehouses?.name || 'Unknown',
           inv.customers?.full_name || 'Walk-in', inv.customers?.pan_no || '', barcodes, categories, totalGross.toFixed(3), totalNet.toFixed(3),
-          totalStone.toFixed(2), huids, inv.profiles?.full_name || 'System', inv.profiles?.role || 'N/A', inv.subtotal || 0,
-          inv.discount_amount || 0, inv.voucher_code || '', inv.voucher_discount || 0, inv.Voucher_handling_fee || 0, inv.exchange_value || 0,
-          inv.exchange_notes || '', inv.taxable_value || 0, inv.cgst_amount || 0, inv.sgst_amount || 0, inv.discounted_total || 0,
-          inv.round_off_amount || 0, inv.kitty_payment || 0, inv.wallet_payment || 0, inv.advance_adjusted || 0, inv.final_total || 0,
+          totalStone.toFixed(2), huids, inv.profiles?.full_name || 'System', inv.profiles?.role || 'N/A', 
+          
+          // Zero out financials if cancelled, so auto-sum in Excel ignores them
+          isCancelled ? 0 : (inv.subtotal || 0),
+          isCancelled ? 0 : (inv.discount_amount || 0), 
+          inv.voucher_code || '', 
+          isCancelled ? 0 : (inv.voucher_discount || 0), 
+          isCancelled ? 0 : (inv.Voucher_handling_fee || 0), 
+          isCancelled ? 0 : (inv.exchange_value || 0),
+          inv.exchange_notes || '', 
+          isCancelled ? 0 : (inv.taxable_value || 0), 
+          isCancelled ? 0 : (inv.cgst_amount || 0), 
+          isCancelled ? 0 : (inv.sgst_amount || 0), 
+          isCancelled ? 0 : (inv.discounted_total || 0),
+          isCancelled ? 0 : (inv.round_off_amount || 0), 
+          isCancelled ? 0 : (inv.kitty_payment || 0), 
+          isCancelled ? 0 : (inv.wallet_payment || 0), 
+          isCancelled ? 0 : (inv.advance_adjusted || 0), 
+          isCancelled ? 0 : (inv.final_total || 0),
+          
           inv.payment_mode || '', inv.split_payments ? JSON.stringify(inv.split_payments) : '', inv.transfer_type || '', inv.transaction_reference || '',
-          inv.payment_remarks || '', inv.cancellation_reason || ''
+          inv.payment_remarks || '', inv.cancellation_reason || '',
+          isCancelled ? (inv.final_total || 0) : '' // Record proof of cancelled amount at the end
         ];
       });
       downloadBlob(headers, csvRows, `Sales_Ledger_${startDate}_to_${endDate}.csv`);
@@ -350,13 +421,10 @@ export default function AccountsMasterPage() {
     }
   };
 
-  // --- EDIT LEDGER ENTRY (UPDATED) ---
   const handleOpenEdit = (inv: any) => {
     setInvoiceToEdit(inv);
-    
-    // Convert UTC Date from Supabase to Local string for <input type="datetime-local">
     const d = new Date(inv.created_at);
-    const tzOffset = d.getTimezoneOffset() * 60000; // offset in milliseconds
+    const tzOffset = d.getTimezoneOffset() * 60000;
     const localISOTime = (new Date(d.getTime() - tzOffset)).toISOString().slice(0,16);
 
     setEditForm({
@@ -380,7 +448,6 @@ export default function AccountsMasterPage() {
 
     setIsEditing(true);
     try {
-      // 1. Anti-Duplicate Check
       if (newInvoiceNo !== invoiceToEdit.invoice_number) {
         const { data: existing, error: checkErr } = await supabase
           .from('invoices')
@@ -397,7 +464,6 @@ export default function AccountsMasterPage() {
         if (checkErr) throw checkErr;
       }
 
-      // 2. Process Update
       const { error } = await supabase.from('invoices').update({
         invoice_number: newInvoiceNo,
         created_at: new Date(editForm.created_at).toISOString(),
@@ -421,6 +487,38 @@ export default function AccountsMasterPage() {
       setIsEditing(false);
     }
   };
+
+  // Helper to render pagination UI
+  const PaginationControls = () => (
+    <div className="flex items-center justify-between border-t border-zinc-200 bg-white p-3 rounded-b-2xl">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-zinc-500 font-medium">Show</span>
+        <Select value={recordLimit.toString()} onValueChange={(val) => setRecordLimit(Number(val))}>
+          <SelectTrigger className="h-8 w-20 text-xs border-zinc-200 bg-zinc-50">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="100">100</SelectItem>
+            <SelectItem value="200">200</SelectItem>
+            <SelectItem value="500">500</SelectItem>
+            <SelectItem value="1000">1000</SelectItem>
+          </SelectContent>
+        </Select>
+        <span className="text-xs text-zinc-500 font-medium">records</span>
+      </div>
+      <div className="flex items-center gap-4">
+        <span className="text-xs text-zinc-500 font-medium hidden sm:block">Page {page}</span>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" className="h-8 px-3 text-xs" onClick={() => setPage(Math.max(1, page - 1))} disabled={page === 1 || loading}>
+            <ChevronLeft className="w-3 h-3 mr-1" /> Prev
+          </Button>
+          <Button variant="outline" size="sm" className="h-8 px-3 text-xs" onClick={() => setPage(page + 1)} disabled={loading}>
+            Next <ChevronRight className="w-3 h-3 ml-1" />
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col min-h-screen bg-zinc-50/50 font-sans pb-20 sm:pb-0 w-full max-w-[100vw] overflow-x-hidden">
@@ -491,33 +589,121 @@ export default function AccountsMasterPage() {
           </div>
         </div>
 
-        {/* ACCOUNTING KPIs */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 w-full">
-          <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
-            <CardContent className="p-4 sm:p-5">
-              <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5 text-zinc-400" /> Gross Value (inc. GST)</p>
-              {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{kpis.grossSales.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm border-emerald-200 bg-emerald-50/40 rounded-2xl w-full">
-            <CardContent className="p-4 sm:p-5">
-              <p className="text-[10px] sm:text-[11px] font-medium text-emerald-700 mb-1 flex items-center gap-1.5"><Scale className="h-3.5 w-3.5" /> Est. Tax Liability</p>
-              {loading ? <Skeleton className="h-8 w-20 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-emerald-900 mt-1">₹{kpis.taxCollected.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
-            <CardContent className="p-4 sm:p-5">
-              <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><BookOpen className="h-3.5 w-3.5 text-zinc-400" /> B2B Activity</p>
-              {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{kpis.b2bSales.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
-            </CardContent>
-          </Card>
-          <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
-            <CardContent className="p-4 sm:p-5">
-              <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><Receipt className="h-3.5 w-3.5 text-zinc-400" /> B2C Activity</p>
-              {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{kpis.b2cSales.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
-            </CardContent>
-          </Card>
-        </div>
+        {/* DYNAMIC ACCOUNTING KPIs BASED ON TAB */}
+        {activeTab === 'sales_register' && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 w-full animate-in fade-in duration-300">
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5 text-zinc-400" /> Gross Value (inc. GST)</p>
+                {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{salesKpis.grossSales.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm border-emerald-200 bg-emerald-50/40 rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-emerald-700 mb-1 flex items-center gap-1.5"><Scale className="h-3.5 w-3.5" /> Est. Tax Liability</p>
+                {loading ? <Skeleton className="h-8 w-20 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-emerald-900 mt-1">₹{salesKpis.taxCollected.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><BookOpen className="h-3.5 w-3.5 text-zinc-400" /> B2B Activity</p>
+                {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{salesKpis.b2bSales.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><Receipt className="h-3.5 w-3.5 text-zinc-400" /> B2C Activity</p>
+                {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{salesKpis.b2cSales.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === 'estimates' && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 w-full animate-in fade-in duration-300">
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><FileText className="h-3.5 w-3.5 text-zinc-400" /> Total Quoted Value</p>
+                {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{estimateKpis.totalValue.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5 text-zinc-400" /> Quotes Generated</p>
+                {loading ? <Skeleton className="h-8 w-20 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">{estimateKpis.count}</p>}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === 'custom_orders' && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 w-full animate-in fade-in duration-300">
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><Box className="h-3.5 w-3.5 text-zinc-400" /> Total Order Value</p>
+                {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{customKpis.totalValue.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm border-emerald-200 bg-emerald-50/40 rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-emerald-700 mb-1 flex items-center gap-1.5"><HandCoins className="h-3.5 w-3.5" /> Advance Collected</p>
+                {loading ? <Skeleton className="h-8 w-20 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-emerald-900 mt-1">₹{customKpis.advance.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm border-amber-200 bg-amber-50/40 rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-amber-700 mb-1 flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5" /> Pending Balance</p>
+                {loading ? <Skeleton className="h-8 w-20 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-amber-900 mt-1">₹{customKpis.pending.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === 'buybacks' && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 w-full animate-in fade-in duration-300">
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><ArrowRightLeft className="h-3.5 w-3.5 text-zinc-400" /> Gross Intake Value</p>
+                {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{buybackKpis.gross.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm border-rose-200 bg-rose-50/40 rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-rose-700 mb-1 flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5" /> Policy Deductions</p>
+                {loading ? <Skeleton className="h-8 w-20 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-rose-900 mt-1">₹{buybackKpis.deductions.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><HandCoins className="h-3.5 w-3.5 text-zinc-400" /> Net Total Refunds</p>
+                {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{buybackKpis.netRefund.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {activeTab === 'repairs' && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 w-full animate-in fade-in duration-300">
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><Wrench className="h-3.5 w-3.5 text-zinc-400" /> Total Est. Cost</p>
+                {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{repairKpis.estCost.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm border-emerald-200 bg-emerald-50/40 rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-emerald-700 mb-1 flex items-center gap-1.5"><HandCoins className="h-3.5 w-3.5" /> Advance Collected</p>
+                {loading ? <Skeleton className="h-8 w-20 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-emerald-900 mt-1">₹{repairKpis.advance.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
+              </CardContent>
+            </Card>
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
+              <CardContent className="p-4 sm:p-5">
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5 text-zinc-400" /> Total Tickets</p>
+                {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">{repairKpis.count}</p>}
+              </CardContent>
+            </Card>
+          </div>
+        )}
 
         {/* ACCOUNTING TABS */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full min-w-0">
@@ -535,10 +721,10 @@ export default function AccountsMasterPage() {
           {/* TAB 1: SALES REGISTER */}
           {/* ========================================================================= */}
           <TabsContent value="sales_register" className="m-0 pt-2 w-full min-w-0">
-            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
               
               {/* ✨ DESKTOP TABLE VIEW */}
-              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
+              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar flex-1">
                 <Table className="w-full whitespace-nowrap">
                   <TableHeader className="bg-zinc-50/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-zinc-200">
@@ -603,7 +789,7 @@ export default function AccountsMasterPage() {
               </div>
 
               {/* ✨ MOBILE & TABLET CARD VIEW */}
-              <div className="xl:hidden flex flex-col divide-y divide-zinc-100">
+              <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {invoices.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No sales records found</div>
                 ) : invoices.map((inv) => {
@@ -659,6 +845,7 @@ export default function AccountsMasterPage() {
                   );
                 })}
               </div>
+              <PaginationControls />
             </Card>
           </TabsContent>
 
@@ -666,10 +853,10 @@ export default function AccountsMasterPage() {
           {/* TAB 2: ESTIMATES */}
           {/* ========================================================================= */}
           <TabsContent value="estimates" className="m-0 pt-2 w-full min-w-0">
-            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
               
               {/* ✨ DESKTOP TABLE VIEW */}
-              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
+              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar flex-1">
                 <Table className="w-full whitespace-nowrap">
                   <TableHeader className="bg-slate-50/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-zinc-200">
@@ -710,7 +897,7 @@ export default function AccountsMasterPage() {
               </div>
 
               {/* ✨ MOBILE & TABLET CARD VIEW */}
-              <div className="xl:hidden flex flex-col divide-y divide-zinc-100">
+              <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {estimates.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No estimates found</div>
                 ) : estimates.map((est) => (
@@ -753,6 +940,7 @@ export default function AccountsMasterPage() {
                   </div>
                 ))}
               </div>
+              <PaginationControls />
             </Card>
           </TabsContent>
 
@@ -760,10 +948,10 @@ export default function AccountsMasterPage() {
           {/* TAB 3: CUSTOM ORDERS */}
           {/* ========================================================================= */}
           <TabsContent value="custom_orders" className="m-0 pt-2 w-full min-w-0">
-            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
               
               {/* ✨ DESKTOP TABLE VIEW */}
-              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
+              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar flex-1">
                 <Table className="w-full whitespace-nowrap">
                   <TableHeader className="bg-purple-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-purple-100">
@@ -807,7 +995,7 @@ export default function AccountsMasterPage() {
               </div>
 
               {/* ✨ MOBILE & TABLET CARD VIEW */}
-              <div className="xl:hidden flex flex-col divide-y divide-zinc-100">
+              <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {customOrders.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No custom orders found</div>
                 ) : customOrders.map((co) => (
@@ -855,6 +1043,7 @@ export default function AccountsMasterPage() {
                   </div>
                 ))}
               </div>
+              <PaginationControls />
             </Card>
           </TabsContent>
 
@@ -862,10 +1051,10 @@ export default function AccountsMasterPage() {
           {/* TAB 4: BUYBACKS / RETURNS */}
           {/* ========================================================================= */}
           <TabsContent value="buybacks" className="m-0 pt-2 w-full min-w-0">
-            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
               
               {/* ✨ DESKTOP TABLE VIEW */}
-              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
+              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar flex-1">
                 <Table className="w-full whitespace-nowrap">
                   <TableHeader className="bg-rose-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-rose-100">
@@ -909,7 +1098,7 @@ export default function AccountsMasterPage() {
               </div>
 
               {/* ✨ MOBILE & TABLET CARD VIEW */}
-              <div className="xl:hidden flex flex-col divide-y divide-zinc-100">
+              <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {buybacks.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No buyback records found</div>
                 ) : buybacks.map((bb) => (
@@ -957,6 +1146,7 @@ export default function AccountsMasterPage() {
                   </div>
                 ))}
               </div>
+              <PaginationControls />
             </Card>
           </TabsContent>
 
@@ -964,10 +1154,10 @@ export default function AccountsMasterPage() {
           {/* TAB 5: REPAIR TICKETS */}
           {/* ========================================================================= */}
           <TabsContent value="repairs" className="m-0 pt-2 w-full min-w-0">
-            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 overflow-hidden">
+            <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
               
               {/* ✨ DESKTOP TABLE VIEW */}
-              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar pb-2">
+              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar flex-1">
                 <Table className="w-full whitespace-nowrap">
                   <TableHeader className="bg-amber-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-amber-100">
@@ -1011,7 +1201,7 @@ export default function AccountsMasterPage() {
               </div>
 
               {/* ✨ MOBILE & TABLET CARD VIEW */}
-              <div className="xl:hidden flex flex-col divide-y divide-zinc-100">
+              <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {repairs.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No repair tickets found</div>
                 ) : repairs.map((rep) => (
@@ -1059,6 +1249,7 @@ export default function AccountsMasterPage() {
                   </div>
                 ))}
               </div>
+              <PaginationControls />
             </Card>
           </TabsContent>
         </Tabs>
