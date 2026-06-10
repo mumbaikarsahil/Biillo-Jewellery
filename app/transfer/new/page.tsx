@@ -6,8 +6,9 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { 
   Send, Package, ArrowRight, ArrowLeft, ChevronRight, 
   Database, Loader2, Warehouse, Boxes, Info, Printer, ShieldCheck, Wrench,
-  Badge
+  AlertCircle 
 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 
 import { supabase } from '@/lib/supabaseClient'
@@ -75,6 +76,15 @@ export default function NewTransferPage() {
 
   const handleDispatch = async () => {
     if (!toWarehouseId) return toast.error("Please select a destination branch");
+    
+    // ✨ FIX: Pre-Flight Check to block double transfers
+    const alreadyInTransit = items.some(itm => itm.status && itm.status.includes('transit'));
+    if (alreadyInTransit) {
+        return toast.error("Action Denied", {
+            description: "One or more selected items are already in transit. You cannot transfer them again."
+        });
+    }
+
     setIsDispatching(true);
 
     try {
@@ -109,7 +119,6 @@ export default function NewTransferPage() {
       if (transferType === 'repair') {
          const lines = items.map(itm => ({ transfer_id: transfer.id, repair_ticket_id: itm.id }))
          
-         // ✨ FIX: Strict Error Handling Added
          const { error: lineErr } = await supabase.from('stock_transfer_repair_lines').insert(lines)
          if (lineErr) throw new Error(`Repair Line Insert Failed: ${lineErr.message}`)
          
@@ -125,12 +134,11 @@ export default function NewTransferPage() {
          // Normal Inventory Flow
          const lines = items.map(itm => ({ transfer_id: transfer.id, item_id: itm.id }))
          
-         // ✨ FIX: Strict Error Handling Added
          const { error: lineErr } = await supabase.from('stock_transfer_item_lines').insert(lines)
          if (lineErr) throw new Error(`Inventory Line Insert Failed: ${lineErr.message}`)
          
          const { error: statusErr } = await supabase.from('inventory_items')
-            .update({ status: 'transit' }) // ✨ FIX: Standardized to 'in_transit'
+            .update({ status: 'transit' }) 
             .in('id', activeIds)
          if (statusErr) throw new Error(`Inventory Status Update Failed: ${statusErr.message}`)
       }
@@ -138,7 +146,6 @@ export default function NewTransferPage() {
       toast.success("Consignment Dispatched & Secured")
       setDispatchSuccess(transfer) // Triggers the print screen
     } catch (err: any) {
-      // Now you will actually see the underlying database constraint error!
       toast.error(err.message, { duration: 8000 })
     } finally {
       setIsDispatching(false)
@@ -277,10 +284,19 @@ export default function NewTransferPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {items.map((itm) => (
+                    {items.map((itm) => {
+                      const inTransit = itm.status && itm.status.includes('transit');
+                      return (
                       <TableRow key={itm.id} className="border-b last:border-0 hover:bg-gray-50/50">
-                        <TableCell className="px-6 py-3 font-mono text-xs font-bold text-gray-900">
+                        <TableCell className="px-6 py-3 font-mono text-xs font-bold text-gray-900 flex items-center gap-2">
                           {transferType === 'repair' ? itm.ticket_number : itm.barcode}
+                          {/* ✨ FIX: Visual indicator for the user */}
+                          {inTransit && (
+                            <Badge variant="destructive" className="h-4 text-[9px] px-1 ml-2 flex items-center gap-1">
+                            <AlertCircle className="w-3 h-3" /> 
+                            Already In Transit
+                          </Badge>
+                          )}
                         </TableCell>
                         <TableCell className="px-4 text-[13px] font-medium text-gray-600">
                           {transferType === 'repair' ? itm.item_description : itm.item_category}
@@ -289,7 +305,7 @@ export default function NewTransferPage() {
                           {transferType === 'repair' ? `${itm.gross_weight_g}g` : `${itm.net_weight_g}g`}
                         </TableCell>
                       </TableRow>
-                    ))}
+                    )})}
                   </TableBody>
                 </Table>
               </div>
@@ -308,7 +324,7 @@ export default function NewTransferPage() {
            <Button 
             onClick={handleDispatch} 
             className="w-full md:w-[280px] h-12 text-sm font-bold uppercase tracking-widest shadow-lg bg-slate-900 hover:bg-slate-800" 
-            disabled={isDispatching || isLoading || !toWarehouseId}
+            disabled={isDispatching || isLoading || !toWarehouseId || items.some(itm => itm.status?.includes('transit'))}
            >
             {isDispatching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
             {isDispatching ? "Securing Vault..." : "Seal & Dispatch"}

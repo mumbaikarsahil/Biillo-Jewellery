@@ -581,7 +581,8 @@ export function useCheckout({
             acquisition_method: 'buyback',
             is_exchanged: true,
             status: 'in_vault', 
-            cost_price: Number(returnDetails.calculatedRefund) || 0 
+            cost_price: Number(returnDetails.calculatedRefund) || 0,
+            source_buyback_id: buybackData.id
           }).select('id').single();
           
           if (invError) throw invError;
@@ -598,7 +599,8 @@ export function useCheckout({
           
           const { error: updateErr } = await supabase.from('inventory_items').update({
             status: 'in_vault',
-            warehouse_id: selectedLocation
+            warehouse_id: selectedLocation,
+            source_buyback_id: buybackData.id
           }).in('id', itemIdsToReturn);
           
           if (updateErr) throw updateErr;
