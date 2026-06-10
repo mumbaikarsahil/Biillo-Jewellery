@@ -636,13 +636,27 @@ export function useCheckout({
           expected_gold_g: Number(customOrderDetails.expected_gold_g) || null,
           expected_diamond_cts: Number(customOrderDetails.expected_diamond_cts) || null,
           estimated_value: Number(customOrderDetails.estimated_value) || 0,
+          
+          // ✨ VOUCHER AUDIT TRAIL ADDED HERE
           advance_paid: (Number(customOrderDetails.advance_paid) || 0) + appliedVoucherAmount,
+          voucher_code: activeVoucher?.code || null,
+          voucher_amount: appliedVoucherAmount,
           
           status: 'pending_manufacturing',
-          created_by: finalizingUserId // ✨ Replaced appUser logic
+          created_by: finalizingUserId 
         }
+        
         const { error } = await supabase.from('custom_orders').insert(payload)
         if (error) throw error
+        
+        // ✨ CRITICAL FIX: MARK VOUCHER AS REDEEMED
+        if (activeVoucher) {
+          await supabase.from('vouchers').update({ 
+            status: 'redeemed', 
+            redeemed_at: new Date().toISOString() 
+          }).eq('id', activeVoucher.id)
+        }
+
         toast.success(`Custom Order ${finalNo} submitted to manufacturing!`)
       }
 

@@ -73,6 +73,9 @@ export function CheckoutSidebar({
   const [selectedBankId, setSelectedBankId] = useState<string>('none')
   const [transferType, setTransferType] = useState<string>('IMPS') 
   const [splitRefs, setSplitRefs] = useState({ card: '', upi: '', bank: '', cheque: '' })
+  
+  // ✨ UX ENHANCEMENT: Ledger Toggle State
+  const [showLedgerDetails, setShowLedgerDetails] = useState(false)
 
   // Reset wallets if customer is changed
   useEffect(() => {
@@ -107,7 +110,7 @@ export function CheckoutSidebar({
   const splitRemaining = Math.max(0, displayTotal - (Number(currentSplitTotal) || 0))
   const isSplitValid = Math.abs((Number(currentSplitTotal) || 0) - displayTotal) < 0.1
 
-  // ✨ --- ENHANCED CUSTOM ORDER MATH (100% NaN Protected) --- ✨
+  // --- ENHANCED CUSTOM ORDER MATH ---
   const customEstBase = Number(customOrderDetails?.estimated_value) || 0;
   const customDiscount = discountType === 'percent' ? (customEstBase * (Number(discountValue) || 0) / 100) : (Number(discountValue) || 0);
   const safeExchangeNum = Number(exchangeNum) || 0;
@@ -484,174 +487,190 @@ export function CheckoutSidebar({
         )}
       </div>
 
-      {/* 4. LEDGER & FOOTER */}
-      <div className="bg-white p-4 border-t border-slate-200 shadow-[0_-8px_30px_-15px_rgba(0,0,0,0.1)] z-20">
+      {/* 4. CONDENSED COLLAPSIBLE LEDGER & FOOTER */}
+      <div className="bg-white p-3 sm:p-4 border-t border-slate-200 shadow-[0_-8px_30px_-15px_rgba(0,0,0,0.15)] z-20">
         
-        {/* NORMAL MODE LEDGER */}
-        {mode === 'normal' && (
-          <div className="space-y-1.5 text-sm text-slate-500 pb-3 border-b border-slate-100 mb-3">
-            
-            <div className="flex justify-between items-center">
-              <span>Subtotal (MRP)</span>
-              <span className="tabular-nums font-medium text-slate-700">
-                ₹{(Number(subtotal) || 0).toLocaleString()} 
-              </span>
-            </div>
-            
-            {/* MANUAL DISCOUNTS */}
-            {Number(discountAmount) > 0 && (
-              <div className="flex justify-between items-center text-red-500">
-                <span>Manual Discount</span><span className="tabular-nums">- ₹{(Number(discountAmount) || 0).toLocaleString()}</span>
-              </div>
-            )}
-            
-            {/* EXCHANGES & VOUCHERS */}
-            {safeExchangeNum > 0 && (
-              <div className="flex justify-between items-center text-blue-600">
-                <span>Old Gold / Exchange</span><span className="tabular-nums">- ₹{safeExchangeNum.toLocaleString()}</span>
-              </div>
-            )}
-            {activeVoucher && (
-              <div className="flex justify-between items-center text-emerald-600">
-                <span>Voucher Redemption</span><span className="tabular-nums">- ₹{(Number(activeVoucher.amount) || 0).toLocaleString()}</span>
-              </div>
-            )}
-            
-            {/* TAX CALCULATION (Pre-Tax Subtotal - All Deductions) */}
-            <div className="flex justify-between items-center text-slate-800 font-semibold pt-1.5 mt-1.5 border-t border-slate-100/50">
-              <span>Taxable Value {Number(handlingAmt) > 0 && <span className="text-[10px] font-normal text-slate-400 ml-1">(inc. Handling ₹{handlingAmt})</span>}</span>
-              <span className="tabular-nums">₹{(Number(finalTaxableValue) || 0).toLocaleString()}</span>
-            </div>
-            
-            <div className="flex justify-between items-center">
-              <span>CGST + SGST (3%)</span><span className="tabular-nums">+ ₹{(Number(cgstAmount) + Number(sgstAmount)).toLocaleString()}</span>
-            </div>
+        {/* ✨ UX ENHANCEMENT: Ledger Toggle Button */}
+        {['normal', 'custom'].includes(mode) && (
+          <button 
+            onClick={() => setShowLedgerDetails(!showLedgerDetails)}
+            className="w-full flex items-center justify-between pb-2 mb-2 border-b border-slate-100 text-[10px] font-bold text-slate-500 uppercase tracking-widest hover:text-slate-800 transition-colors"
+          >
+            <span className="flex items-center gap-1.5">
+              <FileText className="w-3.5 h-3.5" />
+              {showLedgerDetails ? 'Hide' : 'View'} Order Breakdown
+            </span>
+            <ChevronDown className={`w-4 h-4 transition-transform duration-300 ${showLedgerDetails ? 'rotate-180' : ''}`} />
+          </button>
+        )}
 
-            {/* TOTAL INVOICE ROW */}
-            <div className="flex justify-between items-center font-bold text-slate-900 pt-2 border-t border-slate-200">
-              <span>Total Invoice Value</span>
-              <span className="tabular-nums">₹{invoiceTotalValue.toLocaleString()}</span>
-            </div>
-
-            {/* PRE-PAID SETTLEMENTS (Deductions from the Final Total) */}
-            <div className="pt-2 space-y-1">
-              {cartAdvance > 0 && (
-                <div className="flex justify-between items-center text-slate-500 italic">
-                  <span>Less: Advance Received</span>
-                  <span className="tabular-nums">- ₹{cartAdvance.toLocaleString()}</span>
-                </div>
-              )}
-              {Number(appliedKittyAmount) > 0 && (
-                <div className="flex justify-between items-center text-purple-600 font-bold animate-in slide-in-from-right-2">
-                  <span className="flex items-center gap-1.5"><Gem className="w-3.5 h-3.5"/> Less: Kitty Payment</span>
-                  <span className="tabular-nums">- ₹{(Number(appliedKittyAmount) || 0).toLocaleString()}</span>
-                </div>
-              )}
-              {Number(appliedCreditAmount) > 0 && (
-                <div className="flex justify-between items-center text-emerald-600 font-bold animate-in slide-in-from-right-2">
-                  <span className="flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5"/> Less: Wallet Payment</span>
-                  <span className="tabular-nums">- ₹{(Number(appliedCreditAmount) || 0).toLocaleString()}</span>
-                </div>
-              )}
-            </div>
-
-            {Number(roundOffAmount) !== 0 && roundOffAmount !== undefined && (
-              <div className="flex justify-between items-center pt-2">
-                <span>Round Off</span>
-                <span className={`tabular-nums ${Number(roundOffAmount) > 0 ? "text-emerald-500" : "text-red-400"}`}>
-                  {Number(roundOffAmount) > 0 ? '+' : ''} ₹{Math.abs(Number(roundOffAmount)).toFixed(2)}
+        {/* ✨ UX ENHANCEMENT: Collapsible Content Wrapper */}
+        <div className={`overflow-hidden transition-all duration-300 ease-in-out ${showLedgerDetails ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0'}`}>
+          
+          {/* NORMAL MODE LEDGER */}
+          {mode === 'normal' && (
+            <div className="space-y-1 text-sm text-slate-500 pb-3 border-b border-slate-100 mb-2">
+              
+              <div className="flex justify-between items-center">
+                <span>Subtotal (MRP)</span>
+                <span className="tabular-nums font-medium text-slate-700">
+                  ₹{(Number(subtotal) || 0).toLocaleString()} 
                 </span>
               </div>
-            )}
-
-          </div>
-        )}
-
-        {/* ✨ UPDATED CUSTOM ORDER ESTIMATE LEDGER WITH SAFE MATH ✨ */}
-        {mode === 'custom' && customEstBase > 0 && (
-          <div className="space-y-1.5 text-sm text-slate-500 pb-3 border-b border-slate-100 mb-3 bg-purple-50/30 p-3 rounded-lg border border-purple-100 animate-in fade-in">
-            <div className="flex justify-between items-center mb-1">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-purple-800">Est. Final Calculation</span>
-            </div>
-            
-            <div className="flex justify-between items-center">
-              <span>Estimated Base Value</span>
-              <span className="tabular-nums font-medium text-slate-700">₹{customEstBase.toLocaleString('en-IN')}</span>
-            </div>
-            
-            {Number(customDiscount) > 0 && (
-              <div className="flex justify-between items-center text-red-500">
-                <span>Discount Applied</span>
-                <span className="tabular-nums">- ₹{customDiscount.toLocaleString('en-IN')}</span>
+              
+              {/* MANUAL DISCOUNTS */}
+              {Number(discountAmount) > 0 && (
+                <div className="flex justify-between items-center text-red-500">
+                  <span>Manual Discount</span><span className="tabular-nums">- ₹{(Number(discountAmount) || 0).toLocaleString()}</span>
+                </div>
+              )}
+              
+              {/* EXCHANGES & VOUCHERS */}
+              {safeExchangeNum > 0 && (
+                <div className="flex justify-between items-center text-blue-600">
+                  <span>Old Gold / Exchange</span><span className="tabular-nums">- ₹{safeExchangeNum.toLocaleString()}</span>
+                </div>
+              )}
+              {activeVoucher && (
+                <div className="flex justify-between items-center text-emerald-600">
+                  <span>Voucher Redemption</span><span className="tabular-nums">- ₹{(Number(activeVoucher.amount) || 0).toLocaleString()}</span>
+                </div>
+              )}
+              
+              {/* TAX CALCULATION (Pre-Tax Subtotal - All Deductions) */}
+              <div className="flex justify-between items-center text-slate-800 font-semibold pt-1.5 mt-1 border-t border-slate-100/50">
+                <span>Taxable Value {Number(handlingAmt) > 0 && <span className="text-[10px] font-normal text-slate-400 ml-1">(inc. Handling ₹{handlingAmt})</span>}</span>
+                <span className="tabular-nums">₹{(Number(finalTaxableValue) || 0).toLocaleString()}</span>
               </div>
-            )}
-            
-            {safeExchangeNum > 0 && (
-              <div className="flex justify-between items-center text-blue-600">
-                <span>Exchange Credit</span>
-                <span className="tabular-nums">- ₹{safeExchangeNum.toLocaleString('en-IN')}</span>
+              
+              <div className="flex justify-between items-center">
+                <span>CGST + SGST (3%)</span><span className="tabular-nums">+ ₹{(Number(cgstAmount) + Number(sgstAmount)).toLocaleString()}</span>
               </div>
-            )}
-            
-            {activeVoucher && (
-              <div className="flex justify-between items-center text-emerald-600 font-medium">
-                <span>Voucher Auth {Number(activeVoucher.handling_fee) > 0 ? `(Post ₹${activeVoucher.handling_fee} Fee)` : ''}</span>
-                <span className="tabular-nums">- ₹{effectiveVoucherCredit.toLocaleString('en-IN')}</span>
+
+              {/* TOTAL INVOICE ROW */}
+              <div className="flex justify-between items-center font-bold text-slate-900 pt-1.5 mt-1 border-t border-slate-200">
+                <span>Total Invoice Value</span>
+                <span className="tabular-nums">₹{invoiceTotalValue.toLocaleString()}</span>
               </div>
-            )}
 
-            <div className="flex justify-between border-t border-purple-200/50 pt-1 mt-1 text-slate-800 font-semibold">
-              <span>Estimated Taxable Value</span>
-              <span>₹{customTaxable.toLocaleString('en-IN')}</span>
-            </div>
-            
-            <div className="flex justify-between text-xs text-slate-600 mt-1">
-              <span>Estimated CGST (1.5%)</span>
-              <span>+ ₹{customCgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-            </div>
-            <div className="flex justify-between text-xs text-slate-600 pb-1">
-              <span>Estimated SGST (1.5%)</span>
-              <span>+ ₹{customSgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
-            </div>
-
-            <div className="flex justify-between py-1.5 mt-1 border-y border-purple-200/50 text-lg font-black text-slate-900">
-              <span>Total Estimated Amount</span>
-              <span>₹{customTotalEstimate.toLocaleString('en-IN')}</span>
-            </div>
-            
-            {customAdvancePaid > 0 && (
-              <div className="flex justify-between items-center text-emerald-600 font-bold mt-2">
-                <span>Advance Paid (Cash/Bank)</span>
-                <span className="tabular-nums">- ₹{customAdvancePaid.toLocaleString('en-IN')}</span>
+              {/* PRE-PAID SETTLEMENTS (Deductions from the Final Total) */}
+              <div className="pt-1.5 space-y-1">
+                {cartAdvance > 0 && (
+                  <div className="flex justify-between items-center text-slate-500 italic">
+                    <span>Less: Advance Received</span>
+                    <span className="tabular-nums">- ₹{cartAdvance.toLocaleString()}</span>
+                  </div>
+                )}
+                {Number(appliedKittyAmount) > 0 && (
+                  <div className="flex justify-between items-center text-purple-600 font-bold animate-in slide-in-from-right-2">
+                    <span className="flex items-center gap-1.5"><Gem className="w-3.5 h-3.5"/> Less: Kitty Payment</span>
+                    <span className="tabular-nums">- ₹{(Number(appliedKittyAmount) || 0).toLocaleString()}</span>
+                  </div>
+                )}
+                {Number(appliedCreditAmount) > 0 && (
+                  <div className="flex justify-between items-center text-emerald-600 font-bold animate-in slide-in-from-right-2">
+                    <span className="flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5"/> Less: Wallet Payment</span>
+                    <span className="tabular-nums">- ₹{(Number(appliedCreditAmount) || 0).toLocaleString()}</span>
+                  </div>
+                )}
               </div>
-            )}
 
-            {Number(appliedKittyAmount) > 0 && (
-              <div className="flex justify-between items-center text-purple-600 font-bold mt-1">
-                <span>Less: Kitty Payment</span>
-                <span className="tabular-nums">- ₹{appliedKittyAmount.toLocaleString('en-IN')}</span>
-              </div>
-            )}
-            
-            {Number(appliedCreditAmount) > 0 && (
-              <div className="flex justify-between items-center text-emerald-600 font-bold mt-1">
-                <span>Less: Store Credit</span>
-                <span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString('en-IN')}</span>
-              </div>
-            )}
-
-            <div className="flex justify-between items-center text-purple-900 font-bold pt-1.5 mt-1 border-t border-purple-200/50">
-              <span>Est. Balance on Pickup</span>
-              <span className="tabular-nums">₹{customNetEst.toLocaleString('en-IN')}</span>
+              {Number(roundOffAmount) !== 0 && roundOffAmount !== undefined && (
+                <div className="flex justify-between items-center pt-1.5 mt-1 border-t border-slate-100/50">
+                  <span>Round Off</span>
+                  <span className={`tabular-nums ${Number(roundOffAmount) > 0 ? "text-emerald-500" : "text-red-400"}`}>
+                    {Number(roundOffAmount) > 0 ? '+' : ''} ₹{Math.abs(Number(roundOffAmount)).toFixed(2)}
+                  </span>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          )}
 
-        <div className="flex justify-between items-end mb-3 mt-4 border-t-2 border-dashed border-slate-200 pt-3">
+          {/* CUSTOM ORDER ESTIMATE LEDGER */}
+          {mode === 'custom' && customEstBase > 0 && (
+            <div className="space-y-1 text-sm text-slate-500 pb-3 border-b border-slate-100 mb-2 bg-purple-50/30 p-3 rounded-lg border border-purple-100">
+              
+              <div className="flex justify-between items-center">
+                <span>Estimated Base Value</span>
+                <span className="tabular-nums font-medium text-slate-700">₹{customEstBase.toLocaleString('en-IN')}</span>
+              </div>
+              
+              {Number(customDiscount) > 0 && (
+                <div className="flex justify-between items-center text-red-500">
+                  <span>Discount Applied</span>
+                  <span className="tabular-nums">- ₹{customDiscount.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              
+              {safeExchangeNum > 0 && (
+                <div className="flex justify-between items-center text-blue-600">
+                  <span>Exchange Credit</span>
+                  <span className="tabular-nums">- ₹{safeExchangeNum.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              
+              {activeVoucher && (
+                <div className="flex justify-between items-center text-emerald-600 font-medium">
+                  <span>Voucher Auth {Number(activeVoucher.handling_fee) > 0 ? `(Post ₹${activeVoucher.handling_fee} Fee)` : ''}</span>
+                  <span className="tabular-nums">- ₹{effectiveVoucherCredit.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+
+              <div className="flex justify-between border-t border-purple-200/50 pt-1 mt-1 text-slate-800 font-semibold">
+                <span>Estimated Taxable Value</span>
+                <span>₹{customTaxable.toLocaleString('en-IN')}</span>
+              </div>
+              
+              <div className="flex justify-between text-xs text-slate-600 mt-1">
+                <span>Estimated CGST (1.5%)</span>
+                <span>+ ₹{customCgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+              </div>
+              <div className="flex justify-between text-xs text-slate-600 pb-1">
+                <span>Estimated SGST (1.5%)</span>
+                <span>+ ₹{customSgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+              </div>
+
+              <div className="flex justify-between py-1.5 mt-1 border-y border-purple-200/50 text-base font-black text-slate-900">
+                <span>Total Estimated Amount</span>
+                <span>₹{customTotalEstimate.toLocaleString('en-IN')}</span>
+              </div>
+              
+              {customAdvancePaid > 0 && (
+                <div className="flex justify-between items-center text-emerald-600 font-bold mt-1.5">
+                  <span>Advance Paid (Cash/Bank)</span>
+                  <span className="tabular-nums">- ₹{customAdvancePaid.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+
+              {Number(appliedKittyAmount) > 0 && (
+                <div className="flex justify-between items-center text-purple-600 font-bold mt-1">
+                  <span>Less: Kitty Payment</span>
+                  <span className="tabular-nums">- ₹{appliedKittyAmount.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              
+              {Number(appliedCreditAmount) > 0 && (
+                <div className="flex justify-between items-center text-emerald-600 font-bold mt-1">
+                  <span>Less: Store Credit</span>
+                  <span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+
+              <div className="flex justify-between items-center text-purple-900 font-bold pt-1.5 mt-1 border-t border-purple-200/50">
+                <span>Est. Balance on Pickup</span>
+                <span className="tabular-nums">₹{customNetEst.toLocaleString('en-IN')}</span>
+              </div>
+            </div>
+          )}
+        </div>
+        {/* ✨ END COLLAPSIBLE CONTENT ✨ */}
+
+        {/* ALWAYS VISIBLE: GRAND TOTAL */}
+        <div className={`flex justify-between items-end mb-3 ${showLedgerDetails ? 'mt-2' : 'mt-1'}`}>
           <p className="text-xs font-black uppercase text-slate-500">
             {mode === 'custom' || mode === 'repair' ? 'Balance Advance' : mode === 'return' ? 'Refund Amount' : mode === 'challan' ? 'Memo Value' : 'Balance to Pay'}
           </p>
-          <p className={`text-4xl font-bold tracking-tight tabular-nums ${theme.text}`}>
+          <p className={`text-3xl sm:text-4xl font-bold tracking-tight tabular-nums ${theme.text}`}>
              ₹{displayTotal.toLocaleString()}
           </p>
         </div>
@@ -673,7 +692,6 @@ export function CheckoutSidebar({
                  </Select>
                </div>
                
-               {/* Custom Handling Percentage Input */}
                {estimateChargeType === 'handling' && (
                  <div className="flex justify-between items-center px-1 mt-1 animate-in fade-in">
                     <span className="text-[10px] text-slate-500 font-medium">Handling Percentage (%)</span>
@@ -686,7 +704,6 @@ export function CheckoutSidebar({
                  </div>
                )}
                
-               {/* Real-time Estimate Total Preview */}
                <div className="flex justify-between items-center px-1 animate-in fade-in mt-1 border-t border-slate-200/60 pt-2">
                   <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Printed Est. Total:</span>
                   <span className="text-sm font-bold text-slate-800">
