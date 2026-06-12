@@ -2197,7 +2197,6 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
       <SelectItem value="melting"           className="text-xs font-medium">Melting</SelectItem>
       <SelectItem value="disputed"          className="text-xs font-medium">Disputed</SelectItem>
       <SelectItem value="written_off_lost"  className="text-xs font-medium text-rose-600">Written Off / Lost</SelectItem>
-      {isSoldTab && <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>}
       {isSoldTab && <SelectItem value="sold_unbilled" className="text-xs font-medium text-rose-600">Sold Unbilled</SelectItem>}
       {isSoldTab && <SelectItem value="delivered" className="text-xs font-medium text-rose-600">Delivered</SelectItem>}
     </SelectContent>
@@ -2357,7 +2356,6 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
       <SelectItem value="melting"           className="text-xs font-medium">Melting</SelectItem>
       <SelectItem value="disputed"          className="text-xs font-medium">Disputed</SelectItem>
       <SelectItem value="written_off_lost"  className="text-xs font-medium text-rose-600">Written Off / Lost</SelectItem>
-      {isSoldTab && <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>}
       {isSoldTab && <SelectItem value="sold_unbilled" className="text-xs font-medium text-rose-600">Sold Unbilled</SelectItem>}
       {isSoldTab && <SelectItem value="delivered" className="text-xs font-medium text-rose-600">Delivered</SelectItem>}
     </SelectContent>
