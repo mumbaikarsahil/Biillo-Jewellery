@@ -31,6 +31,8 @@ export interface CRMCustomer {
   
   // NEW: An array of active or past plans instead of flat fields
   kitty_plans?: KittyPlan[] 
+  vouchers?: any[];
+  voucher_message_sequences?: any[];
 }
 
 export interface Warehouse {

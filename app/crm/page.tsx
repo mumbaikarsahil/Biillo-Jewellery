@@ -17,7 +17,7 @@ import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
 import { 
   Users, Search, Store, Gem, FilterX, RefreshCw,
-  UserPlus, UploadCloud, Settings, ChevronLeft, ChevronRight, MessageSquare
+  UserPlus, UploadCloud, Settings, ChevronLeft, ChevronRight, MessageSquare, PhoneOff
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Separator } from '@radix-ui/react-separator'
@@ -28,9 +28,19 @@ import { CRMCustomer, Warehouse } from './types'
 import { CustomerList } from './components/CustomerList'
 import { CRMMetrics } from './components/CRMMetrics'
 import { CRMModals } from './components/CRMModals'
-
-// ✨ NEW: Import the WhatsApp Sender Modal
 import { WhatsAppSenderModal } from '@/components/WhatsAppSenderModal'
+
+// ✨ NEW: Defined Call Outcomes for Strict Logging
+const CALL_OUTCOMES = [
+  'Connected / Spoke to Customer',
+  'Ringing / No Answer',
+  'Switched Off',
+  'Out of Service / Not Reachable',
+  'Wrong Number',
+  'Busy / Call Waiting',
+  'Call After Some Time',
+  'Not Interested (Do Not Disturb)'
+]
 
 // Robust DD-MM-YYYY Parser for CSV Uploads
 const formatToDBDate = (dateStr?: string) => {
@@ -63,26 +73,30 @@ export default function CRMPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
 
-  const [activeAiFilter, setActiveAiFilter] = useState<'none' | 'scheme' | 'cold' | 'birthday' | 'anniversary'>('none')
+  // ✨ UPDATED: Added 'dnd' to the AI Filters
+  const [activeAiFilter, setActiveAiFilter] = useState<'none' | 'scheme' | 'cold' | 'dnd' | 'birthday' | 'anniversary'>('none')
 
   // Server-Side Pagination States
   const [activeTab, setActiveTab] = useState<string>("followups")
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState<number>(50) 
-  const [globalCounts, setGlobalCounts] = useState({ followups: 0, purchased: 0, kitty: 0 })
-  const [metrics, setMetrics] = useState({ total: 0, dueToday: 0, overdue: 0, schemeCount: 0, coldCount: 0 })
+  const [globalCounts, setGlobalCounts] = useState({ followups: 0, purchased: 0, kitty: 0, dnd: 0 })
+  const [metrics, setMetrics] = useState({ total: 0, dueToday: 0, overdue: 0, schemeCount: 0, coldCount: 0, dndCount: 0 })
 
-  // ✨ NEW: WhatsApp Integration States
+  // WhatsApp Integration States
   const [isSenderModalOpen, setIsSenderModalOpen] = useState(false);
   const [messageRecipients, setMessageRecipients] = useState<any[]>([]);
 
   // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isAddKittyModalOpen, setIsAddKittyModalOpen] = useState(false)
-  const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false) // Legacy modal state (kept to prevent CRMModals from breaking)
+  const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false) 
   const [isFollowupModalOpen, setIsFollowupModalOpen] = useState(false)
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false)
   const [isLoyaltyModalOpen, setIsLoyaltyModalOpen] = useState(false)
+  
+  // ✨ NEW: Call Logger Modal State
+  const [isCallModalOpen, setIsCallModalOpen] = useState(false)
   
   // Import States
   const [isImportModalOpen, setIsImportModalOpen] = useState(false)
@@ -102,13 +116,16 @@ export default function CRMPage() {
     full_name: '', phone: '', email: '', city: '', config_id: '', start_date: new Date().toISOString().split('T')[0], 
     referred_by_id: 'none', referral_bonus: '500' 
   })
-  
-  // Unified Loyalty Form
   const [loyaltyForm, setLoyaltyForm] = useState({ 
-    actionType: 'manual_add', 
-    amount: '', 
-    billedAmount: '', 
-    notes: '' 
+    actionType: 'manual_add', amount: '', billedAmount: '', notes: '' 
+  })
+
+  // ✨ NEW: Call Logger Form State
+  const [callForm, setCallForm] = useState({
+    outcome: 'Connected / Spoke to Customer',
+    notes: '',
+    next_call_date: '',
+    next_call_time: ''
   })
 
   // Interaction States
@@ -160,17 +177,25 @@ export default function CRMPage() {
       q = q.or(`full_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`);
     }
 
-    if (activeAiFilter === 'scheme') {
-       q = q.eq('customer_status', 'Purchased');
-    } else if (activeAiFilter === 'cold') {
-       q = q.or('customer_status.eq.Lead,customer_status.is.null');
+    // ✨ UPDATED: Logic to specifically filter out DND unless explicitly requested
+    if (activeAiFilter === 'dnd') {
+       q = q.eq('customer_status', 'DND');
     } else {
-       if (tab === 'followups') {
-         q = q.or('customer_status.eq.Lead,customer_status.is.null');
-       } else if (tab === 'purchased') {
-         q = q.eq('customer_status', 'Purchased');
-       } else if (tab === 'kitty') {
-         q = q.eq('customer_status', 'Kitty Member');
+       // Automatically filter out DND from all standard lists
+       q = q.neq('customer_status', 'DND');
+
+       if (activeAiFilter === 'scheme') {
+          q = q.eq('customer_status', 'Purchased');
+       } else if (activeAiFilter === 'cold') {
+          q = q.or('customer_status.eq.Lead,customer_status.is.null');
+       } else {
+          if (tab === 'followups') {
+            q = q.or('customer_status.eq.Lead,customer_status.is.null');
+          } else if (tab === 'purchased') {
+            q = q.eq('customer_status', 'Purchased');
+          } else if (tab === 'kitty') {
+            q = q.eq('customer_status', 'Kitty Member');
+          }
        }
     }
     return q;
@@ -181,55 +206,64 @@ export default function CRMPage() {
     if (!appUser) return;
     const fetchCounts = async () => {
       try {
-        const getQ = (t: string) => buildServerQuery(supabase.from('customers').select('*', { count: 'exact', head: true }), t);
+        const getQ = (t: string) => buildServerQuery(supabase.from('customers').select('*', { count: 'planned', head: true }), t);
 
         const todayStr = new Date().toISOString().split('T')[0];
         const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         const fourteenDaysAgo = new Date(); fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
 
-        let dueQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).eq('next_followup_date', todayStr);
-        let overQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).lt('next_followup_date', todayStr);
+        let dueQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).eq('next_followup_date', todayStr).neq('customer_status', 'DND');
+        let overQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).lt('next_followup_date', todayStr).neq('customer_status', 'DND');
         let schemeQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).eq('customer_status', 'Purchased').lt('created_at', thirtyDaysAgo.toISOString());
         let coldQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).or('customer_status.eq.Lead,customer_status.is.null').lt('created_at', fourteenDaysAgo.toISOString());
+        let dndQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).eq('customer_status', 'DND');
 
         if (selectedLocation !== 'ALL') {
            dueQ = dueQ.eq('warehouse_id', selectedLocation);
            overQ = overQ.eq('warehouse_id', selectedLocation);
            schemeQ = schemeQ.eq('warehouse_id', selectedLocation);
            coldQ = coldQ.eq('warehouse_id', selectedLocation);
+           dndQ = dndQ.eq('warehouse_id', selectedLocation);
         }
 
-        const [f, p, k, due, over, scheme, cold] = await Promise.all([
-          getQ('followups'), getQ('purchased'), getQ('kitty'), dueQ, overQ, schemeQ, coldQ
+        const [f, p, k, due, over, scheme, cold, dnd] = await Promise.all([
+          getQ('followups'), getQ('purchased'), getQ('kitty'), dueQ, overQ, schemeQ, coldQ, dndQ
         ]);
 
         setGlobalCounts({
           followups: f.count || 0,
           purchased: p.count || 0,
-          kitty: k.count || 0
+          kitty: k.count || 0,
+          dnd: dnd.count || 0
         });
 
         setMetrics({
           dueToday: due.count || 0,
           overdue: over.count || 0,
-          total: (f.count || 0) + (p.count || 0) + (k.count || 0),
+          total: (f.count || 0) + (p.count || 0) + (k.count || 0) + (dnd.count || 0),
           schemeCount: scheme.count || 0,
-          coldCount: cold.count || 0
+          coldCount: cold.count || 0,
+          dndCount: dnd.count || 0
         });
       } catch (e) { console.warn("Count Fetch Error:", e); }
     }
     fetchCounts()
   }, [appUser, selectedLocation, debouncedSearch, activeAiFilter])
 
-  // FETCH PAGE DATA
+  // ✨ UPDATED FETCH: Now pulls deeply nested Vouchers & Message Sequences
   const fetchPage = async (pageToLoad: number) => {
     if (!appUser || !selectedLocation) return;
     setIsLoading(true);
     try {
-      let q = supabase.from('customers').select('*, kitty_plans(*)');
+      // ✅ OPTIMIZED: Only fetch the necessary columns for deep relations
+      let q = supabase.from('customers').select(`
+        *, 
+        kitty_plans(*),
+        vouchers(id, code, status, expiry_date), 
+        voucher_message_sequences(id, status)
+      `);
       q = buildServerQuery(q, activeTab);
       
-      // Secondary sorting ensures deterministic pagination
       q = q.order('next_followup_date', { ascending: true, nullsFirst: false }).order('id', { ascending: true });
       q = q.range(pageToLoad * pageSize, (pageToLoad + 1) * pageSize - 1);
 
@@ -243,19 +277,73 @@ export default function CRMPage() {
     }
   }
 
-  // Trigger page reset when filters OR TAB changes
   useEffect(() => {
     setPage(0);
     fetchPage(0);
   }, [appUser, selectedLocation, debouncedSearch, activeAiFilter, activeTab, pageSize])
 
-  const toggleAiFilter = (filter: 'scheme' | 'cold') => {
+  const toggleAiFilter = (filter: 'scheme' | 'cold' | 'dnd' | 'birthday' | 'anniversary') => {
     if (activeAiFilter === filter) {
        setActiveAiFilter('none');
     } else {
        setActiveAiFilter(filter);
        if (filter === 'scheme') setActiveTab('purchased');
-       if (filter === 'cold') setActiveTab('followups');
+       if (filter === 'cold' || filter === 'dnd') setActiveTab('followups'); 
+    }
+  }
+
+  // ✨ NEW: Advanced Call Logging Engine
+  const handleLogCall = async () => {
+    if (!selectedCustomer) return;
+    if (!callForm.outcome) return toast.error("Select a call outcome.");
+
+    setIsSubmitting(true);
+    try {
+      const isDND = callForm.outcome === 'Not Interested (Do Not Disturb)';
+      const callLogEntry = {
+        company_id: appUser?.company_id,
+        customer_id: selectedCustomer.id,
+        user_id: appUser?.id || appUser?.user_id, // Staff who made the call
+        outcome: callForm.outcome,
+        notes: callForm.notes,
+        next_call_date: callForm.next_call_date || null,
+        next_call_time: callForm.next_call_time || null,
+      };
+
+      // 1. Insert into call_records/call_logs table
+      const { error: logErr } = await supabase.from('call_records').insert([callLogEntry]);
+      if (logErr) throw logErr;
+
+      // 2. Update Customer Profile with strict next-action protocols
+      let updatePayload: any = {
+        last_interaction: `[CALL: ${callForm.outcome}] ${callForm.notes}`
+      };
+
+      if (isDND) {
+        updatePayload.customer_status = 'DND';
+        updatePayload.next_followup_date = null; // Kill the timer
+        updatePayload.followup_reason = 'Customer requested Do Not Disturb';
+      } else {
+        // If they specify a next call date, set the CRM timer
+        if (callForm.next_call_date) {
+           updatePayload.next_followup_date = callForm.next_call_date;
+           updatePayload.followup_reason = `Follow up required after: ${callForm.outcome}`;
+        }
+      }
+
+      const { error: custErr } = await supabase.from('customers').update(updatePayload).eq('id', selectedCustomer.id);
+      if (custErr) throw custErr;
+
+      toast.success(isDND ? 'Customer moved to DND List' : 'Call Logged & Timer Set!');
+      
+      setIsCallModalOpen(false);
+      setCallForm({ outcome: 'Connected / Spoke to Customer', notes: '', next_call_date: '', next_call_time: '' });
+      fetchPage(page);
+
+    } catch (error: any) {
+      toast.error(`Failed to log call: ${error.message}`);
+    } finally {
+      setIsSubmitting(false);
     }
   }
 
@@ -574,7 +662,6 @@ export default function CRMPage() {
     }
   }
 
-  // ✨ NEW: Integrated WhatsApp Sender for Single Selection
   const openWhatsAppModal = (customer: CRMCustomer) => {
     let phone = customer.phone.replace(/\D/g, '');
     if (phone.length === 10) phone = '91' + phone;
@@ -583,7 +670,6 @@ export default function CRMPage() {
     setIsSenderModalOpen(true);
   }
 
-  // ✨ NEW: Integrated WhatsApp Sender for Bulk Broadcasts
   const handleBulkBroadcast = () => {
     if (customers.length === 0) return toast.error("No customers found in the current filtered list.");
     
@@ -597,7 +683,6 @@ export default function CRMPage() {
     setIsSenderModalOpen(true);
   }
 
-  // Fallback for legacy calls in existing subcomponents
   const handleTemplateChange = (templateId: string) => {}
   const handleSendWhatsApp = () => {}
 
@@ -607,6 +692,12 @@ export default function CRMPage() {
     setFollowupReason(customer.followup_reason || ''); 
     setInteractionNotes(customer.last_interaction || ''); 
     setIsFollowupModalOpen(true); 
+  }
+
+  // ✨ NEW: Open Call Logger Wrapper
+  const openCallLoggerModal = (customer: CRMCustomer) => {
+    setSelectedCustomer(customer);
+    setIsCallModalOpen(true);
   }
 
   const openProfileModal = (customer: CRMCustomer) => {
@@ -746,7 +837,6 @@ export default function CRMPage() {
           </div>
           
           <div className="flex gap-2 flex-wrap lg:justify-end">
-            {/* ✨ NEW: Broadcast to List Button */}
             <Button onClick={handleBulkBroadcast} className="bg-emerald-600 hover:bg-emerald-700 text-white h-8 text-xs font-semibold rounded-lg shadow-sm border-transparent transition-none">
               <MessageSquare className="w-4 h-4 mr-1.5" /> Broadcast to List
             </Button>
@@ -766,8 +856,17 @@ export default function CRMPage() {
               Cold Leads ({metrics.coldCount})
             </Button>
             
+            {/* ✨ NEW: DND Filter Button */}
+            <Button 
+              variant={activeAiFilter === 'dnd' ? 'default' : 'outline'} size="sm" 
+              onClick={() => toggleAiFilter('dnd')}
+              className={cn("h-8 text-xs font-semibold transition-none rounded-lg", activeAiFilter === 'dnd' ? "bg-red-600 text-white border-transparent" : "bg-white border-red-200 text-red-600 hover:bg-red-50")}
+            >
+              <PhoneOff className="w-3.5 h-3.5 mr-1" /> DND ({metrics.dndCount})
+            </Button>
+
             {activeAiFilter !== 'none' && (
-              <Button variant="ghost" size="icon" onClick={() => setActiveAiFilter('none')} className="h-8 w-8 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg">
+              <Button variant="ghost" size="icon" onClick={() => setActiveAiFilter('none')} className="h-8 w-8 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg">
                 <FilterX className="w-4 h-4" />
               </Button>
             )}
@@ -800,6 +899,7 @@ export default function CRMPage() {
                    onMessage={openWhatsAppModal}
                    onSchedule={openScheduleModal}
                    onViewProfile={openProfileModal}
+                   onLogCall={openCallLoggerModal} 
                  />
                  <PaginationFooter />
               </TabsContent>
@@ -812,6 +912,7 @@ export default function CRMPage() {
                    onMessage={openWhatsAppModal}
                    onSchedule={openScheduleModal}
                    onViewProfile={openProfileModal}
+                   onLogCall={openCallLoggerModal}
                  />
                  <PaginationFooter />
               </TabsContent>
@@ -824,6 +925,7 @@ export default function CRMPage() {
                    onMessage={openWhatsAppModal}
                    onSchedule={openScheduleModal}
                    onViewProfile={openProfileModal}
+                   onLogCall={openCallLoggerModal}
                    isKitty={true}
                  />
                  <PaginationFooter />
@@ -833,14 +935,12 @@ export default function CRMPage() {
         </Card>
       </main>
 
-      {/* ✨ NEW: Reusable WhatsApp Sender Modal */}
       <WhatsAppSenderModal 
         isOpen={isSenderModalOpen}
         onClose={() => setIsSenderModalOpen(false)}
         recipients={messageRecipients}
       />
 
-      {/* LEGACY MODALS */}
       <CRMModals 
         isImportModalOpen={isImportModalOpen} setIsImportModalOpen={setIsImportModalOpen}
         isPreviewModalOpen={isPreviewModalOpen} setIsPreviewModalOpen={setIsPreviewModalOpen}
@@ -886,6 +986,11 @@ export default function CRMPage() {
         handleSendWhatsApp={handleSendWhatsApp}
         openWhatsAppModal={openWhatsAppModal}
         dynamicTemplates={dynamicTemplates} 
+
+        // ✨ NEW: Pass the Call Logger props down to the CRMModals
+        isCallModalOpen={isCallModalOpen} setIsCallModalOpen={setIsCallModalOpen}
+        callForm={callForm} setCallForm={setCallForm}
+        handleLogCall={handleLogCall}
       />
     </div>
   )

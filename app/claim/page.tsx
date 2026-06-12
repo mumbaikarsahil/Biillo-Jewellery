@@ -280,7 +280,7 @@ export default function VoucherClaimPage() {
               action: 'message.sendDirect',
               payload: {
                 user_id: convo360UserId,
-                template_name: 'voucher_resgistration_sucess', 
+                template_name: 'voucher_registration_final', 
                 lang: 'en',
                 namespace: namespace,
                 parameters: [formData.name, cleanCode, formattedExpiry]
