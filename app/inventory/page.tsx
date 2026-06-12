@@ -2190,7 +2190,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
       <SelectItem value="in_stock"          className="text-xs font-medium">In Stock</SelectItem>
       <SelectItem value="in_vault"          className="text-xs font-medium">In Vault</SelectItem>
       <SelectItem value="transit"           className="text-xs font-medium">In Transit</SelectItem>
-      <SelectItem value="received_at_ho"    className="text-xs font-medium">Received at HO</SelectItem>
+      <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>
       <SelectItem value="job_work_out"      className="text-xs font-medium">Job Work Out</SelectItem>
       <SelectItem value="pending_repair"    className="text-xs font-medium">Pending Repair</SelectItem>
       <SelectItem value="pending_melting"   className="text-xs font-medium">Pending Melting</SelectItem>
@@ -2350,7 +2350,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
       <SelectItem value="in_stock"          className="text-xs font-medium">In Stock</SelectItem>
       <SelectItem value="in_vault"          className="text-xs font-medium">In Vault</SelectItem>
       <SelectItem value="transit"           className="text-xs font-medium">In Transit</SelectItem>
-      <SelectItem value="received_at_ho"    className="text-xs font-medium">Received at HO</SelectItem>
+      <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>
       <SelectItem value="job_work_out"      className="text-xs font-medium">Job Work Out</SelectItem>
       <SelectItem value="pending_repair"    className="text-xs font-medium">Pending Repair</SelectItem>
       <SelectItem value="pending_melting"   className="text-xs font-medium">Pending Melting</SelectItem>
