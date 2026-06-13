@@ -26,7 +26,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, message: "Missing required fields" }, { status: 400 });
     }
 
-    const cleanPrefix = prefix.toUpperCase().trim();
+    const cleanPrefix = String(prefix).toUpperCase().trim();
     const cleanPhone = phone.replace(/\D/g, '').slice(-10); // Extract 10-digit number
     const cleanName = name.trim();
 
