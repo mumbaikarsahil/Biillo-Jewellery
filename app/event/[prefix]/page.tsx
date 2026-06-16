@@ -91,7 +91,7 @@ export default function EventVoucherClaimPage() {
   const [isBooting, setIsBooting] = useState(true)
   const [isInvalidEvent, setIsInvalidEvent] = useState(false)
 
-  const [step, setStep] = useState(1) 
+  const [step, setStep] = useState(2) 
   const [loading, setLoading] = useState(false)
   const [claimedCode, setClaimedCode] = useState<string>('')
   const [voucherExpiry, setVoucherExpiry] = useState<string | null>(null)
@@ -478,8 +478,8 @@ export default function EventVoucherClaimPage() {
                 </div>
                 <div className="space-y-2">
                   <h2 className="text-4xl font-serif text-transparent bg-clip-text bg-gradient-to-r from-emerald-800 to-emerald-500 tracking-tight">Claimed!</h2>
-                  <p className="text-sm text-slate-600 leading-relaxed max-w-[280px] mx-auto mt-2">
-                    Show this screen at the counter to receive your physical gift card.
+                  <p className="text-sm font-bold text-slate-600 leading-relaxed max-w-[280px] mx-auto mt-2">
+                    Show this screen & collect your gift voucher worth Rs 10,000/ from Pavitram counter at the event.
                   </p>
                   <p className="text-[11px] text-slate-400 flex items-center justify-center gap-1.5 mt-1">
                     <MessageCircle className="w-3.5 h-3.5 text-[#25D366]" />
@@ -492,7 +492,7 @@ export default function EventVoucherClaimPage() {
                   <p className="text-4xl font-black text-[#881798] tracking-widest">{claimedCode}</p>
                 </div>
                 
-                <p className="text-xs font-semibold text-rose-600 mt-4 text-center">
+                <p className="text-xs font-bold text-rose-600 mt-4 text-center">
                   {voucherExpiry
                     ? <>Valid until <b>{new Date(voucherExpiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b></>
                     : <>Valid until <b>{new Date(new Date().setMonth(new Date().getMonth() + 1)).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</b></>
