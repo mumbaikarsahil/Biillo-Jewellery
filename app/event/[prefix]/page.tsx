@@ -91,7 +91,7 @@ export default function EventVoucherClaimPage() {
   const [isBooting, setIsBooting] = useState(true)
   const [isInvalidEvent, setIsInvalidEvent] = useState(false)
 
-  const [step, setStep] = useState(2) 
+  const [step, setStep] = useState(1) 
   const [loading, setLoading] = useState(false)
   const [claimedCode, setClaimedCode] = useState<string>('')
   const [voucherExpiry, setVoucherExpiry] = useState<string | null>(null)
