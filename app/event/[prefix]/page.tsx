@@ -112,7 +112,7 @@ export default function EventVoucherClaimPage() {
   const receiptRef = useRef<HTMLDivElement>(null);
   const handleDownloadReceipt = useReactToPrint({
     contentRef: receiptRef,
-    documentTitle: `Ossam_Voucher_${claimedCode}`,
+    documentTitle: `Pavitram_Voucher_${claimedCode}`,
   });
 
   useEffect(() => {

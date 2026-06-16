@@ -19,7 +19,8 @@ import {
   QrCode,
   ShieldCheck,
   TrendingUp,
-  ArrowRight
+  ArrowRight,
+  Undo2 // ✨ NEW ICON FOR RETURNS
 } from "lucide-react";
 
 import { useAuth } from "@/hooks/useAuth";
@@ -49,7 +50,6 @@ export default function VouchersDashboard() {
       let page = 0;
       const pageSize = 1000;
 
-      // Robust fetch loop to bypass the 1000 row limit for accurate metrics
       while (more) {
         const { data, error } = await supabase
           .from('vouchers')
@@ -76,7 +76,6 @@ export default function VouchersDashboard() {
         if (v.status === 'redeemed') {
           redeemed++;
         } else if (v.status === 'voided' || v.status === 'expired' || isExpired) {
-          // It's voided, explicitly expired, OR its date has passed
           denied++;
         } else if (v.status === 'distributed' || v.status === 'registered' || v.status === 'unclaimed') {
           active++;
@@ -132,13 +131,21 @@ export default function VouchersDashboard() {
       href: "/vouchers/distribute",
       accent: "text-emerald-600 bg-emerald-50 border-emerald-200 group-hover:bg-emerald-600 group-hover:text-white",
     },
+    // ✨ NEW MODULE ADDED HERE
+    {
+      title: "Returns & Recovery",
+      description: "Recall unsold stock to central vault.",
+      icon: Undo2,
+      href: "/vouchers/return",
+      accent: "text-rose-600 bg-rose-50 border-rose-200 group-hover:bg-rose-600 group-hover:text-white",
+    },
     {
       title: "Audit Trail",
       description: "Track full voucher lifecycles.",
       icon: Search,
       href: "/vouchers/track",
       accent: "text-slate-700 bg-slate-100 border-slate-200 group-hover:bg-slate-800 group-hover:text-white",
-    },
+    }
   ];
 
   return (
@@ -281,13 +288,13 @@ export default function VouchersDashboard() {
           </div>
         </section>
 
-        {/* --- MODULE GRID (MODERN ENTERPRISE STYLE) --- */}
+        {/* --- MODULE GRID (UPDATED GRID COLS TO FIT 6 CARDS) --- */}
         <section className="space-y-4 pt-4">
           <h2 className="text-xs font-bold uppercase tracking-widest text-slate-400 flex items-center gap-2">
             <Database className="w-4 h-4" /> Core Operations
           </h2>
           
-          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-3">
             {voucherModules.map((module) => (
               <Link href={module.href} key={module.title} className="block group outline-none h-full">
                 <div className="h-full bg-white border border-slate-200 rounded-2xl p-5 transition-all duration-300 hover:border-slate-400 hover:shadow-lg flex flex-col relative group-focus-visible:ring-2 group-focus-visible:ring-[#0052FF] group-focus-visible:ring-offset-2">
