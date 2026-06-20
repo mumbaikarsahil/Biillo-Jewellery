@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { 
   ArrowLeft, Plus, MessageCircle, Edit2, Trash2, 
-  Loader2, Save, ShieldAlert, Database, Gem, Gift
+  Loader2, Save, ShieldAlert, Database, Gem, Gift, TicketPercent // ✨ Added Ticket Icon
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -25,7 +25,8 @@ import {
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
-type TemplateCategory = 'Lead' | 'Purchased' | 'Kitty'
+// ✨ ADDED 'Voucher' TO THE TYPE DEFINITION
+type TemplateCategory = 'Lead' | 'Purchased' | 'Kitty' | 'Voucher'
 
 interface MessageTemplate {
   id: string
@@ -273,10 +274,14 @@ export default function CRMSettingsPage() {
             </div>
 
             <Tabs value={activeTemplateTab} onValueChange={(v) => setActiveTemplateTab(v as TemplateCategory)} className="w-full">
-              <TabsList className="bg-gray-200/50 p-1 rounded-xl w-full sm:w-auto flex h-auto">
+              {/* ✨ ADDED VOUCHER CUSTOMERS TAB */}
+              <TabsList className="bg-gray-200/50 p-1 rounded-xl w-full flex flex-wrap h-auto gap-1">
                 <TabsTrigger value="Lead" className="rounded-lg text-xs font-bold py-2 px-4 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-none">Inquiries / Leads</TabsTrigger>
                 <TabsTrigger value="Purchased" className="rounded-lg text-xs font-bold py-2 px-4 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-none">Past Buyers</TabsTrigger>
                 <TabsTrigger value="Kitty" className="rounded-lg text-xs font-bold py-2 px-4 data-[state=active]:bg-white data-[state=active]:shadow-sm flex-1 sm:flex-none">Kitty Members</TabsTrigger>
+                <TabsTrigger value="Voucher" className="rounded-lg text-xs font-bold py-2 px-4 data-[state=active]:bg-teal-50 data-[state=active]:text-teal-700 data-[state=active]:shadow-sm flex-1 sm:flex-none">
+                  <TicketPercent className="w-3.5 h-3.5 mr-1.5" /> Voucher Customers
+                </TabsTrigger>
               </TabsList>
 
               <div className="grid gap-4 mt-6">
@@ -400,10 +405,12 @@ export default function CRMSettingsPage() {
                 <SelectTrigger className="h-10 rounded-xl bg-white border-gray-200 text-sm font-semibold focus:ring-indigo-500">
                   <SelectValue />
                 </SelectTrigger>
+                {/* ✨ UPDATED MODAL SELECTOR */}
                 <SelectContent className="rounded-xl border-gray-200">
                   <SelectItem value="Lead" className="text-xs font-semibold">Inquiries / Leads</SelectItem>
                   <SelectItem value="Purchased" className="text-xs font-semibold">Past Buyers</SelectItem>
                   <SelectItem value="Kitty" className="text-xs font-semibold">Kitty Members</SelectItem>
+                  <SelectItem value="Voucher" className="text-xs font-semibold">Voucher Customers</SelectItem>
                 </SelectContent>
               </Select>
             </div>

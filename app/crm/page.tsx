@@ -17,7 +17,8 @@ import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
 import { 
   Users, Search, Store, Gem, FilterX, RefreshCw,
-  UserPlus, UploadCloud, Settings, ChevronLeft, ChevronRight, MessageSquare, PhoneOff
+  UserPlus, UploadCloud, Settings, ChevronLeft, ChevronRight, MessageSquare, PhoneOff,
+  TicketPercent, ArrowUpDown, Filter, X
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Separator } from '@radix-ui/react-separator'
@@ -30,7 +31,7 @@ import { CRMMetrics } from './components/CRMMetrics'
 import { CRMModals } from './components/CRMModals'
 import { WhatsAppSenderModal } from '@/components/WhatsAppSenderModal'
 
-// ✨ NEW: Defined Call Outcomes for Strict Logging
+// Defined Call Outcomes for Strict Logging
 const CALL_OUTCOMES = [
   'Connected / Spoke to Customer',
   'Ringing / No Answer',
@@ -73,14 +74,16 @@ export default function CRMPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
 
-  // ✨ UPDATED: Added 'dnd' to the AI Filters
   const [activeAiFilter, setActiveAiFilter] = useState<'none' | 'scheme' | 'cold' | 'dnd' | 'birthday' | 'anniversary'>('none')
+  
+  const [sortOrder, setSortOrder] = useState<'followup_asc' | 'followup_desc' | 'newest' | 'name_asc'>('followup_asc')
 
   // Server-Side Pagination States
   const [activeTab, setActiveTab] = useState<string>("followups")
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState<number>(50) 
-  const [globalCounts, setGlobalCounts] = useState({ followups: 0, purchased: 0, kitty: 0, dnd: 0 })
+  
+  const [globalCounts, setGlobalCounts] = useState({ followups: 0, purchased: 0, kitty: 0, vouchers: 0, dnd: 0 })
   const [metrics, setMetrics] = useState({ total: 0, dueToday: 0, overdue: 0, schemeCount: 0, coldCount: 0, dndCount: 0 })
 
   // WhatsApp Integration States
@@ -94,8 +97,6 @@ export default function CRMPage() {
   const [isFollowupModalOpen, setIsFollowupModalOpen] = useState(false)
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false)
   const [isLoyaltyModalOpen, setIsLoyaltyModalOpen] = useState(false)
-  
-  // ✨ NEW: Call Logger Modal State
   const [isCallModalOpen, setIsCallModalOpen] = useState(false)
   
   // Import States
@@ -119,8 +120,6 @@ export default function CRMPage() {
   const [loyaltyForm, setLoyaltyForm] = useState({ 
     actionType: 'manual_add', amount: '', billedAmount: '', notes: '' 
   })
-
-  // ✨ NEW: Call Logger Form State
   const [callForm, setCallForm] = useState({
     outcome: 'Connected / Spoke to Customer',
     notes: '',
@@ -168,7 +167,6 @@ export default function CRMPage() {
     fetchCoreData()
   }, [appUser])
 
-  // SERVER-SIDE QUERY BUILDER
   const buildServerQuery = (queryObj: any, tab: string) => {
     let q = queryObj.eq('company_id', appUser?.company_id);
     
@@ -177,11 +175,9 @@ export default function CRMPage() {
       q = q.or(`full_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`);
     }
 
-    // ✨ UPDATED: Logic to specifically filter out DND unless explicitly requested
     if (activeAiFilter === 'dnd') {
        q = q.eq('customer_status', 'DND');
     } else {
-       // Automatically filter out DND from all standard lists
        q = q.neq('customer_status', 'DND');
 
        if (activeAiFilter === 'scheme') {
@@ -189,7 +185,9 @@ export default function CRMPage() {
        } else if (activeAiFilter === 'cold') {
           q = q.or('customer_status.eq.Lead,customer_status.is.null');
        } else {
-          if (tab === 'followups') {
+          if (tab === 'dnd') {
+            q = queryObj.eq('company_id', appUser?.company_id).eq('customer_status', 'DND'); 
+          } else if (tab === 'followups') {
             q = q.or('customer_status.eq.Lead,customer_status.is.null');
           } else if (tab === 'purchased') {
             q = q.eq('customer_status', 'Purchased');
@@ -206,7 +204,8 @@ export default function CRMPage() {
     if (!appUser) return;
     const fetchCounts = async () => {
       try {
-        const getQ = (t: string) => buildServerQuery(supabase.from('customers').select('*', { count: 'planned', head: true }), t);
+        // ✨ FIX: Changed everything back to count: 'exact' to prevent phantom "1" results on empty small tables
+        const getQ = (t: string) => buildServerQuery(supabase.from('customers').select('*', { count: 'exact', head: true }), t);
 
         const todayStr = new Date().toISOString().split('T')[0];
         const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
@@ -217,6 +216,9 @@ export default function CRMPage() {
         let schemeQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).eq('customer_status', 'Purchased').lt('created_at', thirtyDaysAgo.toISOString());
         let coldQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).or('customer_status.eq.Lead,customer_status.is.null').lt('created_at', fourteenDaysAgo.toISOString());
         let dndQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).eq('customer_status', 'DND');
+        
+        // Exact is perfectly safe here now because you created the Database Index!
+        let voucherQ = supabase.from('customers').select('id, vouchers!inner(id)', {count: 'exact', head: true}).eq('company_id', appUser.company_id).neq('customer_status', 'DND');
 
         if (selectedLocation !== 'ALL') {
            dueQ = dueQ.eq('warehouse_id', selectedLocation);
@@ -224,16 +226,18 @@ export default function CRMPage() {
            schemeQ = schemeQ.eq('warehouse_id', selectedLocation);
            coldQ = coldQ.eq('warehouse_id', selectedLocation);
            dndQ = dndQ.eq('warehouse_id', selectedLocation);
+           voucherQ = voucherQ.eq('warehouse_id', selectedLocation);
         }
 
-        const [f, p, k, due, over, scheme, cold, dnd] = await Promise.all([
-          getQ('followups'), getQ('purchased'), getQ('kitty'), dueQ, overQ, schemeQ, coldQ, dndQ
+        const [f, p, k, vC, due, over, scheme, cold, dnd] = await Promise.all([
+          getQ('followups'), getQ('purchased'), getQ('kitty'), voucherQ, dueQ, overQ, schemeQ, coldQ, dndQ
         ]);
 
         setGlobalCounts({
           followups: f.count || 0,
           purchased: p.count || 0,
           kitty: k.count || 0,
+          vouchers: vC.count || 0, 
           dnd: dnd.count || 0
         });
 
@@ -250,21 +254,30 @@ export default function CRMPage() {
     fetchCounts()
   }, [appUser, selectedLocation, debouncedSearch, activeAiFilter])
 
-  // ✨ UPDATED FETCH: Now pulls deeply nested Vouchers & Message Sequences
   const fetchPage = async (pageToLoad: number) => {
     if (!appUser || !selectedLocation) return;
     setIsLoading(true);
     try {
-      // ✅ OPTIMIZED: Only fetch the necessary columns for deep relations
+      const isVoucherTab = activeTab === 'vouchers';
+      
       let q = supabase.from('customers').select(`
         *, 
         kitty_plans(*),
-        vouchers(id, code, status, expiry_date), 
+        vouchers${isVoucherTab ? '!inner' : ''}(id, code, status, expiry_date), 
         voucher_message_sequences(id, status)
       `);
       q = buildServerQuery(q, activeTab);
       
-      q = q.order('next_followup_date', { ascending: true, nullsFirst: false }).order('id', { ascending: true });
+      if (sortOrder === 'followup_asc') {
+        q = q.order('next_followup_date', { ascending: true, nullsFirst: false }).order('id', { ascending: true });
+      } else if (sortOrder === 'followup_desc') {
+        q = q.order('next_followup_date', { ascending: false, nullsFirst: false }).order('id', { ascending: true });
+      } else if (sortOrder === 'newest') {
+        q = q.order('created_at', { ascending: false }).order('id', { ascending: true });
+      } else if (sortOrder === 'name_asc') {
+        q = q.order('full_name', { ascending: true }).order('id', { ascending: true });
+      }
+      
       q = q.range(pageToLoad * pageSize, (pageToLoad + 1) * pageSize - 1);
 
       const { data, error } = await q;
@@ -280,19 +293,20 @@ export default function CRMPage() {
   useEffect(() => {
     setPage(0);
     fetchPage(0);
-  }, [appUser, selectedLocation, debouncedSearch, activeAiFilter, activeTab, pageSize])
+  }, [appUser, selectedLocation, debouncedSearch, activeAiFilter, activeTab, pageSize, sortOrder])
 
   const toggleAiFilter = (filter: 'scheme' | 'cold' | 'dnd' | 'birthday' | 'anniversary') => {
     if (activeAiFilter === filter) {
        setActiveAiFilter('none');
+       if (activeTab === 'dnd') setActiveTab('followups');
     } else {
        setActiveAiFilter(filter);
        if (filter === 'scheme') setActiveTab('purchased');
-       if (filter === 'cold' || filter === 'dnd') setActiveTab('followups'); 
+       if (filter === 'cold') setActiveTab('followups'); 
+       if (filter === 'dnd') setActiveTab('dnd');
     }
   }
 
-  // ✨ NEW: Advanced Call Logging Engine
   const handleLogCall = async () => {
     if (!selectedCustomer) return;
     if (!callForm.outcome) return toast.error("Select a call outcome.");
@@ -694,7 +708,6 @@ export default function CRMPage() {
     setIsFollowupModalOpen(true); 
   }
 
-  // ✨ NEW: Open Call Logger Wrapper
   const openCallLoggerModal = (customer: CRMCustomer) => {
     setSelectedCustomer(customer);
     setIsCallModalOpen(true);
@@ -707,18 +720,17 @@ export default function CRMPage() {
 
   if (loading || !appUser) return null
 
-  // SERVER PAGINATION FOOTER
   const PaginationFooter = () => {
     const totalCurrentCount = globalCounts[activeTab as keyof typeof globalCounts] || 0;
     return (
       <div className="bg-slate-50 border-t border-slate-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-b-xl">
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-500 font-medium">Rows per page:</span>
+        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
+          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Rows per page:</span>
           <Select value={pageSize.toString()} onValueChange={(val) => setPageSize(Number(val))}>
-            <SelectTrigger className="h-8 w-[80px] text-xs bg-white font-semibold shadow-sm">
+            <SelectTrigger className="h-8 w-[80px] text-xs bg-white font-bold shadow-sm rounded-lg border-slate-200">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent className="rounded-lg border-slate-200">
               <SelectItem value="50">50</SelectItem>
               <SelectItem value="100">100</SelectItem>
               <SelectItem value="200">200</SelectItem>
@@ -727,15 +739,15 @@ export default function CRMPage() {
           </Select>
         </div>
         
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-slate-500 font-medium">
-            Showing <span className="font-bold text-slate-700">{customers.length > 0 ? page * pageSize + 1 : 0}</span> to <span className="font-bold text-slate-700">{Math.min((page + 1) * pageSize, totalCurrentCount)}</span> of <span className="font-bold text-slate-700">{totalCurrentCount}</span>
+        <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
+            Showing <span className="text-indigo-600">{customers.length > 0 ? page * pageSize + 1 : 0}</span> to <span className="text-indigo-600">{Math.min((page + 1) * pageSize, totalCurrentCount)}</span> of <span className="text-indigo-600">{totalCurrentCount}</span>
           </span>
-          <div className="flex items-center gap-1.5">
-            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0 || isLoading} className="h-8 px-3 text-xs bg-white text-slate-600 shadow-sm">
+          <div className="flex items-center gap-1.5 w-full sm:w-auto">
+            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0 || isLoading} className="flex-1 sm:flex-none h-8 px-3 text-xs font-bold bg-white text-slate-600 shadow-sm rounded-lg border-slate-200 hover:bg-slate-50">
               <ChevronLeft className="w-4 h-4 mr-1"/> Prev
             </Button>
-            <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={(page + 1) * pageSize >= totalCurrentCount || isLoading} className="h-8 px-3 text-xs bg-white text-slate-600 shadow-sm">
+            <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={(page + 1) * pageSize >= totalCurrentCount || isLoading} className="flex-1 sm:flex-none h-8 px-3 text-xs font-bold bg-white text-slate-600 shadow-sm rounded-lg border-slate-200 hover:bg-slate-50">
               Next <ChevronRight className="w-4 h-4 ml-1"/>
             </Button>
           </div>
@@ -807,14 +819,14 @@ export default function CRMPage() {
               }))
               setIsAddKittyModalOpen(true)
             }} className="flex-1 md:flex-none bg-purple-600 hover:bg-purple-700 text-white h-10 px-4 text-xs font-bold shadow-sm rounded-lg border border-purple-500 transition-none">
-              <Gem className="w-3.5 h-3.5 mr-1.5" /> Start Kitty Plan
+              <Gem className="w-3.5 h-3.5 md:mr-1.5" /> <span className="hidden md:inline">Start Kitty Plan</span>
             </Button>
             
             <Button onClick={() => {
               setNewCustForm({ full_name: '', phone: '', email: '', city: '', customer_status: 'Lead', birth_date: '', anniversary_date: '', next_followup_date: '', followup_reason: '' }) 
               setIsAddModalOpen(true)
             }} className="flex-1 md:flex-none bg-slate-900 hover:bg-slate-800 text-white h-10 px-4 text-xs font-bold shadow-sm rounded-lg transition-none">
-              <UserPlus className="w-3.5 h-3.5 mr-1.5" /> Add Customer
+              <UserPlus className="w-3.5 h-3.5 mr-1.5" /> Add Lead
             </Button>
           </div>
         </div>
@@ -826,48 +838,64 @@ export default function CRMPage() {
           activeKittyCount={globalCounts.kitty} 
         />
 
-        {/* 4. QUICK FILTERS */}
-        <div className="bg-indigo-50/50 border border-indigo-100 rounded-xl p-4 shadow-sm shrink-0 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="bg-white p-2 rounded-lg border border-indigo-100 text-indigo-500 shadow-sm"><Search className="w-4 h-4" /></div>
-            <div>
-              <h2 className="text-sm font-bold text-indigo-900 tracking-tight">Quick Cohort Filters</h2>
-              <p className="text-[10px] text-indigo-500 font-medium">Find specific groups of customers to message.</p>
-            </div>
+        {/* ✨ 4. REDESIGNED COMMAND BAR */}
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
+          {/* Top Row: Title & Actions */}
+          <div className="bg-slate-50/80 border-b border-slate-100 p-3 sm:px-4 flex items-center justify-between gap-3">
+             <div className="flex items-center gap-2">
+               <div className="bg-indigo-100 p-1.5 rounded text-indigo-600"><Filter className="w-4 h-4" /></div>
+               <span className="text-[11px] font-bold text-slate-700 uppercase tracking-widest hidden sm:block">Command Bar</span>
+               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest sm:hidden">Filters</span>
+             </div>
+             
+             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                <Select value={sortOrder} onValueChange={(val: any) => setSortOrder(val)}>
+                  <SelectTrigger className="h-8 w-[140px] sm:w-[160px] text-[11px] sm:text-xs font-bold bg-white border-slate-200 text-slate-700 shadow-sm rounded-lg">
+                     <div className="flex items-center gap-1.5"><ArrowUpDown className="w-3.5 h-3.5 text-slate-400 shrink-0" /> <span className="truncate"><SelectValue placeholder="Sort By" /></span></div>
+                  </SelectTrigger>
+                  <SelectContent className="border-slate-200 rounded-lg">
+                    <SelectItem value="followup_asc" className="text-xs font-medium">Follow-up: Soonest</SelectItem>
+                    <SelectItem value="followup_desc" className="text-xs font-medium">Follow-up: Latest</SelectItem>
+                    <SelectItem value="newest" className="text-xs font-medium">Recently Added</SelectItem>
+                    <SelectItem value="name_asc" className="text-xs font-medium">Name (A-Z)</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Separator orientation="vertical" className="h-5 mx-1 bg-slate-200 hidden sm:block" />
+
+                <Button onClick={handleBulkBroadcast} className="bg-emerald-600 hover:bg-emerald-700 text-white h-8 px-3 text-[11px] sm:text-xs font-bold rounded-lg shadow-sm border-transparent transition-none">
+                  <MessageSquare className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Broadcast</span>
+                </Button>
+             </div>
           </div>
-          
-          <div className="flex gap-2 flex-wrap lg:justify-end">
-            <Button onClick={handleBulkBroadcast} className="bg-emerald-600 hover:bg-emerald-700 text-white h-8 text-xs font-semibold rounded-lg shadow-sm border-transparent transition-none">
-              <MessageSquare className="w-4 h-4 mr-1.5" /> Broadcast to List
-            </Button>
-            
+
+          {/* Bottom Row: Scrollable Chips */}
+          <div className="p-3 sm:px-4 flex overflow-x-auto custom-scrollbar gap-2 items-center">
             <Button 
               variant={activeAiFilter === 'scheme' ? 'default' : 'outline'} size="sm" 
               onClick={() => toggleAiFilter('scheme')}
-              className={cn("h-8 text-xs font-semibold transition-none rounded-lg", activeAiFilter === 'scheme' ? "bg-indigo-600 text-white border-transparent" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}
+              className={cn("shrink-0 h-8 px-4 rounded-full text-[11px] font-bold transition-none border shadow-sm", activeAiFilter === 'scheme' ? "bg-indigo-600 text-white border-indigo-600" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}
             >
               Can Pitch Kitty ({metrics.schemeCount})
             </Button>
             <Button 
               variant={activeAiFilter === 'cold' ? 'default' : 'outline'} size="sm" 
               onClick={() => toggleAiFilter('cold')}
-              className={cn("h-8 text-xs font-semibold transition-none rounded-lg", activeAiFilter === 'cold' ? "bg-indigo-600 text-white border-transparent" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}
+              className={cn("shrink-0 h-8 px-4 rounded-full text-[11px] font-bold transition-none border shadow-sm", activeAiFilter === 'cold' ? "bg-indigo-600 text-white border-indigo-600" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}
             >
               Cold Leads ({metrics.coldCount})
             </Button>
-            
-            {/* ✨ NEW: DND Filter Button */}
             <Button 
               variant={activeAiFilter === 'dnd' ? 'default' : 'outline'} size="sm" 
               onClick={() => toggleAiFilter('dnd')}
-              className={cn("h-8 text-xs font-semibold transition-none rounded-lg", activeAiFilter === 'dnd' ? "bg-red-600 text-white border-transparent" : "bg-white border-red-200 text-red-600 hover:bg-red-50")}
+              className={cn("shrink-0 h-8 px-4 rounded-full text-[11px] font-bold transition-none border shadow-sm", activeAiFilter === 'dnd' ? "bg-red-600 text-white border-red-600" : "bg-white border-red-200 text-red-600 hover:bg-red-50")}
             >
-              <PhoneOff className="w-3.5 h-3.5 mr-1" /> DND ({metrics.dndCount})
+              <PhoneOff className="w-3 h-3 mr-1.5" /> Do Not Disturb ({metrics.dndCount})
             </Button>
 
             {activeAiFilter !== 'none' && (
-              <Button variant="ghost" size="icon" onClick={() => setActiveAiFilter('none')} className="h-8 w-8 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg">
-                <FilterX className="w-4 h-4" />
+              <Button variant="ghost" size="sm" onClick={() => setActiveAiFilter('none')} className="shrink-0 h-8 px-3 rounded-full text-[10px] font-bold text-slate-400 hover:text-slate-600 hover:bg-slate-100 flex items-center ml-auto">
+                <X className="w-3.5 h-3.5 mr-1" /> Clear
               </Button>
             )}
           </div>
@@ -876,17 +904,22 @@ export default function CRMPage() {
         {/* 5. MAIN LIST AREA */}
         <Card className="flex-1 flex flex-col border-slate-200 shadow-sm overflow-hidden bg-white rounded-xl">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
-            <CardHeader className="py-2 px-3 border-b border-slate-100 bg-slate-50/50 shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <TabsList className="bg-slate-100/50 h-9 p-1 rounded-lg border border-slate-200/60 self-start">
-                <TabsTrigger value="followups" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm rounded-md">
+            <CardHeader className="py-2 px-3 border-b border-slate-100 bg-slate-50/50 shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 overflow-x-auto custom-scrollbar">
+              <TabsList className="bg-slate-100/50 h-9 p-1 rounded-lg border border-slate-200/60 self-start shrink-0 flex-nowrap">
+                <TabsTrigger value="followups" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm rounded-md whitespace-nowrap">
                   Inquiries / Leads <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-slate-100">{globalCounts.followups}</Badge>
                 </TabsTrigger>
-                <TabsTrigger value="purchased" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm rounded-md">
+                <TabsTrigger value="purchased" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm rounded-md whitespace-nowrap">
                   Past Buyers <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-emerald-50 text-emerald-600 border-emerald-100">{globalCounts.purchased}</Badge>
                 </TabsTrigger>
-                <TabsTrigger value="kitty" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm text-purple-700 rounded-md">
+                <TabsTrigger value="kitty" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm text-purple-700 rounded-md whitespace-nowrap">
                   Kitty Plan Members <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-purple-50 text-purple-600 border-purple-100">{globalCounts.kitty}</Badge>
                 </TabsTrigger>
+                <TabsTrigger value="vouchers" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm text-teal-700 rounded-md whitespace-nowrap">
+                  <TicketPercent className="w-3 h-3 mr-1.5 hidden sm:block" /> Voucher Customers <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-teal-50 text-teal-600 border-teal-100">{globalCounts.vouchers}</Badge>
+                </TabsTrigger>
+                {/* Dedicated hidden tab content area for DND customers */}
+                <TabsTrigger value="dnd" className="hidden">DND</TabsTrigger>
               </TabsList>
             </CardHeader>
             
@@ -927,6 +960,32 @@ export default function CRMPage() {
                    onViewProfile={openProfileModal}
                    onLogCall={openCallLoggerModal}
                    isKitty={true}
+                 />
+                 <PaginationFooter />
+              </TabsContent>
+
+              <TabsContent value="vouchers" className="h-full m-0 data-[state=active]:flex flex-col">
+                 <CustomerList 
+                   data={customers} 
+                   loading={isLoading} 
+                   emptyMessage="No Voucher Customers found for this branch."
+                   onMessage={openWhatsAppModal}
+                   onSchedule={openScheduleModal}
+                   onViewProfile={openProfileModal}
+                   onLogCall={openCallLoggerModal}
+                 />
+                 <PaginationFooter />
+              </TabsContent>
+
+              <TabsContent value="dnd" className="h-full m-0 data-[state=active]:flex flex-col">
+                 <CustomerList 
+                   data={customers} 
+                   loading={isLoading} 
+                   emptyMessage="No Do Not Disturb customers found."
+                   onMessage={openWhatsAppModal}
+                   onSchedule={openScheduleModal}
+                   onViewProfile={openProfileModal}
+                   onLogCall={openCallLoggerModal}
                  />
                  <PaginationFooter />
               </TabsContent>
@@ -987,7 +1046,6 @@ export default function CRMPage() {
         openWhatsAppModal={openWhatsAppModal}
         dynamicTemplates={dynamicTemplates} 
 
-        // ✨ NEW: Pass the Call Logger props down to the CRMModals
         isCallModalOpen={isCallModalOpen} setIsCallModalOpen={setIsCallModalOpen}
         callForm={callForm} setCallForm={setCallForm}
         handleLogCall={handleLogCall}

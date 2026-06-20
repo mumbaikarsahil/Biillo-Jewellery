@@ -36,7 +36,8 @@ import {
   X,
   BellRing,
   Megaphone,
-  Trash2
+  Trash2,
+  ArrowUpDown // ✨ NEW ICON FOR SORTING
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -92,6 +93,7 @@ interface TrackedVoucher {
   updated_by_user: string | null;
   scan_count: number;
   last_scanned_at: string | null;
+  updated_at: string | null; // ✨ ADDED TO INTERFACE
   
   last_scanned_warehouse_id?: string | null;
   last_scanned_warehouse?: { name: string } | null;
@@ -135,7 +137,7 @@ export default function TrackVoucherPage() {
   const [isListLoading, setIsListLoading] = useState(false);
   const [localSearch, setLocalSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(0);
-  const [pageSize, setPageSize] = useState(50); // ✨ NEW: Dynamic Page Size
+  const [pageSize, setPageSize] = useState(50); 
   const [totalCount, setTotalCount] = useState(0);
 
   // --- ADVANCED FILTERS STATE ---
@@ -144,6 +146,9 @@ export default function TrackVoucherPage() {
   const [batches, setBatches] = useState<any[]>([]);
   const [selectedFilterDistributor, setSelectedFilterDistributor] = useState("all");
   const [selectedFilterBatch, setSelectedFilterBatch] = useState("all");
+  
+  // ✨ NEW: SORTING STATE
+  const [sortOrder, setSortOrder] = useState("newest"); // Defaulting to newest activity
 
   // --- BULK ACTION STATE ---
   const [selectedVouchers, setSelectedVouchers] = useState<Set<string>>(new Set());
@@ -152,7 +157,7 @@ export default function TrackVoucherPage() {
   const [bulkOverrideReason, setBulkOverrideReason] = useState("");
   const [isUpdatingBulk, setIsUpdatingBulk] = useState(false);
 
-  // ✨ NEW: BULK VOID MODAL STATE
+  // --- BULK VOID MODAL STATE ---
   const [isVoidModalOpen, setIsVoidModalOpen] = useState(false);
   const [bulkVoidReason, setBulkVoidReason] = useState("");
   const [isVoidingBulk, setIsVoidingBulk] = useState(false);
@@ -167,11 +172,11 @@ export default function TrackVoucherPage() {
   const [isQueryingRegistered, setIsQueryingRegistered] = useState(false);
   const [activeTemplateContext, setActiveTemplateContext] = useState<"reminder" | "welcome">("reminder");
 
-  // ✨ NEW: CUSTOM EXPIRY REMINDER MODAL STATE
+  // --- CUSTOM EXPIRY REMINDER MODAL STATE ---
   const [isRemindModalOpen, setIsRemindModalOpen] = useState(false);
   const [remindDays, setRemindDays] = useState("7");
-  const [remindStatus, setRemindStatus] = useState("both"); // "registered", "distributed", "both"
-  const [remindError, setRemindError] = useState<string | null>(null); // ✨ INLINE ERROR STATE
+  const [remindStatus, setRemindStatus] = useState("both");
+  const [remindError, setRemindError] = useState<string | null>(null); 
 
   useEffect(() => {
     const fetchFiltersData = async () => {
@@ -184,29 +189,42 @@ export default function TrackVoucherPage() {
     fetchFiltersData();
   }, []);
 
+  // ✨ UPDATED: Added sortOrder to dependencies
   useEffect(() => {
     const timer = setTimeout(() => {
-      fetchVoucherList(activeFilter, currentPage, localSearch);
+      fetchVoucherList(activeFilter, currentPage, localSearch, sortOrder);
     }, 400); 
     return () => clearTimeout(timer);
-  }, [activeFilter, selectedFilterDistributor, selectedFilterBatch, currentPage, localSearch, pageSize]);
+  }, [activeFilter, selectedFilterDistributor, selectedFilterBatch, currentPage, localSearch, pageSize, sortOrder]);
 
-  const fetchVoucherList = async (tabStatus: string, page: number, searchKeyword: string) => {
+  // ✨ UPDATED: Added sortDirection parameter
+  const fetchVoucherList = async (tabStatus: string, page: number, searchKeyword: string, currentSort: string) => {
     setIsListLoading(true);
     try {
       let query = supabase
         .from("vouchers")
         .select(`
           id, code, discount_value, handling_fee, status, expiry_date, distributed_at, redeemed_at,
-          is_manual_override, updated_by_user, scan_count, last_scanned_at,
+          is_manual_override, updated_by_user, scan_count, last_scanned_at, updated_at,
           voucher_batches (batch_no),
           voucher_distributors (distributor_name, distributor_type, phone),
           voucher_distributions (payment_status, delivery_agent),
           customers (id, full_name, phone, convo360_user_id),
           last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name)
-        `, { count: 'exact' })
-        .order('code', { ascending: true }) 
-        .range(page * pageSize, (page + 1) * pageSize - 1);
+        `, { count: 'exact' });
+
+      // ✨ NEW: Apply Dynamic Sorting
+      if (currentSort === 'newest') {
+        query = query.order('updated_at', { ascending: false, nullsFirst: false });
+      } else if (currentSort === 'oldest') {
+        query = query.order('updated_at', { ascending: true, nullsFirst: false });
+      } else if (currentSort === 'code_desc') {
+        query = query.order('code', { ascending: false });
+      } else {
+        query = query.order('code', { ascending: true }); // Default code_asc
+      }
+
+      query = query.range(page * pageSize, (page + 1) * pageSize - 1);
 
       const todayIso = new Date().toISOString();
       
@@ -234,10 +252,9 @@ export default function TrackVoucherPage() {
     }
   };
 
-  // ✨ UPDATED: Custom Remind Expiring Action
   const executeRemindExpiring = async () => {
     setIsQueryingExpiry(true);
-    setRemindError(null); // Clear previous errors
+    setRemindError(null); 
     
     try {
       const today = new Date();
@@ -266,7 +283,6 @@ export default function TrackVoucherPage() {
       if (error) throw error;
       
       if (!data || data.length === 0) {
-        // Show inline error inside modal instead of toast
         setRemindError(`No vouchers found expiring within the next ${remindDays} days for the selected statuses.`);
         return;
       }
@@ -277,7 +293,6 @@ export default function TrackVoucherPage() {
         const dist = Array.isArray(v.voucher_distributors) ? v.voucher_distributors[0] : v.voucher_distributors;
         const cust = Array.isArray(v.customers) ? v.customers[0] : v.customers;
 
-        // Prioritize customer over distributor if status is registered, else use whoever has a phone
         const rawPhone = v.status === 'registered' ? cust?.phone : (dist?.phone || cust?.phone);
         const name = v.status === 'registered' ? cust?.full_name : (dist?.distributor_name || cust?.full_name || 'Valued Customer');
         
@@ -308,7 +323,6 @@ export default function TrackVoucherPage() {
         return;
       }
 
-      // Success - We have recipients, so we close the Remind Modal and open the Sender Modal
       setIsRemindModalOpen(false);
       setMessageRecipients(recipients);
       setActiveTemplateContext("reminder");
@@ -478,7 +492,7 @@ export default function TrackVoucherPage() {
       if (error) throw error;
 
       toast({ title: "Bulk Update Successful", description: `Updated ${idsToUpdate.length} vouchers.` });
-      fetchVoucherList(activeFilter, currentPage, localSearch);
+      fetchVoucherList(activeFilter, currentPage, localSearch, sortOrder);
       setSelectedVouchers(new Set());
       setBulkHandlingFee("");
       setBulkExpiryDate("");
@@ -508,7 +522,7 @@ export default function TrackVoucherPage() {
       if (error) throw error;
 
       toast({ title: "Vouchers Voided", description: `Successfully voided ${idsToUpdate.length} vouchers.` });
-      fetchVoucherList(activeFilter, currentPage, localSearch);
+      fetchVoucherList(activeFilter, currentPage, localSearch, sortOrder);
       setSelectedVouchers(new Set());
       setBulkVoidReason("");
       setIsVoidModalOpen(false);
@@ -571,7 +585,8 @@ export default function TrackVoucherPage() {
       "Registered Customer", 
       "Customer Phone",
       "Expiry Date", 
-      "Redeemed Date"
+      "Redeemed Date",
+      "Last Updated"
     ];
 
     const csvRows = listData.map(v => [
@@ -585,7 +600,8 @@ export default function TrackVoucherPage() {
       v.customers?.full_name || 'None',
       v.customers?.phone || 'None',
       v.expiry_date ? format(new Date(v.expiry_date), "yyyy-MM-dd") : 'None',
-      v.redeemed_at ? format(new Date(v.redeemed_at), "yyyy-MM-dd") : 'None'
+      v.redeemed_at ? format(new Date(v.redeemed_at), "yyyy-MM-dd") : 'None',
+      v.updated_at ? format(new Date(v.updated_at), "yyyy-MM-dd HH:mm") : 'None'
     ].map(field => `"${String(field).replace(/"/g, '""')}"`).join(","));
 
     const csvContent = [headers.join(","), ...csvRows].join("\n");
@@ -636,7 +652,7 @@ export default function TrackVoucherPage() {
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900" onClick={() => fetchVoucherList(activeFilter, currentPage, localSearch)}>
+          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-semibold text-slate-500 hover:text-slate-900" onClick={() => fetchVoucherList(activeFilter, currentPage, localSearch, sortOrder)}>
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isListLoading ? "animate-spin text-indigo-500" : ""}`} />
             Refresh
           </Button>
@@ -919,13 +935,13 @@ export default function TrackVoucherPage() {
                 <span className="text-[11px] font-bold uppercase tracking-widest text-[#0052FF]">Database Filters:</span>
               </div>
               
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:flex lg:flex-row flex-wrap items-center gap-3 w-full">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:flex lg:flex-row flex-wrap items-center gap-3 w-full">
                 
                 {/* Local Search */}
-                <div className="relative w-full lg:w-[220px]">
+                <div className="relative w-full lg:w-[180px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
                   <Input 
-                    placeholder="Search database by code..." 
+                    placeholder="Search codes..." 
                     className="pl-9 h-9 text-xs bg-white border-slate-200 shadow-sm font-medium rounded-lg"
                     value={localSearch}
                     onChange={(e) => {
@@ -936,7 +952,7 @@ export default function TrackVoucherPage() {
                 </div>
 
                 <Select value={activeFilter} onValueChange={(val) => { setActiveFilter(val); setCurrentPage(0); }}>
-                  <SelectTrigger className="w-full lg:w-[150px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
+                  <SelectTrigger className="w-full lg:w-[140px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
                   <SelectContent className="border-slate-200 rounded-lg">
@@ -952,7 +968,7 @@ export default function TrackVoucherPage() {
                 </Select>
 
                 <Select value={selectedFilterDistributor} onValueChange={(val) => { setSelectedFilterDistributor(val); setCurrentPage(0); }}>
-                  <SelectTrigger className="w-full lg:w-[180px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
+                  <SelectTrigger className="w-full lg:w-[160px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
                     <SelectValue placeholder="All Partners" />
                   </SelectTrigger>
                   <SelectContent className="border-slate-200 rounded-lg">
@@ -964,7 +980,7 @@ export default function TrackVoucherPage() {
                 </Select>
 
                 <Select value={selectedFilterBatch} onValueChange={(val) => { setSelectedFilterBatch(val); setCurrentPage(0); }}>
-                  <SelectTrigger className="w-full lg:w-[160px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
+                  <SelectTrigger className="w-full lg:w-[140px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
                     <SelectValue placeholder="All Batches" />
                   </SelectTrigger>
                   <SelectContent className="border-slate-200 rounded-lg">
@@ -975,20 +991,34 @@ export default function TrackVoucherPage() {
                   </SelectContent>
                 </Select>
 
-                {(selectedFilterDistributor !== "all" || selectedFilterBatch !== "all" || activeFilter !== "all" || localSearch) && (
+                {/* ✨ NEW: SORTING DROPDOWN */}
+                <Select value={sortOrder} onValueChange={(val) => { setSortOrder(val); setCurrentPage(0); }}>
+                  <SelectTrigger className="w-full lg:w-[160px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
+                    <div className="flex items-center gap-1.5"><ArrowUpDown className="w-3.5 h-3.5 text-slate-400" /> <SelectValue placeholder="Sort By" /></div>
+                  </SelectTrigger>
+                  <SelectContent className="border-slate-200 rounded-lg">
+                    <SelectItem value="newest" className="text-xs font-medium">Newest First</SelectItem>
+                    <SelectItem value="oldest" className="text-xs font-medium">Oldest First</SelectItem>
+                    <SelectItem value="code_asc" className="text-xs font-medium">Code (A-Z)</SelectItem>
+                    <SelectItem value="code_desc" className="text-xs font-medium">Code (Z-A)</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                {(selectedFilterDistributor !== "all" || selectedFilterBatch !== "all" || activeFilter !== "all" || localSearch || sortOrder !== "newest") && (
                   <Button 
                     variant="ghost" 
                     size="sm" 
-                    className="h-9 text-xs font-bold text-rose-500 hover:bg-rose-50 hover:text-rose-600 rounded-lg"
+                    className="h-9 text-xs font-bold text-rose-500 hover:bg-rose-50 hover:text-rose-600 rounded-lg ml-auto lg:ml-0"
                     onClick={() => { 
                       setSelectedFilterDistributor("all"); 
                       setSelectedFilterBatch("all"); 
                       setActiveFilter("all");
                       setLocalSearch("");
+                      setSortOrder("newest"); // Reset sorting
                       setCurrentPage(0);
                     }}
                   >
-                    Clear
+                    Clear All
                   </Button>
                 )}
               </div>
@@ -1118,6 +1148,9 @@ export default function TrackVoucherPage() {
                           )}
                           <TableCell className="font-mono font-bold text-xs text-slate-900 px-4 py-3">
                             {v.code}
+                            <div className="text-[9px] text-slate-400 font-sans mt-0.5" title="Last Updated Timestamp">
+                              {v.updated_at ? format(new Date(v.updated_at), 'dd MMM, HH:mm') : ''}
+                            </div>
                             {v.is_manual_override && (
                               <div className="flex items-center gap-1 mt-1 text-rose-500">
                                 <ShieldAlert className="w-3 h-3 shrink-0" />
