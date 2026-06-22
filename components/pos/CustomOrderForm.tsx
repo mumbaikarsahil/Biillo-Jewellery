@@ -27,7 +27,7 @@ interface CustomOrderFormProps {
   setDetails: (details: any) => void
   currentLocationId?: string 
   onAddToBill?: (finalItemData: any) => void 
-  voucherAmount?: number // ✨ NEW: We will pass the active voucher here!
+  voucherAmount?: number 
 }
 
 export function CustomOrderForm({ details, setDetails, currentLocationId, onAddToBill, voucherAmount = 0 }: CustomOrderFormProps) {
@@ -83,11 +83,14 @@ export function CustomOrderForm({ details, setDetails, currentLocationId, onAddT
     }
   }
 
-  // ✨ NEW: Real-time Math Engine for the UI
+  // ✨ UNIFIED MATH ENGINE: Treats Voucher as a Pre-Tax Discount
   const estValue = Number(details?.estimated_value) || 0;
+  const taxableValue = Math.max(0, estValue - voucherAmount);
+  const estimatedGst = taxableValue * 0.03;
+  const finalEstimatedTotal = Math.round(taxableValue + estimatedGst);
+  
   const customerAdvance = Number(details?.advance_paid) || 0;
-  const totalAdvanceCredited = customerAdvance + voucherAmount;
-  const estimatedBalance = Math.max(0, estValue - totalAdvanceCredited);
+  const estimatedBalance = Math.max(0, finalEstimatedTotal - customerAdvance);
 
   return (
     <div className="flex-1 p-3 sm:p-4 custom-scrollbar flex flex-col h-full bg-slate-50/50">
@@ -171,7 +174,7 @@ export function CustomOrderForm({ details, setDetails, currentLocationId, onAddT
                       setIsCustomCategory(false)
                       setDetails({ ...details, item_category: '' })
                     }}>
-                      <X className="h-4 w-4 text-slate-500" />
+                      <X className="w-4 h-4 text-slate-500" />
                     </Button>
                   </div>
                 )}
@@ -212,7 +215,7 @@ export function CustomOrderForm({ details, setDetails, currentLocationId, onAddT
             <div className="mt-4 bg-slate-50 border border-slate-200 rounded-lg p-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                 <div className="space-y-1.5">
-                  <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Estimated Value (₹)</Label>
+                  <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Estimated Base Value (₹)</Label>
                   <Input 
                     name="estimated_value"
                     type="number" 
@@ -235,24 +238,41 @@ export function CustomOrderForm({ details, setDetails, currentLocationId, onAddT
                 </div>
               </div>
 
-              {/* ✨ NEW: Transparent Math Breakdown */}
+              {/* ✨ UNIFIED: Transparent Math Breakdown */}
               <div className="bg-white border border-slate-200 rounded-md p-3 space-y-1.5 shadow-sm">
                 <div className="flex justify-between text-xs text-slate-600">
-                  <span>Advance Received:</span>
-                  <span>₹ {customerAdvance.toLocaleString()}</span>
+                  <span>Estimated Base Value:</span>
+                  <span>₹ {estValue.toLocaleString()}</span>
                 </div>
                 
                 {voucherAmount > 0 && (
                   <div className="flex justify-between text-xs text-emerald-600 font-medium">
-                    <span className="flex items-center gap-1"><Ticket className="w-3.5 h-3.5" /> Voucher Credit:</span>
-                    <span>+ ₹ {voucherAmount.toLocaleString()}</span>
+                    <span className="flex items-center gap-1"><Ticket className="w-3.5 h-3.5" /> Voucher Discount:</span>
+                    <span>- ₹ {voucherAmount.toLocaleString()}</span>
                   </div>
                 )}
                 
-                <div className="flex justify-between text-xs font-bold text-slate-800 border-t border-slate-100 pt-2 mt-1">
-                  <span>Total Advance Logged:</span>
-                  <span>₹ {totalAdvanceCredited.toLocaleString()}</span>
+                <div className="flex justify-between text-xs font-bold text-slate-800 border-t border-slate-100 pt-1.5 mt-1">
+                  <span>Taxable Value:</span>
+                  <span>₹ {taxableValue.toLocaleString()}</span>
                 </div>
+                
+                <div className="flex justify-between text-[10px] text-slate-500 mt-1">
+                  <span>Estimated GST (3%):</span>
+                  <span>+ ₹ {estimatedGst.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                </div>
+                
+                <div className="flex justify-between text-sm font-bold text-slate-900 border-t border-slate-200 pt-1.5 mt-1.5">
+                  <span>Estimated Total:</span>
+                  <span>₹ {finalEstimatedTotal.toLocaleString()}</span>
+                </div>
+
+                {customerAdvance > 0 && (
+                  <div className="flex justify-between text-xs text-emerald-600 font-bold mt-1">
+                    <span>Advance Received (Cash/Bank):</span>
+                    <span>- ₹ {customerAdvance.toLocaleString()}</span>
+                  </div>
+                )}
                 
                 <div className="flex justify-between text-sm font-black text-[#881798] border-t border-slate-200 pt-2 mt-1.5">
                   <span>Estimated Balance on Pickup:</span>
@@ -329,51 +349,78 @@ export function CustomOrderForm({ details, setDetails, currentLocationId, onAddT
                       </div>
 
                       {/* Final Financials Math */}
-                      <div className="bg-white rounded-lg border border-slate-200 p-3 space-y-2">
-                        <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1.5 mb-1.5">Final Settlement</h4>
-                        
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="text-slate-600 font-medium">Final MRP (From Factory)</span>
-                          <span className="font-semibold text-slate-900">₹{(foundOrder.inventory.mrp || 0).toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-xs">
-                          <span className="text-slate-600 font-medium">Estimated GST (3%)</span>
-                          <span className="font-semibold text-slate-900">₹{((foundOrder.inventory.mrp || 0) * 0.03).toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between items-center text-xs text-emerald-600 font-medium">
-                          <span>Total Advance Logged</span>
-                          <span>- ₹{(foundOrder.advance_paid || 0).toLocaleString()}</span>
-                        </div>
-                        
-                        <div className="border-t border-slate-200 pt-2 mt-2 flex justify-between items-center">
-                          <span className="text-xs font-bold text-[#881798]">Balance Payable</span>
-                          <span className="text-base font-black text-[#881798]">
-                            ₹{Math.max(0, (((foundOrder.inventory.mrp || 0) * 1.03) - (foundOrder.advance_paid || 0))).toLocaleString()}
-                          </span>
-                        </div>
-                      </div>
+<div className="bg-white rounded-lg border border-slate-200 p-3 space-y-2">
+  <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest border-b border-slate-100 pb-1.5 mb-1.5">Final Settlement</h4>
+  
+  <div className="flex justify-between items-center text-xs">
+    <span className="text-slate-600 font-medium">Final MRP (From Factory)</span>
+    <span className="font-semibold text-slate-900">₹{(foundOrder.inventory?.mrp || 0).toLocaleString()}</span>
+  </div>
 
-                      <Button 
-                        disabled={foundOrder.inventory.warehouse_id !== currentLocationId}
-                        className="w-full h-10 bg-[#881798] hover:bg-[#721080] text-white font-bold text-xs shadow-sm mt-1"
-                        onClick={() => {
-                          if (onAddToBill) {
-                            onAddToBill({
-                              inventory_id: foundOrder.inventory.id,
-                              barcode: foundOrder.inventory.barcode,
-                              mrp: foundOrder.inventory.mrp,
-                              advance_paid: foundOrder.advance_paid,
-                              custom_order_id: foundOrder.id,
-                              net_weight_g: foundOrder.inventory.net_weight_g,
-                              gross_weight_g: foundOrder.inventory.gross_weight_g,
-                              total_stone_weight_cts: foundOrder.inventory.total_stone_weight_cts,
-                              item_category: foundOrder.inventory.item_category,
-                              metal_type: foundOrder.inventory.metal_type,
-                              purity_karat: foundOrder.inventory.purity_karat
-                            })
-                          }
-                        }}
-                      >
+  {/* ✨ FIX: Automatically pull the locked-in Voucher Amount from the order! */}
+  {foundOrder.voucher_amount > 0 && (
+    <div className="flex justify-between items-center text-xs text-emerald-600 font-medium">
+      <span>Locked Voucher Discount</span>
+      <span>- ₹{(foundOrder.voucher_amount || 0).toLocaleString()}</span>
+    </div>
+  )}
+
+  <div className="flex justify-between items-center text-xs">
+    <span className="text-slate-600 font-medium">Final Taxable Value</span>
+    <span className="font-semibold text-slate-900">
+      ₹{Math.max(0, (foundOrder.inventory?.mrp || 0) - (foundOrder.voucher_amount || 0)).toLocaleString()}
+    </span>
+  </div>
+
+  <div className="flex justify-between items-center text-xs">
+    <span className="text-slate-600 font-medium">Estimated GST (3%)</span>
+    <span className="font-semibold text-slate-900">
+      ₹{(Math.max(0, (foundOrder.inventory?.mrp || 0) - (foundOrder.voucher_amount || 0)) * 0.03).toLocaleString()}
+    </span>
+  </div>
+
+  <div className="flex justify-between items-center text-xs text-emerald-600 font-medium pt-1 mt-1 border-t border-slate-100">
+    <span>Advance Paid (Cash/Bank)</span>
+    <span>- ₹{(foundOrder.advance_paid || 0).toLocaleString()}</span>
+  </div>
+  
+  <div className="border-t border-slate-200 pt-2 mt-2 flex justify-between items-center">
+    <span className="text-xs font-bold text-[#881798]">Balance Payable</span>
+    <span className="text-base font-black text-[#881798]">
+      {/* ✨ FIX: The Final Balance calculation must include the voucher discount! */}
+      ₹{Math.max(0, (
+        (Math.max(0, (foundOrder.inventory?.mrp || 0) - (foundOrder.voucher_amount || 0)) * 1.03) 
+        - (foundOrder.advance_paid || 0)
+      )).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}
+    </span>
+  </div>
+</div>
+
+<Button 
+  disabled={foundOrder.inventory?.warehouse_id !== currentLocationId}
+  className="w-full h-10 bg-[#881798] hover:bg-[#721080] text-white font-bold text-xs shadow-sm mt-1"
+  onClick={() => {
+    if (onAddToBill) {
+      onAddToBill({
+        inventory_id: foundOrder.inventory.id,
+        barcode: foundOrder.inventory.barcode,
+        mrp: foundOrder.inventory.mrp,
+        advance_paid: foundOrder.advance_paid,
+        
+        // ✨ FIX: Pass the voucher discount to the cart!
+        voucher_discount_locked: foundOrder.voucher_amount, 
+        
+        custom_order_id: foundOrder.id,
+        net_weight_g: foundOrder.inventory.net_weight_g,
+        gross_weight_g: foundOrder.inventory.gross_weight_g,
+        total_stone_weight_cts: foundOrder.inventory.total_stone_weight_cts,
+        item_category: foundOrder.inventory.item_category,
+        metal_type: foundOrder.inventory.metal_type,
+        purity_karat: foundOrder.inventory.purity_karat
+      })
+    }
+  }}
+>
                         <IndianRupee className="h-3.5 w-3.5 mr-1.5" />
                         Process Final Invoice
                       </Button>

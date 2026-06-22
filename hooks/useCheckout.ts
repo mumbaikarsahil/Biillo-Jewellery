@@ -626,6 +626,7 @@ export function useCheckout({
       else if (mode === 'custom') {
         if (!selectedCustomer) throw new Error("Please select a customer for this Custom Order.")
         finalNo = `ORD-${Date.now().toString().slice(-6)}`
+        // ... (inside mode === 'custom')
         const payload = {
           created_at: effectiveDateISO, 
           company_id: appUser?.company_id,
@@ -639,8 +640,8 @@ export function useCheckout({
           expected_diamond_cts: Number(customOrderDetails.expected_diamond_cts) || null,
           estimated_value: Number(customOrderDetails.estimated_value) || 0,
           
-          // ✨ VOUCHER AUDIT TRAIL ADDED HERE
-          advance_paid: (Number(customOrderDetails.advance_paid) || 0) + appliedVoucherAmount,
+          // ✨ CRITICAL FIX: Advance Paid is strictly Cash/Bank now!
+          advance_paid: Number(customOrderDetails.advance_paid) || 0, 
           voucher_code: activeVoucher?.code || null,
           voucher_amount: appliedVoucherAmount,
           

@@ -75,15 +75,16 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const roundOff = data.roundOff || 0 
 
     const exchangeVal = data.exchangeValue || 0
-    const voucherVal = data.voucherAmount || 0
     const handlingFee = data.handlingFee || 0
-    const effectiveVoucherCredit = Math.max(0, voucherVal - handlingFee)
+    
+    // ✨ FIX: Just use the exact voucherAmount passed from the hook! No more double-deducting.
+    const effectiveVoucherCredit = data.voucherAmount || 0 
 
     // --- CUSTOM ORDER CALCULATIONS ---
     const customBaseEstimate = Number(customOrder?.estimatedValue || 0);
     
-    // ✨ FIX: Removed `- effectiveVoucherCredit` to prevent the double deduction bug
-    const customTaxable = Math.max(0, customBaseEstimate - manualDiscount - exchangeVal); 
+    // The exact Taxable calculation matching the sidebar
+    const customTaxable = Math.max(0, customBaseEstimate - manualDiscount - exchangeVal - effectiveVoucherCredit); 
     
     const customCgst = customTaxable * 0.015;
     const customSgst = customTaxable * 0.015;
@@ -95,7 +96,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const totalSettlements = appliedKitty + appliedCredit;
 
     const customEstimatedBalance = Math.max(0, customTotalEstimate - customAdvancePaid - totalSettlements);
-    const customTotalAdvanceReceived = customAdvancePaid + voucherVal;
+    const customTotalAdvanceReceived = customAdvancePaid + effectiveVoucherCredit;
 
     let docTitle = "TAX INVOICE" 
     let docNoLabel = "Invoice No. :"
@@ -402,7 +403,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
                   
-                  {voucherVal > 0 && (
+                  {effectiveVoucherCredit > 0 && (
                     <div className="flex justify-between text-[#A85B9D]">
                       <span>Voucher Credit {handlingFee > 0 ? `(Post ₹${handlingFee} Fee)` : ''}</span>
                       <span>- ₹ {effectiveVoucherCredit.toLocaleString('en-IN')}</span>
@@ -495,10 +496,10 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
 
-                  {voucherVal > 0 && (
+                  {effectiveVoucherCredit > 0 && (
                      <div className="flex justify-between text-slate-600">
                        <span>Voucher Credit</span>
-                       <span>- ₹ {voucherVal?.toLocaleString()}</span>
+                       <span>- ₹ {effectiveVoucherCredit?.toLocaleString()}</span>
                      </div>
                   )}
 
@@ -538,10 +539,10 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
 
-                  {(exchangeVal > 0 || voucherVal > 0) && (
+                  {(exchangeVal > 0 || effectiveVoucherCredit > 0) && (
                     <div className="space-y-1 mb-1">
                        {exchangeVal > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Exchange Credit</span><span>- ₹ {exchangeVal?.toLocaleString()}</span></div>}
-                       {voucherVal > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Voucher Credit</span><span>- ₹ {voucherVal?.toLocaleString()}</span></div>}
+                       {effectiveVoucherCredit > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Voucher Credit</span><span>- ₹ {effectiveVoucherCredit?.toLocaleString()}</span></div>}
                     </div>
                   )}
                   

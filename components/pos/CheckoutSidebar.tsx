@@ -611,7 +611,8 @@ export function CheckoutSidebar({
               
               {activeVoucher && (
                 <div className="flex justify-between items-center text-emerald-600 font-medium">
-                  <span>Voucher Auth {Number(activeVoucher.handling_fee) > 0 ? `(Post ₹${activeVoucher.handling_fee} Fee)` : ''}</span>
+                  {/* ✨ FIX: Clarified Label */}
+                  <span>Voucher Discount {Number(activeVoucher.handling_fee) > 0 ? `(Post ₹${activeVoucher.handling_fee} Fee)` : ''}</span>
                   <span className="tabular-nums">- ₹{effectiveVoucherCredit.toLocaleString('en-IN')}</span>
                 </div>
               )}
