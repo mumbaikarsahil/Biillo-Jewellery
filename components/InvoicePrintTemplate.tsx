@@ -81,7 +81,10 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
     // --- CUSTOM ORDER CALCULATIONS ---
     const customBaseEstimate = Number(customOrder?.estimatedValue || 0);
-    const customTaxable = Math.max(0, customBaseEstimate - manualDiscount - exchangeVal - effectiveVoucherCredit);
+    
+    // ✨ FIX: Removed `- effectiveVoucherCredit` to prevent the double deduction bug
+    const customTaxable = Math.max(0, customBaseEstimate - manualDiscount - exchangeVal); 
+    
     const customCgst = customTaxable * 0.015;
     const customSgst = customTaxable * 0.015;
     const customTotalEstimate = Math.round(customTaxable + customCgst + customSgst);
@@ -133,7 +136,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     return (
       <div ref={ref} className="w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
         
-        {/* ✨ FIX: Injecting print-specific CSS to force mobile browsers to respect the A4 dimensions */}
         <style type="text/css" media="print">
           {`
             @page { size: A4 portrait; margin: 0mm; }
@@ -306,7 +308,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                         
                         <td className="p-2.5 text-center pt-2">
                           {imageUrl ? (
-                            /* ✨ FIX: Removed strict crossOrigin and added onError fail-safe to prevent mobile print freezing */
                             <img 
                               src={imageUrl} 
                               alt="Item" 
