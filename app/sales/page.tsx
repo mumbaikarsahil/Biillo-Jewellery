@@ -7,7 +7,7 @@ import {
   FileText, TrendingUp, Printer, Store, RefreshCw, Download, 
   Filter, Calendar, Search, ChevronRight, Landmark,
   Scale, BookOpen, Receipt, Eye, MoreHorizontal, Edit2, XCircle, ShieldAlert, X, Loader2,
-  CheckCircle2, Box, Wrench, ArrowRightLeft, HandCoins, User, ChevronLeft
+  CheckCircle2, Box, Wrench, ArrowRightLeft, HandCoins, User, ChevronLeft, Ticket
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -112,7 +112,6 @@ export default function AccountsMasterPage() {
       safeEndDate.setDate(safeEndDate.getDate() + 1)
       const safeEndDateStr = safeEndDate.toISOString().split('T')[0]
 
-      // Pagination calculation
       const from = (page - 1) * recordLimit
       const to = from + recordLimit - 1
 
@@ -150,7 +149,6 @@ export default function AccountsMasterPage() {
       const bData = buybackRes.data || []
       const rData = repairRes.data || []
       
-      // ✨ GLOBAL PROFILE HYDRATION: Fetch Billed By for ALL ledgers
       const allUserIds = [
         ...invData.map(i => i.user_id || i.created_by),
         ...eData.map(i => i.user_id || i.created_by),
@@ -178,8 +176,6 @@ export default function AccountsMasterPage() {
       setBuybacks(bData)
       setRepairs(rData)
 
-      // --- CALCULATE TABS KPIs ---
-      // Sales
       let sGross = 0; let sTax = 0; let sB2b = 0; let sB2c = 0;
       invData.forEach(inv => {
         if (inv.status === 'CANCELLED') return;
@@ -190,12 +186,10 @@ export default function AccountsMasterPage() {
       })
       setSalesKpis({ grossSales: sGross, taxCollected: sTax, b2bSales: sB2b, b2cSales: sB2c })
 
-      // Estimates
       let eTotal = 0;
       eData.forEach(est => eTotal += (Number(est.total_amount) || 0));
       setEstimateKpis({ totalValue: eTotal, count: eData.length })
 
-      // Custom Orders
       let coTotal = 0; let coAdv = 0;
       cData.forEach(co => {
         coTotal += (Number(co.estimated_value) || 0);
@@ -203,7 +197,6 @@ export default function AccountsMasterPage() {
       });
       setCustomKpis({ totalValue: coTotal, advance: coAdv, pending: Math.max(0, coTotal - coAdv) })
 
-      // Buybacks
       let bbGross = 0; let bbDed = 0; let bbNet = 0;
       bData.forEach(bb => {
         bbGross += (Number(bb.gross_value) || 0);
@@ -212,7 +205,6 @@ export default function AccountsMasterPage() {
       });
       setBuybackKpis({ gross: bbGross, deductions: bbDed, netRefund: bbNet })
 
-      // Repairs
       let repCost = 0; let repAdv = 0;
       rData.forEach(rep => {
         repCost += (Number(rep.estimated_cost) || 0);
@@ -227,7 +219,6 @@ export default function AccountsMasterPage() {
     }
   }
 
-  // Reset page to 1 when filters change
   useEffect(() => {
     setPage(1)
   }, [selectedLocation, startDate, endDate, search, recordLimit, activeTab])
@@ -237,7 +228,6 @@ export default function AccountsMasterPage() {
     return () => clearTimeout(delay)
   }, [appUser, selectedLocation, startDate, endDate, search, page, recordLimit])
 
-  // --- CSV EXPORT LOGIC ---
   const downloadBlob = (headers: string[], rows: any[][], filename: string) => {
     const csvContent = [
       headers.join(","),
@@ -286,7 +276,6 @@ export default function AccountsMasterPage() {
           inv.customers?.full_name || 'Walk-in', inv.customers?.pan_no || '', barcodes, categories, totalGross.toFixed(3), totalNet.toFixed(3),
           totalStone.toFixed(2), huids, inv.profiles?.full_name || 'System', inv.profiles?.role || 'N/A', 
           
-          // Zero out financials if cancelled, so auto-sum in Excel ignores them
           isCancelled ? 0 : (inv.subtotal || 0),
           isCancelled ? 0 : (inv.discount_amount || 0), 
           inv.voucher_code || '', 
@@ -306,7 +295,7 @@ export default function AccountsMasterPage() {
           
           inv.payment_mode || '', inv.split_payments ? JSON.stringify(inv.split_payments) : '', inv.transfer_type || '', inv.transaction_reference || '',
           inv.payment_remarks || '', inv.cancellation_reason || '',
-          isCancelled ? (inv.final_total || 0) : '' // Record proof of cancelled amount at the end
+          isCancelled ? (inv.final_total || 0) : '' 
         ];
       });
       downloadBlob(headers, csvRows, `Sales_Ledger_${startDate}_to_${endDate}.csv`);
@@ -316,7 +305,6 @@ export default function AccountsMasterPage() {
     }
   }
 
-  // --- UNIFIED PRINT ENGINE FOR ALL TABS ---
   const handleOpenPreview = async (item: any, type: 'invoice' | 'estimate' | 'custom' | 'repair' | 'return') => {
     setIsFetchingPreview(true)
     try {
@@ -488,7 +476,6 @@ export default function AccountsMasterPage() {
     }
   };
 
-  // Helper to render pagination UI
   const PaginationControls = () => (
     <div className="flex items-center justify-between border-t border-zinc-200 bg-white p-3 rounded-b-2xl">
       <div className="flex items-center gap-2">
@@ -735,6 +722,8 @@ export default function AccountsMasterPage() {
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Customer</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider border-l border-zinc-200 pl-4">Billed By</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider min-w-[200px]">Items Sold</TableHead>
+                      {/* ✨ NEW COLUMNS */}
+                      <TableHead className="h-11 text-[10px] font-bold text-teal-600 uppercase tracking-wider border-l border-zinc-200">Voucher</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-50/50 border-l border-zinc-200">Subtotal</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-50/50 border-l border-zinc-200">Taxable Val</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-emerald-50/30">CGST</TableHead>
@@ -745,7 +734,7 @@ export default function AccountsMasterPage() {
                   </TableHeader>
                   <TableBody>
                     {invoices.length === 0 ? (
-                      <TableRow><TableCell colSpan={13} className="text-center py-12 text-zinc-400">No sales records found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={14} className="text-center py-12 text-zinc-400">No sales records found</TableCell></TableRow>
                     ) : invoices.map((inv) => {
                       const isCancelled = inv.status === 'CANCELLED'
                       return (
@@ -775,6 +764,19 @@ export default function AccountsMasterPage() {
                                {inv.invoice_items?.map((i: any, idx: number) => <span key={idx} className="text-[10px] font-medium text-zinc-600 bg-zinc-100/50 px-1.5 py-0.5 rounded truncate"><span className="font-mono font-bold text-zinc-400 mr-1">[{i.inventory_items?.barcode || '?'}]</span>{i.inventory_items?.item_category || 'Item'}</span>)}
                              </div>
                           </TableCell>
+
+                          {/* ✨ NEW DATA COLUMNS */}
+                          <TableCell className="px-4 py-2 border-l border-zinc-200">
+                             {inv.voucher_code ? (
+                                <div className="flex flex-col">
+                                   <span className="text-[10px] font-mono font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded uppercase">{inv.voucher_code}</span>
+                                   <span className="text-[10px] font-bold text-teal-600 mt-0.5">- ₹{Number(inv.voucher_discount).toLocaleString()}</span>
+                                </div>
+                             ) : (
+                                <span className="text-[10px] text-zinc-400 font-medium">None</span>
+                             )}
+                          </TableCell>
+
                           <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-700 bg-slate-50/50 border-l border-zinc-200">₹{(Number(inv.subtotal) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[12px] font-bold text-zinc-800 bg-slate-50/50 border-l border-zinc-200">₹{(Number(inv.taxable_value) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 bg-emerald-50/30">₹{(Number(inv.cgst_amount) || 0).toLocaleString()}</TableCell>
@@ -830,6 +832,17 @@ export default function AccountsMasterPage() {
                           <p className="text-xs font-semibold text-zinc-800">{inv.profiles?.full_name || 'System'}</p>
                         </div>
                       </div>
+
+                      {/* ✨ MOBILE VOUCHER INDICATOR */}
+                      {inv.voucher_code && (
+                         <div className="flex justify-between items-center bg-teal-50/50 px-2.5 py-1.5 rounded-lg border border-teal-100">
+                            <div className="flex items-center gap-1.5">
+                               <Ticket className="w-3 h-3 text-teal-600" />
+                               <span className="text-[10px] font-mono font-bold text-teal-700 uppercase">{inv.voucher_code}</span>
+                            </div>
+                            <span className="text-[10px] font-bold text-teal-600">- ₹{Number(inv.voucher_discount).toLocaleString()}</span>
+                         </div>
+                      )}
 
                       <div className="flex justify-between items-end pt-2 border-t border-zinc-100">
                         <div>
@@ -962,13 +975,15 @@ export default function AccountsMasterPage() {
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Customer</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider border-l border-purple-100 pl-4">Created By</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Category / Design</TableHead>
+                      {/* ✨ NEW COLUMNS */}
+                      <TableHead className="h-11 text-[10px] font-bold text-teal-700 uppercase tracking-wider border-l border-purple-100">Voucher</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100">Est. Value</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100">Advance Paid</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {customOrders.length === 0 ? (
-                      <TableRow><TableCell colSpan={9} className="text-center py-12 text-zinc-400">No custom orders found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={10} className="text-center py-12 text-zinc-400">No custom orders found</TableCell></TableRow>
                     ) : customOrders.map((co) => (
                         <TableRow key={co.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors">
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
@@ -986,6 +1001,19 @@ export default function AccountsMasterPage() {
                              <span className="text-[12px] font-semibold text-zinc-800 block">{co.item_category}</span>
                              <span className="text-[10px] text-zinc-500 font-mono">{co.design_reference}</span>
                           </TableCell>
+
+                          {/* ✨ NEW DATA COLUMNS */}
+                          <TableCell className="px-4 py-2 border-l border-purple-100">
+                             {co.voucher_code ? (
+                                <div className="flex flex-col">
+                                   <span className="text-[10px] font-mono font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded uppercase">{co.voucher_code}</span>
+                                   <span className="text-[10px] font-bold text-teal-600 mt-0.5">- ₹{Number(co.voucher_amount).toLocaleString()}</span>
+                                </div>
+                             ) : (
+                                <span className="text-[10px] text-zinc-400 font-medium">None</span>
+                             )}
+                          </TableCell>
+
                           <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-700 border-l border-purple-100">₹{(Number(co.estimated_value) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[13px] font-black text-emerald-600 border-l border-purple-100">₹{(Number(co.advance_paid) || 0).toLocaleString()}</TableCell>
                         </TableRow>
@@ -1024,6 +1052,17 @@ export default function AccountsMasterPage() {
                         <p className="text-xs font-semibold text-zinc-800">{co.profiles?.full_name || 'System'}</p>
                       </div>
                     </div>
+
+                    {/* ✨ MOBILE VOUCHER INDICATOR */}
+                    {co.voucher_code && (
+                       <div className="flex justify-between items-center bg-teal-50/50 px-2.5 py-1.5 rounded-lg border border-teal-100">
+                          <div className="flex items-center gap-1.5">
+                             <Ticket className="w-3 h-3 text-teal-600" />
+                             <span className="text-[10px] font-mono font-bold text-teal-700 uppercase">{co.voucher_code}</span>
+                          </div>
+                          <span className="text-[10px] font-bold text-teal-600">- ₹{Number(co.voucher_amount).toLocaleString()}</span>
+                       </div>
+                    )}
 
                     <div className="mt-1">
                       <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Category / Design</p>

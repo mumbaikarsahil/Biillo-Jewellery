@@ -16,7 +16,7 @@ interface CheckoutConfig {
   allBranches: any[];
   callRpc: Function;
   customBillingDate?: string; 
-  billedBy?: string; // ✨ NEW PROP
+  billedBy?: string; 
 }
 
 export function useCheckout({ 
@@ -116,7 +116,10 @@ export function useCheckout({
 
   let finalTaxableValue = baseTaxable
   let appliedVoucherAmount = 0
+  let finalVoucherCode = ''
+  let finalHandlingFee = handlingAmt
 
+  // ✨ FIX: Inherit locked vouchers for Final Pickup Bills or apply active ones
   if (activeVoucher) {
       const vAmount = activeVoucher.amount;
       const hFee = activeVoucher.handling_fee || 0;
@@ -127,6 +130,14 @@ export function useCheckout({
           finalTaxableValue = hFee;
           appliedVoucherAmount = baseTaxable > hFee ? baseTaxable - hFee : 0; 
       }
+      finalVoucherCode = activeVoucher.code
+  } else if (mode === 'normal' && cart.some(item => item.voucher_discount_locked > 0)) {
+      // Pull locked discount if this is a final bill generated from a custom order
+      const lockedDiscount = cart.reduce((sum, item) => sum + (Number(item.voucher_discount_locked) || 0), 0);
+      appliedVoucherAmount = lockedDiscount;
+      finalTaxableValue = Math.max(0, baseTaxable - appliedVoucherAmount);
+      finalVoucherCode = 'ORD-VOUCHER';
+      finalHandlingFee = 0; 
   }
 
   const cgstAmount = parseFloat((finalTaxableValue * 0.015).toFixed(2))
@@ -143,13 +154,14 @@ export function useCheckout({
   // --- HANDLERS ---
   // ==============================================================
 
-  const handleApplyVoucher = async () => {
+  // ✨ FIX: Accept overrideCode to support phone number lookups
+  const handleApplyVoucher = async (overrideCode?: string) => {
     if (appliedKittyAmount > 0 || appliedCreditAmount > 0) {
       return toast.error("Clubbing Error", { description: "Cannot apply vouchers when Wallet or Kitty balances are in use." });
     }
 
-    if (!voucherCode.trim()) return;
-    let codeToSearch = voucherCode.trim();
+    if (!overrideCode && !voucherCode.trim()) return;
+    let codeToSearch = overrideCode || voucherCode.trim();
     if (codeToSearch.includes('?code=')) {
       codeToSearch = codeToSearch.split('?code=')[1].split('&')[0];
     }
@@ -304,7 +316,7 @@ export function useCheckout({
       subtotal, 
       discountAmount: standardDiscount, 
       voucherAmount: appliedVoucherAmount, 
-      handlingFee: handlingAmt, 
+      handlingFee: finalHandlingFee, 
       taxableValue: finalTaxableValue, 
       cgstAmount: printCgst, 
       sgstAmount: printSgst, 
@@ -375,7 +387,7 @@ export function useCheckout({
           round_off: finalDraftData.roundOffAmount,
           total_amount: finalDraftData.finalTotal,
           remarks: customTransactionContext?.billing_remarks || customTransactionContext?.payment_remarks || null,
-          created_by: finalizingUserId // ✨ Replaced appUser logic
+          created_by: finalizingUserId 
         }).select('id').single();
 
         if (estError) throw new Error("Failed to save estimate: " + estError.message);
@@ -431,9 +443,9 @@ export function useCheckout({
           final_total: finalPayableGross, 
           advance_adjusted: cartAdvance, 
           
-          voucher_code: activeVoucher?.code || null,
+          voucher_code: finalVoucherCode || null,
           voucher_discount: appliedVoucherAmount, 
-          Voucher_handling_fee: handlingAmt,
+          Voucher_handling_fee: finalHandlingFee,
           exchange_value: exchangeNum || 0, 
           
           kitty_payment: effectiveKittyAmt, 
@@ -454,7 +466,6 @@ export function useCheckout({
            invoiceData.exchange_physical_details = exchangePhysicalDetails;
         }
 
-        // ✨ Pass the finalized billedBy user ID to the RPC
         const { data, error } = await callRpc('pos_confirm_sale', { 
            p_invoice_json: invoiceData, 
            p_user_id: finalizingUserId 
@@ -521,7 +532,7 @@ export function useCheckout({
           condition_photo_url: repairDetails.conditionPhotoUrl,
           expected_delivery_date: repairDetails.expectedDelivery || null,
           status: 'received_at_store',
-          created_by: finalizingUserId // ✨ Replaced appUser logic
+          created_by: finalizingUserId 
         })
         if (error) throw error
         toast.success("Repair Ticket Generated!")
@@ -556,7 +567,7 @@ export function useCheckout({
           buyback_percent: Number(returnDetails.returnPercent) || 100,
           net_refund: Number(returnDetails.calculatedRefund) || 0,
           status: 'received',
-          created_by: finalizingUserId // ✨ Replaced appUser logic
+          created_by: finalizingUserId 
         }).select('id').single()
         
         if (buybackErr) throw buybackErr
@@ -626,7 +637,6 @@ export function useCheckout({
       else if (mode === 'custom') {
         if (!selectedCustomer) throw new Error("Please select a customer for this Custom Order.")
         finalNo = `ORD-${Date.now().toString().slice(-6)}`
-        // ... (inside mode === 'custom')
         const payload = {
           created_at: effectiveDateISO, 
           company_id: appUser?.company_id,
@@ -640,7 +650,6 @@ export function useCheckout({
           expected_diamond_cts: Number(customOrderDetails.expected_diamond_cts) || null,
           estimated_value: Number(customOrderDetails.estimated_value) || 0,
           
-          // ✨ CRITICAL FIX: Advance Paid is strictly Cash/Bank now!
           advance_paid: Number(customOrderDetails.advance_paid) || 0, 
           voucher_code: activeVoucher?.code || null,
           voucher_amount: appliedVoucherAmount,
@@ -652,7 +661,6 @@ export function useCheckout({
         const { error } = await supabase.from('custom_orders').insert(payload)
         if (error) throw error
         
-        // ✨ CRITICAL FIX: MARK VOUCHER AS REDEEMED
         if (activeVoucher) {
           await supabase.from('vouchers').update({ 
             status: 'redeemed', 
