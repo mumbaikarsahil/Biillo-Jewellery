@@ -57,12 +57,12 @@ export default function DistributeVouchersPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
 
-  // ✨ NEW: Custom Sequence States
+  // Custom Sequence States
   const [sequenceMode, setSequenceMode] = useState<'auto' | 'custom'>('auto')
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
 
-  // ✨ NEW: Add Distributor States
+  // Add Distributor States
   const [isNewDistModalOpen, setIsNewDistModalOpen] = useState(false)
   const [isSubmittingDist, setIsSubmittingDist] = useState(false)
   const [newDistData, setNewDistData] = useState({
@@ -144,7 +144,7 @@ export default function DistributeVouchersPage() {
     fetchData()
   }, [appUser])
 
-  // --- SEQUENCE AUTO-FETCHER ---
+  // --- ✨ FIX: PAGINATED SEQUENCE AUTO-FETCHER ---
   useEffect(() => {
     if (!selectedBatch) {
       setAvailableVouchers([]);
@@ -157,15 +157,33 @@ export default function DistributeVouchersPage() {
     const fetchVoucherSequence = async () => {
       setIsLoadingVouchers(true);
       try {
-        const { data, error } = await supabase
-          .from("vouchers")
-          .select("id, code")
-          .eq("batch_id", selectedBatch)
-          .eq("status", "in_stock")
-          .order("code", { ascending: true }); 
+        let allData: VoucherCode[] = [];
+        let hasMore = true;
+        let page = 0;
+        const limit = 1000; // Supabase default max per request
 
-        if (error) throw error;
-        setAvailableVouchers(data || []);
+        // Loop to bypass the 1000 row truncation limit
+        while (hasMore) {
+          const { data, error } = await supabase
+            .from("vouchers")
+            .select("id, code")
+            .eq("batch_id", selectedBatch)
+            .eq("status", "in_stock")
+            .order("code", { ascending: true })
+            .range(page * limit, (page + 1) * limit - 1); 
+
+          if (error) throw error;
+          
+          if (data && data.length > 0) {
+            allData = [...allData, ...data];
+            page++;
+            if (data.length < limit) hasMore = false; // Reached the end
+          } else {
+            hasMore = false;
+          }
+        }
+
+        setAvailableVouchers(allData);
         setQuantity(""); 
         setCustomStart("");
         setCustomEnd("");
@@ -179,7 +197,7 @@ export default function DistributeVouchersPage() {
     fetchVoucherSequence();
   }, [selectedBatch]);
 
-  // ✨ NEW: Auto-Calculate Custom Sequence based on Quantity Changes
+  // Auto-Calculate Custom Sequence based on Quantity Changes
   useEffect(() => {
     if (sequenceMode === 'custom' && customStart && parseInt(quantity) > 0) {
       const idx = availableVouchers.findIndex(v => v.code.toLowerCase() === customStart.toLowerCase());
@@ -189,7 +207,7 @@ export default function DistributeVouchersPage() {
         setCustomEnd('');
       }
     }
-  }, [quantity, sequenceMode]);
+  }, [quantity, sequenceMode, customStart, availableVouchers]);
 
   const handleQuantityChange = (val: string) => {
     if (!val) {
@@ -207,7 +225,7 @@ export default function DistributeVouchersPage() {
         setQuantity(val);
       }
     } else {
-      setQuantity(val); // In custom mode, we'll validate strictly in useMemo
+      setQuantity(val); 
     }
   };
 
@@ -233,7 +251,6 @@ export default function DistributeVouchersPage() {
     }
   }
 
-  // ✨ UPDATED: Handles both Auto and Custom modes for selecting vouchers to update
   const { numQuantity, isValidQuantity, startCode, endCode, vouchersToUpdate, sequenceError } = useMemo(() => {
     const num = parseInt(quantity) || 0;
     if (num <= 0) return { numQuantity: num, isValidQuantity: false, startCode: "---", endCode: "---", vouchersToUpdate: [], sequenceError: "Enter a valid quantity." };
@@ -243,7 +260,6 @@ export default function DistributeVouchersPage() {
         const toUpdate = availableVouchers.slice(0, num);
         return { numQuantity: num, isValidQuantity: true, startCode: toUpdate[0]?.code, endCode: toUpdate[toUpdate.length - 1]?.code, vouchersToUpdate: toUpdate, sequenceError: "" };
     } else {
-        // Custom Mode
         const idx = availableVouchers.findIndex(v => v.code.toLowerCase() === customStart.toLowerCase());
         if (idx === -1) return { numQuantity: num, isValidQuantity: false, startCode: "---", endCode: "---", vouchersToUpdate: [], sequenceError: "Start code not found in available stock." };
         if (idx + num > availableVouchers.length) return { numQuantity: num, isValidQuantity: false, startCode: "---", endCode: "---", vouchersToUpdate: [], sequenceError: "Not enough contiguous stock from this start code." };
@@ -297,7 +313,7 @@ export default function DistributeVouchersPage() {
           .from('vouchers')
           .update({
             status: 'distributed',
-            distributor_id: distributorId, // ✨ Distributor ID assigned correctly
+            distributor_id: distributorId, 
             distribution_id: challan.id, 
             expiry_date: finalExpiryDate,
             distributed_at: new Date().toISOString(),
@@ -340,7 +356,6 @@ export default function DistributeVouchersPage() {
         })
       }
 
-      // Reset Form
       setQuantity('')
       setTotalFee('')
       setDistributorId('')
@@ -434,7 +449,6 @@ export default function DistributeVouchersPage() {
     }
   }
 
-  // ✨ NEW: Handle Create Distributor
   const handleCreateDistributor = async () => {
     if (!newDistData.distributor_name.trim()) return toast.error("Distributor name is required");
     setIsSubmittingDist(true);
@@ -617,7 +631,6 @@ export default function DistributeVouchersPage() {
                   <div className="flex items-center justify-between mb-2">
                     <Label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Generated Sequence</Label>
                     
-                    {/* ✨ NEW: Sequence Mode Toggle */}
                     <div className="flex items-center bg-gray-200/50 p-0.5 rounded border border-gray-200">
                       <button 
                         className={`text-[9px] font-bold px-2 py-0.5 rounded-sm uppercase tracking-wider transition-all ${sequenceMode === 'auto' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
