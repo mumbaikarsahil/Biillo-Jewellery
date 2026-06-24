@@ -21,7 +21,7 @@ import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { 
   Loader2, FileText, CheckCircle2, CalendarDays, IndianRupee, Send, 
-  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer, QrCode as QrCodeIcon, Download
+  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer, QrCode as QrCodeIcon, Download, PlusCircle
 } from 'lucide-react'
 import { addMonths, format } from 'date-fns'
 
@@ -57,6 +57,18 @@ export default function DistributeVouchersPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
 
+  // ✨ NEW: Custom Sequence States
+  const [sequenceMode, setSequenceMode] = useState<'auto' | 'custom'>('auto')
+  const [customStart, setCustomStart] = useState('')
+  const [customEnd, setCustomEnd] = useState('')
+
+  // ✨ NEW: Add Distributor States
+  const [isNewDistModalOpen, setIsNewDistModalOpen] = useState(false)
+  const [isSubmittingDist, setIsSubmittingDist] = useState(false)
+  const [newDistData, setNewDistData] = useState({
+    distributor_name: '', contact_person: '', phone: '', address: '', distributor_type: 'external_shop'
+  })
+
   // View Details & Print Modal State
   const [viewChallan, setViewChallan] = useState<any>(null)
   const [viewSequence, setViewSequence] = useState<{start: string, end: string} | null>(null)
@@ -84,8 +96,6 @@ export default function DistributeVouchersPage() {
       const { data: agentData } = await supabase.from('delivery_agents').select('*').eq('company_id', appUser.company_id).order('name')
       if (agentData) setAgents(agentData)
 
-      // ─── ✨ UPDATED BATCH FETCHING LOGIC ✨ ───
-      // Removed nested `vouchers(status)` array query to avoid the 1000 row truncation
       const { data: batchData } = await supabase
         .from("voucher_batches")
         .select(`id, batch_no, prefix, discount_value, handling_fee, status`)
@@ -93,12 +103,11 @@ export default function DistributeVouchersPage() {
         .order('created_at', { ascending: false }); 
 
       if (batchData) {
-        // Run a fast exact count query per batch to bypass any limits
         const formattedBatchesRaw = await Promise.all(
           batchData.map(async (b) => {
             const { count } = await supabase
               .from('vouchers')
-              .select('id', { count: 'exact', head: true }) // head: true means do not download the rows, just return the number
+              .select('id', { count: 'exact', head: true })
               .eq('batch_id', b.id)
               .eq('status', 'in_stock');
 
@@ -140,6 +149,8 @@ export default function DistributeVouchersPage() {
     if (!selectedBatch) {
       setAvailableVouchers([]);
       setQuantity("");
+      setCustomStart("");
+      setCustomEnd("");
       return;
     }
 
@@ -156,6 +167,8 @@ export default function DistributeVouchersPage() {
         if (error) throw error;
         setAvailableVouchers(data || []);
         setQuantity(""); 
+        setCustomStart("");
+        setCustomEnd("");
       } catch (error: any) {
         toast.error("Error fetching sequence: " + error.message);
       } finally {
@@ -166,6 +179,18 @@ export default function DistributeVouchersPage() {
     fetchVoucherSequence();
   }, [selectedBatch]);
 
+  // ✨ NEW: Auto-Calculate Custom Sequence based on Quantity Changes
+  useEffect(() => {
+    if (sequenceMode === 'custom' && customStart && parseInt(quantity) > 0) {
+      const idx = availableVouchers.findIndex(v => v.code.toLowerCase() === customStart.toLowerCase());
+      if (idx !== -1 && idx + parseInt(quantity) <= availableVouchers.length) {
+        setCustomEnd(availableVouchers[idx + parseInt(quantity) - 1].code);
+      } else {
+        setCustomEnd('');
+      }
+    }
+  }, [quantity, sequenceMode]);
+
   const handleQuantityChange = (val: string) => {
     if (!val) {
       setQuantity("");
@@ -174,31 +199,63 @@ export default function DistributeVouchersPage() {
     const num = parseInt(val);
     const maxAvailable = availableVouchers.length;
     
-    if (num > maxAvailable) {
-      setQuantity(maxAvailable.toString());
-      toast.info(`Quantity auto-adjusted to max available stock (${maxAvailable}).`);
+    if (sequenceMode === 'auto') {
+      if (num > maxAvailable) {
+        setQuantity(maxAvailable.toString());
+        toast.info(`Quantity auto-adjusted to max available stock (${maxAvailable}).`);
+      } else {
+        setQuantity(val);
+      }
     } else {
-      setQuantity(val);
+      setQuantity(val); // In custom mode, we'll validate strictly in useMemo
     }
   };
 
-  const { numQuantity, isValidQuantity, startCode, endCode, vouchersToUpdate } = useMemo(() => {
+  const handleCustomStartChange = (val: string) => {
+    setCustomStart(val);
+    const idx = availableVouchers.findIndex(v => v.code.toLowerCase() === val.toLowerCase());
     const num = parseInt(quantity) || 0;
-    const isValid = num > 0 && num <= availableVouchers.length;
-    const toUpdate = isValid ? availableVouchers.slice(0, num) : [];
+    if (idx !== -1 && num > 0 && idx + num <= availableVouchers.length) {
+        setCustomEnd(availableVouchers[idx + num - 1].code);
+    } else {
+        setCustomEnd('');
+    }
+  }
+
+  const handleCustomEndChange = (val: string) => {
+    setCustomEnd(val);
+    const idx = availableVouchers.findIndex(v => v.code.toLowerCase() === val.toLowerCase());
+    const num = parseInt(quantity) || 0;
+    if (idx !== -1 && num > 0 && idx - num + 1 >= 0) {
+        setCustomStart(availableVouchers[idx - num + 1].code);
+    } else {
+        setCustomStart('');
+    }
+  }
+
+  // ✨ UPDATED: Handles both Auto and Custom modes for selecting vouchers to update
+  const { numQuantity, isValidQuantity, startCode, endCode, vouchersToUpdate, sequenceError } = useMemo(() => {
+    const num = parseInt(quantity) || 0;
+    if (num <= 0) return { numQuantity: num, isValidQuantity: false, startCode: "---", endCode: "---", vouchersToUpdate: [], sequenceError: "Enter a valid quantity." };
     
-    return {
-      numQuantity: num,
-      isValidQuantity: isValid,
-      startCode: isValid ? toUpdate[0].code : "---",
-      endCode: isValid ? toUpdate[toUpdate.length - 1].code : "---",
-      vouchersToUpdate: toUpdate
-    };
-  }, [quantity, availableVouchers]);
+    if (sequenceMode === 'auto') {
+        if (num > availableVouchers.length) return { numQuantity: num, isValidQuantity: false, startCode: "---", endCode: "---", vouchersToUpdate: [], sequenceError: "Quantity exceeds available stock." };
+        const toUpdate = availableVouchers.slice(0, num);
+        return { numQuantity: num, isValidQuantity: true, startCode: toUpdate[0]?.code, endCode: toUpdate[toUpdate.length - 1]?.code, vouchersToUpdate: toUpdate, sequenceError: "" };
+    } else {
+        // Custom Mode
+        const idx = availableVouchers.findIndex(v => v.code.toLowerCase() === customStart.toLowerCase());
+        if (idx === -1) return { numQuantity: num, isValidQuantity: false, startCode: "---", endCode: "---", vouchersToUpdate: [], sequenceError: "Start code not found in available stock." };
+        if (idx + num > availableVouchers.length) return { numQuantity: num, isValidQuantity: false, startCode: "---", endCode: "---", vouchersToUpdate: [], sequenceError: "Not enough contiguous stock from this start code." };
+        
+        const toUpdate = availableVouchers.slice(idx, idx + num);
+        return { numQuantity: num, isValidQuantity: true, startCode: toUpdate[0]?.code, endCode: toUpdate[toUpdate.length - 1]?.code, vouchersToUpdate: toUpdate, sequenceError: "" };
+    }
+  }, [quantity, availableVouchers, sequenceMode, customStart]);
 
   const handleProcessAllocation = async () => {
     if (!selectedBatch) return toast.error("Select a source batch")
-    if (!isValidQuantity) return toast.error(`Please enter a valid quantity between 1 and ${availableVouchers.length}.`)
+    if (!isValidQuantity) return toast.error(sequenceError || `Please check the quantity and sequence range.`)
 
     if (allocationType === 'vendor') {
       if (!distributorId) return toast.error("Select a distributor")
@@ -219,7 +276,6 @@ export default function DistributeVouchersPage() {
       const voucherIds = vouchersToUpdate.map(v => v.id);
 
       if (allocationType === 'vendor') {
-        // --- 1. PHYSICAL VENDOR LOGIC ---
         const { data: challan, error: challanErr } = await supabase
           .from('voucher_distributions')
           .insert({
@@ -241,7 +297,7 @@ export default function DistributeVouchersPage() {
           .from('vouchers')
           .update({
             status: 'distributed',
-            distributor_id: distributorId,
+            distributor_id: distributorId, // ✨ Distributor ID assigned correctly
             distribution_id: challan.id, 
             expiry_date: finalExpiryDate,
             distributed_at: new Date().toISOString(),
@@ -259,7 +315,6 @@ export default function DistributeVouchersPage() {
         setViewSequence({ start: startCode, end: endCode })
         
       } else {
-        // --- 2. DIGITAL EVENT (QR) LOGIC ---
         const { error: updateErr } = await supabase
           .from('vouchers')
           .update({
@@ -291,6 +346,9 @@ export default function DistributeVouchersPage() {
       setDistributorId('')
       setSelectedBatch('')
       setDeliveryAgent('')
+      setCustomStart('')
+      setCustomEnd('')
+      setSequenceMode('auto')
       setIsBirthdayRedemption(false)
       fetchData()
 
@@ -376,6 +434,30 @@ export default function DistributeVouchersPage() {
     }
   }
 
+  // ✨ NEW: Handle Create Distributor
+  const handleCreateDistributor = async () => {
+    if (!newDistData.distributor_name.trim()) return toast.error("Distributor name is required");
+    setIsSubmittingDist(true);
+    try {
+      const { data, error } = await supabase.from('voucher_distributors').insert({
+        company_id: appUser?.company_id,
+        ...newDistData
+      }).select().single();
+      
+      if (error) throw error;
+      
+      toast.success("Distributor added successfully!");
+      setDistributors(prev => [...prev, data].sort((a,b) => a.distributor_name.localeCompare(b.distributor_name)));
+      setDistributorId(data.id);
+      setIsNewDistModalOpen(false);
+      setNewDistData({ distributor_name: '', contact_person: '', phone: '', address: '', distributor_type: 'external_shop' });
+    } catch (e: any) {
+      toast.error(e.message || "Failed to create distributor");
+    } finally {
+      setIsSubmittingDist(false);
+    }
+  }
+
   if (isLoading) {
     return <div className="p-8 flex justify-center min-h-screen bg-[#fafafa] items-center"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>
   }
@@ -448,7 +530,10 @@ export default function DistributeVouchersPage() {
               {allocationType === 'vendor' && (
                 <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2">
                   <Label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">Distributor</Label>
-                  <Select value={distributorId} onValueChange={setDistributorId}>
+                  <Select value={distributorId} onValueChange={(val) => {
+                    if (val === 'ADD_NEW') setIsNewDistModalOpen(true)
+                    else setDistributorId(val)
+                  }}>
                     <SelectTrigger className="h-10 text-sm bg-gray-50 border-gray-200"><SelectValue placeholder="Select partner..." /></SelectTrigger>
                     <SelectContent className="border-gray-200 max-h-[300px]">
                       {distributors.map(d => (
@@ -458,6 +543,11 @@ export default function DistributeVouchersPage() {
                           </div>
                         </SelectItem>
                       ))}
+                      <div className="p-1 mt-1 border-t border-gray-100">
+                        <SelectItem value="ADD_NEW" className="text-indigo-600 font-bold bg-indigo-50/50 focus:bg-indigo-100 rounded-md cursor-pointer">
+                          <span className="flex items-center gap-1.5"><PlusCircle className="w-3.5 h-3.5"/> Add New Distributor</span>
+                        </SelectItem>
+                      </div>
                     </SelectContent>
                   </Select>
                 </div>
@@ -524,17 +614,59 @@ export default function DistributeVouchersPage() {
                 </div>
 
                 <div className="bg-gray-50 p-3 rounded border border-gray-200">
-                  <Label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest block mb-2">Generated Sequence</Label>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 h-9 bg-white border border-gray-200 rounded flex items-center justify-center font-mono text-xs font-bold text-gray-800 shadow-sm">
-                      {startCode}
-                    </div>
-                    <span className="text-gray-400 text-xs font-medium">to</span>
-                    <div className="flex-1 h-9 bg-white border border-gray-200 rounded flex items-center justify-center font-mono text-xs font-bold text-gray-800 shadow-sm">
-                      {endCode}
+                  <div className="flex items-center justify-between mb-2">
+                    <Label className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">Generated Sequence</Label>
+                    
+                    {/* ✨ NEW: Sequence Mode Toggle */}
+                    <div className="flex items-center bg-gray-200/50 p-0.5 rounded border border-gray-200">
+                      <button 
+                        className={`text-[9px] font-bold px-2 py-0.5 rounded-sm uppercase tracking-wider transition-all ${sequenceMode === 'auto' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={() => { setSequenceMode('auto'); setCustomStart(''); setCustomEnd(''); }}
+                      >
+                        Auto
+                      </button>
+                      <button 
+                        className={`text-[9px] font-bold px-2 py-0.5 rounded-sm uppercase tracking-wider transition-all ${sequenceMode === 'custom' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                        onClick={() => { setSequenceMode('custom'); setCustomStart(startCode !== '---' ? startCode : ''); setCustomEnd(endCode !== '---' ? endCode : ''); }}
+                        disabled={!selectedBatch || availableVouchers.length === 0}
+                      >
+                        Custom Range
+                      </button>
                     </div>
                   </div>
                   
+                  {sequenceMode === 'auto' ? (
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-9 bg-white border border-gray-200 rounded flex items-center justify-center font-mono text-xs font-bold text-gray-800 shadow-sm">
+                        {startCode}
+                      </div>
+                      <span className="text-gray-400 text-xs font-medium">to</span>
+                      <div className="flex-1 h-9 bg-white border border-gray-200 rounded flex items-center justify-center font-mono text-xs font-bold text-gray-800 shadow-sm">
+                        {endCode}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <Input 
+                        placeholder="Start Code" 
+                        value={customStart} 
+                        onChange={(e) => handleCustomStartChange(e.target.value)}
+                        className={`flex-1 h-9 font-mono text-xs font-bold shadow-sm uppercase ${sequenceError && !isValidQuantity ? 'border-red-300 bg-red-50 text-red-900 focus-visible:ring-red-400' : 'bg-white border-indigo-200 focus-visible:ring-indigo-500'}`}
+                      />
+                      <span className="text-gray-400 text-xs font-medium">to</span>
+                      <Input 
+                        placeholder="End Code" 
+                        value={customEnd} 
+                        onChange={(e) => handleCustomEndChange(e.target.value)}
+                        className={`flex-1 h-9 font-mono text-xs font-bold shadow-sm uppercase ${sequenceError && !isValidQuantity ? 'border-red-300 bg-red-50 text-red-900 focus-visible:ring-red-400' : 'bg-white border-indigo-200 focus-visible:ring-indigo-500'}`}
+                      />
+                    </div>
+                  )}
+                  
+                  {sequenceError && sequenceMode === 'custom' && (
+                    <p className="text-[10px] text-red-500 font-bold uppercase tracking-widest mt-2">{sequenceError}</p>
+                  )}
+
                   {isValidQuantity && allocationType === 'event' && (
                     <p className="text-[10px] text-emerald-600 mt-2 font-bold uppercase tracking-widest text-center pt-1 border-t border-gray-200">
                       Auto-Prefix URL: /event/{startCode.replace(/[0-9]/g, '') || startCode.substring(0, 1)}
@@ -736,6 +868,76 @@ export default function DistributeVouchersPage() {
           </Card>
         </div>
       </main>
+
+      {/* --- ADD NEW DISTRIBUTOR MODAL --- */}
+      <Dialog open={isNewDistModalOpen} onOpenChange={setIsNewDistModalOpen}>
+        <DialogContent className="sm:max-w-[425px] p-0 border-none shadow-2xl rounded-2xl bg-white overflow-hidden">
+          <DialogHeader className="bg-gray-50 p-6 border-b border-gray-100">
+            <DialogTitle className="text-lg font-bold text-gray-900 flex items-center gap-2">
+              <Store className="w-5 h-5 text-indigo-600" /> Add New Distributor
+            </DialogTitle>
+            <DialogDescription className="text-xs font-medium text-gray-500 mt-1">
+              Register a new partner or internal branch for allocations.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="p-6 space-y-4">
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Business/Distributor Name *</Label>
+              <Input 
+                className="h-10 text-sm font-semibold border-gray-200 rounded-xl"
+                value={newDistData.distributor_name}
+                onChange={e => setNewDistData({...newDistData, distributor_name: e.target.value})}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Contact Person</Label>
+                <Input 
+                  className="h-10 text-sm border-gray-200 rounded-xl"
+                  value={newDistData.contact_person}
+                  onChange={e => setNewDistData({...newDistData, contact_person: e.target.value})}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Phone</Label>
+                <Input 
+                  type="tel"
+                  className="h-10 text-sm border-gray-200 rounded-xl"
+                  value={newDistData.phone}
+                  onChange={e => setNewDistData({...newDistData, phone: e.target.value})}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Address</Label>
+              <Input 
+                className="h-10 text-sm border-gray-200 rounded-xl"
+                value={newDistData.address}
+                onChange={e => setNewDistData({...newDistData, address: e.target.value})}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Distributor Type</Label>
+              <Select value={newDistData.distributor_type} onValueChange={v => setNewDistData({...newDistData, distributor_type: v})}>
+                <SelectTrigger className="h-10 text-sm border-gray-200 rounded-xl bg-white"><SelectValue/></SelectTrigger>
+                <SelectContent className="rounded-xl border-gray-200">
+                  <SelectItem value="external_shop">External Shop</SelectItem>
+                  <SelectItem value="corporate_partner">Corporate Partner</SelectItem>
+                  <SelectItem value="internal_branch">Internal Branch</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter className="bg-gray-50 p-4 border-t border-gray-100">
+            <Button variant="outline" className="h-11 rounded-xl text-xs font-bold uppercase tracking-widest text-gray-500 hover:bg-gray-100" onClick={() => setIsNewDistModalOpen(false)}>Cancel</Button>
+            <Button className="h-11 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs uppercase tracking-widest" onClick={handleCreateDistributor} disabled={isSubmittingDist}>
+              {isSubmittingDist ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />} Save Distributor
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* --- EVENT QR DOWNLOAD MODAL --- */}
       <Dialog open={!!eventQrData} onOpenChange={(open) => !open && setEventQrData(null)}>

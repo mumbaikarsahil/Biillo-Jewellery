@@ -37,7 +37,8 @@ import {
   BellRing,
   Megaphone,
   Trash2,
-  ArrowUpDown // ✨ NEW ICON FOR SORTING
+  ArrowUpDown, // ✨ NEW ICON FOR SORTING
+  Settings2
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -149,13 +150,26 @@ export default function TrackVoucherPage() {
   
   // ✨ NEW: SORTING STATE
   const [sortOrder, setSortOrder] = useState("newest"); // Defaulting to newest activity
-
+  const [searchMode, setSearchMode] = useState<'text' | 'range'>('text');
+  const [fromCode, setFromCode] = useState("");
+  const [toCode, setToCode] = useState("");
   // --- BULK ACTION STATE ---
   const [selectedVouchers, setSelectedVouchers] = useState<Set<string>>(new Set());
   const [bulkHandlingFee, setBulkHandlingFee] = useState("");
   const [bulkExpiryDate, setBulkExpiryDate] = useState(""); 
   const [bulkOverrideReason, setBulkOverrideReason] = useState("");
+
+  // ✨ NEW: MASTER UPDATE MODAL STATE
+  const [isMasterEditModalOpen, setIsMasterEditModalOpen] = useState(false);
   const [isUpdatingBulk, setIsUpdatingBulk] = useState(false);
+  const [masterEditForm, setMasterEditForm] = useState({
+    status: 'no_change',
+    distributor_id: 'no_change',
+    distributed_at: '',
+    expiry_date: '',
+    handling_fee: '',
+    override_reason: ''
+  });
 
   // --- BULK VOID MODAL STATE ---
   const [isVoidModalOpen, setIsVoidModalOpen] = useState(false);
@@ -195,7 +209,18 @@ export default function TrackVoucherPage() {
       fetchVoucherList(activeFilter, currentPage, localSearch, sortOrder);
     }, 400); 
     return () => clearTimeout(timer);
-  }, [activeFilter, selectedFilterDistributor, selectedFilterBatch, currentPage, localSearch, pageSize, sortOrder]);
+  }, [
+    activeFilter, 
+    selectedFilterDistributor, 
+    selectedFilterBatch, 
+    currentPage, 
+    localSearch, 
+    pageSize, 
+    sortOrder, 
+    searchMode, 
+    fromCode, 
+    toCode
+  ]);
 
   // ✨ UPDATED: Added sortDirection parameter
   const fetchVoucherList = async (tabStatus: string, page: number, searchKeyword: string, currentSort: string) => {
@@ -234,9 +259,23 @@ export default function TrackVoucherPage() {
         query = query.eq("status", tabStatus);
       }
 
-      if (selectedFilterDistributor !== "all") query = query.eq("distributor_id", selectedFilterDistributor);
-      if (selectedFilterBatch !== "all") query = query.eq("batch_id", selectedFilterBatch);
-      if (searchKeyword.trim()) query = query.ilike("code", `%${searchKeyword.trim()}%`);
+      // --- ✨ APPLY CONDITIONAL FILTERS ONLY ONCE ---
+if (searchMode === 'text') {
+  if (searchKeyword.trim()) {
+      query = query.ilike("code", `%${searchKeyword.trim()}%`);
+  }
+} else if (searchMode === 'range') {
+  if (fromCode.trim()) {
+      query = query.gte("code", fromCode.trim().toUpperCase());
+  }
+  if (toCode.trim()) {
+      query = query.lte("code", toCode.trim().toUpperCase());
+  }
+}
+
+     // --- ALWAYS APPLY THESE FILTERS ---
+if (selectedFilterDistributor !== "all") query = query.eq("distributor_id", selectedFilterDistributor);
+if (selectedFilterBatch !== "all") query = query.eq("batch_id", selectedFilterBatch);
 
       const { data, count, error } = await query;
       
@@ -497,6 +536,66 @@ export default function TrackVoucherPage() {
       setBulkHandlingFee("");
       setBulkExpiryDate("");
       setBulkOverrideReason("");
+    } catch (error: any) {
+      toast({ title: "Update Failed", description: error.message, variant: "destructive" });
+    } finally {
+      setIsUpdatingBulk(false);
+    }
+  };
+
+  // --- ✨ NEW: MASTER BULK UPDATE HANDLER ---
+  const handleMasterUpdate = async () => {
+    if (selectedVouchers.size === 0) return;
+    if (!masterEditForm.override_reason.trim()) {
+      return toast({ title: "Reason Required", description: "You must provide an audit reason to execute a master override.", variant: "destructive" });
+    }
+
+    setIsUpdatingBulk(true);
+    try {
+      const updates: any = {};
+      
+      if (masterEditForm.status !== 'no_change') updates.status = masterEditForm.status;
+      
+      if (masterEditForm.distributor_id !== 'no_change') {
+        updates.distributor_id = masterEditForm.distributor_id === 'clear' ? null : masterEditForm.distributor_id;
+      }
+      
+      if (masterEditForm.distributed_at) {
+        updates.distributed_at = new Date(masterEditForm.distributed_at).toISOString();
+      }
+      
+      if (masterEditForm.expiry_date) {
+        updates.expiry_date = masterEditForm.expiry_date;
+      }
+      
+      if (masterEditForm.handling_fee !== '') {
+        updates.handling_fee = Number(masterEditForm.handling_fee);
+      }
+
+      updates.is_manual_override = true; 
+      
+      const userIdent = appUser?.email?.split('@')[0] || 'MasterAdmin';
+      updates.updated_by_user = `${userIdent}: ${masterEditForm.override_reason.trim()}`; 
+
+      const idsToUpdate = Array.from(selectedVouchers);
+      const { error } = await supabase.from("vouchers").update(updates).in("id", idsToUpdate);
+      
+      if (error) throw error;
+
+      toast({ title: "Master Update Successful", description: `Safely updated ${idsToUpdate.length} vouchers.` });
+      
+      // Cleanup
+      fetchVoucherList(activeFilter, currentPage, localSearch, sortOrder);
+      setSelectedVouchers(new Set());
+      setIsMasterEditModalOpen(false);
+      setMasterEditForm({
+        status: 'no_change',
+        distributor_id: 'no_change',
+        distributed_at: '',
+        expiry_date: '',
+        handling_fee: '',
+        override_reason: ''
+      });
     } catch (error: any) {
       toast({ title: "Update Failed", description: error.message, variant: "destructive" });
     } finally {
@@ -929,27 +1028,39 @@ export default function TrackVoucherPage() {
           <Card className="shadow-sm border-slate-200 overflow-hidden bg-white rounded-xl">
             
             {/* --- ADVANCED UNIFIED FILTER BAR --- */}
-            <div className="bg-slate-50 border-b border-slate-200 p-4 flex flex-col xl:flex-row items-start xl:items-center gap-4">
-              <div className="flex items-center gap-2 text-slate-500 w-full xl:w-auto shrink-0">
-                <Filter className="w-4 h-4 text-[#0052FF]" />
-                <span className="text-[11px] font-bold uppercase tracking-widest text-[#0052FF]">Database Filters:</span>
-              </div>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:flex lg:flex-row flex-wrap items-center gap-3 w-full">
-                
-                {/* Local Search */}
-                <div className="relative w-full lg:w-[180px]">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                  <Input 
-                    placeholder="Search codes..." 
-                    className="pl-9 h-9 text-xs bg-white border-slate-200 shadow-sm font-medium rounded-lg"
-                    value={localSearch}
-                    onChange={(e) => {
-                      setLocalSearch(e.target.value);
-                      setCurrentPage(0);
-                    }}
-                  />
-                </div>
+<div className="bg-slate-50 border-b border-slate-200 p-4 flex flex-col xl:flex-row items-start xl:items-center gap-4">
+  <div className="flex items-center gap-2 text-slate-500 w-full xl:w-auto shrink-0 justify-between">
+    <div className="flex items-center gap-2">
+      <Filter className="w-4 h-4 text-[#0052FF]" />
+      <span className="text-[11px] font-bold uppercase tracking-widest text-[#0052FF]">Filters:</span>
+    </div>
+    {/* ✨ TOGGLE SWITCH */}
+    <div className="flex bg-white rounded-lg border border-slate-200 p-0.5 shadow-sm">
+      <Button size="sm" variant={searchMode === 'text' ? 'default' : 'ghost'} className="h-7 text-[10px] font-bold px-3 rounded-md" onClick={() => setSearchMode('text')}>Text</Button>
+      <Button size="sm" variant={searchMode === 'range' ? 'default' : 'ghost'} className="h-7 text-[10px] font-bold px-3 rounded-md" onClick={() => setSearchMode('range')}>Range</Button>
+    </div>
+  </div>
+  
+  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:flex lg:flex-row flex-wrap items-center gap-3 w-full">
+    
+    {/* ✨ CONDITIONAL SEARCH INPUTS */}
+    {searchMode === 'text' ? (
+      <div className="relative w-full lg:w-[220px]">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+        <Input 
+          placeholder="Search codes..." 
+          className="pl-9 h-9 text-xs bg-white border-slate-200 shadow-sm font-medium rounded-lg"
+          value={localSearch}
+          onChange={(e) => { setLocalSearch(e.target.value); setCurrentPage(0); }}
+        />
+      </div>
+    ) : (
+      <div className="flex items-center gap-2 w-full lg:w-auto">
+        <Input placeholder="From Code" className="h-9 text-xs w-[120px] font-mono font-bold uppercase" value={fromCode} onChange={(e) => setFromCode(e.target.value.toUpperCase())} />
+        <span className="text-slate-400 font-bold">-</span>
+        <Input placeholder="To Code" className="h-9 text-xs w-[120px] font-mono font-bold uppercase" value={toCode} onChange={(e) => setToCode(e.target.value.toUpperCase())} />
+      </div>
+    )}
 
                 <Select value={activeFilter} onValueChange={(val) => { setActiveFilter(val); setCurrentPage(0); }}>
                   <SelectTrigger className="w-full lg:w-[140px] h-9 text-xs bg-white border-slate-200 font-semibold text-slate-700 shadow-sm rounded-lg">
@@ -1024,60 +1135,29 @@ export default function TrackVoucherPage() {
               </div>
             </div>
 
-            {/* BULK ACTION BAR */}
+            {/* ✨ REDESIGNED BULK ACTION BAR */}
             {canBulkUpdate && selectedVouchers.size > 0 && (
-              <div className="bg-blue-50/80 border-b border-blue-100 p-4 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 animate-in slide-in-from-top-2">
+              <div className="bg-indigo-50/80 border-b border-indigo-100 p-4 flex flex-col xl:flex-row items-start xl:items-center justify-between gap-4 animate-in slide-in-from-top-2">
                 <div className="flex items-center gap-2 shrink-0">
-                  <CheckSquare className="h-4 w-4 text-[#0052FF]" />
-                  <span className="text-sm font-bold text-blue-900">{selectedVouchers.size} Selected</span>
+                  <CheckSquare className="h-4 w-4 text-indigo-600" />
+                  <span className="text-sm font-bold text-indigo-900">{selectedVouchers.size} Selected</span>
                 </div>
-                <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto">
-                  <div className="relative">
-                    <IndianRupee className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                    <Input 
-                      type="number"
-                      placeholder="Fee..." 
-                      className="pl-8 h-9 text-xs w-full sm:w-28 bg-white border-blue-200 focus-visible:ring-[#0052FF] rounded-lg shadow-sm"
-                      value={bulkHandlingFee}
-                      onChange={(e) => setBulkHandlingFee(e.target.value)}
-                    />
-                  </div>
-                  <div className="relative">
-                    <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                    <Input 
-                      type="date"
-                      className="pl-8 pr-3 h-9 text-xs w-full sm:w-36 bg-white border-blue-200 focus-visible:ring-[#0052FF] rounded-lg shadow-sm"
-                      value={bulkExpiryDate}
-                      onChange={(e) => setBulkExpiryDate(e.target.value)}
-                    />
-                  </div>
-                  <div className="relative flex-1 sm:w-64 min-w-[200px]">
-                    <FileEdit className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
-                    <Input 
-                      type="text"
-                      placeholder="Reason for override (Required)..." 
-                      className="pl-8 h-9 text-xs w-full bg-white border-blue-200 focus-visible:ring-[#0052FF] rounded-lg shadow-sm"
-                      value={bulkOverrideReason}
-                      onChange={(e) => setBulkOverrideReason(e.target.value)}
-                    />
-                  </div>
+                
+                <div className="flex items-center gap-3 w-full xl:w-auto">
                   <Button 
                     size="sm" 
-                    className="h-9 text-xs font-bold bg-[#0052FF] hover:bg-blue-700 text-white w-full sm:w-auto shadow-sm rounded-lg"
-                    disabled={isUpdatingBulk || (!bulkHandlingFee.trim() && !bulkExpiryDate.trim()) || !bulkOverrideReason.trim()}
-                    onClick={handleBulkUpdate}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm font-bold flex-1 sm:flex-none"
+                    onClick={() => setIsMasterEditModalOpen(true)}
                   >
-                    {isUpdatingBulk ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Apply Override"}
+                    <Settings2 className="w-4 h-4 mr-2" /> Master Update
                   </Button>
-                  
-                  {/* ✨ BULK VOID ACTION */}
                   <Button 
                     size="sm" 
-                    variant="destructive"
-                    className="h-9 text-xs font-bold w-full sm:w-auto shadow-sm rounded-lg"
+                    variant="destructive" 
+                    className="font-bold shadow-sm flex-1 sm:flex-none"
                     onClick={() => setIsVoidModalOpen(true)}
                   >
-                    <Trash2 className="w-3.5 h-3.5 mr-1.5" /> Void Vouchers
+                    <Trash2 className="w-4 h-4 mr-2" /> Void Vouchers
                   </Button>
                 </div>
               </div>
@@ -1086,17 +1166,13 @@ export default function TrackVoucherPage() {
             <CardContent className="p-0">
               {isListLoading ? (
                 <div className="flex flex-col items-center justify-center py-24 bg-slate-50/50">
-                  <div className="flex items-center gap-2 mb-3">
-                    <Sparkles className="w-5 h-5 text-[#0052FF] animate-pulse" />
-                    <span className="text-[11px] font-black uppercase tracking-widest text-[#0052FF]">Syncing Database</span>
-                  </div>
-                  <Skeleton className="h-6 w-64 bg-slate-200 rounded mb-2" />
-                  <Skeleton className="h-4 w-48 bg-slate-100 rounded" />
+                  <Loader2 className="w-6 h-6 animate-spin text-indigo-500 mb-2" />
+                  <span className="text-[11px] font-black uppercase tracking-widest text-indigo-600">Syncing Database</span>
                 </div>
               ) : listData.length === 0 ? (
                 <div className="text-center py-20 bg-slate-50/50">
                   <Package className="w-12 h-12 mx-auto mb-4 text-slate-200" />
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">No records found for this filter</p>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">No records found</p>
                 </div>
               ) : (
                 <div className="max-h-[600px] overflow-y-auto custom-scrollbar">
@@ -1107,7 +1183,7 @@ export default function TrackVoucherPage() {
                           <TableHead className="w-12 px-4 text-center">
                             <input 
                               type="checkbox" 
-                              className="w-4 h-4 rounded border-slate-300 text-[#0052FF] focus:ring-[#0052FF] cursor-pointer"
+                              className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600 cursor-pointer"
                               checked={selectedVouchers.size === listData.length && listData.length > 0}
                               onChange={toggleAll}
                             />
@@ -1118,29 +1194,19 @@ export default function TrackVoucherPage() {
                         <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-center">Location & Scans</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-right">Value (INR)</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-right">Fee & Pmt</TableHead>
-                        
-                        {["all", "distributed", "in_stock", "registered", "redeemed", "expired"].includes(activeFilter) && (
-                          <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10">Logistics & Customer</TableHead>
-                        )}
-                        
-                        {["all", "distributed", "in_stock", "registered", "expired"].includes(activeFilter) && (
-                          <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-center">Expiration</TableHead>
-                        )}
-                        {["redeemed"].includes(activeFilter) && (
-                          <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-center">Redeemed On</TableHead>
-                        )}
-                        
+                        <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10">Logistics & Customer</TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-center">Expiration</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase text-slate-500 tracking-widest px-4 h-10 text-center pr-6">Status</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {listData.map((v) => (
-                        <TableRow key={v.id} className={`hover:bg-slate-50/80 border-b border-slate-100 transition-colors ${selectedVouchers.has(v.id) ? 'bg-blue-50/30' : ''}`}>
+                        <TableRow key={v.id} className={`hover:bg-slate-50/80 border-b border-slate-100 transition-colors ${selectedVouchers.has(v.id) ? 'bg-indigo-50/30' : ''}`}>
                           {canBulkUpdate && (
                             <TableCell className="px-4 text-center">
                               <input 
                                 type="checkbox" 
-                                className="w-4 h-4 rounded border-slate-300 text-[#0052FF] focus:ring-[#0052FF] cursor-pointer"
+                                className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600 cursor-pointer"
                                 checked={selectedVouchers.has(v.id)}
                                 onChange={() => toggleSelection(v.id)}
                               />
@@ -1167,11 +1233,6 @@ export default function TrackVoucherPage() {
                               <Badge variant="secondary" className="bg-blue-50 text-[#0052FF] hover:bg-blue-100 border-blue-200 shadow-none">
                                 {v.scan_count} Scans
                               </Badge>
-                              {v.last_scanned_warehouse && (
-                                <span className="text-[9px] text-slate-500 mt-1.5 font-medium flex items-center gap-1" title="Last scanned location">
-                                  <MapPin className="w-2.5 h-2.5" /> {v.last_scanned_warehouse.name}
-                                </span>
-                              )}
                             </div>
                           </TableCell>
 
@@ -1188,37 +1249,17 @@ export default function TrackVoucherPage() {
                             </div>
                           </TableCell>
                           
-                          {/* LOGISTICS & CUSTOMER CELL - INTERACTIVE */}
-                          {["all", "distributed", "in_stock", "registered", "redeemed", "expired"].includes(activeFilter) && (
-                            <TableCell className="px-4">
-                              <div className="flex flex-col items-start gap-1.5">
-                                <span className="font-semibold text-[11px] text-slate-700 flex items-center gap-1">
-                                  <Store className="w-3 h-3 text-slate-400" /> {v.voucher_distributors?.distributor_name || <span className="text-slate-300 italic font-medium">Unassigned</span>}
-                                </span>
-                                {v.customers && (
-                                  <button 
-                                    onClick={() => setSelectedCustomer({ ...v.customers!, voucherCode: v.code })}
-                                    className="text-[10px] font-bold text-teal-700 flex items-center gap-1 bg-teal-50 hover:bg-teal-100 px-2 py-1 rounded border border-teal-200 transition-colors shadow-sm group"
-                                  >
-                                    <User className="w-3 h-3 text-teal-500" /> 
-                                    {v.customers.full_name}
-                                    <ExternalLink className="w-3 h-3 opacity-0 group-hover:opacity-100 ml-0.5 transition-opacity" />
-                                  </button>
-                                )}
-                              </div>
-                            </TableCell>
-                          )}
+                          <TableCell className="px-4">
+                            <div className="flex flex-col items-start gap-1.5">
+                              <span className="font-semibold text-[11px] text-slate-700 flex items-center gap-1">
+                                <Store className="w-3 h-3 text-slate-400" /> {v.voucher_distributors?.distributor_name || <span className="text-slate-300 italic font-medium">Unassigned</span>}
+                              </span>
+                            </div>
+                          </TableCell>
 
-                          {["all", "distributed", "in_stock", "registered", "expired"].includes(activeFilter) && (
-                            <TableCell className="text-center font-bold text-[10px] text-rose-500 px-4">
-                              {v.expiry_date ? format(new Date(v.expiry_date), "dd MMM yy") : "-"}
-                            </TableCell>
-                          )}
-                          {["redeemed"].includes(activeFilter) && (
-                            <TableCell className="text-center font-bold text-[10px] text-emerald-600 px-4">
-                              {v.redeemed_at ? format(new Date(v.redeemed_at), "dd MMM yy") : "-"}
-                            </TableCell>
-                          )}
+                          <TableCell className="text-center font-bold text-[10px] text-rose-500 px-4">
+                            {v.expiry_date ? format(new Date(v.expiry_date), "dd MMM yy") : "-"}
+                          </TableCell>
                           
                           <TableCell className="text-center px-4 pr-6"><StatusBadge status={getDisplayStatus(v)} /></TableCell>
                         </TableRow>
@@ -1229,7 +1270,7 @@ export default function TrackVoucherPage() {
               )}
             </CardContent>
             
-            {/* SERVER-SIDE PAGINATION FOOTER - UPDATED WITH SELECTOR */}
+            {/* SERVER-SIDE PAGINATION FOOTER */}
             {totalCount > 0 && (
               <div className="bg-slate-50 border-t border-slate-200 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
                 <div className="flex items-center gap-4 text-xs font-semibold text-slate-500">
@@ -1244,7 +1285,6 @@ export default function TrackVoucherPage() {
                         <SelectItem value="100">100</SelectItem>
                         <SelectItem value="200">200</SelectItem>
                         <SelectItem value="500">500</SelectItem>
-                        <SelectItem value="1000">1000</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1254,25 +1294,11 @@ export default function TrackVoucherPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    className="h-8 text-xs font-bold text-slate-600 bg-white"
-                    onClick={() => setCurrentPage(p => Math.max(0, p - 1))}
-                    disabled={currentPage === 0 || isListLoading}
-                  >
+                  <Button variant="outline" size="sm" className="h-8 text-xs font-bold text-slate-600 bg-white" onClick={() => setCurrentPage(p => Math.max(0, p - 1))} disabled={currentPage === 0 || isListLoading}>
                     <ChevronLeft className="w-4 h-4 mr-1" /> Prev
                   </Button>
-                  <div className="text-xs font-bold text-slate-400 px-2">
-                    Page {currentPage + 1} of {totalPages}
-                  </div>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    className="h-8 text-xs font-bold text-slate-600 bg-white"
-                    onClick={() => setCurrentPage(p => p + 1)}
-                    disabled={(currentPage + 1) * pageSize >= totalCount || isListLoading}
-                  >
+                  <div className="text-xs font-bold text-slate-400 px-2">Page {currentPage + 1} of {totalPages}</div>
+                  <Button variant="outline" size="sm" className="h-8 text-xs font-bold text-slate-600 bg-white" onClick={() => setCurrentPage(p => p + 1)} disabled={(currentPage + 1) * pageSize >= totalCount || isListLoading}>
                     Next <ChevronRight className="w-4 h-4 ml-1" />
                   </Button>
                 </div>
@@ -1281,102 +1307,112 @@ export default function TrackVoucherPage() {
           </Card>
         </section>
 
-        {/* --- CUSTOMER DETAILS MODAL --- */}
-        <Dialog open={!!selectedCustomer} onOpenChange={(open) => !open && setSelectedCustomer(null)}>
-          <DialogContent className="sm:max-w-[400px] border-slate-200 shadow-2xl rounded-xl p-0 overflow-hidden bg-white">
-            {selectedCustomer && (
-              <>
-                <DialogHeader className="bg-slate-50 border-b border-slate-100 p-6">
-                  <div className="w-12 h-12 bg-teal-100 rounded-full flex items-center justify-center mb-4">
-                    <User className="w-6 h-6 text-teal-600" />
-                  </div>
-                  <DialogTitle className="text-xl font-bold text-slate-900 tracking-tight">
-                    {selectedCustomer.full_name}
-                  </DialogTitle>
-                  <DialogDescription className="text-xs font-medium text-slate-500 mt-1 flex items-center gap-1.5">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-teal-500" /> Registered to Voucher: <span className="font-mono font-bold text-slate-700">{selectedCustomer.voucherCode}</span>
-                  </DialogDescription>
-                </DialogHeader>
-
-                <div className="p-6 space-y-6">
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Contact Number</p>
-                    <p className="text-[15px] font-semibold text-slate-900 flex items-center gap-2">
-                      <Phone className="w-4 h-4 text-slate-400" /> {selectedCustomer.phone}
-                    </p>
-                  </div>
-                  
-                  <div>
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">Customer ID Reference</p>
-                    <p className="text-xs font-mono font-medium text-slate-500 bg-slate-50 p-2 rounded border border-slate-100">
-                      {selectedCustomer.id}
-                    </p>
-                  </div>
-
-                  <Button 
-                    className="w-full h-11 bg-[#25D366] hover:bg-[#20bd5a] text-white font-bold text-[13px] rounded-lg shadow-sm"
-                    onClick={() => window.open(getWhatsAppLink(selectedCustomer.phone), '_blank')}
-                  >
-                    <MessageCircle className="w-4 h-4 mr-2" /> Message on WhatsApp
-                  </Button>
-                </div>
-              </>
-            )}
-          </DialogContent>
-        </Dialog>
-
-        {/* ✨ CUSTOM REMINDER MODAL */}
-        <Dialog open={isRemindModalOpen} onOpenChange={setIsRemindModalOpen}>
-          <DialogContent className="sm:max-w-[425px]">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 text-amber-600">
-                <BellRing className="w-5 h-5" /> Target Expiring Vouchers
+        {/* ✨ NEW: MASTER UPDATE MODAL */}
+        <Dialog open={isMasterEditModalOpen} onOpenChange={setIsMasterEditModalOpen}>
+          <DialogContent className="sm:max-w-[500px] border-none shadow-2xl rounded-2xl p-0 overflow-hidden bg-slate-50">
+            <DialogHeader className="bg-white border-b border-slate-200 p-5 shrink-0">
+              <DialogTitle className="flex items-center gap-2 text-indigo-600 text-lg font-bold">
+                <Settings2 className="w-5 h-5" /> Master Voucher Update
               </DialogTitle>
-              <DialogDescription>
-                Select which vouchers to target for the expiry broadcast.
+              <DialogDescription className="text-xs font-medium text-slate-500 mt-1.5">
+                Applying forced database overrides to <strong className="text-slate-900">{selectedVouchers.size}</strong> selected voucher(s). Empty fields will remain unchanged.
               </DialogDescription>
             </DialogHeader>
-            <div className="grid gap-4 py-4">
-              <div className="space-y-2">
-                <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Target Status</Label>
-                <Select value={remindStatus} onValueChange={(val) => { setRemindStatus(val); setRemindError(null); }}>
-                  <SelectTrigger className="h-11">
+
+            <div className="p-5 space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
+              
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Override Status</Label>
+                <Select value={masterEditForm.status} onValueChange={(val) => setMasterEditForm({...masterEditForm, status: val})}>
+                  <SelectTrigger className="h-10 bg-white border-slate-200 text-xs font-semibold shadow-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="both">Both Registered & Distributed</SelectItem>
-                    <SelectItem value="registered">Registered Only (Direct to Customer)</SelectItem>
-                    <SelectItem value="distributed">Distributed Only (Direct to Partner)</SelectItem>
+                    <SelectItem value="no_change" className="text-slate-400 italic">No Change</SelectItem>
+                    <SelectItem value="pending_print">Pending Print</SelectItem>
+                    <SelectItem value="in_stock">In Stock</SelectItem>
+                    <SelectItem value="unclaimed">Unclaimed Event QR</SelectItem>
+                    <SelectItem value="distributed">Distributed</SelectItem>
+                    <SelectItem value="registered">Registered</SelectItem>
+                    <SelectItem value="redeemed">Redeemed</SelectItem>
+                    <SelectItem value="expired">Expired</SelectItem>
+                    <SelectItem value="voided">Voided</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
-                <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Expiring Within (Days)</Label>
-                <Select value={remindDays} onValueChange={(val) => { setRemindDays(val); setRemindError(null); }}>
-                  <SelectTrigger className="h-11">
+
+              <div className="space-y-1.5">
+                <Label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Override Distributor</Label>
+                <Select value={masterEditForm.distributor_id} onValueChange={(val) => setMasterEditForm({...masterEditForm, distributor_id: val})}>
+                  <SelectTrigger className="h-10 bg-white border-slate-200 text-xs font-semibold shadow-sm">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    {[1,2,3,4,5,6,7].map(d => (
-                      <SelectItem key={d} value={d.toString()}>{d} Day{d > 1 ? 's' : ''}</SelectItem>
+                  <SelectContent className="max-h-[250px]">
+                    <SelectItem value="no_change" className="text-slate-400 italic">No Change</SelectItem>
+                    <SelectItem value="clear" className="text-rose-500 font-bold">Clear / Remove Distributor</SelectItem>
+                    {distributors.map(d => (
+                      <SelectItem key={d.id} value={d.id}>{d.distributor_name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
 
-              {/* ✨ INLINE ERROR DISPLAY */}
-              {remindError && (
-                <div className="bg-red-50 text-red-600 p-3 rounded-lg border border-red-100 flex items-start gap-2.5 animate-in slide-in-from-top-2 duration-300">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <p className="text-xs font-semibold leading-relaxed">{remindError}</p>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Distribution Date</Label>
+                  <Input 
+                    type="datetime-local" 
+                    className="h-10 bg-white border-slate-200 text-xs font-semibold shadow-sm"
+                    value={masterEditForm.distributed_at}
+                    onChange={(e) => setMasterEditForm({...masterEditForm, distributed_at: e.target.value})}
+                  />
+                  <p className="text-[9px] text-slate-400 italic mt-0.5">Leave blank for no change</p>
                 </div>
-              )}
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Expiry Date</Label>
+                  <Input 
+                    type="date" 
+                    className="h-10 bg-white border-slate-200 text-xs font-semibold shadow-sm"
+                    value={masterEditForm.expiry_date}
+                    onChange={(e) => setMasterEditForm({...masterEditForm, expiry_date: e.target.value})}
+                  />
+                  <p className="text-[9px] text-slate-400 italic mt-0.5">Leave blank for no change</p>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 border-t border-slate-200 pt-4">
+                <Label className="text-[10px] font-bold uppercase tracking-widest text-slate-500">Handling Fee Override (₹)</Label>
+                <Input 
+                  type="number" 
+                  placeholder="Leave blank for no change..."
+                  className="h-10 bg-white border-slate-200 text-xs font-semibold shadow-sm"
+                  value={masterEditForm.handling_fee}
+                  onChange={(e) => setMasterEditForm({...masterEditForm, handling_fee: e.target.value})}
+                />
+              </div>
+
+              <div className="space-y-1.5 bg-rose-50/50 p-3 rounded-lg border border-rose-100">
+                <Label className="text-[10px] font-bold uppercase tracking-widest text-rose-600">Audit Trail Reason (Required) *</Label>
+                <Input 
+                  type="text" 
+                  placeholder="Why are you making this master edit?"
+                  className="h-10 bg-white border-rose-200 focus-visible:ring-rose-500 text-xs shadow-sm"
+                  value={masterEditForm.override_reason}
+                  onChange={(e) => setMasterEditForm({...masterEditForm, override_reason: e.target.value})}
+                />
+              </div>
+
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsRemindModalOpen(false)}>Cancel</Button>
-              <Button onClick={executeRemindExpiring} disabled={isQueryingExpiry} className="bg-amber-500 hover:bg-amber-600 text-white">
-                {isQueryingExpiry ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-                Generate Broadcast List
+
+            <DialogFooter className="bg-white p-4 border-t border-slate-200 shrink-0">
+              <Button variant="outline" onClick={() => setIsMasterEditModalOpen(false)}>Cancel</Button>
+              <Button 
+                onClick={handleMasterUpdate} 
+                disabled={isUpdatingBulk || !masterEditForm.override_reason.trim()}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+              >
+                {isUpdatingBulk ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                Execute Master Update
               </Button>
             </DialogFooter>
           </DialogContent>

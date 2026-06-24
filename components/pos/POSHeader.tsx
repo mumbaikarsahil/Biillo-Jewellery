@@ -19,7 +19,6 @@ interface POSHeaderProps {
   billingDate?: string
   setBillingDate?: (date: string) => void
   
-  // NEW PROPS FOR BILLED BY
   billedBy?: string
   setBilledBy?: (userId: string) => void
 }
@@ -46,13 +45,12 @@ export function POSHeader({
     address?: string, 
     contact_number?: string, 
     gstin?: string
-    exchange_policy_text?: string,  // ✨ ADDED
-    invoice_banner_url?: string     // ✨ ADDED
+    exchange_policy_text?: string,  
+    invoice_banner_url?: string     
   }[]>([])
 
   const [staffMembers, setStaffMembers] = useState<{ id: string, full_name: string }[]>([])
 
-  // ✨ Define explicit permissions for who can change the "Billed By" user
   const canChangeBilledBy = isAdmin || isHQ || ['owner', 'manager', 'operations_manager', 'branch_manager'].includes(userRole || '')
 
   useEffect(() => {
@@ -61,7 +59,6 @@ export function POSHeader({
       try {
         const { data, error } = await supabase
           .from('warehouses')
-          // ✨ FIX: Added the new columns to the select query
           .select('id, name, address, contact_number, gstin, exchange_policy_text, invoice_banner_url')
           .eq('company_id', appUser.company_id)
           .eq('is_active', true)
@@ -85,19 +82,14 @@ export function POSHeader({
   useEffect(() => {
     const fetchStaff = async () => {
       try {
-        // Start building the query
-        let query = supabase
+        // ✨ FIX: Removed the invalid 'company_id' filter. 
+        const { data, error } = await supabase
           .from('profiles')
-          .select('id, full_name')
-          .in('role', ['sales_person', 'branch_manager', 'owner', 'operations_manager'])
+          .select('id, full_name, role')
+          .neq('role', 'owner')
+          .neq('role', 'manager')
+          .neq('role', 'operations_manager')
           .order('full_name');
-
-        // ✨ FIX: Only fetch staff assigned to the currently selected warehouse
-        if (selectedLocation && selectedLocation !== 'ALL') {
-          query = query.eq('warehouse_id', selectedLocation);
-        }
-
-        const { data, error } = await query;
           
         if (error) throw error;
         if (data) setStaffMembers(data);
@@ -107,11 +99,11 @@ export function POSHeader({
       }
     }
     
-    // Only fetch if the user has permission to change the billed by person
     if (canChangeBilledBy) {
        fetchStaff()
     }
-  }, [canChangeBilledBy, selectedLocation]) // ✨ Added selectedLocation to the dependency array
+  }, [canChangeBilledBy])
+
   return (
     <header className="z-40 w-full bg-white border-b border-slate-200 px-4 h-14 flex items-center justify-between shrink-0 sticky top-0 lg:static">
       
@@ -141,7 +133,7 @@ export function POSHeader({
           </SelectContent>
         </Select>
 
-        {/* NEW: Billed By Dropdown for Managers/Admins */}
+        {/* Billed By Dropdown for Managers/Admins */}
         {canChangeBilledBy && setBilledBy && (
           <>
             <div className="w-px h-5 bg-slate-200 mx-1 hidden sm:block"></div>
@@ -150,10 +142,11 @@ export function POSHeader({
               <SelectTrigger className="h-9 bg-indigo-50/50 hover:bg-indigo-50 border-indigo-100 focus:ring-indigo-200 text-xs font-semibold px-3 w-[140px] sm:w-[160px] rounded-lg transition-colors text-indigo-700 shadow-sm outline-none">
                 <SelectValue placeholder="Billed By..." />
               </SelectTrigger>
-              <SelectContent className="rounded-xl border-slate-200 shadow-xl bg-white">
+              <SelectContent className="rounded-xl border-slate-200 shadow-xl bg-white max-h-[300px]">
                 <SelectItem value={appUser?.id || ''} className="text-xs font-bold text-slate-700">
                   Self (Logged In)
                 </SelectItem>
+                {/* Render the globally fetched staff list */}
                 {staffMembers.filter(s => s.id !== appUser?.id).map((staff) => (
                   <SelectItem key={staff.id} value={staff.id} className="text-xs font-medium text-slate-700">
                     {staff.full_name}
