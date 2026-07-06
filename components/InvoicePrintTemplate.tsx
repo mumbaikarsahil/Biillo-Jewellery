@@ -77,15 +77,11 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const exchangeVal = data.exchangeValue || 0
     const handlingFee = data.handlingFee || 0
     
-    // ✨ FIX: Just use the exact voucherAmount passed from the hook! No more double-deducting.
     const effectiveVoucherCredit = data.voucherAmount || 0 
 
     // --- CUSTOM ORDER CALCULATIONS ---
     const customBaseEstimate = Number(customOrder?.estimatedValue || 0);
-    
-    // The exact Taxable calculation matching the sidebar
     const customTaxable = Math.max(0, customBaseEstimate - manualDiscount - exchangeVal - effectiveVoucherCredit); 
-    
     const customCgst = customTaxable * 0.015;
     const customSgst = customTaxable * 0.015;
     const customTotalEstimate = Math.round(customTaxable + customCgst + customSgst);
@@ -137,10 +133,50 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     return (
       <div ref={ref} className="w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
         
+        {/* ✨ FIX: Bulletproof CSS for Mobile Browser Print Fallbacks */}
         <style type="text/css" media="print">
           {`
             @page { size: A4 portrait; margin: 0mm; }
-            body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            
+            @media print {
+              html, body { 
+                background: white !important; 
+                -webkit-print-color-adjust: exact !important; 
+                print-color-adjust: exact !important; 
+              }
+
+              /* 1. Hide the main app behind the modal (removes Biillo OS header) */
+              body > div:first-of-type { 
+                display: none !important; 
+              }
+
+              /* 2. Forcefully hide all buttons ("Close Window", "Print Document") */
+              button { 
+                display: none !important; 
+              }
+
+              /* 3. Flatten the Modal to make it act like a standard page */
+              [role="dialog"] {
+                position: absolute !important;
+                top: 0 !important;
+                left: 0 !important;
+                width: 100% !important;
+                height: auto !important;
+                background: white !important;
+                box-shadow: none !important;
+                border: none !important;
+                border-radius: 0 !important;
+                transform: none !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                max-width: none !important;
+              }
+
+              /* 4. Hide the dark overlay backdrop from the screen */
+              [data-aria-hidden="true"], [data-radix-focus-guard] {
+                 display: none !important;
+              }
+            }
           `}
         </style>
 
@@ -564,7 +600,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
 
-                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-300 text-xl font-black text-slate-900"><span>Net Payable</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
+                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-800 text-xl font-black text-slate-900"><span>Net Payable</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
                 </>
               )}
             </div>
@@ -621,7 +657,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
             </div>
 
             {!isEstimate && (
-              <div className="w-full h-[140px] rounded-xl overflow-hidden border border-slate-200 relative">
+              <div className="w-full h-[80px] rounded-xl overflow-hidden border border-slate-200 relative">
                 <img 
                   src={bannerImage} 
                   alt="Pavitram Promotional Banner" 
