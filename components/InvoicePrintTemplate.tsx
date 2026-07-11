@@ -131,9 +131,10 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const bannerImage = data.branch?.invoice_banner_url || data.bannerUrl || "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/brand-assets/invoice-banner1.jpg";
 
     return (
-      <div ref={ref} className="w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
+      // ✨ ADDED 'print-section' class here to target it perfectly
+      <div ref={ref} className="print-section w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
         
-        {/* ✨ FIX: Bulletproof CSS for Mobile Browser Print Fallbacks */}
+        {/* ✨ FIX: Safer and more robust CSS for Mobile Printing */}
         <style type="text/css" media="print">
           {`
             @page { size: A4 portrait; margin: 0mm; }
@@ -145,36 +146,26 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 print-color-adjust: exact !important; 
               }
 
-              /* 1. Hide the main app behind the modal (removes Biillo OS header) */
-              body > div:first-of-type { 
-                display: none !important; 
+              /* Hide absolutely everything in the body by default */
+              body * {
+                visibility: hidden;
               }
 
-              /* 2. Forcefully hide all buttons ("Close Window", "Print Document") */
-              button { 
-                display: none !important; 
+              /* Reveal ONLY the print-section and its children */
+              .print-section, .print-section * {
+                visibility: visible;
               }
 
-              /* 3. Flatten the Modal to make it act like a standard page */
-              [role="dialog"] {
+              /* Position the print-section exactly at the top-left of the page */
+              .print-section {
                 position: absolute !important;
-                top: 0 !important;
                 left: 0 !important;
+                top: 0 !important;
                 width: 100% !important;
                 height: auto !important;
-                background: white !important;
-                box-shadow: none !important;
-                border: none !important;
-                border-radius: 0 !important;
-                transform: none !important;
                 margin: 0 !important;
-                padding: 0 !important;
-                max-width: none !important;
-              }
-
-              /* 4. Hide the dark overlay backdrop from the screen */
-              [data-aria-hidden="true"], [data-radix-focus-guard] {
-                 display: none !important;
+                padding: 40px !important; /* Force padding for the print edge */
+                box-shadow: none !important;
               }
             }
           `}
@@ -612,7 +603,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 {['normal', 'custom'].includes(mode) && (
                   <img 
                     src="/exchange-stamp.png" 
-                    alt="100% Exchange Guarantee" 
+                    alt="" 
                     className="absolute -top-14 left-1/2 -translate-x-1/2 h-[64px] w-[64px] object-contain -rotate-12 opacity-90" 
                     onError={(e) => e.currentTarget.style.display = 'none'} 
                   />
@@ -660,9 +651,10 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
               <div className="w-full h-[80px] rounded-xl overflow-hidden border border-slate-200 relative">
                 <img 
                   src={bannerImage} 
-                  alt="Pavitram Promotional Banner" 
+                  alt="" 
                   className="w-full h-full object-cover object-center"
                   crossOrigin="anonymous" 
+                  onError={(e) => e.currentTarget.style.display = 'none'}
                 />
               </div>
             )}
