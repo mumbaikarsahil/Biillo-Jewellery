@@ -131,10 +131,9 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const bannerImage = data.branch?.invoice_banner_url || data.bannerUrl || "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/brand-assets/invoice-banner1.jpg";
 
     return (
-      // ✨ ADDED 'print-section' class here to target it perfectly
       <div ref={ref} className="print-section w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
         
-        {/* ✨ FIX: Safer and more robust CSS for Mobile Printing */}
+        {/* ✨ FIX: Bulletproof CSS ensuring 1 exact page print */}
         <style type="text/css" media="print">
           {`
             @page { size: A4 portrait; margin: 0mm; }
@@ -144,28 +143,29 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 background: white !important; 
                 -webkit-print-color-adjust: exact !important; 
                 print-color-adjust: exact !important; 
+                height: auto !important;
+                overflow: visible !important;
               }
 
-              /* Hide absolutely everything in the body by default */
-              body * {
-                visibility: hidden;
+              /* 1. COMPLETELY REMOVE EVERYTHING FROM FLOW (Fixes the 14 empty pages) */
+              header, main, nav, footer, aside, [role="dialog"], [data-radix-focus-guard], [data-aria-hidden="true"], #radix-portal {
+                display: none !important;
               }
 
-              /* Reveal ONLY the print-section and its children */
-              .print-section, .print-section * {
-                visibility: visible;
+              /* 2. FORCE HIDDEN PARENTS TO BECOME VISIBLE (Fixes the blank invoice) */
+              .hidden:has(.print-section), div[style*="display: none"]:has(.print-section) {
+                display: block !important;
               }
 
-              /* Position the print-section exactly at the top-left of the page */
+              /* 3. ENSURE PRINT SECTION ACTS AS ROOT ELEMENT */
               .print-section {
-                position: absolute !important;
-                left: 0 !important;
-                top: 0 !important;
+                display: flex !important;
+                position: relative !important;
                 width: 100% !important;
                 height: auto !important;
                 margin: 0 !important;
-                padding: 40px !important; /* Force padding for the print edge */
-                box-shadow: none !important;
+                padding: 30px !important; 
+                visibility: visible !important;
               }
             }
           `}
@@ -647,6 +647,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
               </p>
             </div>
 
+            {/* ✨ FIXED: Shortened banner size */}
             {!isEstimate && (
               <div className="w-full h-[80px] rounded-xl overflow-hidden border border-slate-200 relative">
                 <img 
