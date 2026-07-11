@@ -52,7 +52,6 @@ interface Warehouse {
   is_active: boolean
 }
 
-// ✨ Simplified to just 2 simple things: Assets & Revenue
 interface WarehouseMetrics {
   inventoryCount: number
   inventoryValuation: number
@@ -79,6 +78,11 @@ export default function MasterDashboard() {
   
   const [detailsLoading, setDetailsLoading] = useState(false)
   const [nodeItems, setNodeItems] = useState<any[]>([])
+  
+  // ✨ FIX: Added Pagination States for the Modal
+  const [nodeItemsPage, setNodeItemsPage] = useState(0)
+  const [hasMoreNodeItems, setHasMoreNodeItems] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
 
   // --- GLOBAL GOLD RATE STATE ---
   const [isRateDialogOpen, setIsRateDialogOpen] = useState(false)
@@ -91,11 +95,26 @@ export default function MasterDashboard() {
     let more = true;
     let i = 0;
     while (more) {
+      // ✨ FIX: Attempt to fetch both 'mrp' and 'cost_total'
       const { data, error } = await supabase.from('inventory_items')
-        .select('warehouse_id, cost_total')
+        .select('warehouse_id, cost_total, mrp')
         .eq('company_id', appUser?.company_id).eq('status', 'in_stock')
         .range(i*1000, (i+1)*1000 - 1);
-      if (error) throw error;
+      
+      if (error) {
+        // Safe fallback in case 'mrp' doesn't exist as a column yet
+        if (error.message.includes('mrp')) {
+           const fallback = await supabase.from('inventory_items')
+            .select('warehouse_id, cost_total')
+            .eq('company_id', appUser?.company_id).eq('status', 'in_stock')
+            .range(i*1000, (i+1)*1000 - 1);
+           res.push(...(fallback.data || []));
+           more = (fallback.data || []).length === 1000;
+           i++;
+           continue;
+        }
+        throw error;
+      }
       res.push(...(data||[]));
       more = data.length === 1000;
       i++;
@@ -103,7 +122,6 @@ export default function MasterDashboard() {
     return res;
   }
 
-  // ✨ FIX: Removed gross_profit from fetch to stop the crash
   const fetchAllInvoices = async (todayStr: string) => {
     let res: any[] = [];
     let more = true;
@@ -155,7 +173,8 @@ export default function MasterDashboard() {
         const nodeInv = invData.filter(i => i.warehouse_id === wh.id) || []
         const nodeSales = salesData.filter(s => s.warehouse_id === wh.id) || []
 
-        const valuation = nodeInv.reduce((sum, i) => sum + (Number(i.cost_total) || 0), 0)
+        // ✨ FIX: Intelligently fallback to whichever column has the correct value
+        const valuation = nodeInv.reduce((sum, i) => sum + (Number(i.mrp) || Number(i.cost_total) || 0), 0)
         const salesToday = nodeSales.reduce((sum, s) => sum + (Number(s.final_total) || 0), 0)
 
         newMetrics[wh.id] = {
@@ -173,24 +192,81 @@ export default function MasterDashboard() {
     }
   }
 
+  // ✨ FIX: Paginated Fetch for the Detailed Dialog (First 1000)
   useEffect(() => {
-    const fetchNodeDetails = async () => {
+    const fetchInitialNodeDetails = async () => {
       if (!dialogNodeId) return;
       setDetailsLoading(true)
+      setNodeItemsPage(0)
       try {
-        const { data: items } = await supabase.from('inventory_items')
-           .select('id, barcode, item_category, net_weight_g, cost_total')
+        let queryData;
+        const { data, error } = await supabase.from('inventory_items')
+           .select('id, barcode, item_category, net_weight_g, cost_total, mrp')
            .eq('warehouse_id', dialogNodeId).eq('status', 'in_stock')
-           .order('created_at', { ascending: false }).limit(200)
-        setNodeItems(items || [])
+           .order('created_at', { ascending: false }).range(0, 999)
+        
+        if (error && error.message.includes('mrp')) {
+           const fallback = await supabase.from('inventory_items')
+             .select('id, barcode, item_category, net_weight_g, cost_total')
+             .eq('warehouse_id', dialogNodeId).eq('status', 'in_stock')
+             .order('created_at', { ascending: false }).range(0, 999)
+           queryData = fallback.data;
+        } else if (error) {
+           throw error;
+        } else {
+           queryData = data;
+        }
+
+        setNodeItems(queryData || [])
+        setHasMoreNodeItems((queryData || []).length === 1000)
       } catch (err) {
         console.error(err)
       } finally {
         setDetailsLoading(false)
       }
     }
-    fetchNodeDetails()
+    fetchInitialNodeDetails()
   }, [dialogNodeId])
+
+  // ✨ FIX: Load More Paginated Function for the Modal
+  const loadMoreNodeItems = async () => {
+    if (!dialogNodeId || loadingMore || !hasMoreNodeItems) return;
+    setLoadingMore(true);
+    const nextPage = nodeItemsPage + 1;
+    try {
+      let queryData;
+      const { data, error } = await supabase.from('inventory_items')
+        .select('id, barcode, item_category, net_weight_g, cost_total, mrp')
+        .eq('warehouse_id', dialogNodeId).eq('status', 'in_stock')
+        .order('created_at', { ascending: false })
+        .range(nextPage * 1000, (nextPage + 1) * 1000 - 1);
+      
+      if (error && error.message.includes('mrp')) {
+         const fallback = await supabase.from('inventory_items')
+           .select('id, barcode, item_category, net_weight_g, cost_total')
+           .eq('warehouse_id', dialogNodeId).eq('status', 'in_stock')
+           .order('created_at', { ascending: false })
+           .range(nextPage * 1000, (nextPage + 1) * 1000 - 1);
+         queryData = fallback.data;
+      } else if (error) {
+         throw error;
+      } else {
+         queryData = data;
+      }
+      
+      if (queryData && queryData.length > 0) {
+        setNodeItems(prev => [...prev, ...queryData]);
+        setNodeItemsPage(nextPage);
+        setHasMoreNodeItems(queryData.length === 1000);
+      } else {
+        setHasMoreNodeItems(false);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   useEffect(() => {
     fetchCommandData()
@@ -254,20 +330,14 @@ export default function MasterDashboard() {
 
   if (!appUser) return null
 
-  // ✨ FIX: Modern Flex-Wrap Section Renderer (No infinite horizontal scrolling!)
   const NetworkSection = ({ title, nodes, isRoot = false }: { title: string, nodes: Warehouse[], isRoot?: boolean }) => {
     if (nodes.length === 0) return null;
     return (
       <div className="flex flex-col items-center w-full max-w-[1400px]">
-        {/* Connector Line from previous block */}
         {!isRoot && <div className="w-[2px] h-12 bg-slate-300 my-2" />}
-        
-        {/* Section Badge */}
         <Badge variant="outline" className="bg-white border-slate-300 text-slate-500 font-bold uppercase tracking-widest px-4 py-1 mb-6 shadow-sm">
           {title} ({nodes.length})
         </Badge>
-        
-        {/* Flex Wrap Container - This auto-arranges 20 branches perfectly! */}
         <div className="flex flex-wrap justify-center gap-8 w-full px-4">
           {nodes.map(node => (
             <NodeBlock key={node.id} node={node} metrics={metricsMap[node.id]} onAction={openNodeDialog} />
@@ -307,7 +377,6 @@ export default function MasterDashboard() {
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3">
-          {/* Zoom controls only show on Desktop for HQ */}
           {isHQ && (
             <div className="hidden md:flex items-center bg-muted/30 rounded-md border border-border p-0.5 gap-1">
               <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground" onClick={zoomOut}><ZoomOut className="h-3.5 w-3.5" /></Button>
@@ -355,7 +424,6 @@ export default function MasterDashboard() {
                     </div>
                   </div>
 
-                  {/* Clean Flex-Wrap Sections */}
                   <NetworkSection title="Main Safes" nodes={mainSafes} isRoot={true} />
                   <NetworkSection title="Factories" nodes={factories} />
                   <NetworkSection title="Retail Branches" nodes={branches} />
@@ -448,7 +516,6 @@ export default function MasterDashboard() {
       {isHQ && (
         <Dialog open={isRateDialogOpen} onOpenChange={setIsRateDialogOpen}>
           <DialogContent className="w-[95vw] sm:max-w-[600px] bg-white border-border shadow-2xl rounded-xl p-5 sm:p-6">
-            {/* Same code as before */}
             <form onSubmit={handleSaveRates} className="space-y-6 pt-2">
               <div>
                 <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-3 flex items-center gap-2">
@@ -526,10 +593,20 @@ export default function MasterDashboard() {
                       <div className="p-3 bg-white border border-border rounded-lg shadow-sm"><span className="flex items-center gap-1.5 text-[9px] sm:text-[10px] font-bold text-muted-foreground uppercase"><DollarSign className="h-3 w-3"/> Valuation</span><p className="text-base sm:text-lg font-black text-emerald-600 mt-1">₹{(dialogMetrics.inventoryValuation / 100000).toFixed(2)}L</p></div>
                     </div>
                     <div className="flex-1 bg-white border border-border rounded-lg shadow-sm overflow-hidden flex flex-col relative min-h-[300px]">
-                      {detailsLoading ? (
+                      {detailsLoading && nodeItems.length === 0 ? (
                         <div className="flex-1 flex items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
                       ) : (
-                        <div className="h-full flex flex-col"><div className="bg-slate-100 border-b px-3 py-2 text-[10px] font-bold uppercase text-muted-foreground shrink-0">Inventory Log</div><div className="flex-1 overflow-auto custom-scrollbar"><InventoryTable items={nodeItems} /></div></div>
+                        <div className="h-full flex flex-col">
+                          <div className="bg-slate-100 border-b px-3 py-2 text-[10px] font-bold uppercase text-muted-foreground shrink-0">Inventory Log</div>
+                          <div className="flex-1 overflow-auto custom-scrollbar">
+                            <InventoryTable 
+                              items={nodeItems} 
+                              hasMore={hasMoreNodeItems} 
+                              loadingMore={loadingMore} 
+                              onLoadMore={loadMoreNodeItems} 
+                            />
+                          </div>
+                        </div>
                       )}
                     </div>
                   </TabsContent>
@@ -566,7 +643,7 @@ function DockItem({ href, icon: Icon, label, color, hover }: any) {
   )
 }
 
-// ✨ FIX: Refined NodeBlock to only show Stock and Revenue
+// ✨ FIX: Updated NodeBlock to show Units, Valuation, and Revenue on the card itself
 function NodeBlock({ node, metrics, onAction }: { node: Warehouse, metrics: WarehouseMetrics, onAction: (id: string, tab: string) => void }) {
   const isMain = node.warehouse_type === 'main_safe'
   const isBranch = node.warehouse_type === 'branch'
@@ -587,7 +664,22 @@ function NodeBlock({ node, metrics, onAction }: { node: Warehouse, metrics: Ware
       
       <div className="flex flex-col">
         <SubActionRow title="Vault Stock" value={`${metrics?.inventoryCount || 0} Units`} icon={Package} onClick={() => onAction(node.id, 'stock')} />
-        <SubActionRow title="Today's Revenue" value={`₹${(metrics?.todaySales / 100000 || 0).toFixed(2)}L`} icon={TrendingUp} onClick={() => onAction(node.id, 'revenue')} isLast />
+        
+        {/* ✨ NEW: Valuation Row directly on the card */}
+        <SubActionRow 
+          title="Stock Value" 
+          value={`₹${((metrics?.inventoryValuation || 0) / 100000).toFixed(2)}L`} 
+          icon={DollarSign} 
+          onClick={() => onAction(node.id, 'stock')} 
+        />
+        
+        <SubActionRow 
+          title="Today's Revenue" 
+          value={`₹${((metrics?.todaySales || 0) / 100000).toFixed(2)}L`} 
+          icon={TrendingUp} 
+          onClick={() => onAction(node.id, 'revenue')} 
+          isLast 
+        />
       </div>
     </div>
   )
@@ -608,18 +700,36 @@ function SubActionRow({ title, value, icon: Icon, onClick, isLast = false }: any
   )
 }
 
-function InventoryTable({ items }: { items: any[] }) {
+// ✨ FIX: Enhanced Table with "Load More" functionality inside the modal
+function InventoryTable({ items, hasMore, loadingMore, onLoadMore }: { items: any[], hasMore: boolean, loadingMore: boolean, onLoadMore: () => void }) {
   if (items.length === 0) return <div className="p-4 text-xs text-muted-foreground text-center">No items found.</div>
   return (
     <div className="w-full overflow-x-auto">
       <table className="w-full text-left text-xs min-w-[450px]">
-        <thead className="bg-slate-50 text-[9px] uppercase tracking-widest text-muted-foreground sticky top-0">
+        <thead className="bg-slate-50 text-[9px] uppercase tracking-widest text-muted-foreground sticky top-0 shadow-sm z-10">
           <tr><th className="px-3 py-2 font-bold border-b">Barcode</th><th className="px-3 py-2 font-bold border-b">Category</th><th className="px-3 py-2 font-bold border-b text-right">Net Wt</th><th className="px-3 py-2 font-bold border-b text-right">Valuation</th></tr>
         </thead>
         <tbody>
-          {items.map(item => (
-            <tr key={item.id} className="border-b last:border-0 hover:bg-slate-50"><td className="px-3 py-2 font-mono font-bold text-slate-700">{item.barcode}</td><td className="px-3 py-2 text-slate-600">{item.item_category}</td><td className="px-3 py-2 text-right">{item.net_weight_g}g</td><td className="px-3 py-2 text-right text-emerald-600 font-medium">₹{item.cost_total}</td></tr>
+          {items.map((item, idx) => (
+            <tr key={`${item.id}-${idx}`} className="border-b last:border-0 hover:bg-slate-50">
+              <td className="px-3 py-2 font-mono font-bold text-slate-700">{item.barcode}</td>
+              <td className="px-3 py-2 text-slate-600">{item.item_category}</td>
+              <td className="px-3 py-2 text-right">{item.net_weight_g}g</td>
+              {/* ✨ FIX: Smart fallback rendering */}
+              <td className="px-3 py-2 text-right text-emerald-600 font-medium">₹{(Number(item.mrp) || Number(item.cost_total) || 0).toLocaleString('en-IN')}</td>
+            </tr>
           ))}
+          
+          {hasMore && (
+            <tr>
+              <td colSpan={4} className="p-3 text-center bg-slate-50/50">
+                <Button variant="outline" size="sm" onClick={onLoadMore} disabled={loadingMore} className="text-[10px] font-bold shadow-sm uppercase tracking-widest text-slate-500">
+                  {loadingMore ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
+                  Load Next 1000 Items
+                </Button>
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
