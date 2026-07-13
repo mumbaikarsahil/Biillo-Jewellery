@@ -9,12 +9,13 @@ import { Button } from '@/components/ui/button'
 import {
   Home, Server, Monitor, QrCode, Wallet, PieChart, Compass,
   SlidersHorizontal, ShoppingBag, Hammer, Layers, BookOpen, Route, Users,
-  TicketPercent, LogOut, Menu, X, ChevronRight, PanelLeft, Building2, Box, MessageSquare
+  TicketPercent, LogOut, Menu, X, ChevronRight, PanelLeft, Building2, Box, MessageSquare, Brain
 } from 'lucide-react'
 
 // --- Configuration with Premium Icons ---
 const allCoreModules = [
   { href: '/dashboard', label: 'Dashboard', icon: Home, roles: ['all'] }, 
+  { href: '/ai-assistant', label: 'Ask AI', icon: Brain, roles: ['owner'] },
   { href: '/topology', label: 'Topology', icon: Server, roles: ['owner', 'manager'] },
   { href: '/pos', label: 'Terminal', icon: Monitor, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
   { href: '/sales', label: 'Revenue', icon: Wallet, roles: ['owner', 'manager', 'branch_manager'] },
@@ -32,6 +33,7 @@ const allOperationModules = [
   { href: '/crm', label: 'CRM', icon: Users, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
   { href: '/whatsapp', label: 'Whatsapp API', icon: MessageSquare, roles: ['owner', 'manager'] },
   { href: '/vouchers', label: 'Vouchers', icon: TicketPercent, roles: ['owner', 'manager', 'voucher_manager'] },
+  
 ]
 
 export function AppLayout({ children, appUser }: { children: React.ReactNode, appUser?: any }) {
