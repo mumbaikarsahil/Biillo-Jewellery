@@ -1,14 +1,14 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import { 
   Plus, Search, ChevronRight, ArrowLeft, LayoutDashboard, 
   RefreshCw, Database, Loader2, Briefcase, User, CheckCircle2,
-  Package, Info, Filter, Wand2, SortDesc, CalendarDays, Bell, Hammer, Wrench,
-  Check
+  Package, Filter, Wand2, CalendarDays, Bell, Wrench,
+  Check, Banknote, HardHat, Scale, History
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -16,10 +16,11 @@ import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
   SheetDescription, SheetTrigger, SheetFooter
@@ -75,7 +76,6 @@ export default function JobBagPage() {
   const [karigarFilter, setKarigarFilter] = useState("all");
   const [dateSort, setDateSort] = useState("desc");
 
-  // Smart Dropdown States
   const [showCustomCategory, setShowCustomCategory] = useState(false);
   const [showCustomDesign, setShowCustomDesign] = useState(false);
 
@@ -89,35 +89,27 @@ export default function JobBagPage() {
     if (!appUser) return;
     setLoading(true);
     try {
+      // 🚀 FIXED: Added inventory_items(net_weight_g) to fetch the actual finished net weight
       const [jbRes, kRes, ordRes, repRes, restockRes] = await Promise.all([
-        supabase.from("job_bags").select("*, karigars(full_name)").eq("company_id", appUser.company_id),
-        supabase.from("karigars").select("id, full_name").eq("company_id", appUser.company_id).eq("is_active", true),
+        supabase.from("job_bags").select("*, karigars(full_name), inventory_items(net_weight_g)").eq("company_id", appUser.company_id),
+        supabase.from("karigars").select("*").eq("company_id", appUser.company_id).eq("is_active", true),
         supabase.from("custom_orders").select("*, origin:origin_warehouse_id(name)").eq("company_id", appUser.company_id).eq("status", "pending_manufacturing"),
         supabase.from("repair_tickets").select("*, origin:warehouses!repair_tickets_origin_warehouse_id_fkey(name)").eq("company_id", appUser.company_id).eq("status", "received_at_ho"),
         supabase.from("branch_restock_requests").select("*, warehouses(name)").eq("company_id", appUser.company_id).eq("status", "pending_ho")
       ]);
 
-      if (jbRes.error) {
-        console.error("Job Bags Error:", jbRes.error);
-        toast.error("Failed to load Job Bags");
-      } else {
-        setJobBags(jbRes.data || []);
-      }
+      if (jbRes.error) throw jbRes.error;
+      setJobBags(jbRes.data || []);
 
-      if (kRes.error) console.error("Karigars Error:", kRes.error);
-      else setKarigars(kRes.data || []);
+      if (kRes.error) throw kRes.error;
+      setKarigars(kRes.data || []);
 
-      if (ordRes.error) console.error("Custom Orders Error:", ordRes.error);
-      else setPendingOrders(ordRes.data || []);
-
-      if (repRes.error) console.error("Repairs Error:", repRes.error);
-      else setPendingRepairs(repRes.data || []);
-
-      if (restockRes.error) console.error("Restocks Error:", restockRes.error);
-      else setPendingRestocks(restockRes.data || []);
+      setPendingOrders(ordRes.data || []);
+      setPendingRepairs(repRes.data || []);
+      setPendingRestocks(restockRes.data || []);
 
     } catch (err: any) {
-      toast.error(`Unexpected error: ${err.message}`);
+      toast.error(`Error loading workshop data: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -127,9 +119,71 @@ export default function JobBagPage() {
     fetchData();
   }, [fetchData]);
 
-  const openCount = jobBags.filter((j) => j.status === 'open').length;
-  const inProgressCount = jobBags.filter((j) => j.status === 'in_progress').length;
-  const completedCount = jobBags.filter((j) => j.status === 'completed').length;
+  // 🚀 CORE ENGINE: Calculates payout strictly on ACTUAL generated inventory net weight
+  const enrichedJobBags = useMemo(() => {
+    return jobBags.map(bag => {
+      const karigar = karigars.find(k => k.id === bag.karigar_id);
+      const rate = Number(karigar?.default_labor_rate) || 350;
+      const laborType = karigar?.labor_type || 'per_gram';
+      
+      // Calculate actual generated net weight from linked inventory items
+      const actualNetWeight = bag.inventory_items?.reduce((sum: number, item: any) => sum + (Number(item.net_weight_g) || 0), 0) || 0;
+      
+      // Use actual net weight if items exist, otherwise fallback to expected weight for forecasting
+      const isFinalWeight = actualNetWeight > 0;
+      const weightUsed = isFinalWeight ? actualNetWeight : (Number(bag.gold_expected_weight_g) || 0);
+
+      let payout = 0;
+      if (laborType === 'per_piece' || laborType === 'fixed') {
+         payout = rate; 
+      } else {
+         payout = weightUsed * rate; 
+      }
+
+      return {
+        ...bag,
+        payout,
+        isFinalWeight, // Flag to show if payout is estimated or finalized
+        rate_display: `₹${rate}/${laborType === 'per_piece' || laborType === 'fixed' ? 'pc' : 'g'}`,
+        weight_used: weightUsed,
+        labor_type: laborType
+      };
+    });
+  }, [jobBags, karigars]);
+
+  // 🚀 KARIGAR LEDGER CALCULATIONS
+  const karigarLedgers = useMemo(() => {
+    return karigars.map(karigar => {
+      const rate = Number(karigar.default_labor_rate) || 350; 
+      const laborType = karigar.labor_type || 'per_gram';
+      
+      const kBags = enrichedJobBags.filter(jb => jb.karigar_id === karigar.id && jb.status !== 'closed');
+      const pendingBags = kBags.filter(jb => ['open', 'in_progress'].includes(jb.status));
+      const readyBags = kBags.filter(jb => jb.status === 'completed');
+
+      // Weights are now based on actual Net Weight calculation above
+      const pendingWeight = pendingBags.reduce((sum, jb) => sum + jb.weight_used, 0);
+      const readyWeight = readyBags.reduce((sum, jb) => sum + jb.weight_used, 0);
+      const totalWeight = pendingWeight + readyWeight;
+      
+      const estimatedPay = kBags.reduce((sum, jb) => sum + jb.payout, 0);
+
+      return {
+        ...karigar,
+        rate,
+        laborType,
+        activeJobs: kBags.length,
+        pendingWeight,
+        readyWeight,
+        totalWeight,
+        estimatedPay
+      };
+    }).filter(k => k.activeJobs > 0);
+  }, [enrichedJobBags, karigars]);
+
+  const totalPendingGrams = karigarLedgers.reduce((sum, k) => sum + k.pendingWeight, 0);
+  const totalReadyGrams = karigarLedgers.reduce((sum, k) => sum + k.readyWeight, 0);
+  const totalPendingPayout = karigarLedgers.reduce((sum, k) => sum + k.estimatedPay, 0);
 
   const generateJobRef = () => {
     const randomCode = Math.floor(10000 + Math.random() * 90000);
@@ -172,7 +226,6 @@ export default function JobBagPage() {
     }
   }
 
-  // --- ROUTE CUSTOM ORDER, REPAIR, OR RESTOCK TO JOB BAG ---
   const handleRouteItem = async (type: 'order' | 'repair' | 'restock') => {
     const item = type === 'order' ? selectedOrder : type === 'repair' ? selectedRepair : selectedRestock;
     if (!item) return;
@@ -228,7 +281,6 @@ export default function JobBagPage() {
         router.push(`/manufacturing/job-bags/${targetBagId}?repair_ticket=${item.id}`);
       } else if (type === 'restock') {
         setIsRestocksModalOpen(false);
-        // FIX: Changed 'restock_request' to 'store_restock' to match the OverviewTab listener.
         router.push(`/manufacturing/job-bags/${targetBagId}?store_restock=${item.id}`);
       }
       
@@ -239,7 +291,8 @@ export default function JobBagPage() {
     }
   }
 
-  const filtered = jobBags
+  // 🚀 GLOBAL FILTERING 
+  const baseFiltered = enrichedJobBags
     .filter((j) => {
       const matchSearch = j.job_bag_number.toLowerCase().includes(search.toLowerCase()) || 
                           (j.design_code && j.design_code.toLowerCase().includes(search.toLowerCase()));
@@ -253,11 +306,15 @@ export default function JobBagPage() {
       return dateSort === "desc" ? dateB - dateA : dateA - dateB;
     });
 
+  const activeBags = baseFiltered.filter(j => ['open', 'in_progress'].includes(j.status));
+  const historyBags = baseFiltered.filter(j => ['completed', 'closed'].includes(j.status));
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "open": return <Badge variant="outline" className="bg-blue-50 text-blue-600 border-blue-200/50 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">Awaiting Issue</Badge>;
       case "in_progress": return <Badge variant="outline" className="bg-amber-50 text-amber-600 border-amber-200/50 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">In Fabrication</Badge>;
-      case "completed": return <Badge variant="outline" className="bg-emerald-50 text-emerald-600 border-emerald-200/50 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">Finished</Badge>;
+      case "completed": return <Badge variant="outline" className="bg-emerald-50 text-emerald-600 border-emerald-200/50 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">Completed</Badge>;
+      case "closed": return <Badge variant="outline" className="bg-gray-100 text-gray-500 border-gray-200 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">Archived</Badge>;
       default: return <Badge variant="secondary" className="bg-gray-50 text-gray-600 border-gray-200/60 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">{status}</Badge>;
     }
   };
@@ -270,12 +327,141 @@ export default function JobBagPage() {
     </div>
   );
 
+  const renderJobBagTable = (bags: any[], isHistory = false) => {
+    if (loading) return <ListSkeleton />;
+    if (bags.length === 0) return (
+      <div className="text-center py-20 bg-white border border-gray-200/60 rounded-2xl shadow-sm">
+         <Package className="w-12 h-12 mx-auto mb-4 text-gray-300" strokeWidth={1.5} />
+         <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+           {isHistory ? "No historical records found" : "No active jobs in registry"}
+         </p>
+      </div>
+    );
+
+    return (
+      <>
+        {/* DESKTOP VIEW */}
+        <div className="hidden md:block overflow-hidden border border-gray-200/60 rounded-2xl bg-white shadow-sm">
+          <Table>
+            <TableHeader className="bg-gray-50/80">
+              <TableRow className="hover:bg-transparent border-gray-200/60">
+                <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-6 h-12">Job Ref</TableHead>
+                <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12">Specs & Category</TableHead>
+                <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12">Artisan</TableHead>
+                <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12">Net Weight</TableHead>
+                <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12 text-center">Status</TableHead>
+                <TableHead className="text-[11px] font-black uppercase text-blue-700 tracking-widest px-4 h-12 text-right">Payout</TableHead>
+                <TableHead className="w-[60px] h-12"></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {bags.map((job) => (
+                <TableRow 
+                  key={job.id} 
+                  className="hover:bg-gray-50/50 transition-colors border-b border-gray-100 last:border-0 cursor-pointer group"
+                  onClick={() => router.push(`/manufacturing/job-bags/${job.id}`)}
+                >
+                  <TableCell className="px-6 py-4 font-mono font-bold text-sm text-gray-900 tracking-tight group-hover:text-blue-600 transition-colors">
+                     {job.job_bag_number}
+                  </TableCell>
+                  <TableCell className="px-4">
+                     <div className="text-[13px] font-bold text-gray-900">{job.product_category}</div>
+                     <div className="text-[10px] text-gray-500 font-medium uppercase tracking-widest mt-0.5">SKU: {job.design_code}</div>
+                  </TableCell>
+                  <TableCell className="px-4">
+                     <div className="flex items-center gap-2.5">
+                       <div className="h-7 w-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-500"><User className="h-3.5 w-3.5" strokeWidth={1.5} /></div>
+                       <span className="text-[13px] font-semibold text-gray-700">{job.karigars?.full_name}</span>
+                     </div>
+                  </TableCell>
+                  <TableCell className="px-4">
+                     <div className={`font-mono text-[13px] font-bold ${job.isFinalWeight ? 'text-emerald-600' : 'text-amber-600'}`}>
+                       {job.weight_used.toFixed(3)}g
+                     </div>
+                     <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">
+                       {job.isFinalWeight ? 'Actual Net' : 'Expected'}
+                     </div>
+                  </TableCell>
+                  <TableCell className="px-4 text-center">
+                     {getStatusBadge(job.status)}
+                  </TableCell>
+                  <TableCell className="px-4 text-right">
+                     <div className={`text-[14px] font-black ${job.isFinalWeight ? 'text-emerald-600' : 'text-blue-700'}`}>
+                       ₹ {job.payout.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                     </div>
+                     <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">
+                       {job.rate_display}
+                     </div>
+                  </TableCell>
+                  <TableCell className="px-4 text-right">
+                     <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full text-gray-400 group-hover:bg-white group-hover:shadow-sm group-hover:text-gray-900 transition-all">
+                       <ChevronRight className="h-[18px] w-[18px]" strokeWidth={1.5} />
+                     </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+
+        {/* MOBILE CARD VIEW */}
+        <div className="md:hidden space-y-3">
+          {bags.map((job) => (
+            <Card 
+              key={job.id} 
+              className="shadow-sm border-gray-200/60 overflow-hidden bg-white active:scale-[0.98] transition-transform rounded-2xl"
+              onClick={() => router.push(`/manufacturing/job-bags/${job.id}`)}
+            >
+              <CardContent className="p-5 space-y-4">
+                 <div className="flex justify-between items-start">
+                    <div className="space-y-1">
+                       <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">Reference</p>
+                       <p className="text-[15px] font-mono font-bold text-gray-900 mt-1">{job.job_bag_number}</p>
+                    </div>
+                    {getStatusBadge(job.status)}
+                 </div>
+
+                 <div className="p-3.5 rounded-xl bg-gray-50 border border-gray-100 flex justify-between items-center">
+                    <div>
+                      <div className="flex items-center gap-2.5">
+                         <Briefcase className="h-[18px] w-[18px] text-gray-400" strokeWidth={1.5} />
+                         <span className="text-[13px] font-bold text-gray-800">{job.product_category}</span>
+                      </div>
+                      <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mt-1 block">
+                        {job.weight_used.toFixed(3)}g {job.isFinalWeight ? '(Actual)' : '(Est)'}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className={`block text-sm font-black ${job.isFinalWeight ? 'text-emerald-600' : 'text-blue-700'}`}>
+                        ₹ {job.payout.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
+                      </span>
+                      <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{job.rate_display}</span>
+                    </div>
+                 </div>
+
+                 <div className="flex items-center justify-between text-xs text-gray-500 pt-1">
+                    <div className="flex flex-col gap-1.5">
+                       <div className="flex items-center gap-2">
+                         <div className="h-6 w-6 rounded-full bg-gray-200 flex items-center justify-center text-gray-500"><User className="h-3 w-3" strokeWidth={1.5} /></div>
+                         <span className="font-semibold text-gray-900">{job.karigars?.full_name}</span>
+                       </div>
+                       <span className="text-[10px] font-medium ml-8 text-gray-400">{format(new Date(job.created_at), 'dd MMM yyyy')}</span>
+                    </div>
+                    <ChevronRight className="h-5 w-5 text-gray-300" strokeWidth={1.5} />
+                 </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </>
+    );
+  };
+
   if (!appUser) return null;
 
   return (
     <div className="flex flex-col min-h-screen bg-[#F8F9FA] font-sans">
       
-      {/* --- MINIMAL HEADER --- */}
       <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-md border-b border-gray-200/60 px-4 h-14 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 overflow-hidden">
           <Link href="/dashboard">
@@ -287,65 +473,24 @@ export default function JobBagPage() {
           <nav className="flex items-center gap-1.5 text-[13px] whitespace-nowrap overflow-hidden">
             <span className="text-gray-500 font-medium">Production</span>
             <ChevronRight className="h-3.5 w-3.5 text-gray-400" strokeWidth={1.5} />
-            <span className="font-bold text-gray-900 tracking-tight">Job Bags</span>
+            <span className="font-bold text-gray-900 tracking-tight">Karigar & Jobs</span>
           </nav>
         </div>
 
-        {/* NOTIFICATION BUTTONS WRAPPER */}
         <div className="flex items-center gap-1 overflow-x-auto custom-scrollbar py-2 px-1">
-          
-          {/* NOTIFICATION BELL FOR BRANCH RESTOCKS */}
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            className="h-9 px-3 text-[13px] font-bold text-gray-600 hover:text-blue-600 hover:bg-blue-50 relative shrink-0 rounded-xl transition-colors"
-            onClick={() => setIsRestocksModalOpen(true)}
-          >
-            <div className="flex items-center">
-              <Package className="h-[18px] w-[18px] sm:mr-2" strokeWidth={1.5} /> 
-              <span className="hidden sm:inline">Branch Restocks</span>
-            </div>
-            {pendingRestocks.length > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black border-2 border-white shadow-sm z-10">
-                {pendingRestocks.length > 99 ? '99+' : pendingRestocks.length}
-              </span>
-            )}
+          <Button variant="ghost" size="sm" className="h-9 px-3 text-[13px] font-bold text-gray-600 hover:text-blue-600 hover:bg-blue-50 relative shrink-0 rounded-xl transition-colors" onClick={() => setIsRestocksModalOpen(true)}>
+            <div className="flex items-center"><Package className="h-[18px] w-[18px] sm:mr-2" strokeWidth={1.5} /> <span className="hidden sm:inline">Restocks</span></div>
+            {pendingRestocks.length > 0 && <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black border-2 border-white shadow-sm z-10">{pendingRestocks.length}</span>}
           </Button>
 
-          {/* NOTIFICATION BELL FOR CUSTOM ORDERS */}
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            className="h-9 px-3 text-[13px] font-bold text-gray-600 hover:text-purple-600 hover:bg-purple-50 relative shrink-0 rounded-xl transition-colors"
-            onClick={() => setIsOrdersModalOpen(true)}
-          >
-            <div className="flex items-center">
-              <Bell className="h-[18px] w-[18px] sm:mr-2" strokeWidth={1.5} /> 
-              <span className="hidden sm:inline">Store Requests</span>
-            </div>
-            {pendingOrders.length > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black border-2 border-white shadow-sm z-10">
-                {pendingOrders.length > 99 ? '99+' : pendingOrders.length}
-              </span>
-            )}
+          <Button variant="ghost" size="sm" className="h-9 px-3 text-[13px] font-bold text-gray-600 hover:text-purple-600 hover:bg-purple-50 relative shrink-0 rounded-xl transition-colors" onClick={() => setIsOrdersModalOpen(true)}>
+            <div className="flex items-center"><Bell className="h-[18px] w-[18px] sm:mr-2" strokeWidth={1.5} /> <span className="hidden sm:inline">Store Requests</span></div>
+            {pendingOrders.length > 0 && <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black border-2 border-white shadow-sm z-10">{pendingOrders.length}</span>}
           </Button>
 
-          {/* NOTIFICATION BELL FOR REPAIRS */}
-          <Button 
-            variant="ghost" 
-            size="sm" 
-            className="h-9 px-3 text-[13px] font-bold text-gray-600 hover:text-amber-600 hover:bg-amber-50 relative shrink-0 rounded-xl transition-colors"
-            onClick={() => setIsRepairsModalOpen(true)}
-          >
-            <div className="flex items-center">
-              <Wrench className="h-[18px] w-[18px] sm:mr-2" strokeWidth={1.5} /> 
-              <span className="hidden sm:inline">Store Repairs</span>
-            </div>
-            {pendingRepairs.length > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black border-2 border-white shadow-sm z-10">
-                {pendingRepairs.length > 99 ? '99+' : pendingRepairs.length}
-              </span>
-            )}
+          <Button variant="ghost" size="sm" className="h-9 px-3 text-[13px] font-bold text-gray-600 hover:text-amber-600 hover:bg-amber-50 relative shrink-0 rounded-xl transition-colors" onClick={() => setIsRepairsModalOpen(true)}>
+            <div className="flex items-center"><Wrench className="h-[18px] w-[18px] sm:mr-2" strokeWidth={1.5} /> <span className="hidden sm:inline">Repairs</span></div>
+            {pendingRepairs.length > 0 && <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black border-2 border-white shadow-sm z-10">{pendingRepairs.length}</span>}
           </Button>
 
           <Separator orientation="vertical" className="h-5 mx-1.5 bg-gray-200 shrink-0 hidden sm:block" />
@@ -357,41 +502,37 @@ export default function JobBagPage() {
 
       <main className="p-4 md:p-6 lg:p-8 max-w-7xl w-full mx-auto space-y-6 animate-in fade-in duration-500 pb-20">
         
-        {/* ACTION BAR (FLOATING CARD) */}
         <div className="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-gray-200/60 flex flex-col md:flex-row justify-between md:items-center gap-4">
           <div className="space-y-1">
-             <h1 className="text-xl font-bold tracking-tight text-gray-900">Manufacturing Workflow</h1>
-             <p className="text-[13px] font-medium text-gray-500">Orchestrate workshop orders, material allocation, and artisan tracking.</p>
+             <h1 className="text-xl font-bold tracking-tight text-gray-900">Karigar Pay & Workflow</h1>
+             <p className="text-[13px] font-medium text-gray-500">Track artisan workloads and generate payroll based on received gold weight.</p>
           </div>
           
           <Sheet open={isOpen} onOpenChange={handleOpenSheet}>
             <SheetTrigger asChild>
               <Button className="h-10 px-6 font-bold text-[13px] shadow-sm bg-gray-900 text-white hover:bg-gray-800 rounded-xl w-full md:w-auto transition-all active:scale-95">
-                <Plus className="mr-2 h-4 w-4" strokeWidth={2} /> New Production Bag
+                <Plus className="mr-2 h-4 w-4" strokeWidth={2} /> New Job Bag
               </Button>
             </SheetTrigger>
             <SheetContent className="w-full sm:max-w-[450px] p-0 border-none shadow-2xl rounded-l-[24px]">
               <SheetHeader className="bg-gray-50/80 p-6 border-b border-gray-100">
                 <SheetTitle className="text-lg font-bold text-gray-900">Initialize Job Bag</SheetTitle>
-                <SheetDescription className="text-xs font-medium text-gray-500 mt-1">Define standard parameters or create custom references.</SheetDescription>
+                <SheetDescription className="text-xs font-medium text-gray-500 mt-1">Assign metal weights and design targets to a Karigar.</SheetDescription>
               </SheetHeader>
               
               <div className="p-6 space-y-6 overflow-y-auto max-h-[calc(100vh-140px)] custom-scrollbar">
                 <div className="space-y-5">
-                  
-                  {/* AUTO-GENERATED REF */}
                   <div className="space-y-2">
                     <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest flex justify-between">
                       <span>Unique Ref #</span>
                       <button type="button" onClick={generateJobRef} className="text-blue-600 flex items-center hover:text-blue-700 transition-colors">
-                        <Wand2 className="w-3 h-3 mr-1" /> Auto-Generate
+                        <Wand2 className="w-3 h-3 mr-1" /> Auto
                       </button>
                     </Label>
-                    <Input placeholder="e.g. JB-9921" className="h-10 text-sm font-mono font-bold border-gray-200/60 bg-gray-50 hover:bg-gray-100 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all" value={form.job_bag_number} onChange={(e) => setForm({ ...form, job_bag_number: e.target.value })} />
+                    <Input className="h-10 text-sm font-mono font-bold border-gray-200/60 bg-gray-50 rounded-xl" value={form.job_bag_number} onChange={(e) => setForm({ ...form, job_bag_number: e.target.value })} />
                   </div>
 
                   <div className="grid grid-cols-2 gap-4">
-                    {/* CATEGORY SMART SELECTOR */}
                     <div className="space-y-2">
                       <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Item Category</Label>
                       {!showCustomCategory ? (
@@ -399,34 +540,20 @@ export default function JobBagPage() {
                            if (v === 'Other') { setShowCustomCategory(true); setForm({ ...form, product_category: '' }); }
                            else { setForm({ ...form, product_category: v }); }
                          }}>
-                           <SelectTrigger className="h-10 text-sm font-medium border-gray-200/60 bg-gray-50 hover:bg-gray-100 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"><SelectValue placeholder="Category..." /></SelectTrigger>
-                           <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
-                             {STANDARD_CATEGORIES.map(c => <SelectItem key={c} value={c} className="text-sm font-medium rounded-lg cursor-pointer focus:bg-blue-50 focus:text-blue-700 py-2">{c}</SelectItem>)}
-                             <SelectItem value="Other" className="text-sm font-bold text-blue-600 rounded-lg cursor-pointer focus:bg-blue-50 py-2">Other (Type)</SelectItem>
+                           <SelectTrigger className="h-10 rounded-xl border-gray-200/60 bg-gray-50 text-sm"><SelectValue placeholder="Select..." /></SelectTrigger>
+                           <SelectContent className="rounded-xl p-1">
+                             {STANDARD_CATEGORIES.map(c => <SelectItem key={c} value={c} className="py-2 text-sm">{c}</SelectItem>)}
+                             <SelectItem value="Other" className="py-2 text-sm font-bold text-blue-600">Other (Type)</SelectItem>
                            </SelectContent>
                          </Select>
                       ) : (
                          <div className="flex gap-1.5 h-10">
-                           <Input className="h-10 text-sm font-medium bg-white border-blue-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm" placeholder="Custom..." value={form.product_category} onChange={(e) => setForm({ ...form, product_category: e.target.value })} />
-                           <Button type="button" className="h-10 w-10 shrink-0 bg-blue-600 text-white hover:bg-blue-700 rounded-xl shadow-sm" size="icon" onClick={() => {
-                               setShowCustomCategory(false);
-                               if (form.product_category && !STANDARD_CATEGORIES.includes(form.product_category)) {
-                                 // Ideally append to standard array, but keeping static for now
-                               }
-                             }}>
-                             <Check className="h-4 w-4" />
-                           </Button>
-                           <Button type="button" variant="ghost" className="h-10 w-10 shrink-0 text-gray-400 rounded-xl hover:bg-gray-100" size="icon" onClick={() => {
-                               setShowCustomCategory(false);
-                               setForm({ ...form, product_category: '' });
-                             }}>
-                             <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
-                           </Button>
+                           <Input className="h-10 text-sm border-blue-200 rounded-xl" placeholder="Custom..." value={form.product_category} onChange={(e) => setForm({ ...form, product_category: e.target.value })} />
+                           <Button type="button" className="h-10 w-10 shrink-0 bg-blue-600 text-white rounded-xl" size="icon" onClick={() => setShowCustomCategory(false)}><Check className="h-4 w-4" /></Button>
                          </div>
                       )}
                     </div>
 
-                    {/* DESIGN SMART SELECTOR */}
                     <div className="space-y-2">
                       <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Design ID</Label>
                       {!showCustomDesign ? (
@@ -434,18 +561,16 @@ export default function JobBagPage() {
                            if (v === 'Other') { setShowCustomDesign(true); setForm({ ...form, design_code: '' }); }
                            else { setForm({ ...form, design_code: v }); }
                          }}>
-                           <SelectTrigger className="h-10 text-sm font-medium border-gray-200/60 bg-gray-50 hover:bg-gray-100 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all"><SelectValue placeholder="Design..." /></SelectTrigger>
-                           <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
-                             {STANDARD_DESIGNS.map(d => <SelectItem key={d} value={d} className="text-sm font-medium rounded-lg cursor-pointer focus:bg-blue-50 focus:text-blue-700 py-2">{d}</SelectItem>)}
-                             <SelectItem value="Other" className="text-sm font-bold text-blue-600 rounded-lg cursor-pointer focus:bg-blue-50 py-2">Other / Custom</SelectItem>
+                           <SelectTrigger className="h-10 rounded-xl border-gray-200/60 bg-gray-50 text-sm"><SelectValue placeholder="Design..." /></SelectTrigger>
+                           <SelectContent className="rounded-xl p-1">
+                             {STANDARD_DESIGNS.map(d => <SelectItem key={d} value={d} className="py-2 text-sm">{d}</SelectItem>)}
+                             <SelectItem value="Other" className="py-2 text-sm font-bold text-blue-600">Other / Custom</SelectItem>
                            </SelectContent>
                          </Select>
                       ) : (
                          <div className="flex gap-1.5 h-10">
-                           <Input className="h-10 text-sm font-mono bg-white border-blue-200 rounded-xl shadow-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" placeholder="Custom ID..." value={form.design_code} onChange={(e) => setForm({ ...form, design_code: e.target.value })} />
-                           <Button variant="outline" size="icon" className="h-10 w-10 shrink-0 text-gray-400 rounded-xl border-gray-200 hover:bg-gray-50" onClick={() => setShowCustomDesign(false)}>
-                             <ArrowLeft className="h-4 w-4" strokeWidth={1.5} />
-                           </Button>
+                           <Input className="h-10 text-sm font-mono border-blue-200 rounded-xl" placeholder="Custom ID..." value={form.design_code} onChange={(e) => setForm({ ...form, design_code: e.target.value })} />
+                           <Button variant="outline" size="icon" className="h-10 w-10 shrink-0 rounded-xl" onClick={() => setShowCustomDesign(false)}><ArrowLeft className="h-4 w-4" /></Button>
                          </div>
                       )}
                     </div>
@@ -456,22 +581,20 @@ export default function JobBagPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Est. Gold (g)</Label>
-                      <Input type="number" step="0.001" className="h-10 text-sm font-bold border-gray-200/60 bg-gray-50 hover:bg-gray-100 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all" value={form.gold_expected_weight_g} onChange={(e) => setForm({ ...form, gold_expected_weight_g: e.target.value })} />
+                      <Input type="number" step="0.001" className="h-10 text-sm font-bold border-gray-200/60 bg-gray-50 rounded-xl" value={form.gold_expected_weight_g} onChange={(e) => setForm({ ...form, gold_expected_weight_g: e.target.value })} />
                     </div>
                     <div className="space-y-2">
                       <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Est. Diamond (ct)</Label>
-                      <Input type="number" step="0.01" className="h-10 text-sm font-bold border-gray-200/60 bg-gray-50 hover:bg-gray-100 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all" value={form.diamond_expected_weight_cts} onChange={(e) => setForm({ ...form, diamond_expected_weight_cts: e.target.value })} />
+                      <Input type="number" step="0.01" className="h-10 text-sm font-bold border-gray-200/60 bg-gray-50 rounded-xl" value={form.diamond_expected_weight_cts} onChange={(e) => setForm({ ...form, diamond_expected_weight_cts: e.target.value })} />
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Target Artisan (Karigar)</Label>
+                    <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Target Karigar</Label>
                     <Select onValueChange={(v) => setForm({ ...form, karigar_id: v })}>
-                      <SelectTrigger className="h-10 text-sm font-medium border-gray-200/60 bg-gray-50 hover:bg-gray-100 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all">
-                        <SelectValue placeholder="Identify Karigar..." />
-                      </SelectTrigger>
-                      <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
-                        {karigars.map((k) => <SelectItem key={k.id} value={k.id} className="text-sm font-semibold rounded-lg cursor-pointer focus:bg-blue-50 focus:text-blue-700 py-2.5">{k.full_name}</SelectItem>)}
+                      <SelectTrigger className="h-10 rounded-xl border-gray-200/60 bg-gray-50 text-sm font-semibold"><SelectValue placeholder="Identify Karigar..." /></SelectTrigger>
+                      <SelectContent className="rounded-xl p-1">
+                        {karigars.map((k) => <SelectItem key={k.id} value={k.id} className="py-2.5 text-sm font-semibold">{k.full_name}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>
@@ -479,46 +602,44 @@ export default function JobBagPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Dispatch Date</Label>
-                      <Input type="date" className="h-10 text-[13px] font-medium border-gray-200/60 bg-gray-50 hover:bg-gray-100 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all text-gray-700 px-3" value={form.issue_date} onChange={(e) => setForm({ ...form, issue_date: e.target.value })} />
+                      <Input type="date" className="h-10 text-[13px] font-medium border-gray-200/60 bg-gray-50 rounded-xl px-3" value={form.issue_date} onChange={(e) => setForm({ ...form, issue_date: e.target.value })} />
                     </div>
                     <div className="space-y-2">
                       <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Expected Return</Label>
-                      <Input type="date" className="h-10 text-[13px] font-medium border-gray-200/60 bg-gray-50 hover:bg-gray-100 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 rounded-xl transition-all text-gray-700 px-3" value={form.expected_return_date} onChange={(e) => setForm({ ...form, expected_return_date: e.target.value })} />
+                      <Input type="date" className="h-10 text-[13px] font-medium border-gray-200/60 bg-gray-50 rounded-xl px-3" value={form.expected_return_date} onChange={(e) => setForm({ ...form, expected_return_date: e.target.value })} />
                     </div>
                   </div>
                 </div>
               </div>
               <SheetFooter className="p-5 bg-white border-t border-gray-100">
-                 <Button className="w-full h-11 font-bold text-[13px] shadow-sm rounded-xl bg-blue-600 hover:bg-blue-700 text-white" onClick={handleCreate} disabled={isCreating}>
+                 <Button className="w-full h-11 font-bold text-[13px] rounded-xl bg-blue-600 hover:bg-blue-700 text-white" onClick={handleCreate} disabled={isCreating}>
                    {isCreating ? <Loader2 className="animate-spin h-4 w-4 mr-2" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
-                   Begin Fabrication
+                   Generate Job Bag
                  </Button>
               </SheetFooter>
             </SheetContent>
           </Sheet>
         </div>
 
-        {/* SUMMARY DASHBOARD - FLOATING CARDS */}
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
           <div className="p-5 rounded-2xl border border-gray-200/60 bg-white shadow-sm flex flex-col justify-center">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">Queue Size</p>
-            <p className="text-2xl font-black tracking-tight text-gray-900">{jobBags.length}</p>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-gray-500 flex items-center mb-1"><HardHat className="w-3.5 h-3.5 mr-1.5" /> Active Artisans</p>
+            <p className="text-2xl font-black tracking-tight text-gray-900">{karigarLedgers.length}</p>
           </div>
           <div className="p-5 rounded-2xl border border-amber-100 bg-amber-50/50 shadow-sm flex flex-col justify-center">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-amber-500 mb-1">In Fabrication</p>
-            <p className="text-2xl font-black tracking-tight text-amber-700">{inProgressCount}</p>
-          </div>
-          <div className="p-5 rounded-2xl border border-emerald-100 bg-emerald-50/50 shadow-sm flex flex-col justify-center">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-emerald-500 mb-1">Ready for Audit</p>
-            <p className="text-2xl font-black tracking-tight text-emerald-700">{completedCount}</p>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-amber-600 flex items-center mb-1"><Scale className="w-3.5 h-3.5 mr-1.5" /> Pending Gold</p>
+            <p className="text-2xl font-black tracking-tight text-amber-700">{totalPendingGrams.toFixed(2)} <span className="text-sm font-bold text-amber-600/50">g</span></p>
           </div>
           <div className="p-5 rounded-2xl border border-blue-100 bg-blue-50/50 shadow-sm flex flex-col justify-center">
-            <p className="text-[11px] font-bold uppercase tracking-widest text-blue-500 mb-1">Awaiting Issue</p>
-            <p className="text-2xl font-black tracking-tight text-blue-700">{openCount}</p>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-blue-600 flex items-center mb-1"><Package className="w-3.5 h-3.5 mr-1.5" /> Active Job Bags</p>
+            <p className="text-2xl font-black tracking-tight text-blue-700">{activeBags.length}</p>
+          </div>
+          <div className="p-5 rounded-2xl border border-indigo-100 bg-indigo-50/50 shadow-sm flex flex-col justify-center">
+            <p className="text-[11px] font-bold uppercase tracking-widest text-indigo-600 flex items-center mb-1"><Banknote className="w-3.5 h-3.5 mr-1.5" /> Est. Payouts Owed</p>
+            <p className="text-2xl font-black tracking-tight text-indigo-700">₹ {totalPendingPayout.toLocaleString('en-IN')}</p>
           </div>
         </div>
 
-        {/* MULTI-FILTER SYSTEM (FLOATING CARD) */}
         <div className="bg-white p-3 rounded-2xl border border-gray-200/60 shadow-sm flex flex-col xl:flex-row gap-3">
           <div className="relative flex-1 group">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 group-focus-within:text-blue-500 transition-colors" />
@@ -529,10 +650,8 @@ export default function JobBagPage() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          
           <div className="flex flex-wrap md:flex-nowrap items-center gap-2">
-            {/* KARIGAR FILTER */}
-            <div className="flex items-center gap-2 bg-gray-50 px-2 py-1 rounded-xl border border-gray-100 w-full md:w-auto hover:bg-gray-100 transition-colors">
+            <div className="flex items-center gap-2 bg-gray-50 px-2 py-1 rounded-xl border border-gray-100 w-full md:w-auto">
               <User className="w-[18px] h-[18px] text-gray-400 ml-1.5" strokeWidth={1.5} />
               <Select value={karigarFilter} onValueChange={setKarigarFilter}>
                 <SelectTrigger className="h-8 border-none bg-transparent shadow-none text-xs font-bold text-gray-700 w-full md:w-[160px] focus:ring-0">
@@ -544,9 +663,7 @@ export default function JobBagPage() {
                 </SelectContent>
               </Select>
             </div>
-
-            {/* STATUS FILTER */}
-            <div className="flex items-center gap-2 bg-gray-50 px-2 py-1 rounded-xl border border-gray-100 w-full md:w-auto hover:bg-gray-100 transition-colors">
+            <div className="flex items-center gap-2 bg-gray-50 px-2 py-1 rounded-xl border border-gray-100 w-full md:w-auto">
               <Filter className="w-[18px] h-[18px] text-gray-400 ml-1.5" strokeWidth={1.5} />
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="h-8 border-none bg-transparent shadow-none text-xs font-bold text-gray-700 w-full md:w-[150px] focus:ring-0">
@@ -556,137 +673,84 @@ export default function JobBagPage() {
                   <SelectItem value="all" className="text-xs font-bold text-blue-600 rounded-lg py-2">All Statuses</SelectItem>
                   <SelectItem value="open" className="text-xs font-medium rounded-lg py-2">Awaiting Issue</SelectItem>
                   <SelectItem value="in_progress" className="text-xs font-medium rounded-lg py-2">Under Fabrication</SelectItem>
-                  <SelectItem value="completed" className="text-xs font-medium rounded-lg py-2">Finished / Audit</SelectItem>
-                  <SelectItem value="closed" className="text-xs font-medium rounded-lg py-2">Archived</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* DATE SORT */}
-            <div className="flex items-center gap-2 bg-gray-50 px-2 py-1 rounded-xl border border-gray-100 w-full md:w-auto hover:bg-gray-100 transition-colors">
-              <CalendarDays className="w-[18px] h-[18px] text-gray-400 ml-1.5" strokeWidth={1.5} />
-              <Select value={dateSort} onValueChange={setDateSort}>
-                <SelectTrigger className="h-8 border-none bg-transparent shadow-none text-xs font-bold text-gray-700 w-full md:w-[130px] focus:ring-0">
-                  <SelectValue placeholder="Sort" />
-                </SelectTrigger>
-                <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
-                  <SelectItem value="desc" className="text-xs font-medium rounded-lg py-2">Newest First</SelectItem>
-                  <SelectItem value="asc" className="text-xs font-medium rounded-lg py-2">Oldest First</SelectItem>
+                  <SelectItem value="completed" className="text-xs font-medium rounded-lg py-2">Audit Ready / Completed</SelectItem>
+                  <SelectItem value="closed" className="text-xs font-medium rounded-lg py-2">Archived / History</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
         </div>
 
-        {/* JOB BAGS LIST */}
-        <div className="space-y-4">
-          {loading ? (
-            <ListSkeleton />
-          ) : filtered.length === 0 ? (
-            <div className="text-center py-20 bg-white border border-gray-200/60 rounded-2xl shadow-sm">
-               <Package className="w-12 h-12 mx-auto mb-4 text-gray-300" strokeWidth={1.5} />
-               <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">No matching orders in registry</p>
-            </div>
-          ) : (
-            <>
-              {/* DESKTOP VIEW */}
-              <div className="hidden md:block overflow-hidden border border-gray-200/60 rounded-2xl bg-white shadow-sm">
-                <Table>
-                  <TableHeader className="bg-gray-50/80">
-                    <TableRow className="hover:bg-transparent border-gray-200/60">
-                      <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-6 h-12">Job Ref</TableHead>
-                      <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12">Specs & Category</TableHead>
-                      <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12">Artisan</TableHead>
-                      <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12">Created Date</TableHead>
-                      <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12 text-center">Status</TableHead>
-                      <TableHead className="w-[80px] h-12"></TableHead>
+        <Tabs defaultValue="bags" className="w-full space-y-4">
+          <TabsList className="bg-gray-100/50 border border-gray-200/50 rounded-xl h-12 px-1 flex w-full max-w-max overflow-x-auto custom-scrollbar">
+            <TabsTrigger value="bags" className="rounded-lg px-6 text-xs font-bold uppercase tracking-widest data-[state=active]:bg-white data-[state=active]:shadow-sm">Active Job Bags</TabsTrigger>
+            <TabsTrigger value="ledgers" className="rounded-lg px-6 text-xs font-bold uppercase tracking-widest data-[state=active]:bg-white data-[state=active]:shadow-sm">Karigar Ledger</TabsTrigger>
+            <TabsTrigger value="history" className="rounded-lg px-6 text-xs font-bold uppercase tracking-widest data-[state=active]:bg-emerald-50 data-[state=active]:text-emerald-700 data-[state=active]:shadow-sm">
+              <History className="w-3.5 h-3.5 mr-2" /> History & Settled
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="ledgers" className="m-0">
+            <div className="bg-white border border-gray-200/60 rounded-2xl overflow-hidden shadow-sm">
+              <Table>
+                <TableHeader className="bg-gray-50/80">
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-6 h-12">Karigar Name</TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12 text-center">Active Bags</TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12 text-center">Base Rate</TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase text-amber-600 tracking-widest px-4 h-12 text-right">WIP Gold</TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase text-emerald-600 tracking-widest px-4 h-12 text-right">Ready Gold</TableHead>
+                    <TableHead className="text-[11px] font-black uppercase text-indigo-700 tracking-widest px-6 h-12 text-right">Est. Payout</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {karigarLedgers.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="h-24 text-center text-xs font-bold text-gray-400 uppercase tracking-widest">No active Karigar work found</TableCell>
                     </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filtered.map((job) => (
-                      <TableRow 
-                        key={job.id} 
-                        className="hover:bg-gray-50/50 transition-colors border-b border-gray-100 last:border-0 cursor-pointer group"
-                        onClick={() => router.push(`/manufacturing/job-bags/${job.id}`)}
-                      >
-                        <TableCell className="px-6 py-4 font-mono font-bold text-sm text-gray-900 tracking-tight group-hover:text-blue-600 transition-colors">
-                           {job.job_bag_number}
-                        </TableCell>
-                        <TableCell className="px-4">
-                           <div className="text-[13px] font-bold text-gray-900">{job.product_category}</div>
-                           <div className="text-[10px] text-gray-500 font-medium uppercase tracking-widest mt-0.5">SKU: {job.design_code}</div>
-                        </TableCell>
-                        <TableCell className="px-4">
-                           <div className="flex items-center gap-2.5">
-                             <div className="h-7 w-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-500"><User className="h-3.5 w-3.5" strokeWidth={1.5} /></div>
-                             <span className="text-[13px] font-semibold text-gray-700">{job.karigars?.full_name}</span>
-                           </div>
-                        </TableCell>
-                        <TableCell className="px-4">
-                           <div className="text-[13px] text-gray-500 font-medium">
-                             {format(new Date(job.created_at), 'dd MMM yyyy')}
+                  ) : (
+                    karigarLedgers.map((k) => (
+                      <TableRow key={k.id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100">
+                        <TableCell className="px-6 py-4">
+                           <div className="flex items-center gap-3">
+                             <div className="h-8 w-8 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600"><User className="h-4 w-4" strokeWidth={2} /></div>
+                             <span className="text-sm font-bold text-gray-900">{k.full_name}</span>
                            </div>
                         </TableCell>
                         <TableCell className="px-4 text-center">
-                           {getStatusBadge(job.status)}
+                          <Badge variant="secondary" className="font-mono bg-gray-100">{k.activeJobs}</Badge>
                         </TableCell>
-                        <TableCell className="px-6 text-right">
-                           <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full text-gray-400 group-hover:bg-white group-hover:shadow-sm group-hover:text-gray-900 transition-all">
-                             <ChevronRight className="h-[18px] w-[18px]" strokeWidth={1.5} />
-                           </Button>
+                        <TableCell className="px-4 text-center font-mono text-xs text-gray-600 font-bold">
+                          ₹ {k.rate} <span className="text-[9px] uppercase tracking-widest text-gray-400">/{k.laborType === 'per_piece' || k.laborType === 'fixed' ? 'pc' : 'g'}</span>
+                        </TableCell>
+                        <TableCell className="px-4 text-right font-mono text-[13px] font-bold text-amber-600">
+                          {k.pendingWeight > 0 ? `${k.pendingWeight.toFixed(2)} g` : '-'}
+                        </TableCell>
+                        <TableCell className="px-4 text-right font-mono text-[13px] font-bold text-emerald-600">
+                          {k.readyWeight > 0 ? `${k.readyWeight.toFixed(2)} g` : '-'}
+                        </TableCell>
+                        <TableCell className="px-6 text-right font-mono text-[15px] font-black text-indigo-700 bg-indigo-50/30">
+                          ₹ {k.estimatedPay.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                         </TableCell>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </TabsContent>
 
-              {/* MOBILE CARD VIEW */}
-              <div className="md:hidden space-y-3">
-                {filtered.map((job) => (
-                  <Card 
-                    key={job.id} 
-                    className="shadow-sm border-gray-200/60 overflow-hidden bg-white active:scale-[0.98] transition-transform rounded-2xl"
-                    onClick={() => router.push(`/manufacturing/job-bags/${job.id}`)}
-                  >
-                    <CardContent className="p-5 space-y-4">
-                       <div className="flex justify-between items-start">
-                          <div className="space-y-1">
-                             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">Reference</p>
-                             <p className="text-[15px] font-mono font-bold text-gray-900 mt-1">{job.job_bag_number}</p>
-                          </div>
-                          {getStatusBadge(job.status)}
-                       </div>
+          <TabsContent value="bags" className="m-0 space-y-4">
+             {renderJobBagTable(activeBags)}
+          </TabsContent>
 
-                       <div className="p-3.5 rounded-xl bg-gray-50 border border-gray-100 flex justify-between items-center">
-                          <div className="flex items-center gap-2.5">
-                             <Briefcase className="h-[18px] w-[18px] text-gray-400" strokeWidth={1.5} />
-                             <span className="text-[13px] font-bold text-gray-800">{job.product_category}</span>
-                          </div>
-                          <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">{job.design_code}</span>
-                       </div>
-
-                       <div className="flex items-center justify-between text-xs text-gray-500 pt-1">
-                          <div className="flex flex-col gap-1.5">
-                             <div className="flex items-center gap-2">
-                               <div className="h-6 w-6 rounded-full bg-gray-100 flex items-center justify-center text-gray-500"><User className="h-3 w-3" strokeWidth={1.5} /></div>
-                               <span className="font-semibold text-gray-900">{job.karigars?.full_name}</span>
-                             </div>
-                             <span className="text-[10px] font-medium ml-8 text-gray-400">{format(new Date(job.created_at), 'dd MMM yyyy')}</span>
-                          </div>
-                          <ChevronRight className="h-5 w-5 text-gray-300" strokeWidth={1.5} />
-                       </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
+          <TabsContent value="history" className="m-0 space-y-4">
+             {renderJobBagTable(historyBags, true)}
+          </TabsContent>
+        </Tabs>
 
       </main>
 
-      {/* PENDING BRANCH RESTOCKS MODAL */}
       <Dialog open={isRestocksModalOpen} onOpenChange={setIsRestocksModalOpen}>
         <DialogContent className="sm:max-w-[550px] p-0 border-none shadow-2xl rounded-2xl bg-white overflow-hidden">
           <DialogHeader className="bg-blue-50/50 p-6 border-b border-blue-100/50">
@@ -764,7 +828,6 @@ export default function JobBagPage() {
         </DialogContent>
       </Dialog>
 
-      {/* PENDING REPAIRS MODAL */}
       <Dialog open={isRepairsModalOpen} onOpenChange={setIsRepairsModalOpen}>
         <DialogContent className="sm:max-w-[550px] p-0 border-none shadow-2xl rounded-2xl bg-white overflow-hidden">
           <DialogHeader className="bg-amber-50/50 p-6 border-b border-amber-100/50">
@@ -841,12 +904,11 @@ export default function JobBagPage() {
         </DialogContent>
       </Dialog>
 
-      {/* PENDING CUSTOM ORDERS MODAL */}
       <Dialog open={isOrdersModalOpen} onOpenChange={setIsOrdersModalOpen}>
         <DialogContent className="sm:max-w-[550px] p-0 border-none shadow-2xl rounded-2xl bg-white overflow-hidden">
           <DialogHeader className="bg-purple-50/50 p-6 border-b border-purple-100/50">
             <DialogTitle className="text-lg font-bold text-purple-900 flex items-center gap-2.5">
-              <Hammer className="w-5 h-5 text-purple-600" strokeWidth={2} /> Pending Store Requests
+              <CheckCircle2 className="w-5 h-5 text-purple-600" strokeWidth={2} /> Pending Store Requests
             </DialogTitle>
             <DialogDescription className="text-xs font-medium text-purple-700/70 mt-1.5">
               Select a custom order to pull its specifications into a Job Bag.

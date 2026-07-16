@@ -66,7 +66,8 @@ interface Distributor {
   contact_person: string;
   phone: string;
   address: string;
-  distributor_type: 'internal_branch' | 'external_shop' | 'corporate_partner';
+  // ✨ Updated Interface to support new types
+  distributor_type: 'internal_branch' | 'external_shop' | 'corporate_partner' | 'voucher_printing_press' | 'business_introduction_agent' | 'sales_person';
   created_at: string;
 }
 
@@ -190,6 +191,7 @@ export default function DistributorsPage() {
     }
   };
 
+  // ✨ Added badge styles for the 3 new roles
   const getTypeBadge = (type: string) => {
     switch (type) {
       case 'internal_branch':
@@ -198,8 +200,14 @@ export default function DistributorsPage() {
         return <Badge variant="outline" className="bg-gray-100 text-gray-600 border-gray-200 text-[10px] font-bold h-5 uppercase">External</Badge>;
       case 'corporate_partner':
         return <Badge variant="outline" className="bg-purple-50 text-purple-600 border-purple-200 text-[10px] font-bold h-5 uppercase">Corporate</Badge>;
+      case 'voucher_printing_press':
+        return <Badge variant="outline" className="bg-orange-50 text-orange-600 border-orange-200 text-[10px] font-bold h-5 uppercase">Printing Press</Badge>;
+      case 'business_introduction_agent':
+        return <Badge variant="outline" className="bg-emerald-50 text-emerald-600 border-emerald-200 text-[10px] font-bold h-5 uppercase">Intro Agent</Badge>;
+      case 'sales_person':
+        return <Badge variant="outline" className="bg-indigo-50 text-indigo-600 border-indigo-200 text-[10px] font-bold h-5 uppercase">Sales Person</Badge>;
       default:
-        return <Badge variant="secondary" className="text-[10px] h-5 uppercase">{type}</Badge>;
+        return <Badge variant="secondary" className="text-[10px] h-5 uppercase">{type.replace(/_/g, ' ')}</Badge>;
     }
   };
 
@@ -280,6 +288,10 @@ export default function DistributorsPage() {
                           <SelectItem value="external_shop">External Vendor</SelectItem>
                           <SelectItem value="internal_branch">Internal Branch</SelectItem>
                           <SelectItem value="corporate_partner">Corporate Account</SelectItem>
+                          {/* ✨ Added 3 new roles here */}
+                          <SelectItem value="voucher_printing_press">Voucher Printing Press</SelectItem>
+                          <SelectItem value="business_introduction_agent">Business Introduction Agent</SelectItem>
+                          <SelectItem value="sales_person">Sales Person</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>

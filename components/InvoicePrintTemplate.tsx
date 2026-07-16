@@ -128,44 +128,46 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const branchPan = branchGstin.length >= 12 ? branchGstin.substring(2, 12) : 'AAOPM1004A';
 
     const guaranteeText = data.branch?.exchange_policy_text || "* Lifetime 100% Exchange guarantee. And Lifetime 70% Buyback on actual paid amount.";
-    const bannerImage = data.branch?.invoice_banner_url || data.bannerUrl || "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/brand-assets/invoice-banner1.jpg";
+    const bannerImage = data.branch?.invoice_banner_url || data.bannerUrl || "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/brand-assets/invoice-banner2.jpg";
 
     return (
       <div ref={ref} className="print-section w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
         
-        {/* ✨ FIX: Bulletproof CSS ensuring 1 exact page print */}
+        {/* ✨ FIX: Bulletproof Mobile Print CSS (No :has() selectors) */}
         <style type="text/css" media="print">
           {`
-            @page { size: A4 portrait; margin: 0mm; }
+            @page { size: A4 portrait; margin: 0; }
             
             @media print {
               html, body { 
                 background: white !important; 
                 -webkit-print-color-adjust: exact !important; 
                 print-color-adjust: exact !important; 
-                height: auto !important;
-                overflow: visible !important;
+                /* Lock body to exactly 1 page to prevent the 14 extra blank pages bug */
+                height: 100vh !important;
+                overflow: hidden !important;
+                margin: 0 !important;
+                padding: 0 !important;
               }
 
-              /* 1. COMPLETELY REMOVE EVERYTHING FROM FLOW (Fixes the 14 empty pages) */
-              header, main, nav, footer, aside, [role="dialog"], [data-radix-focus-guard], [data-aria-hidden="true"], #radix-portal {
+              /* Hide UI navigation without touching Dialogs or Portals */
+              header, nav, footer, aside, .sidebar {
                 display: none !important;
               }
 
-              /* 2. FORCE HIDDEN PARENTS TO BECOME VISIBLE (Fixes the blank invoice) */
-              .hidden:has(.print-section), div[style*="display: none"]:has(.print-section) {
-                display: block !important;
-              }
-
-              /* 3. ENSURE PRINT SECTION ACTS AS ROOT ELEMENT */
+              /* Pull the invoice out of the hidden modal flow and overlay it on everything */
               .print-section {
-                display: flex !important;
-                position: relative !important;
-                width: 100% !important;
-                height: auto !important;
+                position: absolute !important;
+                top: 0 !important;
+                left: 0 !important;
+                width: 100vw !important;
+                min-height: 100vh !important;
+                background: white !important;
+                z-index: 2147483647 !important; /* Maximum top layer */
                 margin: 0 !important;
-                padding: 30px !important; 
+                padding: 10mm !important; 
                 visibility: visible !important;
+                display: flex !important;
               }
             }
           `}
@@ -647,13 +649,19 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
               </p>
             </div>
 
+            {/* ✨ FIXED: Height increased to 100px for full text visibility, centered evenly */}
             {!isEstimate && (
-              <div className="w-full h-[110px] rounded-xl overflow-hidden border border-slate-200 relative shrink-0 mt-2">
+              <div 
+                className="w-full h-[100px] rounded-xl overflow-hidden border border-slate-200 relative shrink-0 mt-1"
+                style={{ 
+                   pageBreakInside: 'avoid',
+                   breakInside: 'avoid'
+                }}
+              >
                 <img 
                   src={bannerImage} 
                   alt="Promotional Banner" 
-                  // ✨ FIXED: Replaced object-center with object-[50%_35%] to nudge the crop upwards
-                  className="w-full h-full object-cover object-[50%_35%] block"
+                  className="w-full h-full object-cover object-center block"
                   crossOrigin="anonymous" 
                   onError={(e) => e.currentTarget.style.display = 'none'}
                 />
