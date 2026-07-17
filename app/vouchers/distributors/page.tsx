@@ -207,7 +207,7 @@ export default function DistributorsPage() {
       case 'sales_person':
         return <Badge variant="outline" className="bg-indigo-50 text-indigo-600 border-indigo-200 text-[10px] font-bold h-5 uppercase">Sales Person</Badge>;
       default:
-        return <Badge variant="secondary" className="text-[10px] h-5 uppercase">{type.replace(/_/g, ' ')}</Badge>;
+        return <Badge variant="secondary" className="text-[10px] h-5 uppercase">{(type || "Unknown").replace(/_/g, ' ')}</Badge>;
     }
   };
 
