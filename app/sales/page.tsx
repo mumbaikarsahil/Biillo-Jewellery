@@ -40,6 +40,63 @@ import {
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 
+// ✨ FIXED: Dynamic Top Scrollbar Sync Logic
+const SyncedTableWrapper = ({ children }: { children: React.ReactNode }) => {
+  const topScrollRef = useRef<HTMLDivElement>(null);
+  const bottomScrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [contentWidth, setContentWidth] = useState(2500);
+
+  useEffect(() => {
+    if (contentRef.current) {
+      const resizeObserver = new ResizeObserver(entries => {
+        for (let entry of entries) {
+          setContentWidth(entry.target.scrollWidth);
+        }
+      });
+      resizeObserver.observe(contentRef.current);
+      return () => resizeObserver.disconnect();
+    }
+  }, []);
+
+  const handleTopScroll = () => {
+    if (bottomScrollRef.current && topScrollRef.current) {
+      bottomScrollRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+    }
+  };
+
+  const handleBottomScroll = () => {
+    if (topScrollRef.current && bottomScrollRef.current) {
+      topScrollRef.current.scrollLeft = bottomScrollRef.current.scrollLeft;
+    }
+  };
+
+  return (
+    <div className="flex flex-col w-full relative">
+      {/* Top Scrollbar */}
+      <div 
+        ref={topScrollRef} 
+        onScroll={handleTopScroll}
+        className="w-full overflow-x-auto custom-scrollbar h-[12px] bg-zinc-50 border-b border-zinc-200 hidden xl:block sticky top-0 z-30"
+      >
+        <div style={{ width: `${contentWidth}px`, height: '1px' }}></div>
+      </div>
+      
+      {/* Actual Table Wrapper */}
+      <div 
+        ref={bottomScrollRef} 
+        onScroll={handleBottomScroll}
+        className="w-full overflow-x-auto custom-scrollbar flex-1 pb-4"
+      >
+        {/* We use a w-max container to force the width calculations */}
+        <div ref={contentRef} className="w-max min-w-full [&>div]:overflow-visible">
+          {children}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function AccountsMasterPage() {
   const { appUser } = useAuth()
   const { isHQ, isLocked, selectedLocation, setSelectedLocation } = useStoreLocation()
@@ -115,28 +172,23 @@ export default function AccountsMasterPage() {
       const from = (page - 1) * recordLimit
       const to = from + recordLimit - 1
 
-      // 1. SALES INVOICES
       let salesQuery = supabase.from('invoices')
         .select(`*, customers(full_name, pan_no, id, phone), warehouses(name), invoice_items(item_id, rate, inventory_items(item_category, purity_karat, barcode, gross_weight_g, net_weight_g, total_stone_weight_cts, huid_code, hsn_code))`)
         .eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') salesQuery = salesQuery.eq('warehouse_id', selectedLocation)
       if (search.trim()) salesQuery = salesQuery.ilike('invoice_number', `%${search.trim()}%`)
 
-      // 2. ESTIMATES
       let estQuery = supabase.from('estimates').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') estQuery = estQuery.eq('warehouse_id', selectedLocation)
       if (search.trim()) estQuery = estQuery.ilike('estimate_number', `%${search.trim()}%`)
 
-      // 3. CUSTOM ORDERS
       let customQuery = supabase.from('custom_orders').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') customQuery = customQuery.eq('origin_warehouse_id', selectedLocation)
       if (search.trim()) customQuery = customQuery.ilike('order_number', `%${search.trim()}%`)
 
-      // 4. BUYBACKS / RETURNS
       let buybackQuery = supabase.from('buybacks').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') buybackQuery = buybackQuery.eq('warehouse_id', selectedLocation)
       
-      // 5. REPAIRS
       let repairQuery = supabase.from('repair_tickets').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') repairQuery = repairQuery.eq('origin_warehouse_id', selectedLocation)
       if (search.trim()) repairQuery = repairQuery.ilike('ticket_number', `%${search.trim()}%`)
@@ -300,8 +352,42 @@ export default function AccountsMasterPage() {
       });
       downloadBlob(headers, csvRows, `Sales_Ledger_${startDate}_to_${endDate}.csv`);
       toast.success("Sales Ledger CSV Downloaded!");
-    } else {
-      toast.error("Export is only supported for the Sales Register currently.");
+    } 
+    else if (activeTab === 'estimates') {
+      if (estimates.length === 0) return toast.error("No estimates to export");
+      const headers = ["Date", "Estimate Number", "Status", "Customer Name", "Phone", "Created By", "Subtotal", "Discount", "CGST", "SGST", "Final Estimated Total"];
+      const csvRows = estimates.map(est => [
+        format(new Date(est.created_at), 'yyyy-MM-dd HH:mm:ss'), est.estimate_number, est.status, est.customers?.full_name || 'Walk-in', est.customers?.phone || '', est.profiles?.full_name || 'System',
+        est.subtotal, est.discount_amount, est.cgst, est.sgst, est.total_amount
+      ]);
+      downloadBlob(headers, csvRows, `Estimates_${startDate}_to_${endDate}.csv`);
+    }
+    else if (activeTab === 'custom_orders') {
+      if (customOrders.length === 0) return toast.error("No custom orders to export");
+      const headers = ["Date", "Order Number", "Status", "Customer Name", "Phone", "Created By", "Category", "Design Ref", "Exp. Gold (g)", "Exp. Dia (cts)", "Voucher Code", "Estimated Value", "Advance Paid"];
+      const csvRows = customOrders.map(co => [
+        format(new Date(co.created_at), 'yyyy-MM-dd HH:mm:ss'), co.order_number, co.status, co.customers?.full_name || 'Walk-in', co.customers?.phone || '', co.profiles?.full_name || 'System',
+        co.item_category, co.design_reference, co.expected_gold_g, co.expected_diamond_cts, co.voucher_code || '', co.estimated_value, co.advance_paid
+      ]);
+      downloadBlob(headers, csvRows, `CustomOrders_${startDate}_to_${endDate}.csv`);
+    }
+    else if (activeTab === 'buybacks') {
+      if (buybacks.length === 0) return toast.error("No buybacks to export");
+      const headers = ["Date", "Status", "Customer Name", "Phone", "Handled By", "Category", "Purity", "Gross Wt (g)", "Gross Value", "Deductions", "Net Refund"];
+      const csvRows = buybacks.map(bb => [
+        format(new Date(bb.created_at), 'yyyy-MM-dd HH:mm:ss'), bb.status, bb.customers?.full_name || 'Walk-in', bb.customers?.phone || '', bb.profiles?.full_name || 'System',
+        bb.item_category, bb.purity_karat, bb.gross_weight_g, bb.gross_value, bb.deduction_amount, bb.net_refund
+      ]);
+      downloadBlob(headers, csvRows, `Buybacks_${startDate}_to_${endDate}.csv`);
+    }
+    else if (activeTab === 'repairs') {
+      if (repairs.length === 0) return toast.error("No repairs to export");
+      const headers = ["Date", "Ticket Number", "Status", "Customer Name", "Phone", "Handled By", "Description", "Purity", "Gross Wt (g)", "Est. Cost", "Advance Paid"];
+      const csvRows = repairs.map(rep => [
+        format(new Date(rep.created_at), 'yyyy-MM-dd HH:mm:ss'), rep.ticket_number, rep.status, rep.customers?.full_name || 'Walk-in', rep.customers?.phone || '', rep.profiles?.full_name || 'System',
+        rep.item_description, rep.purity, rep.gross_weight_g, rep.estimated_cost, rep.advance_paid
+      ]);
+      downloadBlob(headers, csvRows, `Repairs_${startDate}_to_${endDate}.csv`);
     }
   }
 
@@ -507,6 +593,42 @@ export default function AccountsMasterPage() {
     </div>
   );
 
+  // ✨ FIXED: SAFELY PARSES JSON OR STRINGIFIED JSON FOR SPLIT PAYMENTS
+  const renderPaymentMode = (inv: any) => {
+    if (inv.status === 'CANCELLED') return <span className="px-2 py-1 rounded bg-red-50 text-red-600 text-[10px] font-bold uppercase tracking-wider">CANCELLED</span>;
+    
+    // Safely attempt to parse split_payments if it was returned as a string from the DB
+    let splits = inv.split_payments;
+    if (typeof splits === 'string') {
+      try { splits = JSON.parse(splits); } 
+      catch (e) { splits = null; }
+    }
+
+    return (
+      <div className="flex flex-col items-start gap-1">
+        <span className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-700 text-[10px] font-bold uppercase tracking-wider">
+          {inv.payment_mode || 'UNKNOWN'}
+        </span>
+        
+        {inv.payment_mode === 'SPLIT' && splits && typeof splits === 'object' && (
+          <div className="flex flex-col gap-0.5 mt-1 border-l-2 border-indigo-200 pl-2">
+            {Object.entries(splits).map(([method, amount]: any) => (
+              <span key={method} className="text-[9px] font-medium text-zinc-500">
+                <strong className="text-zinc-700">{method}:</strong> ₹{Number(amount).toLocaleString()}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {Number(inv.advance_adjusted) > 0 && (
+          <span className="text-[9px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded mt-0.5 border border-amber-100">
+            <strong>Advance Used:</strong> ₹{Number(inv.advance_adjusted).toLocaleString()}
+          </span>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col min-h-screen bg-zinc-50/50 font-sans pb-20 sm:pb-0 w-full max-w-[100vw] overflow-x-hidden">
       {/* HEADER */}
@@ -540,8 +662,9 @@ export default function AccountsMasterPage() {
             <Button variant="outline" size="icon" className="h-9 w-9 rounded-full border-zinc-200 shrink-0 hidden sm:flex text-zinc-600 hover:bg-zinc-100" onClick={fetchAccountingData}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             </Button>
+            {/* ✨ UNIVERSAL EXPORT BUTTON FOR ALL TABS */}
             <Button className="h-9 text-xs font-medium rounded-full hidden sm:flex shrink-0 text-zinc-700 border border-zinc-200 bg-white hover:bg-zinc-50 shadow-sm" onClick={handleExportCSV}>
-              <Download className="mr-2 h-3.5 w-3.5" /> Export Sales CSV
+              <Download className="mr-2 h-3.5 w-3.5" /> Export Data to CSV
             </Button>
           </div>
 
@@ -571,7 +694,7 @@ export default function AccountsMasterPage() {
             </div>
             
             <Button className="h-10 text-xs font-bold rounded-xl flex sm:hidden w-full text-zinc-700 border border-zinc-200 bg-white shadow-sm mt-1" onClick={handleExportCSV}>
-              <Download className="mr-2 h-4 w-4" /> Export Ledger CSV
+              <Download className="mr-2 h-4 w-4" /> Export Data to CSV
             </Button>
           </div>
         </div>
@@ -710,9 +833,9 @@ export default function AccountsMasterPage() {
           <TabsContent value="sales_register" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
               
-              {/* ✨ DESKTOP TABLE VIEW */}
-              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar flex-1">
-                <Table className="w-full whitespace-nowrap">
+              {/* ✨ DESKTOP TABLE VIEW WITH TOP SCROLL SYNC */}
+              <SyncedTableWrapper>
+                <Table className="w-full whitespace-nowrap border-b border-zinc-200">
                   <TableHeader className="bg-zinc-50/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-zinc-200">
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider px-4 bg-zinc-50 z-20 w-[60px] text-center sticky left-0 border-r border-zinc-200">Actions</TableHead>
@@ -722,14 +845,13 @@ export default function AccountsMasterPage() {
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Customer</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider border-l border-zinc-200 pl-4">Billed By</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider min-w-[200px]">Items Sold</TableHead>
-                      {/* ✨ NEW COLUMNS */}
                       <TableHead className="h-11 text-[10px] font-bold text-teal-600 uppercase tracking-wider border-l border-zinc-200">Voucher</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-50/50 border-l border-zinc-200">Subtotal</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-50/50 border-l border-zinc-200">Taxable Val</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-emerald-50/30">CGST</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-emerald-50/30">SGST</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-right bg-slate-100 border-l border-zinc-200">Final Total</TableHead>
-                      <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider text-center border-l border-zinc-200">Pay Mode</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider border-l border-zinc-200 pl-4">Payment Breakdown</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -765,7 +887,6 @@ export default function AccountsMasterPage() {
                              </div>
                           </TableCell>
 
-                          {/* ✨ NEW DATA COLUMNS */}
                           <TableCell className="px-4 py-2 border-l border-zinc-200">
                              {inv.voucher_code ? (
                                 <div className="flex flex-col">
@@ -782,13 +903,17 @@ export default function AccountsMasterPage() {
                           <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 bg-emerald-50/30">₹{(Number(inv.cgst_amount) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 bg-emerald-50/30">₹{(Number(inv.sgst_amount) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[13px] font-black text-zinc-900 bg-slate-100 border-l border-zinc-200">₹{(Number(inv.final_total) || 0).toLocaleString()}</TableCell>
-                          <TableCell className="py-2 text-center border-l border-zinc-200"><span className="px-2 py-1 rounded bg-zinc-100 border border-zinc-200 text-zinc-600 text-[10px] font-bold uppercase tracking-wider">{inv.payment_mode}</span></TableCell>
+                          
+                          {/* ✨ DETAILED PAYMENT BREAKDOWN */}
+                          <TableCell className="px-4 py-2 border-l border-zinc-200 align-top">
+                             {renderPaymentMode(inv)}
+                          </TableCell>
                         </TableRow>
                       )
                     })}
                   </TableBody>
                 </Table>
-              </div>
+              </SyncedTableWrapper>
 
               {/* ✨ MOBILE & TABLET CARD VIEW */}
               <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
@@ -833,7 +958,6 @@ export default function AccountsMasterPage() {
                         </div>
                       </div>
 
-                      {/* ✨ MOBILE VOUCHER INDICATOR */}
                       {inv.voucher_code && (
                          <div className="flex justify-between items-center bg-teal-50/50 px-2.5 py-1.5 rounded-lg border border-teal-100">
                             <div className="flex items-center gap-1.5">
@@ -846,8 +970,8 @@ export default function AccountsMasterPage() {
 
                       <div className="flex justify-between items-end pt-2 border-t border-zinc-100">
                         <div>
-                          <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Pay Mode</p>
-                          <span className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-600 text-[10px] font-bold uppercase tracking-wider">{inv.payment_mode || 'UNKNOWN'}</span>
+                          <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-1">Pay Breakdown</p>
+                          {renderPaymentMode(inv)}
                         </div>
                         <div className="text-right">
                           <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Final Total</p>
@@ -867,10 +991,8 @@ export default function AccountsMasterPage() {
           {/* ========================================================================= */}
           <TabsContent value="estimates" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
-              
-              {/* ✨ DESKTOP TABLE VIEW */}
-              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar flex-1">
-                <Table className="w-full whitespace-nowrap">
+              <SyncedTableWrapper>
+                <Table className="w-full whitespace-nowrap border-b border-zinc-200">
                   <TableHeader className="bg-slate-50/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-zinc-200">
                       <TableHead className="h-11 text-[10px] font-bold text-zinc-500 uppercase tracking-wider px-4 bg-zinc-50 z-20 w-[60px] text-center sticky left-0 border-r border-zinc-200">Actions</TableHead>
@@ -907,9 +1029,8 @@ export default function AccountsMasterPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+              </SyncedTableWrapper>
 
-              {/* ✨ MOBILE & TABLET CARD VIEW */}
               <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {estimates.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No estimates found</div>
@@ -962,10 +1083,8 @@ export default function AccountsMasterPage() {
           {/* ========================================================================= */}
           <TabsContent value="custom_orders" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
-              
-              {/* ✨ DESKTOP TABLE VIEW */}
-              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar flex-1">
-                <Table className="w-full whitespace-nowrap">
+              <SyncedTableWrapper>
+                <Table className="w-full whitespace-nowrap border-b border-zinc-200">
                   <TableHeader className="bg-purple-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-purple-100">
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider px-4 bg-purple-50/50 z-20 w-[60px] text-center sticky left-0 border-r border-purple-100">Actions</TableHead>
@@ -975,7 +1094,6 @@ export default function AccountsMasterPage() {
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Customer</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider border-l border-purple-100 pl-4">Created By</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Category / Design</TableHead>
-                      {/* ✨ NEW COLUMNS */}
                       <TableHead className="h-11 text-[10px] font-bold text-teal-700 uppercase tracking-wider border-l border-purple-100">Voucher</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100">Est. Value</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100">Advance Paid</TableHead>
@@ -1001,8 +1119,6 @@ export default function AccountsMasterPage() {
                              <span className="text-[12px] font-semibold text-zinc-800 block">{co.item_category}</span>
                              <span className="text-[10px] text-zinc-500 font-mono">{co.design_reference}</span>
                           </TableCell>
-
-                          {/* ✨ NEW DATA COLUMNS */}
                           <TableCell className="px-4 py-2 border-l border-purple-100">
                              {co.voucher_code ? (
                                 <div className="flex flex-col">
@@ -1013,16 +1129,14 @@ export default function AccountsMasterPage() {
                                 <span className="text-[10px] text-zinc-400 font-medium">None</span>
                              )}
                           </TableCell>
-
                           <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-700 border-l border-purple-100">₹{(Number(co.estimated_value) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[13px] font-black text-emerald-600 border-l border-purple-100">₹{(Number(co.advance_paid) || 0).toLocaleString()}</TableCell>
                         </TableRow>
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+              </SyncedTableWrapper>
 
-              {/* ✨ MOBILE & TABLET CARD VIEW */}
               <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {customOrders.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No custom orders found</div>
@@ -1053,7 +1167,6 @@ export default function AccountsMasterPage() {
                       </div>
                     </div>
 
-                    {/* ✨ MOBILE VOUCHER INDICATOR */}
                     {co.voucher_code && (
                        <div className="flex justify-between items-center bg-teal-50/50 px-2.5 py-1.5 rounded-lg border border-teal-100">
                           <div className="flex items-center gap-1.5">
@@ -1091,10 +1204,8 @@ export default function AccountsMasterPage() {
           {/* ========================================================================= */}
           <TabsContent value="buybacks" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
-              
-              {/* ✨ DESKTOP TABLE VIEW */}
-              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar flex-1">
-                <Table className="w-full whitespace-nowrap">
+              <SyncedTableWrapper>
+                <Table className="w-full whitespace-nowrap border-b border-zinc-200">
                   <TableHeader className="bg-rose-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-rose-100">
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider px-4 bg-rose-50/50 z-20 w-[60px] text-center sticky left-0 border-r border-rose-100">Actions</TableHead>
@@ -1134,9 +1245,8 @@ export default function AccountsMasterPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+              </SyncedTableWrapper>
 
-              {/* ✨ MOBILE & TABLET CARD VIEW */}
               <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {buybacks.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No buyback records found</div>
@@ -1194,10 +1304,8 @@ export default function AccountsMasterPage() {
           {/* ========================================================================= */}
           <TabsContent value="repairs" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
-              
-              {/* ✨ DESKTOP TABLE VIEW */}
-              <div className="hidden xl:block w-full overflow-x-auto custom-scrollbar flex-1">
-                <Table className="w-full whitespace-nowrap">
+              <SyncedTableWrapper>
+                <Table className="w-full whitespace-nowrap border-b border-zinc-200">
                   <TableHeader className="bg-amber-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-amber-100">
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider px-4 bg-amber-50/50 z-20 w-[60px] text-center sticky left-0 border-r border-amber-100">Actions</TableHead>
@@ -1237,9 +1345,8 @@ export default function AccountsMasterPage() {
                     ))}
                   </TableBody>
                 </Table>
-              </div>
+              </SyncedTableWrapper>
 
-              {/* ✨ MOBILE & TABLET CARD VIEW */}
               <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {repairs.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No repair tickets found</div>

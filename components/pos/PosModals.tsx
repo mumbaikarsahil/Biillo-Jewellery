@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { QrCode, X, ShieldAlert, Loader2, CheckCircle2, FileText, Truck, Hammer, Printer } from 'lucide-react'
+import { QrCode, X, ShieldAlert, Loader2, CheckCircle2, FileText, Truck, Hammer, Printer, Store } from 'lucide-react'
 import { Scanner } from '@yudiel/react-qr-scanner'
 import { useReactToPrint } from 'react-to-print'
 import { Button } from '@/components/ui/button'
@@ -16,37 +16,40 @@ export function PosModals({
   isProcessing 
 }: any) {
   
-  const printRef = useRef<HTMLDivElement>(null)
+  // ✨ TWO DEDICATED REFS FOR FLAWLESS MOBILE ISOLATION
+  const customerPrintRef = useRef<HTMLDivElement>(null)
+  const storePrintRef = useRef<HTMLDivElement>(null)
+  
   const [mounted, setMounted] = useState(false)
 
-  // ✨ Wait for the client to mount so we can safely use Portals in Next.js
   useEffect(() => {
     setMounted(true)
   }, [])
   
-  // Base trigger function
-  const triggerPrint = useReactToPrint({ 
-    contentRef: printRef 
-  })
+  // Base trigger functions
+  const triggerCustomerPrint = useReactToPrint({ contentRef: customerPrintRef })
+  const triggerStorePrint = useReactToPrint({ contentRef: storePrintRef })
 
-  // --- Wrapper function to hijack document.title for PDF saving ---
-  const handlePrint = () => {
-    if (!lastInvoiceData) return;
-    
-    // Save the original page title
+  // --- Wrapper function for Customer Copy ---
+  const handlePrintCustomer = () => {
+    const data = lastInvoiceData || previewData;
+    if (!data) return;
     const originalTitle = document.title;
-    
-    // Overwrite the title so "Save as PDF" uses this name
     const docPrefix = mode === 'challan' ? 'Challan' : mode === 'estimate' ? 'Estimate' : 'Invoice';
-    document.title = `${docPrefix}_${lastInvoiceData.invoice_number || 'Doc'}`;
-    
-    // Trigger the print dialog
-    triggerPrint();
-    
-    // Restore the original title after a short delay
-    setTimeout(() => {
-      document.title = originalTitle;
-    }, 2000);
+    document.title = `${docPrefix}_${data.invoice_number}_Customer`;
+    triggerCustomerPrint();
+    setTimeout(() => { document.title = originalTitle; }, 2000);
+  };
+
+  // --- Wrapper function for Store Copy ---
+  const handlePrintStore = () => {
+    const data = lastInvoiceData || previewData;
+    if (!data) return;
+    const originalTitle = document.title;
+    const docPrefix = mode === 'challan' ? 'Challan' : mode === 'estimate' ? 'Estimate' : 'Invoice';
+    document.title = `${docPrefix}_${data.invoice_number}_Store`;
+    triggerStorePrint();
+    setTimeout(() => { document.title = originalTitle; }, 2000);
   };
 
   const modeConfig: Record<string, { bg: string, text: string }> = {
@@ -61,31 +64,37 @@ export function PosModals({
 
   return (
     <>
-      {/* ✨ BULLETPROOF PRINT ISOLATION */}
+      {/* ✨ BULLETPROOF PRINT ISOLATION: Hides EVERYTHING except the print portal */}
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
           @page { margin: 0; size: auto; } 
           
-          /* iPhone Native Print: Hides the main Next.js app to kill the 60 empty pages */
-          /* Desktop Print: Ignores the .print-container so the iframe doesn't go blank */
-          body > *:not(#mobile-print-portal):not(.print-container) {
+          /* Hide the main Next.js app completely */
+          #__next, body > div:not(#mobile-print-portal) {
             display: none !important;
           }
           
+          /* Force hide ALL Radix UI Modals/Overlays during print */
+          [data-radix-portal], [role="dialog"], [data-aria-hidden="true"], .fixed.inset-0 {
+            display: none !important;
+            opacity: 0 !important;
+            visibility: hidden !important;
+          }
+          
+          /* Only display our hidden portal container */
           #mobile-print-portal {
             display: block !important;
-          }
-
-          /* Kill Radix UI dark overlay backgrounds so we don't print grey pages */
-          [data-radix-focus-guard], [data-aria-hidden="true"], .fixed.inset-0 {
-            display: none !important;
+            visibility: visible !important;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
           }
         }
       `}} />
 
       {/* 1. CAMERA SCANNER MODAL */}
       <Dialog open={showScanner} onOpenChange={setShowScanner}>
-        {/* ✨ Added print:hidden so the modal vanishes if they trigger native print */}
         <DialogContent className="print:hidden sm:max-w-md p-0 overflow-hidden bg-white border border-slate-200 rounded-2xl shadow-2xl">
           <DialogHeader className="p-5 border-b border-slate-100 bg-white shrink-0">
             <DialogTitle className="text-sm font-bold uppercase tracking-widest text-slate-700 flex items-center justify-center gap-2">
@@ -121,7 +130,6 @@ export function PosModals({
 
       {/* 2. WYSIWYG PREVIEW MODAL */}
       <Dialog open={showPreviewModal} onOpenChange={setShowPreviewModal}>
-        {/* ✨ Added print:hidden */}
         <DialogContent 
           className="print:hidden max-w-[950px] w-full h-[100dvh] sm:h-[90vh] p-0 border-0 sm:border border-slate-200 shadow-[0_0_50px_rgba(0,0,0,0.15)] rounded-none sm:rounded-2xl bg-slate-50 flex flex-col overflow-hidden"
         >
@@ -152,35 +160,48 @@ export function PosModals({
              {previewData && (
                <div className="w-full min-h-full flex justify-center pb-[300px] sm:pb-20">
                  <div className="w-[210mm] origin-top-left sm:origin-top scale-[0.42] sm:scale-75 md:scale-[0.85] lg:scale-100 absolute sm:relative left-[4%] sm:left-auto mt-4 sm:mt-8 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.15)] bg-white ring-1 ring-slate-200 rounded-sm">
+                   {/* This is purely visual for the screen, not the print ref */}
                    <InvoicePrintTemplate data={previewData} copyLabel="Preview Draft" />
                  </div>
                </div>
              )}
           </div>
 
-          <DialogFooter className="bg-white p-4 sm:p-5 border-t border-slate-200 shrink-0 flex flex-col sm:flex-row justify-end gap-3 z-20 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
-            <Button 
-              variant="outline" 
-              className="rounded-xl text-sm font-bold w-full sm:w-auto h-12 sm:h-11 border-slate-300 text-slate-700 hover:bg-slate-50" 
-              onClick={() => setShowPreviewModal(false)}
-            >
-              Back to Edit
-            </Button>
-            <Button 
-              onClick={executeCheckout} 
-              disabled={isProcessing} 
-              className={`rounded-xl text-sm font-bold text-white w-full sm:w-auto h-12 sm:h-11 px-8 shadow-md transition-all active:scale-[0.98] ${currentTheme.bg}`}
-            >
-              {isProcessing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-              {isProcessing ? 'Processing...' : 'Confirm & Commit to Ledger'}
-            </Button>
+          <DialogFooter className="bg-white p-4 sm:p-5 border-t border-slate-200 shrink-0 flex flex-col sm:flex-row justify-between gap-3 z-20 shadow-[0_-4px_20px_rgba(0,0,0,0.03)]">
+            
+            {/* Split Print Buttons inside Preview */}
+            <div className="flex gap-2 w-full sm:w-auto">
+              <Button onClick={handlePrintCustomer} variant="outline" className="flex-1 sm:flex-none rounded-xl text-xs font-bold border-slate-300 text-slate-700 hover:bg-slate-50 h-12 sm:h-11">
+                <Printer className="w-4 h-4 mr-2" /> Cust. Copy
+              </Button>
+              <Button onClick={handlePrintStore} variant="outline" className="flex-1 sm:flex-none rounded-xl text-xs font-bold border-slate-300 text-slate-700 hover:bg-slate-50 h-12 sm:h-11">
+                <Store className="w-4 h-4 mr-2" /> Store Copy
+              </Button>
+            </div>
+
+            <div className="flex gap-2 w-full sm:w-auto mt-2 sm:mt-0">
+              <Button 
+                variant="ghost" 
+                className="rounded-xl text-sm font-bold w-full sm:w-auto h-12 sm:h-11 text-slate-500 hover:text-slate-800" 
+                onClick={() => setShowPreviewModal(false)}
+              >
+                Back to Edit
+              </Button>
+              <Button 
+                onClick={executeCheckout} 
+                disabled={isProcessing} 
+                className={`rounded-xl text-sm font-bold text-white w-full sm:w-auto h-12 sm:h-11 px-8 shadow-md transition-all active:scale-[0.98] ${currentTheme.bg}`}
+              >
+                {isProcessing ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+                {isProcessing ? 'Processing...' : 'Confirm & Commit to Ledger'}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* 3. SUCCESS & PRINT MODAL */}
       <Dialog open={showPrintModal} onOpenChange={setShowPrintModal}>
-        {/* ✨ Added print:hidden */}
         <DialogContent className="print:hidden sm:max-w-[420px] border-0 sm:border border-slate-200 shadow-2xl p-0 rounded-none sm:rounded-2xl overflow-hidden bg-white w-full h-[100dvh] sm:h-auto flex flex-col justify-center">
           <DialogTitle className="sr-only">Transaction Success</DialogTitle>
           <div className="flex flex-col items-center justify-center p-8 sm:p-10 text-center space-y-6">
@@ -191,29 +212,38 @@ export function PosModals({
                <h2 className="text-2xl font-bold text-slate-800 tracking-tight">Success</h2>
                <p className="text-sm font-mono font-semibold text-slate-500 bg-slate-100 px-3 py-1 rounded-md inline-block">{lastInvoiceData?.invoice_number}</p>
             </div>
-            <div className="w-full flex flex-col sm:flex-row gap-3 pt-4">
-              <Button onClick={() => setShowPrintModal(false)} variant="outline" className="w-full sm:flex-1 h-12 rounded-xl font-bold border-slate-300 text-slate-600 hover:bg-slate-50">
-                Close
+            
+            {/* ✨ TWO DEDICATED PRINT BUTTONS */}
+            <div className="w-full grid grid-cols-1 gap-3 pt-2">
+              <Button onClick={handlePrintCustomer} className={`w-full h-12 rounded-xl font-bold text-white shadow-md ${currentTheme.bg}`}>
+                <Printer className="h-4 w-4 mr-2"/> Print Customer Copy
               </Button>
-              <Button onClick={handlePrint} className={`w-full sm:flex-1 h-12 rounded-xl font-bold text-white shadow-md ${currentTheme.bg}`}>
-                <Printer className="h-4 w-4 mr-2"/> Print Bill
+              <Button onClick={handlePrintStore} variant="outline" className={`w-full h-12 rounded-xl font-bold border-2 shadow-sm bg-white ${currentTheme.text} border-current hover:bg-slate-50`}>
+                <Store className="h-4 w-4 mr-2"/> Print Store Copy
               </Button>
             </div>
+            
+            <Button onClick={() => setShowPrintModal(false)} variant="ghost" className="w-full h-10 font-bold text-slate-500 hover:bg-slate-100 mt-2">
+              Close Window
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* ✨ FIX: PORTAL RENDERS PRINT TARGET DIRECTLY TO DOCUMENT ROOT */}
+      {/* ✨ ISOLATED RENDER TARGETS: We render both refs invisibly outside the DOM flow */}
       {mounted && typeof document !== 'undefined' && createPortal(
-        <div id="mobile-print-portal" className="hidden print:block w-full">
-          <div ref={printRef} className="print-container bg-white flex flex-col mx-auto w-max">
+        <div id="mobile-print-portal" className="hidden print:block w-full h-0 overflow-hidden">
+          {/* Ref 1: Customer */}
+          <div ref={customerPrintRef} className="print-container bg-white flex flex-col mx-auto w-max">
             <InvoicePrintTemplate 
-              data={lastInvoiceData} 
+              data={lastInvoiceData || previewData} 
               copyLabel="Customer Copy" 
             />
-            <div style={{ pageBreakAfter: 'always' }}></div>
+          </div>
+          {/* Ref 2: Store */}
+          <div ref={storePrintRef} className="print-container bg-white flex flex-col mx-auto w-max">
             <InvoicePrintTemplate 
-              data={lastInvoiceData} 
+              data={lastInvoiceData || previewData} 
               copyLabel="Store Copy" 
             />
           </div>

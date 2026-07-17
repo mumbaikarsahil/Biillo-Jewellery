@@ -133,7 +133,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     return (
       <div ref={ref} className="print-section w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
         
-        {/* ✨ FIX: Bulletproof Mobile Print CSS (No :has() selectors) */}
         <style type="text/css" media="print">
           {`
             @page { size: A4 portrait; margin: 0; }
@@ -143,11 +142,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 background: white !important; 
                 -webkit-print-color-adjust: exact !important; 
                 print-color-adjust: exact !important; 
-                /* Lock body to exactly 1 page to prevent the 14 extra blank pages bug */
-                height: 100vh !important;
-                overflow: hidden !important;
-                margin: 0 !important;
-                padding: 0 !important;
               }
 
               /* Hide UI navigation without touching Dialogs or Portals */
@@ -155,7 +149,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 display: none !important;
               }
 
-              /* Pull the invoice out of the hidden modal flow and overlay it on everything */
               .print-section {
                 position: absolute !important;
                 top: 0 !important;
@@ -602,14 +595,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
           <div className="mt-auto flex flex-col shrink-0">
             <div className="grid grid-cols-3 items-end text-sm font-bold mb-3 mt-4 relative">
               <div className="text-center px-6 relative">
-                {['normal', 'custom'].includes(mode) && (
-                  <img 
-                    src="/exchange-stamp.png" 
-                    alt="" 
-                    className="absolute -top-14 left-1/2 -translate-x-1/2 h-[64px] w-[64px] object-contain -rotate-12 opacity-90" 
-                    onError={(e) => e.currentTarget.style.display = 'none'} 
-                  />
-                )}
+                {/* ✨ STAMP REMOVED HERE AS REQUESTED */}
                 <div className="border-t border-black pt-1 text-[11px] uppercase tracking-wider">
                   {(mode === 'repair' || mode === 'return') ? 'Customer Signature' : 'Customer / Receiver Signature'}
                 </div>
@@ -649,7 +635,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
               </p>
             </div>
 
-            {/* ✨ FIXED: Height increased to 100px for full text visibility, centered evenly */}
             {!isEstimate && (
               <div 
                 className="w-full h-[100px] rounded-xl overflow-hidden border border-slate-200 relative shrink-0 mt-1"
