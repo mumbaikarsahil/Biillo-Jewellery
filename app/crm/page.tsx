@@ -91,6 +91,7 @@ export default function CRMPage() {
   const [messageRecipients, setMessageRecipients] = useState<any[]>([]);
 
   // Modals
+  const [activeCallRecordId, setActiveCallRecordId] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isAddKittyModalOpen, setIsAddKittyModalOpen] = useState(false)
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false) 
@@ -263,7 +264,7 @@ export default function CRMPage() {
       let q = supabase.from('customers').select(`
         *, 
         kitty_plans(*),
-        vouchers${isVoucherTab ? '!inner' : ''}(id, code, status, expiry_date), 
+        vouchers${isVoucherTab ? '!inner' : ''}(id, code, status, expiry_date, voucher_distributors(distributor_name)),
         voucher_message_sequences(id, status)
       `);
       q = buildServerQuery(q, activeTab);
@@ -315,18 +316,25 @@ export default function CRMPage() {
     try {
       const isDND = callForm.outcome === 'Not Interested (Do Not Disturb)';
       const callLogEntry = {
-        company_id: appUser?.company_id,
-        customer_id: selectedCustomer.id,
-        user_id: appUser?.id || appUser?.user_id, // Staff who made the call
         outcome: callForm.outcome,
         notes: callForm.notes,
         next_call_date: callForm.next_call_date || null,
         next_call_time: callForm.next_call_time || null,
       };
 
-      // 1. Insert into call_records/call_logs table
-      const { error: logErr } = await supabase.from('call_records').insert([callLogEntry]);
-      if (logErr) throw logErr;
+      // 1. UPDATE the existing call record (if we caught the ID) or INSERT a new one as a fallback
+      if (activeCallRecordId) {
+        const { error: logErr } = await supabase.from('call_records').update(callLogEntry).eq('id', activeCallRecordId);
+        if (logErr) throw logErr;
+      } else {
+        const { error: logErr } = await supabase.from('call_records').insert([{
+          company_id: appUser?.company_id,
+          customer_id: selectedCustomer.id,
+          user_id: appUser?.id || appUser?.user_id,
+          ...callLogEntry
+        }]);
+        if (logErr) throw logErr;
+      }
 
       // 2. Update Customer Profile with strict next-action protocols
       let updatePayload: any = {
@@ -335,10 +343,9 @@ export default function CRMPage() {
 
       if (isDND) {
         updatePayload.customer_status = 'DND';
-        updatePayload.next_followup_date = null; // Kill the timer
+        updatePayload.next_followup_date = null; 
         updatePayload.followup_reason = 'Customer requested Do Not Disturb';
       } else {
-        // If they specify a next call date, set the CRM timer
         if (callForm.next_call_date) {
            updatePayload.next_followup_date = callForm.next_call_date;
            updatePayload.followup_reason = `Follow up required after: ${callForm.outcome}`;
@@ -351,6 +358,7 @@ export default function CRMPage() {
       toast.success(isDND ? 'Customer moved to DND List' : 'Call Logged & Timer Set!');
       
       setIsCallModalOpen(false);
+      setActiveCallRecordId(null); // Reset the active ID
       setCallForm({ outcome: 'Connected / Spoke to Customer', notes: '', next_call_date: '', next_call_time: '' });
       fetchPage(page);
 
@@ -360,7 +368,6 @@ export default function CRMPage() {
       setIsSubmitting(false);
     }
   }
-
   // --- CSV Import Handlers ---
   const handleDownloadSample = () => {
     const csvContent = "full_name,phone,city,customer_status,birth_date,anniversary_date,store_credit_balance\nJohn Doe,9876543210,Mumbai,Lead,01-01-1990,15-05-2015,0\nJane Smith,9123456789,Delhi,Purchased,20-08-1985,,1200\nRahul Sharma,9988776655,Pune,Kitty Member,10-12-1992,20-11-2020,0";
@@ -708,9 +715,34 @@ export default function CRMPage() {
     setIsFollowupModalOpen(true); 
   }
 
-  const openCallLoggerModal = (customer: CRMCustomer) => {
+  const openCallLoggerModal = async (customer: CRMCustomer) => {
     setSelectedCustomer(customer);
+    
+    // 1. Trigger the Phone Dialer immediately
+    const cleanPhone = customer.phone.replace(/\D/g, '');
+    window.location.href = `tel:+91${cleanPhone}`;
+
+    // 2. Open the Modal so it's waiting when they return
     setIsCallModalOpen(true);
+    setCallForm({ outcome: 'Connected / Spoke to Customer', notes: '', next_call_date: '', next_call_time: '' });
+
+    // 3. Silently create the "Attempt" record in the database
+    try {
+      const { data, error } = await supabase.from('call_records').insert([{
+        company_id: appUser?.company_id,
+        customer_id: customer.id,
+        user_id: appUser?.id || appUser?.user_id,
+        outcome: 'Call Attempted (Pending Details)',
+        notes: 'Call initiated from CRM dialer.',
+      }]).select('id').single();
+
+      if (error) throw error;
+      
+      // Save this ID so we can update it when they fill out the modal
+      setActiveCallRecordId(data.id);
+    } catch (error) {
+      console.error("Failed to auto-log call attempt:", error);
+    }
   }
 
   const openProfileModal = (customer: CRMCustomer) => {

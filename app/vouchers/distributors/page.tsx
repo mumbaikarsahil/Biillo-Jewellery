@@ -17,7 +17,10 @@ import {
   Database,
   User,
   Truck,
-  IdCard
+  IdCard,
+  Search,
+  Filter,
+  TrendingUp
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -60,15 +63,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+interface DistributorMetrics {
+  registered: number;
+  redeemed: number;
+  conversionRate: number;
+}
+
 interface Distributor {
   id: string;
   distributor_name: string;
   contact_person: string;
   phone: string;
   address: string;
-  // ✨ Updated Interface to support new types
   distributor_type: 'internal_branch' | 'external_shop' | 'corporate_partner' | 'voucher_printing_press' | 'business_introduction_agent' | 'sales_person';
   created_at: string;
+  metrics?: DistributorMetrics;
 }
 
 interface DeliveryAgent {
@@ -87,6 +96,10 @@ export default function DistributorsPage() {
   const [agents, setAgents] = useState<DeliveryAgent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   
+  // ✨ Search and Filter States
+  const [searchTerm, setSearchTerm] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+
   // Modals & Submit States
   const [isPartnerDialogOpen, setIsPartnerDialogOpen] = useState(false);
   const [isAgentDialogOpen, setIsAgentDialogOpen] = useState(false);
@@ -109,17 +122,51 @@ export default function DistributorsPage() {
   const fetchRegistries = async () => {
     setIsLoading(true);
     try {
-      // 1. Fetch Partners
+      // 1. Fetch Partners AND their associated vouchers in a single query
       const { data: distData, error: distErr } = await supabase
         .from("voucher_distributors")
-        .select("*")
+        // We only pull the 'status' column from the related vouchers to keep the payload light
+        .select("*, vouchers(status)")
         .eq("company_id", appUser?.company_id)
         .order("created_at", { ascending: false });
 
       if (distErr) throw distErr;
-      setDistributors(distData || []);
 
-      // 2. Fetch Agents
+      // 2. Calculate accurate metrics using the voucher statuses
+      const enrichedDistributors = (distData || []).map((distributor) => {
+        let registeredCount = 0;
+        let redeemedCount = 0;
+
+        // Loop through all vouchers linked to this specific distributor ID
+        if (distributor.vouchers && Array.isArray(distributor.vouchers)) {
+          distributor.vouchers.forEach((v: any) => {
+            if (v.status === 'registered') {
+              // The customer scanned it and registered it to their wallet
+              registeredCount += 1;
+            } else if (v.status === 'redeemed') {
+              // The customer used it in the store
+              // (If it's redeemed, it was also successfully registered first, so we count both)
+              registeredCount += 1; 
+              redeemedCount += 1;
+            }
+          });
+        }
+
+        const conversionRate = registeredCount > 0 ? (redeemedCount / registeredCount) * 100 : 0;
+
+        return {
+          ...distributor,
+          metrics: {
+            registered: registeredCount,
+            redeemed: redeemedCount,
+            conversionRate: conversionRate
+          }
+        };
+      });
+
+      setDistributors(enrichedDistributors);
+
+      // 3. Fetch Delivery Agents
       const { data: agentData, error: agentErr } = await supabase
         .from("delivery_agents")
         .select("*")
@@ -141,7 +188,6 @@ export default function DistributorsPage() {
     if (appUser) fetchRegistries();
   }, [appUser]);
 
-  // --- Partner Logic ---
   const handlePartnerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -167,7 +213,6 @@ export default function DistributorsPage() {
     }
   };
 
-  // --- Agent Logic ---
   const handleAgentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -191,7 +236,6 @@ export default function DistributorsPage() {
     }
   };
 
-  // ✨ Added badge styles for the 3 new roles
   const getTypeBadge = (type: string) => {
     switch (type) {
       case 'internal_branch':
@@ -210,6 +254,15 @@ export default function DistributorsPage() {
         return <Badge variant="secondary" className="text-[10px] h-5 uppercase">{(type || "Unknown").replace(/_/g, ' ')}</Badge>;
     }
   };
+
+  // ✨ Filtering Logic for Partners
+  const filteredDistributors = distributors.filter((d) => {
+    const matchesSearch = d.distributor_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                          d.contact_person?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          d.phone.includes(searchTerm);
+    const matchesType = typeFilter === "all" || d.distributor_type === typeFilter;
+    return matchesSearch && matchesType;
+  });
 
   return (
     <div className="flex flex-col min-h-screen bg-[#fafafa]">
@@ -249,7 +302,7 @@ export default function DistributorsPage() {
         </div>
       </header>
 
-      <main className="p-4 md:p-8 max-w-[1200px] w-full mx-auto animate-in fade-in duration-500">
+      <main className="p-4 md:p-8 max-w-[1300px] w-full mx-auto animate-in fade-in duration-500">
         
         <Tabs defaultValue="partners" className="space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -272,7 +325,7 @@ export default function DistributorsPage() {
                     <DialogTitle className="text-lg font-bold text-gray-900">Add B2B Partner</DialogTitle>
                     <DialogDescription className="text-xs font-medium text-gray-500">Configure a new distribution point.</DialogDescription>
                   </DialogHeader>
-                  <form id="add-partner-form" onSubmit={handlePartnerSubmit} className="p-6 space-y-4">
+                  <form id="add-partner-form" className="p-6 space-y-4">
                     <div className="space-y-1.5">
                       <Label className="text-[11px] font-bold text-gray-400 uppercase">Business Name</Label>
                       <div className="relative">
@@ -288,7 +341,6 @@ export default function DistributorsPage() {
                           <SelectItem value="external_shop">External Vendor</SelectItem>
                           <SelectItem value="internal_branch">Internal Branch</SelectItem>
                           <SelectItem value="corporate_partner">Corporate Account</SelectItem>
-                          {/* ✨ Added 3 new roles here */}
                           <SelectItem value="voucher_printing_press">Voucher Printing Press</SelectItem>
                           <SelectItem value="business_introduction_agent">Business Introduction Agent</SelectItem>
                           <SelectItem value="sales_person">Sales Person</SelectItem>
@@ -315,7 +367,7 @@ export default function DistributorsPage() {
                   </form>
                   <DialogFooter className="bg-gray-50 p-4 border-t gap-2">
                     <Button type="button" variant="ghost" size="sm" className="text-xs font-bold uppercase" onClick={() => setIsPartnerDialogOpen(false)} disabled={isSubmitting}>Cancel</Button>
-                    <Button type="submit" form="add-partner-form" size="sm" className="text-xs font-bold uppercase px-6 bg-gray-900" disabled={isSubmitting}>
+                    <Button type="button" size="sm" className="text-xs font-bold uppercase px-6 bg-gray-900" disabled={isSubmitting} onClick={handlePartnerSubmit}>
                       {isSubmitting ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : null} Commit Partner
                     </Button>
                   </DialogFooter>
@@ -335,7 +387,7 @@ export default function DistributorsPage() {
                     <DialogTitle className="text-lg font-bold text-gray-900">Add Delivery Agent</DialogTitle>
                     <DialogDescription className="text-xs font-medium text-gray-500">Register a secure courier or staff member.</DialogDescription>
                   </DialogHeader>
-                  <form id="add-agent-form" onSubmit={handleAgentSubmit} className="p-6 space-y-4">
+                  <form id="add-agent-form" className="p-6 space-y-4">
                     <div className="space-y-1.5">
                       <Label className="text-[11px] font-bold text-gray-400 uppercase">Agent Full Name</Label>
                       <div className="relative">
@@ -360,7 +412,7 @@ export default function DistributorsPage() {
                   </form>
                   <DialogFooter className="bg-gray-50 p-4 border-t gap-2">
                     <Button type="button" variant="ghost" size="sm" className="text-xs font-bold uppercase" onClick={() => setIsAgentDialogOpen(false)} disabled={isSubmitting}>Cancel</Button>
-                    <Button type="submit" form="add-agent-form" size="sm" className="text-xs font-bold uppercase px-6 bg-indigo-600 hover:bg-indigo-700" disabled={isSubmitting}>
+                    <Button type="button" size="sm" className="text-xs font-bold uppercase px-6 bg-indigo-600 hover:bg-indigo-700" disabled={isSubmitting} onClick={handleAgentSubmit}>
                       {isSubmitting ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : null} Commit Agent
                     </Button>
                   </DialogFooter>
@@ -372,7 +424,7 @@ export default function DistributorsPage() {
           <Card className="shadow-sm border-gray-200/60 overflow-hidden bg-white">
             <TabsList className="bg-gray-50/80 border-b border-gray-100 rounded-none w-full justify-start h-12 px-4 gap-6">
               <TabsTrigger value="partners" className="data-[state=active]:border-b-2 data-[state=active]:border-gray-900 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-gray-900 shadow-none transition-all bg-transparent">
-                B2B Partners ({distributors.length})
+                B2B Partners ({filteredDistributors.length})
               </TabsTrigger>
               <TabsTrigger value="agents" className="data-[state=active]:border-b-2 data-[state=active]:border-indigo-600 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-indigo-700 shadow-none transition-all bg-transparent">
                 Delivery Agents ({agents.length})
@@ -383,12 +435,44 @@ export default function DistributorsPage() {
               
               {/* PARTNERS TABLE */}
               <TabsContent value="partners" className="m-0">
+                {/* ✨ Search & Filters Bar */}
+                <div className="flex flex-col sm:flex-row gap-3 p-4 bg-white border-b border-gray-100">
+                  <div className="relative flex-1 max-w-sm">
+                    <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                    <Input 
+                      placeholder="Search by partner name, contact, or phone..." 
+                      className="pl-9 h-9 text-sm border-gray-200 shadow-sm"
+                      value={searchTerm}
+                      onChange={(e) => setSearchTerm(e.target.value)}
+                    />
+                  </div>
+                  <div className="w-full sm:w-[220px]">
+                    <Select value={typeFilter} onValueChange={setTypeFilter}>
+                      <SelectTrigger className="h-9 text-sm border-gray-200 shadow-sm">
+                        <Filter className="w-4 h-4 mr-2 text-gray-400" />
+                        <SelectValue placeholder="Filter by type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Categories</SelectItem>
+                        <SelectItem value="external_shop">External Vendor</SelectItem>
+                        <SelectItem value="internal_branch">Internal Branch</SelectItem>
+                        <SelectItem value="corporate_partner">Corporate Account</SelectItem>
+                        <SelectItem value="voucher_printing_press">Voucher Printing Press</SelectItem>
+                        <SelectItem value="business_introduction_agent">Business Introduction Agent</SelectItem>
+                        <SelectItem value="sales_person">Sales Person</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
                 {isLoading ? (
                   <div className="flex justify-center items-center py-20"><Loader2 className="h-8 w-8 animate-spin text-gray-200" /></div>
-                ) : distributors.length === 0 ? (
+                ) : filteredDistributors.length === 0 ? (
                   <div className="text-center py-20 bg-gray-50/30">
                     <Store className="w-12 h-12 mx-auto mb-4 text-gray-200" />
-                    <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter italic font-sans">No distribution partners found</p>
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter italic font-sans">
+                      {distributors.length > 0 ? "No partners match your filters" : "No distribution partners found"}
+                    </p>
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
@@ -397,36 +481,47 @@ export default function DistributorsPage() {
                         <TableRow className="hover:bg-transparent">
                           <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-6 h-10">Entity Name</TableHead>
                           <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10">Classification</TableHead>
-                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10">Primary Contact</TableHead>
-                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10">Phone / Comms</TableHead>
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10 text-center">Registered</TableHead>
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10 text-center">Redeemed</TableHead>
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10 text-center">Conversion</TableHead>
                           <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10">Created</TableHead>
                           <TableHead className="w-[50px]"></TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {distributors.map((distributor) => (
+                        {filteredDistributors.map((distributor) => (
                           <TableRow key={distributor.id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100">
                             <TableCell className="px-6 py-3">
                               <div className="flex items-center gap-3">
                                 <div className="h-8 w-8 rounded bg-gray-100 flex items-center justify-center text-gray-400">
                                   <Building2 className="h-4 w-4" />
                                 </div>
-                                <span className="font-bold text-sm text-gray-900">{distributor.distributor_name}</span>
+                                <div className="flex flex-col">
+                                  <span className="font-bold text-sm text-gray-900">{distributor.distributor_name}</span>
+                                  <span className="text-[10px] font-medium text-gray-500 mt-0.5">{distributor.phone} • {distributor.contact_person}</span>
+                                </div>
                               </div>
                             </TableCell>
                             <TableCell className="px-4">{getTypeBadge(distributor.distributor_type)}</TableCell>
-                            <TableCell className="px-4">
-                              <div className="flex items-center gap-2">
-                                <User className="h-3.5 w-3.5 text-gray-400" />
-                                <span className="text-xs font-semibold text-gray-700">{distributor.contact_person || "N/A"}</span>
+                            
+                            {/* ✨ Metrics Columns */}
+                            <TableCell className="px-4 text-center">
+                              <Badge variant="secondary" className="bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold border-blue-200">
+                                {distributor.metrics?.registered || 0}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="px-4 text-center">
+                              <Badge variant="secondary" className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-bold border-emerald-200">
+                                {distributor.metrics?.redeemed || 0}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="px-4 text-center">
+                              <div className="flex items-center justify-center gap-1.5 font-bold text-xs text-gray-700">
+                                {distributor.metrics?.conversionRate.toFixed(1)}%
+                                {(distributor.metrics?.conversionRate || 0) > 0 && <TrendingUp className="w-3 h-3 text-emerald-500" />}
                               </div>
                             </TableCell>
-                            <TableCell className="px-4">
-                              <div className="flex items-center gap-2">
-                                <Phone className="h-3.5 w-3.5 text-gray-400" />
-                                <span className="text-xs font-mono font-bold text-gray-600">{distributor.phone || "---"}</span>
-                              </div>
-                            </TableCell>
+
                             <TableCell className="px-4">
                               <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">{format(new Date(distributor.created_at), "dd MMM yy")}</span>
                             </TableCell>

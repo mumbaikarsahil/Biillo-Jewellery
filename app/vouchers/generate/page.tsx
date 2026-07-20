@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog"; 
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -27,13 +28,16 @@ export default function GenerateVouchersPage() {
   
   const [companyName, setCompanyName] = useState("GIFT VOUCHER");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [generationProgress, setGenerationProgress] = useState(0); // Track 0 to 100%
+  const [generationProgress, setGenerationProgress] = useState(0); 
 
   const [successBatch, setSuccessBatch] = useState<{ 
     batchNo: string; codes: string[]; discount: number; handlingFee: number; expiry: string 
   } | null>(null);
 
   const [showSuccessModal, setShowSuccessModal] = useState(false);
+
+  // ✨ FIX 1: Updated the interface to match your database column
+  const [printers, setPrinters] = useState<{id: string, distributor_name: string}[]>([]);
 
   const [formData, setFormData] = useState({
     prefix: "A",
@@ -59,11 +63,20 @@ export default function GenerateVouchersPage() {
 
       const { data: lastBatch } = await supabase.from('voucher_batches').select('prefix').eq('company_id', appUser.company_id).order('created_at', { ascending: false }).limit(1).maybeSingle();
       if (lastBatch && lastBatch.prefix) setFormData(prev => ({ ...prev, prefix: lastBatch.prefix }));
+
+      // ✨ FIX 2: Selecting `distributor_name` instead of `name`
+      const { data: printersData, error } = await supabase
+        .from('voucher_distributors')
+        .select('id, distributor_name')
+        .eq('company_id', appUser.company_id)
+        .eq('distributor_type', 'voucher_printing_press')
+        .order('distributor_name');
+        
+      if (printersData) setPrinters(printersData);
     }
     fetchInitialContext();
   }, [appUser]);
 
-  // --- EXTRACTED SEQUENCE DETECTOR FOR REUSE ---
   const fetchNextSequence = useCallback(async (prefixToSearch: string) => {
     if (!prefixToSearch.trim()) return;
     const prefix = prefixToSearch.trim().toUpperCase();
@@ -95,11 +108,9 @@ export default function GenerateVouchersPage() {
     return () => clearTimeout(timeoutId);
   }, [formData.prefix, fetchNextSequence]);
 
-  // --- RESET ROUTINE ---
   const handleResetAfterSuccess = () => {
     setShowSuccessModal(false);
     
-    // Clear the form to default values EXCEPT the prefix
     setFormData(prev => ({
       ...prev,
       quantity: 100,
@@ -109,8 +120,6 @@ export default function GenerateVouchersPage() {
     }));
     
     setGenerationProgress(0);
-    
-    // Auto-fetch the very next available sequence after the huge batch was just inserted
     setTimeout(() => fetchNextSequence(formData.prefix), 300);
   };
 
@@ -123,6 +132,10 @@ export default function GenerateVouchersPage() {
     e.preventDefault();
     if (isGenerating) return; 
     
+    if (intendedUse === 'physical' && !formData.printerName) {
+      return toast({ title: "Validation Error", description: "Please select a Printing Press.", variant: "destructive" });
+    }
+
     setIsGenerating(true);
     setGenerationProgress(0);
 
@@ -142,13 +155,11 @@ export default function GenerateVouchersPage() {
 
       const prefix = formData.prefix.trim().toUpperCase();
       
-      // Generating arrays in memory takes <50ms even for 20,000 items
       const generatedCodes = Array.from({ length: quantity }, (_, i) => {
         const numSequence = (startNum + i).toString().padStart(4, '0');
         return `${prefix}${numSequence}`;
       });
 
-      // 1. Create the Batch Header first
       const { data: batchData, error: batchError } = await supabase.from("voucher_batches").insert({
           company_id: companyId, 
           batch_no: batchNo, 
@@ -171,23 +182,21 @@ export default function GenerateVouchersPage() {
         expiry_date: expiryIsoStr,
       }));
 
-      // 2. Insert robustly in chunks to bypass API timeout/payload limits
-      const chunkSize = 1000; // Optimal for Supabase throughput
+      const chunkSize = 1000; 
       let successfulInserts = 0;
 
       for (let i = 0; i < vouchersToInsert.length; i += chunkSize) {
         const chunk = vouchersToInsert.slice(i, i + chunkSize);
         
-        // Retry logic for huge batches to handle temporary network blips
         let retries = 3;
         while (retries > 0) {
            const { error: vouchersError } = await supabase.from("vouchers").insert(chunk);
            if (vouchersError) {
              retries--;
              if (retries === 0) throw new Error(`Failed writing block ${i}. Network error: ${vouchersError.message}`);
-             await new Promise(res => setTimeout(res, 1500)); // wait 1.5s before retry
+             await new Promise(res => setTimeout(res, 1500));
            } else {
-             break; // Success, break retry loop
+             break; 
            }
         }
         
@@ -260,7 +269,6 @@ export default function GenerateVouchersPage() {
   return (
     <div className="flex flex-col min-h-screen bg-[#fafafa] font-sans">
       
-      {/* --- COMPACT IDE-STYLE TOOLBAR HEADER --- */}
       <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-md border-b border-gray-200 px-4 h-12 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 overflow-hidden">
           <Link href="/vouchers">
@@ -303,7 +311,6 @@ export default function GenerateVouchersPage() {
       <main className="p-4 md:p-8 max-w-[1100px] w-full mx-auto space-y-6 animate-in fade-in duration-500">
         <div className="grid gap-6 md:grid-cols-5">
           
-          {/* MAIN FORM SECTION */}
           <Card className="md:col-span-3 shadow-sm border-gray-200/60 overflow-hidden bg-white">
             <CardHeader className="bg-gray-50/50 py-3 px-4 border-b">
               <div className="flex items-center gap-2">
@@ -374,10 +381,31 @@ export default function GenerateVouchersPage() {
                   </div>
                 </div>
 
+                {/* ✨ FIX 3: Using `printer.distributor_name` correctly in the Select elements */}
                 {intendedUse === 'physical' && (
                   <div className="space-y-2">
-                    <Label htmlFor="printerName" className="text-xs font-bold text-gray-500 uppercase tracking-tight">Printer / Vendor ID (Optional)</Label>
-                    <Input id="printerName" name="printerName" placeholder="Identify the printing press..." className="h-10 text-sm border-gray-200 focus-visible:ring-primary rounded-md bg-gray-50" value={formData.printerName} onChange={handleInputChange} />
+                    <Label htmlFor="printerName" className="text-xs font-bold text-gray-500 uppercase tracking-tight">Printing Press Vendor</Label>
+                    <Select 
+                      value={formData.printerName} 
+                      onValueChange={(val) => setFormData(prev => ({ ...prev, printerName: val }))}
+                    >
+                      <SelectTrigger className="h-10 text-sm border-gray-200 focus:ring-primary rounded-md bg-gray-50">
+                        <SelectValue placeholder="Select registered printing press..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {printers.length > 0 ? (
+                          printers.map(printer => (
+                            <SelectItem key={printer.id} value={printer.distributor_name}>
+                              {printer.distributor_name}
+                            </SelectItem>
+                          ))
+                        ) : (
+                          <SelectItem value="none" disabled>
+                            No printing presses found. Add one in the Distributors tab.
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
                   </div>
                 )}
 
@@ -398,7 +426,6 @@ export default function GenerateVouchersPage() {
             </CardContent>
           </Card>
 
-          {/* SIDEBAR / STATUS SECTION */}
           <div className="md:col-span-2 space-y-6">
             <Card className={`shadow-sm border-gray-200/60 overflow-hidden rounded-lg transition-all duration-500 ${successBatch ? 'bg-white' : 'bg-gray-50/50 opacity-80'}`}>
               <CardHeader className="bg-gray-50/50 py-3 px-4 border-b border-gray-200/60">
@@ -487,7 +514,6 @@ export default function GenerateVouchersPage() {
         </div>
       </main>
 
-      {/* SUCCESS CELEBRATION MODAL */}
       <Dialog open={showSuccessModal} onOpenChange={(open) => !open && handleResetAfterSuccess()}>
         <DialogContent className="sm:max-w-md text-center flex flex-col items-center border-none shadow-2xl p-6 rounded-2xl">
           <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-2 shadow-sm border border-emerald-200">
@@ -526,8 +552,6 @@ export default function GenerateVouchersPage() {
         </DialogContent>
       </Dialog>
 
-      {/* --- HIDDEN PRINT AREA --- */}
-      {/* We only render this div if the batch is <= 1000 items to save the DOM from freezing! */}
       {(successBatch && successBatch.codes.length <= 1000) && (
         <div className="hidden">
           <div ref={printRef}>

@@ -1,6 +1,6 @@
 import React from 'react'
 import { format } from "date-fns"
-import { Phone, User, MessageCircle, Calendar, IndianRupee, Star, AlertCircle, Users, PhoneCall, Ticket } from 'lucide-react'
+import { Phone, User, MessageCircle, Calendar, IndianRupee, Star, AlertCircle, Users, PhoneCall, Ticket, Store } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -66,6 +66,18 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
     )
   }
 
+  // ✨ HELPER: Safely extracts the distributor name from the Supabase Join
+  const getDistributorName = (voucher: any) => {
+    if (!voucher) return "Direct Event / Campaign";
+    
+    const distData = voucher.voucher_distributors;
+    
+    if (Array.isArray(distData)) {
+      return distData[0]?.distributor_name || "Direct Event / Campaign";
+    }
+    return distData?.distributor_name || "Direct Event / Campaign";
+  }
+  
   return (
     <div className="h-full flex flex-col">
       {/* DESKTOP VIEW */}
@@ -82,23 +94,27 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
           <TableBody>
             {data.map((row) => {
               // ✨ LOGIC: Smart Voucher Status Check
-              const hasVouchers = row.vouchers && row.vouchers.length > 0;
+              const activeVoucher = row.vouchers?.find(v => v.status === 'registered') 
+                                 || row.vouchers?.find(v => v.status === 'redeemed') 
+                                 || row.vouchers?.[0];
+
               let voucherText = "";
               let voucherColor = "";
 
-              if (hasVouchers) {
-                // Prioritize 'registered' (active) over 'redeemed' (used)
-                if (row.vouchers?.some(v => v.status === 'registered')) {
+              if (activeVoucher) {
+                if (activeVoucher.status === 'registered') {
                   voucherText = "Voucher Registered";
-                  voucherColor = "bg-blue-600 text-white"; // Bright blue for active
-                } else if (row.vouchers?.some(v => v.status === 'redeemed')) {
+                  voucherColor = "bg-blue-600 text-white"; 
+                } else if (activeVoucher.status === 'redeemed') {
                   voucherText = "Claimed Voucher";
-                  voucherColor = "bg-slate-100 text-slate-500"; // Dimmed gray for already used
+                  voucherColor = "bg-slate-100 text-slate-500"; 
                 } else {
                   voucherText = "Voucher Active";
                   voucherColor = "bg-blue-600 text-white";
                 }
               }
+
+              const distributorName = getDistributorName(activeVoucher);
               
               return (
               <TableRow key={row.id} className={cn("transition-colors border-b border-slate-100 hover:bg-slate-50/50", isKitty && "hover:bg-purple-50/50")}>
@@ -108,13 +124,6 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                       <button onClick={() => onViewProfile(row)} className="font-semibold text-indigo-600 hover:text-indigo-800 hover:underline text-sm leading-tight transition-colors text-left">
                         {row.full_name}
                       </button>
-                      
-                      {/* ✨ NEW: Dynamic Voucher Badge */}
-                      {hasVouchers && voucherText && (
-                        <Badge className={cn("border-none text-[8px] h-4 px-1.5 uppercase tracking-widest flex items-center gap-1 shadow-sm", voucherColor)}>
-                          <Ticket className="w-2.5 h-2.5" /> {voucherText}
-                        </Badge>
-                      )}
 
                       {Number(row.store_credit_balance) > 0 && (
                         <Badge className="bg-emerald-50 text-emerald-600 border-emerald-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">
@@ -127,7 +136,25 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                         </Badge>
                       )}
                     </div>
+
                     <span className="text-[10px] text-slate-500 font-mono mt-0.5 flex items-center gap-1"><Phone className="w-2.5 h-2.5"/> {row.phone}</span>
+
+                    {/* ✨ NEW: Detailed Voucher Block */}
+                    {activeVoucher && voucherText && (
+                      <div className="mt-1.5 flex flex-col gap-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <Badge className={cn("border-none text-[8px] h-4 px-1.5 uppercase tracking-widest flex items-center gap-1 shadow-sm w-max", voucherColor)}>
+                            <Ticket className="w-2.5 h-2.5" /> {voucherText}
+                          </Badge>
+                          <span className="text-[10px] font-mono font-bold text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                            {activeVoucher.code}
+                          </span>
+                        </div>
+                        <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1 mt-0.5">
+                          <Store className="w-2.5 h-2.5" /> Via: {distributorName}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </TableCell>
                 <TableCell className="py-3">
@@ -166,15 +193,18 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
       <div className="md:hidden flex flex-col gap-3 p-3 bg-slate-50/50 flex-1 overflow-y-auto custom-scrollbar">
         {data.map((row) => {
           // ✨ LOGIC: Smart Voucher Status Check (Mobile)
-          const hasVouchers = row.vouchers && row.vouchers.length > 0;
+          const activeVoucher = row.vouchers?.find(v => v.status === 'registered') 
+                             || row.vouchers?.find(v => v.status === 'redeemed') 
+                             || row.vouchers?.[0];
+
           let voucherText = "";
           let voucherColor = "";
 
-          if (hasVouchers) {
-            if (row.vouchers?.some(v => v.status === 'registered')) {
+          if (activeVoucher) {
+            if (activeVoucher.status === 'registered') {
               voucherText = "Voucher Registered";
               voucherColor = "bg-blue-600 text-white"; 
-            } else if (row.vouchers?.some(v => v.status === 'redeemed')) {
+            } else if (activeVoucher.status === 'redeemed') {
               voucherText = "Claimed Voucher";
               voucherColor = "bg-slate-100 text-slate-500"; 
             } else {
@@ -182,6 +212,8 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
               voucherColor = "bg-blue-600 text-white";
             }
           }
+
+          const distributorName = getDistributorName(activeVoucher);
 
           return (
           <div key={row.id} className={cn("bg-white border rounded-xl p-4 shadow-sm flex flex-col gap-3", isKitty ? "border-purple-100" : "border-slate-200")}>
@@ -191,14 +223,6 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                   {row.full_name}
                 </button>
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  
-                  {/* ✨ NEW: Dynamic Voucher Badge (Mobile) */}
-                  {hasVouchers && voucherText && (
-                    <Badge className={cn("border-none text-[8px] h-4 px-1.5 uppercase tracking-widest flex items-center gap-1 shadow-sm", voucherColor)}>
-                      <Ticket className="w-2.5 h-2.5" /> {voucherText}
-                    </Badge>
-                  )}
-
                   {Number(row.store_credit_balance) > 0 && (
                     <Badge className="bg-emerald-50 text-emerald-600 border-emerald-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">
                       <IndianRupee className="w-2.5 h-2.5" /> Credit
@@ -211,6 +235,23 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                   )}
                 </div>
                 <p className="text-[11px] font-mono text-slate-500 mt-1.5 flex items-center gap-1"><Phone className="w-3 h-3"/> {row.phone}</p>
+
+                {/* ✨ NEW: Detailed Voucher Block (Mobile) */}
+                {activeVoucher && voucherText && (
+                  <div className="mt-2.5 flex flex-col gap-1.5 p-2 bg-slate-50 rounded-lg border border-slate-100">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Badge className={cn("border-none text-[8px] h-4 px-1.5 uppercase tracking-widest flex items-center gap-1 shadow-sm w-max", voucherColor)}>
+                        <Ticket className="w-2.5 h-2.5" /> {voucherText}
+                      </Badge>
+                      <span className="text-[10px] font-mono font-bold text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                        {activeVoucher.code}
+                      </span>
+                    </div>
+                    <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                      <Store className="w-2.5 h-2.5" /> Via: {distributorName}
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="flex gap-1.5">
                 <Button size="icon" variant="outline" className="h-8 w-8 text-[#1DA851] border-slate-200 rounded-lg hover:bg-[#25D366]/10 shrink-0" onClick={() => onMessage(row)}>
@@ -222,7 +263,7 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
               </div>
             </div>
             
-            <div className="bg-slate-50 rounded-lg p-3 border border-slate-100">
+            <div className="bg-slate-50 rounded-lg p-3 border border-slate-100 mt-1">
               {renderFollowup(row.next_followup_date, row.followup_reason)}
             </div>
 

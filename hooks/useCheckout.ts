@@ -119,7 +119,6 @@ export function useCheckout({
   let finalVoucherCode = ''
   let finalHandlingFee = handlingAmt
 
-  // ✨ FIX: Inherit locked vouchers for Final Pickup Bills or apply active ones
   if (activeVoucher) {
       const vAmount = activeVoucher.amount;
       const hFee = activeVoucher.handling_fee || 0;
@@ -132,7 +131,6 @@ export function useCheckout({
       }
       finalVoucherCode = activeVoucher.code
   } else if (mode === 'normal' && cart.some(item => item.voucher_discount_locked > 0)) {
-      // Pull locked discount if this is a final bill generated from a custom order
       const lockedDiscount = cart.reduce((sum, item) => sum + (Number(item.voucher_discount_locked) || 0), 0);
       appliedVoucherAmount = lockedDiscount;
       finalTaxableValue = Math.max(0, baseTaxable - appliedVoucherAmount);
@@ -154,7 +152,6 @@ export function useCheckout({
   // --- HANDLERS ---
   // ==============================================================
 
-  // ✨ FIX: Accept overrideCode to support phone number lookups
   const handleApplyVoucher = async (overrideCode?: string) => {
     if (appliedKittyAmount > 0 || appliedCreditAmount > 0) {
       return toast.error("Clubbing Error", { description: "Cannot apply vouchers when Wallet or Kitty balances are in use." });
@@ -346,7 +343,6 @@ export function useCheckout({
     let finalNo = ''
     try {
       
-      // Determine the final user attributing the sale
       const finalizingUserId = billedBy || appUser?.user_id || appUser?.id;
 
       const effectiveKittyAmt = customTransactionContext?.applied_kitty || customTransactionContext?.appliedKitty || appliedKittyAmount;
@@ -637,6 +633,11 @@ export function useCheckout({
       else if (mode === 'custom') {
         if (!selectedCustomer) throw new Error("Please select a customer for this Custom Order.")
         finalNo = `ORD-${Date.now().toString().slice(-6)}`
+
+        const customCashAdvance = Number(customOrderDetails.advance_paid) || 0;
+        const totalRealizedAdvance = customCashAdvance + effectiveKittyAmt + effectiveCreditAmt;
+        const baseEstimate = Number(customOrderDetails.estimated_value) || 0;
+
         const payload = {
           created_at: effectiveDateISO, 
           company_id: appUser?.company_id,
@@ -644,14 +645,21 @@ export function useCheckout({
           customer_id: selectedCustomer.id,
           order_number: finalNo,
           design_reference: customOrderDetails.design_reference,
-
           item_category: customOrderDetails.item_category,
           expected_gold_g: Number(customOrderDetails.expected_gold_g) || null,
           expected_diamond_cts: Number(customOrderDetails.expected_diamond_cts) || null,
-          estimated_value: Number(customOrderDetails.estimated_value) || 0,
           
-          advance_paid: Number(customOrderDetails.advance_paid) || 0, 
-          voucher_code: activeVoucher?.code || null,
+          // ✨ NEW DETAILED BREAKDOWN FIELDS
+          base_estimated_value: baseEstimate,
+          discount_amount: standardDiscount,
+          taxable_value: finalTaxableValue,
+          cgst_amount: cgstAmount,
+          sgst_amount: sgstAmount,
+          
+          estimated_value: finalPayableGross, 
+          advance_paid: totalRealizedAdvance, 
+          
+          voucher_code: finalVoucherCode || null,
           voucher_amount: appliedVoucherAmount,
           
           status: 'pending_manufacturing',

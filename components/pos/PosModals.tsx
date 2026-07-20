@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { InvoicePrintTemplate } from '@/components/InvoicePrintTemplate'
 import { BillingMode } from '@/app/pos/page'
 import { toast } from 'sonner'
+import * as VisuallyHidden from "@radix-ui/react-visually-hidden";
 
 export function PosModals({ 
   mode, showScanner, setShowScanner, onScanSuccess, 
@@ -137,6 +138,9 @@ export function PosModals({
       {/* 3. SUCCESS MODAL */}
       <Dialog open={showPrintModal} onOpenChange={setShowPrintModal}>
         <DialogContent className="print:hidden sm:max-w-[420px] p-0 rounded-2xl overflow-hidden bg-white">
+        <VisuallyHidden.Root>
+          <DialogTitle>Transaction Success</DialogTitle>
+        </VisuallyHidden.Root>
           <div className="flex flex-col items-center justify-center p-10 text-center space-y-6">
             <div className={`w-20 h-20 text-white rounded-full flex items-center justify-center shadow-lg ${currentTheme.bg}`}>
               <CheckCircle2 className="h-10 w-10" />
