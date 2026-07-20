@@ -259,7 +259,7 @@ export default function DistributorsPage() {
   const filteredDistributors = distributors.filter((d) => {
     const matchesSearch = d.distributor_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           d.contact_person?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          d.phone.includes(searchTerm);
+                          d.phone?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesType = typeFilter === "all" || d.distributor_type === typeFilter;
     return matchesSearch && matchesType;
   });
