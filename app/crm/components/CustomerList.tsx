@@ -1,12 +1,14 @@
 import React from 'react'
 import { format } from "date-fns"
-import { Phone, User, MessageCircle, Calendar, IndianRupee, Star, AlertCircle, Users, PhoneCall, Ticket, Store } from 'lucide-react'
+// Add History to your lucide-react imports
+import { Phone, User, MessageCircle, Calendar, IndianRupee, Star, AlertCircle, Users, PhoneCall, Ticket, Store, History } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
 import { CRMCustomer } from '../types'
+
 
 interface Props {
   data: CRMCustomer[]
@@ -17,9 +19,12 @@ interface Props {
   onViewProfile: (c: CRMCustomer) => void
   onLogCall: (c: CRMCustomer) => void 
   isKitty?: boolean
+  
+  onViewHistory: (c: CRMCustomer) => void
 }
 
-export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedule, onViewProfile, onLogCall, isKitty = false }: Props) {
+
+export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedule, onViewProfile, onLogCall, onViewHistory, isKitty = false }: Props) {
   if (loading) {
     return (
       <div className="p-5 space-y-3">
@@ -77,7 +82,7 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
     }
     return distData?.distributor_name || "Direct Event / Campaign";
   }
-  
+
   return (
     <div className="h-full flex flex-col">
       {/* DESKTOP VIEW */}
@@ -165,6 +170,10 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                 </TableCell>
                 <TableCell className="text-right px-6 py-3">
                   <div className="flex justify-end gap-2">
+
+                    <Button variant="outline" size="icon" className="h-8 w-8 text-amber-600 border-amber-200 bg-amber-50 hover:bg-amber-100 shrink-0" onClick={() => onViewHistory(row)} title="Purchase History">
+                      <History className="w-3.5 h-3.5 sm:mr-1.5" /> {/* Ensure you import { History } from 'lucide-react' */}
+                    </Button>
                     
                     <Button variant="outline" size="sm" className="h-8 px-3 text-[10px] font-bold uppercase text-blue-700 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:text-blue-800" onClick={() => onLogCall(row)}>
                       <PhoneCall className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Log Call</span>
@@ -254,6 +263,9 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                 )}
               </div>
               <div className="flex gap-1.5">
+                <Button size="icon" variant="outline" className="h-8 w-8 text-amber-600 border-amber-200 rounded-lg hover:bg-amber-100 shrink-0" onClick={() => onViewHistory(row)}>
+                  <History className="h-4 w-4" />
+                </Button>
                 <Button size="icon" variant="outline" className="h-8 w-8 text-[#1DA851] border-slate-200 rounded-lg hover:bg-[#25D366]/10 shrink-0" onClick={() => onMessage(row)}>
                   <MessageCircle className="h-4 w-4" />
                 </Button>

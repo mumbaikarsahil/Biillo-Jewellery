@@ -9,13 +9,17 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { 
   UploadCloud, Download, FileSpreadsheet, Loader2, Database, Trash2, 
   Phone, Star, IndianRupee, Edit2, Gem, CheckCircle2, Clock, Lock, 
   UserPlus, Building2, MapPin, Calendar, MessageCircle, Wallet, Gift, Users, Mail, CheckCircle,
-  Bot, Ticket, Settings2
+  Bot, Ticket, Settings2,
+  Hammer,
+  Wrench,
+  FileText, History
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CRMCustomer, Warehouse } from '../types'
@@ -30,6 +34,9 @@ interface CRMModalsProps {
   isAddKittyModalOpen: boolean; setIsAddKittyModalOpen: (v: boolean) => void;
   isFollowupModalOpen: boolean; setIsFollowupModalOpen: (v: boolean) => void;
   isWhatsAppModalOpen: boolean; setIsWhatsAppModalOpen: (v: boolean) => void;
+  isHistoryModalOpen: boolean; setIsHistoryModalOpen: (val: boolean) => void;
+  customerHistory: any[];
+  isHistoryLoading: boolean;
 
   isCallModalOpen: boolean; setIsCallModalOpen: (v: boolean) => void;
   callForm: {
@@ -88,6 +95,8 @@ const DIALOG_CONTENT_CLASS = "w-full border-none sm:rounded-2xl rounded-t-2xl ro
 
 export function CRMModals(props: CRMModalsProps) {
   const {
+    // Add these alongside your other destructured props
+    isHistoryModalOpen, setIsHistoryModalOpen, customerHistory, isHistoryLoading,
     isImportModalOpen, setIsImportModalOpen, isPreviewModalOpen, setIsPreviewModalOpen,
     isProfileModalOpen, setIsProfileModalOpen, isLoyaltyModalOpen, setIsLoyaltyModalOpen,
     isAddModalOpen, setIsAddModalOpen, isAddKittyModalOpen, setIsAddKittyModalOpen,
@@ -885,6 +894,62 @@ export function CRMModals(props: CRMModalsProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* PURCHASE HISTORY MODAL */}
+<Dialog open={isHistoryModalOpen} onOpenChange={setIsHistoryModalOpen}>
+  <DialogContent className="sm:max-w-[500px] bg-white p-0 overflow-hidden border-none shadow-2xl rounded-2xl">
+    <DialogHeader className="bg-slate-50 p-5 border-b border-slate-100">
+      <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
+        <History className="w-5 h-5 text-amber-500" /> Activity History
+      </DialogTitle>
+      <DialogDescription className="text-xs">
+        Past purchases, repairs, and orders for <b>{selectedCustomer?.full_name}</b>
+      </DialogDescription>
+    </DialogHeader>
+
+    <div className="p-5 max-h-[60vh] overflow-y-auto custom-scrollbar bg-slate-50/50">
+      {isHistoryLoading ? (
+        <div className="flex justify-center items-center py-10">
+          <Loader2 className="w-6 h-6 animate-spin text-slate-300" />
+        </div>
+      ) : customerHistory.length === 0 ? (
+        <div className="text-center py-10 text-slate-400 text-sm font-medium">
+          No previous transactions found for this customer.
+        </div>
+      ) : (
+        <div className="space-y-3 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-200 before:to-transparent">
+          {customerHistory.map((item: any, idx: number) => (
+            <div key={idx} className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group is-active">
+              <div className="flex items-center justify-center w-10 h-10 rounded-full border border-white bg-slate-100 shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10">
+                {item.type === 'Invoice' && <IndianRupee className="w-4 h-4 text-emerald-500" />}
+                {item.type === 'Custom Order' && <Hammer className="w-4 h-4 text-blue-500" />}
+                {item.type === 'Repair' && <Wrench className="w-4 h-4 text-orange-500" />}
+                {item.type === 'Estimate' && <FileText className="w-4 h-4 text-slate-500" />}
+              </div>
+              <div className="w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] p-4 rounded-xl border border-slate-100 bg-white shadow-sm">
+                <div className="flex items-center justify-between space-x-2 mb-1">
+                  <div className="font-bold text-slate-900 text-sm">{item.type}</div>
+                  <time className="text-[10px] font-mono font-medium text-slate-500">{new Date(item.date).toLocaleDateString('en-IN')}</time>
+                </div>
+                <div className="text-xs text-slate-600 mb-2 font-mono bg-slate-50 px-2 py-1 rounded inline-block">Ref: {item.ref}</div>
+                <div className="flex justify-between items-center text-sm font-black text-slate-800 border-t border-slate-50 pt-2">
+                  <span>Value:</span>
+                  <span>₹ {Number(item.amt || 0).toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+    
+    <DialogFooter className="bg-white p-4 border-t border-slate-100">
+      <Button variant="outline" className="w-full h-10 rounded-xl text-xs font-bold uppercase tracking-widest text-slate-500" onClick={() => setIsHistoryModalOpen(false)}>
+        Close Timeline
+      </Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
 
       {/* CALL LOGGER MODAL */}
       <Dialog open={isCallModalOpen} onOpenChange={setIsCallModalOpen}>

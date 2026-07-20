@@ -5,7 +5,7 @@ import { format } from 'date-fns'
 import { 
   Download, Filter, Loader2, Package, Search, 
   RefreshCw, FileText, Store, Layers, TrendingDown, TrendingUp, AlertTriangle, Sparkles, IndianRupee, MapPin,
-  CheckCircle2, Trophy, Target, PieChart, Gem, MessageCircle, Printer, ChevronDown, CheckSquare, Square, Check
+  CheckCircle2, Trophy, Target, PieChart, Gem, MessageCircle, Printer, ChevronDown, CheckSquare, Square, Check, Barcode
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -56,11 +56,11 @@ export function InventoryRegistryReport() {
   const [showFilters, setShowFilters] = useState(false)
   const [showAnalytics, setShowAnalytics] = useState(false)
 
-  // ✨ NEW: RBAC State
+  // RBAC State
   const [userRole, setUserRole] = useState<string>('sales_person')
   const canFullManage = ['owner', 'manager', 'operations_manager'].includes(userRole)
 
-  // UI "Draft" States (No lag while adjusting)
+  // UI "Draft" States
   const [search, setSearch] = useState('')
   const [selectedWhs, setSelectedWhs] = useState<string[]>(['ALL'])
   const [filterStatus, setFilterStatus] = useState('all')
@@ -70,20 +70,14 @@ export function InventoryRegistryReport() {
   const [priceRange, setPriceRange] = useState<number[]>([0, 1000000])
   const [maxPrice, setMaxPrice] = useState(1000000)
 
-  // Actual "Applied" States (Triggers math & table re-renders)
+  // Actual "Applied" States
   const [activeWhs, setActiveWhs] = useState<string[]>(['ALL'])
   const [activeFilters, setActiveFilters] = useState({
-    search: '',
-    status: 'all',
-    metal: 'all',
-    category: 'all',
-    stone: 'all',
-    priceRange: [0, 1000000]
+    search: '', status: 'all', metal: 'all', category: 'all', stone: 'all', priceRange: [0, 1000000]
   })
 
   const [showLocDropdown, setShowLocDropdown] = useState(false)
 
-  // ✨ NEW: Fetch User Role
   useEffect(() => {
     async function fetchRole() {
       if (!appUser) return;
@@ -136,16 +130,8 @@ export function InventoryRegistryReport() {
   }
 
   const handleApplyFilters = () => {
-    // ✨ FIX: Only allow applying selected branches if they have permission
     setActiveWhs(canFullManage ? selectedWhs : [selectedLocation]);
-    setActiveFilters({
-      search,
-      status: filterStatus,
-      metal: filterMetal,
-      category: filterCategory,
-      stone: filterStone,
-      priceRange
-    });
+    setActiveFilters({ search, status: filterStatus, metal: filterMetal, category: filterCategory, stone: filterStone, priceRange });
   }
 
   const handleResetFilters = () => {
@@ -154,9 +140,7 @@ export function InventoryRegistryReport() {
     setSelectedWhs(resetLoc);
     
     setActiveWhs(resetLoc);
-    setActiveFilters({
-      search: '', status: 'all', metal: 'all', category: 'all', stone: 'all', priceRange: [0, maxPrice]
-    });
+    setActiveFilters({ search: '', status: 'all', metal: 'all', category: 'all', stone: 'all', priceRange: [0, maxPrice] });
   }
 
   const fetchData = async () => {
@@ -177,9 +161,7 @@ export function InventoryRegistryReport() {
           .order('id', { ascending: true }) 
           .range(step * limit, (step + 1) * limit - 1)
 
-        // ✨ FIX: Enforce the warehouse lock if not HQ/Manager
         let targetLocations = canFullManage ? activeWhs : [selectedLocation];
-
         if (!targetLocations.includes('ALL') && targetLocations.length > 0) {
           query = query.in('warehouse_id', targetLocations)
         }
@@ -202,7 +184,6 @@ export function InventoryRegistryReport() {
       if (uniqueItems.length > 0) {
         const highest = Math.max(...uniqueItems.map((d: any) => Number(d.mrp) || 0), 100000);
         setMaxPrice(highest);
-        // Only reset active price bound if we are viewing everything
         if (activeFilters.priceRange[1] === maxPrice || activeFilters.priceRange[1] > highest) {
            setPriceRange([0, highest]);
            setActiveFilters(prev => ({...prev, priceRange: [0, highest]}));
@@ -272,11 +253,12 @@ export function InventoryRegistryReport() {
     return Object.entries(summary).sort((a, b) => b[1].count - a[1].count);
   }, [filteredData]);
 
+  // ✨ NEXT-GEN V2 MATRIX ANALYTICS ENGINE ✨
   const analytics = useMemo(() => {
     if (filteredData.length === 0) return null;
 
     const multiDimStats: Record<string, { 
-      location: string, category: string, bracket: string, stock: number, sold: number, dead: number, valStock: number 
+      location: string, category: string, bracket: string, stock: number, sold: number, dead: number, valStock: number, deadBarcodes: string[] 
     }> = {};
 
     const categoryAgg: Record<string, { sold: number, stock: number }> = {};
@@ -285,7 +267,7 @@ export function InventoryRegistryReport() {
     data.forEach(item => {
       const cat = normalizeCategory(item.item_category); 
       const met = item.metal_type || 'Unknown Metal';
-      const bar = item.barcode || '';
+      const bar = item.barcode || 'UNKNOWN';
 
       if (activeFilters.search && !bar.toLowerCase().includes(activeFilters.search.toLowerCase()) && !cat.toLowerCase().includes(activeFilters.search.toLowerCase())) return;
       if (activeFilters.metal !== 'all' && met !== activeFilters.metal) return;
@@ -302,7 +284,7 @@ export function InventoryRegistryReport() {
       const matrixKey = `${loc}::${cat}::${bracket}`;
 
       if (!multiDimStats[matrixKey]) {
-        multiDimStats[matrixKey] = { location: loc, category: cat, bracket: bracket, stock: 0, sold: 0, dead: 0, valStock: 0 };
+        multiDimStats[matrixKey] = { location: loc, category: cat, bracket: bracket, stock: 0, sold: 0, dead: 0, valStock: 0, deadBarcodes: [] };
       }
       if (!categoryAgg[cat]) categoryAgg[cat] = { sold: 0, stock: 0 };
       if (!bracketAgg[bracket]) bracketAgg[bracket] = { sold: 0 };
@@ -313,7 +295,10 @@ export function InventoryRegistryReport() {
         categoryAgg[cat].stock++;
         
         const daysOld = (new Date().getTime() - new Date(item.created_at).getTime()) / (1000 * 3600 * 24);
-        if (daysOld > 90) multiDimStats[matrixKey].dead++;
+        if (daysOld > 90) {
+           multiDimStats[matrixKey].dead++;
+           multiDimStats[matrixKey].deadBarcodes.push(bar);
+        }
       } 
       else if (item.status === 'sold' || item.status === 'delivered') {
         multiDimStats[matrixKey].sold++;
@@ -329,7 +314,8 @@ export function InventoryRegistryReport() {
       if (stats.sold > stats.stock && stats.sold > 0) {
         restockWarnings.push({ ...stats, deficit: stats.sold - stats.stock });
       }
-      if (stats.dead >= 2 && stats.sold === 0) { 
+      // Consider it a warning if there's dead stock AND it's underperforming (no recent sales in this bracket/cat)
+      if (stats.dead >= 1 && stats.sold === 0) { 
         deadStockWarnings.push({ ...stats, deadCount: stats.dead, lockedValue: stats.valStock });
       }
     }
@@ -648,19 +634,30 @@ export function InventoryRegistryReport() {
 
             <div className="flex-1" />
 
-            <Button 
-              variant={showAnalytics ? "default" : "outline"} 
-              className={`h-9 px-4 text-xs font-bold rounded-lg hidden sm:flex transition-all ${showAnalytics ? 'bg-indigo-600 text-white hover:bg-indigo-700 border-indigo-600 shadow-md shadow-indigo-200' : 'border-indigo-200 text-indigo-600 bg-indigo-50/50 hover:bg-indigo-100'}`}
-              onClick={() => setShowAnalytics(!showAnalytics)}
-            >
-              <Sparkles className={`h-3.5 w-3.5 mr-1.5 ${showAnalytics ? 'text-white' : 'text-indigo-500'}`} /> 
-              Matrix Analytics
-            </Button>
+            <div className="relative inline-block pt-2">
+  {/* Floating "V2" New Feature Badge */}
+  <span className="absolute -top-0.5 right-3 z-10 bg-indigo-600 text-white text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full shadow-sm pointer-events-none animate-bounce">
+    V2 New
+  </span>
+
+  <Button 
+    variant={showAnalytics ? "default" : "outline"} 
+    className={`h-9 px-4 text-xs font-bold rounded-lg hidden sm:flex transition-all items-center gap-1.5 ${
+      showAnalytics 
+        ? 'bg-zinc-900 text-white hover:bg-zinc-800 border-zinc-900 shadow-md' 
+        : 'border-indigo-200 text-indigo-600 bg-indigo-50/30 hover:bg-indigo-50 shadow-sm'
+    }`}
+    onClick={() => setShowAnalytics(!showAnalytics)}
+  >
+    <Sparkles className="h-3.5 w-3.5 text-indigo-500 animate-pulse" /> 
+    Matrix Analytics
+  </Button>
+</div>
 
             <Button variant="outline" size="icon" className="h-9 w-9 rounded-lg border-zinc-200 shrink-0 hidden sm:flex text-zinc-600 hover:bg-zinc-100" onClick={fetchData}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             </Button>
-            <Button onClick={handleExport} disabled={exporting || loading} className="h-9 text-xs font-bold rounded-lg hidden sm:flex shrink-0 text-emerald-700 border border-emerald-200 hover:bg-emerald-50 bg-white">
+            <Button onClick={handleExport} disabled={exporting || loading} className="h-9 text-xs font-bold rounded-lg hidden sm:flex shrink-0 text-emerald-700 border border-emerald-200 hover:bg-emerald-50 bg-white shadow-sm">
               {exporting ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-2 h-3.5 w-3.5 text-emerald-500" />}
               Export CSV
             </Button>
@@ -670,7 +667,6 @@ export function InventoryRegistryReport() {
             <div className="pt-4 border-t border-zinc-100 mt-1 animate-in slide-in-from-top-2 duration-200">
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
                 
-                {/* ✨ FIX: Render Location Badge for regular staff, Multi-Select for Owners/Managers */}
                 {(!canFullManage || isLocked) ? (
                    <Badge className="h-9 justify-center bg-zinc-100 text-zinc-600 border border-zinc-200 shadow-none font-bold text-xs px-4">
                      <Store className="w-3 h-3 mr-1.5" /> {getWhName(selectedLocation)}
@@ -787,7 +783,7 @@ export function InventoryRegistryReport() {
                 </Button>
                 <Button 
               onClick={handleApplyFilters}
-              className="h-9 px-5 text-xs font-bold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm shadow-indigo-200"
+              className="h-9 px-5 text-xs font-bold rounded-lg bg-black text-white hover:bg-zinc-800 shadow-sm shadow-zinc-200"
             >
                <Check className="h-3.5 w-3.5 mr-1.5" /> Apply 
             </Button>
@@ -796,89 +792,163 @@ export function InventoryRegistryReport() {
           )}
         </div>
 
-        {/* SMART MULTI-DIMENSIONAL ANALYTICS PANEL */}
+        {/* ✨ NEXT-GEN MATRIX ANALYTICS PANEL (LINEAR/VERCEL STYLE) ✨ */}
         {showAnalytics && analytics && (
-          <div className="flex flex-col gap-4 animate-in slide-in-from-top-4 duration-300">
+          <div className="flex flex-col gap-6 animate-in slide-in-from-top-4 duration-500 pb-2">
+            
+            {/* KPI Cards (High Contrast Minimalist) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Card className="bg-emerald-50 border-emerald-100 shadow-sm rounded-xl">
-                <CardContent className="p-4 flex items-center gap-4">
-                  <div className="h-12 w-12 bg-emerald-100 rounded-full flex items-center justify-center shrink-0 border border-emerald-200 shadow-sm">
-                     <Trophy className="w-6 h-6 text-emerald-600" />
-                  </div>
+              <Card className="bg-white border-zinc-200 shadow-sm rounded-xl overflow-hidden relative group">
+                <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500" />
+                <CardContent className="p-5 flex items-start justify-between">
                   <div>
-                    <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Top Performer</p>
-                    <p className="text-xl font-black text-emerald-900 leading-tight mt-0.5">{analytics.marketIntel.bestCategory.name}</p>
-                    <p className="text-[10px] font-medium text-emerald-700 mt-1">Driving highest sales volume ({analytics.marketIntel.bestCategory.sold} units)</p>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-blue-50 border-blue-100 shadow-sm rounded-xl">
-                <CardContent className="p-4 flex items-center gap-4">
-                  <div className="h-12 w-12 bg-blue-100 rounded-full flex items-center justify-center shrink-0 border border-blue-200 shadow-sm">
-                     <Target className="w-6 h-6 text-blue-600" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-blue-600 uppercase tracking-widest">Price Sweet Spot</p>
-                    <p className="text-xl font-black text-blue-900 leading-tight mt-0.5">{analytics.marketIntel.sweetSpot.name}</p>
-                    <p className="text-[10px] font-medium text-blue-700 mt-1">Optimal conversion bracket</p>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="bg-rose-50 border-rose-100 shadow-sm rounded-xl">
-                <CardContent className="p-4 flex items-center gap-4">
-                  <div className="h-12 w-12 bg-rose-100 rounded-full flex items-center justify-center shrink-0 border border-rose-200 shadow-sm">
-                     <TrendingDown className="w-6 h-6 text-rose-600" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Underperformer</p>
-                    <p className="text-xl font-black text-rose-900 leading-tight mt-0.5">
-                      {analytics.marketIntel.worstCategory ? analytics.marketIntel.worstCategory.name : 'Data Insufficient'}
+                    <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                      <Trophy className="w-3 h-3 text-emerald-500" /> Top Performer
                     </p>
-                    <p className="text-[10px] font-medium text-rose-700 mt-1">
-                      {analytics.marketIntel.worstCategory ? `Only ${analytics.marketIntel.worstCategory.sellThrough.toFixed(1)}% sell-through rate` : 'Need more sales data'}
+                    <p className="text-xl font-black text-zinc-900 leading-tight">{analytics.marketIntel.bestCategory.name}</p>
+                    <p className="text-[11px] font-medium text-zinc-500 mt-1.5">{analytics.marketIntel.bestCategory.sold} units moving</p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white border-zinc-200 shadow-sm rounded-xl overflow-hidden relative group">
+                <div className="absolute top-0 left-0 w-1 h-full bg-blue-500" />
+                <CardContent className="p-5 flex items-start justify-between">
+                  <div>
+                    <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                      <Target className="w-3 h-3 text-blue-500" /> Sweet Spot
+                    </p>
+                    <p className="text-xl font-black text-zinc-900 leading-tight">{analytics.marketIntel.sweetSpot.name}</p>
+                    <p className="text-[11px] font-medium text-zinc-500 mt-1.5">Highest conversion bracket</p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="bg-white border-zinc-200 shadow-sm rounded-xl overflow-hidden relative group">
+                <div className="absolute top-0 left-0 w-1 h-full bg-rose-500" />
+                <CardContent className="p-5 flex items-start justify-between">
+                  <div>
+                    <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                      <TrendingDown className="w-3 h-3 text-rose-500" /> Underperformer
+                    </p>
+                    <p className="text-xl font-black text-zinc-900 leading-tight">
+                      {analytics.marketIntel.worstCategory ? analytics.marketIntel.worstCategory.name : 'N/A'}
+                    </p>
+                    <p className="text-[11px] font-medium text-zinc-500 mt-1.5">
+                      {analytics.marketIntel.worstCategory ? `Stagnant at ${analytics.marketIntel.worstCategory.sellThrough.toFixed(1)}% sell-through` : 'Insufficient data'}
                     </p>
                   </div>
                 </CardContent>
               </Card>
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <Card className="bg-indigo-50 border-indigo-100 shadow-sm rounded-2xl overflow-hidden">
-                <CardHeader className="p-4 pb-2 border-b border-indigo-100/50 bg-indigo-100/30">
+            {/* Matrix Data Tables */}
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              
+              {/* RESTOCK WARNINGS */}
+              <Card className="bg-white border-zinc-200 shadow-sm rounded-2xl overflow-hidden flex flex-col h-[400px]">
+                <CardHeader className="p-4 border-b border-zinc-100 bg-zinc-50/50 shrink-0">
                   <div className="flex justify-between items-center">
-                    <CardTitle className="text-xs font-black uppercase tracking-widest text-indigo-800 flex items-center gap-2">
-                      <TrendingUp className="w-4 h-4 text-indigo-600" /> Restock Matrix Alerts
+                    <CardTitle className="text-xs font-bold uppercase tracking-widest text-zinc-800 flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-blue-500" /> High-Velocity (Restock Needed)
                     </CardTitle>
-                    <Badge className="bg-indigo-600 hover:bg-indigo-600 text-[9px]">{analytics.restockWarnings.length} Alerts</Badge>
+                    <Badge variant="outline" className="bg-white font-mono text-[10px]">{analytics.restockWarnings.length}</Badge>
                   </div>
                 </CardHeader>
-                <CardContent className="p-4">
+                <CardContent className="p-0 overflow-auto custom-scrollbar flex-1">
                   {analytics.restockWarnings.length === 0 ? (
-                    <div className="text-center py-6">
-                      <CheckCircle2 className="w-8 h-8 text-indigo-300 mx-auto mb-2" />
-                      <p className="text-xs font-medium text-indigo-600/70">No severe localized deficits detected.</p>
+                    <div className="flex flex-col items-center justify-center h-full text-zinc-400 p-6 text-center">
+                      <CheckCircle2 className="w-8 h-8 mb-3 opacity-20" />
+                      <p className="text-xs font-medium">Inventory is keeping up with demand.</p>
                     </div>
                   ) : (
-                    <div className="space-y-3 max-h-[220px] overflow-y-auto custom-scrollbar pr-2">
-                      {analytics.restockWarnings.map((w, i) => (
-                        <div key={i} className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-white p-3 rounded-xl border border-indigo-100 shadow-sm gap-3">
-                          <div className="w-full sm:w-auto">
-                            <div className="flex items-center gap-2">
-                              <MapPin className="w-3.5 h-3.5 text-indigo-400" />
-                              <p className="text-xs font-bold text-indigo-900">{w.location} <span className="text-indigo-300 mx-1">|</span> {w.category}</p>
+                    <Table>
+                      <TableHeader className="sticky top-0 bg-white z-10 shadow-sm">
+                        <TableRow className="border-zinc-100 hover:bg-transparent">
+                          <TableHead className="text-[10px] uppercase font-bold text-zinc-500 h-9">Asset Profile</TableHead>
+                          <TableHead className="text-[10px] uppercase font-bold text-zinc-500 h-9 text-center">Metrics</TableHead>
+                          <TableHead className="text-[10px] uppercase font-bold text-zinc-500 h-9 text-right">Deficit</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {analytics.restockWarnings.map((w, i) => (
+                          <TableRow key={i} className="border-zinc-100 hover:bg-zinc-50/50">
+                            <TableCell className="py-3">
+                              <p className="text-xs font-bold text-zinc-900">{w.category}</p>
+                              <p className="text-[10px] text-zinc-500 mt-0.5">{w.location} • {w.bracket}</p>
+                            </TableCell>
+                            <TableCell className="text-center py-3">
+                              <div className="flex items-center justify-center gap-2 text-[11px] font-mono">
+                                <span className="text-zinc-500">{w.stock} stock</span>
+                                <span className="text-zinc-300">/</span>
+                                <span className="text-emerald-600 font-bold">{w.sold} sold</span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right py-3">
+                              <span className="inline-flex items-center justify-center px-2 py-1 rounded bg-rose-50 text-rose-600 font-bold text-[11px]">
+                                -{w.deficit}
+                              </span>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* DEAD STOCK WARNINGS (Now with Barcodes) */}
+              <Card className="bg-white border-zinc-200 shadow-sm rounded-2xl overflow-hidden flex flex-col h-[400px]">
+                <CardHeader className="p-4 border-b border-zinc-100 bg-zinc-50/50 shrink-0">
+                  <div className="flex justify-between items-center">
+                    <CardTitle className="text-xs font-bold uppercase tracking-widest text-zinc-800 flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-500" /> Dead Capital (&gt;90 Days, 0 Sales)
+                    </CardTitle>
+                    <Badge variant="outline" className="bg-white font-mono text-[10px]">{analytics.deadStockWarnings.length}</Badge>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0 overflow-auto custom-scrollbar flex-1">
+                  {analytics.deadStockWarnings.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center h-full text-zinc-400 p-6 text-center">
+                      <CheckCircle2 className="w-8 h-8 mb-3 opacity-20" />
+                      <p className="text-xs font-medium">No stagnant inventory detected.</p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-zinc-100">
+                      {analytics.deadStockWarnings.map((w, i) => (
+                        <div key={i} className="p-4 hover:bg-zinc-50/50 transition-colors">
+                          <div className="flex justify-between items-start mb-3">
+  <div>
+    {/* Changed <p> to <div className="text-xs font-bold text-zinc-900 flex items-center gap-2"> */}
+    <div className="text-xs font-bold text-zinc-900 flex items-center gap-2">
+      {w.category} 
+      <Badge variant="secondary" className="text-[9px] h-4 bg-zinc-100 text-zinc-600 border-none">{w.bracket}</Badge>
+    </div>
+    <p className="text-[10px] font-medium text-zinc-500 mt-1 flex items-center gap-1.5">
+      <Store className="w-3 h-3" /> {w.location}
+    </p>
+  </div>
+  <div className="text-right">
+    <p className="text-[9px] uppercase font-bold text-zinc-400 tracking-widest mb-0.5">Locked Value</p>
+    <p className="text-sm font-black text-rose-600">₹{w.lockedValue.toLocaleString()}</p>
+  </div>
+</div>
+                          
+                          {/* Render the specific dead barcodes inline */}
+                          {w.deadBarcodes.length > 0 && (
+                            <div className="bg-zinc-100/50 rounded-lg p-3 border border-zinc-200/50">
+                              <p className="text-[9px] font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                                <Barcode className="w-3 h-3" /> Flagged Barcodes ({w.deadCount})
+                              </p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {w.deadBarcodes.map((bc, idx) => (
+                                  <span key={idx} className="bg-white border border-zinc-200 text-zinc-700 text-[10px] font-mono font-bold px-1.5 py-0.5 rounded shadow-sm">
+                                    {bc}
+                                  </span>
+                                ))}
+                              </div>
                             </div>
-                            <div className="flex items-center gap-2 mt-2">
-                              <Badge variant="secondary" className="bg-slate-100 text-slate-600 border-slate-200 text-[9px] uppercase tracking-widest font-bold">
-                                {w.bracket}
-                              </Badge>
-                              <p className="text-[10px] font-semibold text-indigo-500">Only {w.stock} left vs {w.sold} sold</p>
-                            </div>
-                          </div>
-                          <Badge className="bg-rose-100 text-rose-700 hover:bg-rose-100 border-rose-200 shadow-none font-bold text-[10px] uppercase tracking-widest w-full sm:w-auto justify-center">
-                            Urgent Deficit: -{w.deficit}
-                          </Badge>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -886,47 +956,6 @@ export function InventoryRegistryReport() {
                 </CardContent>
               </Card>
 
-              <Card className="bg-amber-50 border-amber-100 shadow-sm rounded-2xl overflow-hidden">
-                <CardHeader className="p-4 pb-2 border-b border-amber-100/50 bg-amber-100/30">
-                  <div className="flex justify-between items-center">
-                    <CardTitle className="text-xs font-black uppercase tracking-widest text-amber-800 flex items-center gap-2">
-                      <AlertTriangle className="w-4 h-4 text-amber-600" /> Dead Stock Matrix (less than 90 Days)
-                    </CardTitle>
-                    <Badge className="bg-amber-500 hover:bg-amber-500 text-[9px]">{analytics.deadStockWarnings.length} Alerts</Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="p-4">
-                  {analytics.deadStockWarnings.length === 0 ? (
-                    <div className="text-center py-6">
-                      <CheckCircle2 className="w-8 h-8 text-amber-300 mx-auto mb-2" />
-                      <p className="text-xs font-medium text-amber-600/70">No severe dead stock traps detected.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3 max-h-[220px] overflow-y-auto custom-scrollbar pr-2">
-                      {analytics.deadStockWarnings.map((w, i) => (
-                        <div key={i} className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-white p-3 rounded-xl border border-amber-100 shadow-sm gap-3">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <Store className="w-3.5 h-3.5 text-amber-500" />
-                              <p className="text-xs font-bold text-amber-900">{w.location} <span className="text-amber-300 mx-1">|</span> {w.category}</p>
-                            </div>
-                            <div className="flex items-center gap-2 mt-2">
-                              <Badge variant="secondary" className="bg-slate-100 text-slate-600 border-slate-200 text-[9px] uppercase tracking-widest font-bold">
-                                {w.bracket}
-                              </Badge>
-                              <p className="text-[10px] font-semibold text-amber-600">{w.deadCount} aged items, ZERO sales</p>
-                            </div>
-                          </div>
-                          <div className="text-left sm:text-right bg-amber-50/50 p-2 rounded-lg border border-amber-100/50 w-full sm:w-auto">
-                            <p className="text-[8px] font-bold text-amber-500 uppercase tracking-widest">Locked Capital</p>
-                            <p className="text-sm font-black text-amber-700">₹{w.valStock.toLocaleString()}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
             </div>
           </div>
         )}
@@ -963,7 +992,6 @@ export function InventoryRegistryReport() {
             </CardContent>
           </Card>
 
-          {/* Gives the valuation card extra room on mobile/tablet so large currency text doesn't overflow */}
           <Card className="shadow-sm border-zinc-200 bg-zinc-50 rounded-2xl w-full min-w-0 col-span-2 md:col-span-2 xl:col-span-1">
             <CardContent className="p-4 sm:p-5 overflow-hidden">
               <p className="text-[11px] font-semibold text-zinc-600 uppercase tracking-widest mb-1 truncate">Filtered Valuation</p>
@@ -1185,7 +1213,7 @@ export function InventoryRegistryReport() {
         </Card>
       </div>
 
-      {/* ✨ EXECUTIVE PDF REPORT (HIDDEN ON SCREEN, VISIBLE ON PRINT) ✨ */}
+      {/* EXECUTIVE PDF REPORT (HIDDEN ON SCREEN, VISIBLE ON PRINT) */}
       <div id="executive-pdf-report" className="hidden print:block w-full font-sans bg-white pb-10">
         
         <div className="flex justify-between items-end border-b-[3px] border-black pb-4 mb-6">

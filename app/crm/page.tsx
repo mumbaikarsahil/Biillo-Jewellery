@@ -75,6 +75,7 @@ export default function CRMPage() {
   const [debouncedSearch, setDebouncedSearch] = useState('')
 
   const [activeAiFilter, setActiveAiFilter] = useState<'none' | 'scheme' | 'cold' | 'dnd' | 'birthday' | 'anniversary'>('none')
+  const [voucherFilter, setVoucherFilter] = useState<'all' | 'registered' | 'redeemed' | 'none'>('all')
   
   const [sortOrder, setSortOrder] = useState<'followup_asc' | 'followup_desc' | 'newest' | 'name_asc'>('followup_asc')
 
@@ -85,6 +86,11 @@ export default function CRMPage() {
   
   const [globalCounts, setGlobalCounts] = useState({ followups: 0, purchased: 0, kitty: 0, vouchers: 0, dnd: 0 })
   const [metrics, setMetrics] = useState({ total: 0, dueToday: 0, overdue: 0, schemeCount: 0, coldCount: 0, dndCount: 0 })
+
+  // History States
+  const [customerHistory, setCustomerHistory] = useState<any[]>([])
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false)
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false)
 
   // WhatsApp Integration States
   const [isSenderModalOpen, setIsSenderModalOpen] = useState(false);
@@ -205,7 +211,6 @@ export default function CRMPage() {
     if (!appUser) return;
     const fetchCounts = async () => {
       try {
-        // ✨ FIX: Changed everything back to count: 'exact' to prevent phantom "1" results on empty small tables
         const getQ = (t: string) => buildServerQuery(supabase.from('customers').select('*', { count: 'exact', head: true }), t);
 
         const todayStr = new Date().toISOString().split('T')[0];
@@ -218,7 +223,6 @@ export default function CRMPage() {
         let coldQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).or('customer_status.eq.Lead,customer_status.is.null').lt('created_at', fourteenDaysAgo.toISOString());
         let dndQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).eq('customer_status', 'DND');
         
-        // Exact is perfectly safe here now because you created the Database Index!
         let voucherQ = supabase.from('customers').select('id, vouchers!inner(id)', {count: 'exact', head: true}).eq('company_id', appUser.company_id).neq('customer_status', 'DND');
 
         if (selectedLocation !== 'ALL') {
@@ -259,16 +263,23 @@ export default function CRMPage() {
     if (!appUser || !selectedLocation) return;
     setIsLoading(true);
     try {
-      const isVoucherTab = activeTab === 'vouchers';
+      const requireVoucherJoin = activeTab === 'vouchers' || voucherFilter === 'registered' || voucherFilter === 'redeemed';
       
       let q = supabase.from('customers').select(`
         *, 
         kitty_plans(*),
-        vouchers${isVoucherTab ? '!inner' : ''}(id, code, status, expiry_date, voucher_distributors(distributor_name)),
+        vouchers${requireVoucherJoin ? '!inner' : ''}(id, code, status, expiry_date, distributor_id, voucher_distributors(distributor_name)),
         voucher_message_sequences(id, status)
       `);
-      q = buildServerQuery(q, activeTab);
       
+      q = buildServerQuery(q, activeTab);
+
+      if (voucherFilter === 'registered') q = q.eq('vouchers.status', 'registered');
+      if (voucherFilter === 'redeemed') q = q.eq('vouchers.status', 'redeemed');
+      if (voucherFilter === 'none') {
+         q = q.is('vouchers', null); 
+      }
+
       if (sortOrder === 'followup_asc') {
         q = q.order('next_followup_date', { ascending: true, nullsFirst: false }).order('id', { ascending: true });
       } else if (sortOrder === 'followup_desc') {
@@ -294,7 +305,35 @@ export default function CRMPage() {
   useEffect(() => {
     setPage(0);
     fetchPage(0);
-  }, [appUser, selectedLocation, debouncedSearch, activeAiFilter, activeTab, pageSize, sortOrder])
+  }, [appUser, selectedLocation, debouncedSearch, activeAiFilter, voucherFilter, activeTab, pageSize, sortOrder])
+
+  const handleViewHistory = async (customer: CRMCustomer) => {
+    setSelectedCustomer(customer);
+    setIsHistoryModalOpen(true);
+    setIsHistoryLoading(true);
+    
+    try {
+      const [inv, ord, rep, est] = await Promise.all([
+        supabase.from('invoices').select('id, invoice_number, created_at, final_total, subtotal').eq('customer_id', customer.id),
+        supabase.from('custom_orders').select('id, order_number, created_at, estimated_value, status').eq('customer_id', customer.id),
+        supabase.from('repair_tickets').select('id, ticket_number, created_at, estimated_cost, status').eq('customer_id', customer.id),
+        supabase.from('estimates').select('id, estimate_number, created_at, total_amount').eq('customer_id', customer.id)
+      ]);
+
+      const combined = [
+        ...(inv.data || []).map(i => ({ ...i, type: 'Invoice', date: i.created_at, ref: i.invoice_number, amt: i.final_total || i.subtotal })),
+        ...(ord.data || []).map(o => ({ ...o, type: 'Custom Order', date: o.created_at, ref: o.order_number, amt: o.estimated_value })),
+        ...(rep.data || []).map(r => ({ ...r, type: 'Repair', date: r.created_at, ref: r.ticket_number, amt: r.estimated_cost })),
+        ...(est.data || []).map(e => ({ ...e, type: 'Estimate', date: e.created_at, ref: e.estimate_number, amt: e.total_amount }))
+      ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      setCustomerHistory(combined);
+    } catch (err) {
+      toast.error("Failed to load purchase history");
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
 
   const toggleAiFilter = (filter: 'scheme' | 'cold' | 'dnd' | 'birthday' | 'anniversary') => {
     if (activeAiFilter === filter) {
@@ -322,7 +361,6 @@ export default function CRMPage() {
         next_call_time: callForm.next_call_time || null,
       };
 
-      // 1. UPDATE the existing call record (if we caught the ID) or INSERT a new one as a fallback
       if (activeCallRecordId) {
         const { error: logErr } = await supabase.from('call_records').update(callLogEntry).eq('id', activeCallRecordId);
         if (logErr) throw logErr;
@@ -336,7 +374,6 @@ export default function CRMPage() {
         if (logErr) throw logErr;
       }
 
-      // 2. Update Customer Profile with strict next-action protocols
       let updatePayload: any = {
         last_interaction: `[CALL: ${callForm.outcome}] ${callForm.notes}`
       };
@@ -358,7 +395,7 @@ export default function CRMPage() {
       toast.success(isDND ? 'Customer moved to DND List' : 'Call Logged & Timer Set!');
       
       setIsCallModalOpen(false);
-      setActiveCallRecordId(null); // Reset the active ID
+      setActiveCallRecordId(null);
       setCallForm({ outcome: 'Connected / Spoke to Customer', notes: '', next_call_date: '', next_call_time: '' });
       fetchPage(page);
 
@@ -368,6 +405,7 @@ export default function CRMPage() {
       setIsSubmitting(false);
     }
   }
+
   // --- CSV Import Handlers ---
   const handleDownloadSample = () => {
     const csvContent = "full_name,phone,city,customer_status,birth_date,anniversary_date,store_credit_balance\nJohn Doe,9876543210,Mumbai,Lead,01-01-1990,15-05-2015,0\nJane Smith,9123456789,Delhi,Purchased,20-08-1985,,1200\nRahul Sharma,9988776655,Pune,Kitty Member,10-12-1992,20-11-2020,0";
@@ -718,15 +756,12 @@ export default function CRMPage() {
   const openCallLoggerModal = async (customer: CRMCustomer) => {
     setSelectedCustomer(customer);
     
-    // 1. Trigger the Phone Dialer immediately
     const cleanPhone = customer.phone.replace(/\D/g, '');
     window.location.href = `tel:+91${cleanPhone}`;
 
-    // 2. Open the Modal so it's waiting when they return
     setIsCallModalOpen(true);
     setCallForm({ outcome: 'Connected / Spoke to Customer', notes: '', next_call_date: '', next_call_time: '' });
 
-    // 3. Silently create the "Attempt" record in the database
     try {
       const { data, error } = await supabase.from('call_records').insert([{
         company_id: appUser?.company_id,
@@ -737,8 +772,6 @@ export default function CRMPage() {
       }]).select('id').single();
 
       if (error) throw error;
-      
-      // Save this ID so we can update it when they fill out the modal
       setActiveCallRecordId(data.id);
     } catch (error) {
       console.error("Failed to auto-log call attempt:", error);
@@ -829,14 +862,30 @@ export default function CRMPage() {
         
         {/* 2. ACTION BAR */}
         <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col md:flex-row gap-3 items-start md:items-center justify-between">
-          <div className="relative w-full md:w-[300px]">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <Input 
-              placeholder="Search by name or phone..." 
-              className="pl-9 h-10 text-sm font-medium bg-slate-50 border-slate-200 focus-visible:bg-white focus-visible:border-slate-400 focus-visible:ring-1 focus-visible:ring-slate-400 rounded-lg transition-all"
-              value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-            />
+          <div className="flex items-center gap-2 w-full md:w-auto flex-1 max-w-xl">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <Input 
+                placeholder="Search by name or phone..." 
+                className="pl-9 h-10 text-sm font-medium bg-slate-50 border-slate-200 focus-visible:bg-white focus-visible:border-slate-400 focus-visible:ring-1 focus-visible:ring-slate-400 rounded-lg transition-all"
+                value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+
+            {/* Voucher Filter Dropdown */}
+            <Select value={voucherFilter} onValueChange={(v: any) => setVoucherFilter(v)}>
+              <SelectTrigger className="h-10 w-[180px] bg-white border-slate-200 text-xs font-bold rounded-lg shrink-0">
+                <SelectValue placeholder="Voucher Filter" />
+              </SelectTrigger>
+              <SelectContent className="rounded-lg border-slate-200">
+                <SelectItem value="all">All Vouchers</SelectItem>
+                <SelectItem value="none">Normal (No Voucher)</SelectItem>
+                <SelectItem value="registered">Voucher Registered</SelectItem>
+                <SelectItem value="redeemed">Voucher Redeemed</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
+
           <div className="flex gap-2 w-full md:w-auto">
             <Button onClick={() => setIsImportModalOpen(true)} className="flex-1 md:flex-none bg-emerald-600 hover:bg-emerald-700 text-white h-10 px-4 text-xs font-bold shadow-sm rounded-lg border border-emerald-500 transition-none">
               <UploadCloud className="w-3.5 h-3.5 mr-1.5" /> Import
@@ -870,9 +919,8 @@ export default function CRMPage() {
           activeKittyCount={globalCounts.kitty} 
         />
 
-        {/* ✨ 4. REDESIGNED COMMAND BAR */}
+        {/* 4. COMMAND BAR */}
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
-          {/* Top Row: Title & Actions */}
           <div className="bg-slate-50/80 border-b border-slate-100 p-3 sm:px-4 flex items-center justify-between gap-3">
              <div className="flex items-center gap-2">
                <div className="bg-indigo-100 p-1.5 rounded text-indigo-600"><Filter className="w-4 h-4" /></div>
@@ -901,7 +949,6 @@ export default function CRMPage() {
              </div>
           </div>
 
-          {/* Bottom Row: Scrollable Chips */}
           <div className="p-3 sm:px-4 flex overflow-x-auto custom-scrollbar gap-2 items-center">
             <Button 
               variant={activeAiFilter === 'scheme' ? 'default' : 'outline'} size="sm" 
@@ -950,7 +997,6 @@ export default function CRMPage() {
                 <TabsTrigger value="vouchers" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm text-teal-700 rounded-md whitespace-nowrap">
                   <TicketPercent className="w-3 h-3 mr-1.5 hidden sm:block" /> Voucher Customers <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-teal-50 text-teal-600 border-teal-100">{globalCounts.vouchers}</Badge>
                 </TabsTrigger>
-                {/* Dedicated hidden tab content area for DND customers */}
                 <TabsTrigger value="dnd" className="hidden">DND</TabsTrigger>
               </TabsList>
             </CardHeader>
@@ -958,66 +1004,71 @@ export default function CRMPage() {
             <CardContent className="p-0 flex-1 overflow-hidden">
               <TabsContent value="followups" className="h-full m-0 data-[state=active]:flex flex-col">
                  <CustomerList 
-                   data={customers} 
-                   loading={isLoading} 
-                   emptyMessage={activeAiFilter !== 'none' ? "No leads match this filter." : "No active leads found."}
-                   onMessage={openWhatsAppModal}
-                   onSchedule={openScheduleModal}
-                   onViewProfile={openProfileModal}
-                   onLogCall={openCallLoggerModal} 
+                    data={customers} 
+                    loading={isLoading} 
+                    emptyMessage={activeAiFilter !== 'none' ? "No leads match this filter." : "No active leads found."}
+                    onMessage={openWhatsAppModal}
+                    onSchedule={openScheduleModal}
+                    onViewProfile={openProfileModal}
+                    onLogCall={openCallLoggerModal} 
+                    onViewHistory={handleViewHistory}
                  />
                  <PaginationFooter />
               </TabsContent>
 
               <TabsContent value="purchased" className="h-full m-0 data-[state=active]:flex flex-col">
                  <CustomerList 
-                   data={customers} 
-                   loading={isLoading} 
-                   emptyMessage={activeAiFilter !== 'none' ? "No buyers match this filter." : "No purchased customers found."}
-                   onMessage={openWhatsAppModal}
-                   onSchedule={openScheduleModal}
-                   onViewProfile={openProfileModal}
-                   onLogCall={openCallLoggerModal}
+                    data={customers} 
+                    loading={isLoading} 
+                    emptyMessage={activeAiFilter !== 'none' ? "No buyers match this filter." : "No purchased customers found."}
+                    onMessage={openWhatsAppModal}
+                    onSchedule={openScheduleModal}
+                    onViewProfile={openProfileModal}
+                    onLogCall={openCallLoggerModal}
+                    onViewHistory={handleViewHistory}
                  />
                  <PaginationFooter />
               </TabsContent>
 
               <TabsContent value="kitty" className="h-full m-0 data-[state=active]:flex flex-col">
                  <CustomerList 
-                   data={customers} 
-                   loading={isLoading} 
-                   emptyMessage="No active Kitty Members found for this branch."
-                   onMessage={openWhatsAppModal}
-                   onSchedule={openScheduleModal}
-                   onViewProfile={openProfileModal}
-                   onLogCall={openCallLoggerModal}
-                   isKitty={true}
+                    data={customers} 
+                    loading={isLoading} 
+                    emptyMessage="No active Kitty Members found for this branch."
+                    onMessage={openWhatsAppModal}
+                    onSchedule={openScheduleModal}
+                    onViewProfile={openProfileModal}
+                    onLogCall={openCallLoggerModal}
+                    onViewHistory={handleViewHistory}
+                    isKitty={true}
                  />
                  <PaginationFooter />
               </TabsContent>
 
               <TabsContent value="vouchers" className="h-full m-0 data-[state=active]:flex flex-col">
                  <CustomerList 
-                   data={customers} 
-                   loading={isLoading} 
-                   emptyMessage="No Voucher Customers found for this branch."
-                   onMessage={openWhatsAppModal}
-                   onSchedule={openScheduleModal}
-                   onViewProfile={openProfileModal}
-                   onLogCall={openCallLoggerModal}
+                    data={customers} 
+                    loading={isLoading} 
+                    emptyMessage="No Voucher Customers found for this branch."
+                    onMessage={openWhatsAppModal}
+                    onSchedule={openScheduleModal}
+                    onViewProfile={openProfileModal}
+                    onLogCall={openCallLoggerModal}
+                    onViewHistory={handleViewHistory}
                  />
                  <PaginationFooter />
               </TabsContent>
 
               <TabsContent value="dnd" className="h-full m-0 data-[state=active]:flex flex-col">
                  <CustomerList 
-                   data={customers} 
-                   loading={isLoading} 
-                   emptyMessage="No Do Not Disturb customers found."
-                   onMessage={openWhatsAppModal}
-                   onSchedule={openScheduleModal}
-                   onViewProfile={openProfileModal}
-                   onLogCall={openCallLoggerModal}
+                    data={customers} 
+                    loading={isLoading} 
+                    emptyMessage="No Do Not Disturb customers found."
+                    onMessage={openWhatsAppModal}
+                    onSchedule={openScheduleModal}
+                    onViewProfile={openProfileModal}
+                    onLogCall={openCallLoggerModal}
+                    onViewHistory={handleViewHistory}
                  />
                  <PaginationFooter />
               </TabsContent>
@@ -1081,6 +1132,10 @@ export default function CRMPage() {
         isCallModalOpen={isCallModalOpen} setIsCallModalOpen={setIsCallModalOpen}
         callForm={callForm} setCallForm={setCallForm}
         handleLogCall={handleLogCall}
+
+        isHistoryModalOpen={isHistoryModalOpen} setIsHistoryModalOpen={setIsHistoryModalOpen}
+        customerHistory={customerHistory}
+        isHistoryLoading={isHistoryLoading}
       />
     </div>
   )
