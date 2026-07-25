@@ -125,9 +125,18 @@ export async function middleware(request: NextRequest) {
   return supabaseResponse
 }
 
-// Ensure the middleware runs on all routes except static files
+// Ensure the middleware runs on all routes except static files, API routes, and Next internals
 export const config = {
   matcher: [
-    '/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    /*
+     * Match all request paths except for the ones starting with:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - api (API routes - stops Vercel from charging Edge Requests for API calls)
+     * - favicon.ico (favicon file)
+     * - Any file with an extension (svg, png, etc.)
+     */
+
+    '/((?!_next/static|_next/image|api|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 }
