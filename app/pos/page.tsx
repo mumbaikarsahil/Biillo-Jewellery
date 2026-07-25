@@ -187,130 +187,133 @@ export default function POSPage() {
   }
 
   return (
-    <div className="min-h-[100dvh] lg:h-[100dvh] flex flex-col bg-[#E6E6E6] text-slate-900 font-sans overflow-hidden">
+    <div className="min-h-[100dvh] lg:h-[100dvh] flex flex-col bg-[#E6E6E6] print:bg-white text-slate-900 font-sans overflow-hidden">
       
-      <POSHeader 
-        isHQ={isHQ} isLocked={isLocked} 
-        selectedLocation={selectedLocation} setSelectedLocation={setSelectedLocation} 
-        onWipeSession={handleWipeSession} 
-        onWarehousesLoaded={setAllBranches} 
-        isAdmin={isAdmin}
-        billingDate={billingDate}
-        setBillingDate={setBillingDate}
-        // ✨ NEW: Passed props to Header
-        userRole={appUser?.role}
-        billedBy={billedBy}
-        setBilledBy={setBilledBy}
-      />
-
-      <ModeTabs mode={mode} setMode={setMode} />
-
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden p-2 gap-2">
+      {/* ✨ 2. THE MASTER PRINT TRAP: Everything inside this div vanishes when Android prints! */}
+      <div className="print:hidden flex flex-col flex-1 overflow-hidden">
         
-        {/* LEFT PANEL */}
-        <div className="flex-1 flex flex-col bg-white border border-slate-300 shadow-sm overflow-hidden rounded-sm min-h-[400px] lg:min-h-0">
-        {mode === 'custom' ? (
-             <CustomOrderForm 
-               details={customOrderDetails} 
-               setDetails={setCustomOrderDetails} 
-               currentLocationId={selectedLocation}
-               voucherAmount={checkoutHook.appliedVoucherAmount}
-               onAddToBill={(finalItemData: any) => {
-                 setMode('normal');
-                 clearCart();
-                 if (setCart) {
-                   setCart([{
-                     id: finalItemData.inventory_id,
-                     barcode: finalItemData.barcode,
-                     mrp: finalItemData.mrp,
-                     quantity: 1,
-                     custom_order_id: finalItemData.custom_order_id,
-                     advance_paid: finalItemData.advance_paid,
-                     net_weight_g: finalItemData.net_weight_g,
-                     gross_weight_g: finalItemData.gross_weight_g,
-                     total_stone_weight_cts: finalItemData.total_stone_weight_cts,
-                     item_category: finalItemData.item_category,
-                     metal_type: finalItemData.metal_type,
-                     purity_karat: finalItemData.purity_karat
-                   }]);
-                   toast.success("Added to cart! Advance payment applied.");
-                 } else {
-                   toast.error("Cart error: Please ensure setCart is exported from useCart.");
-                 }
-               }}
-             />
-          ) : mode === 'return' ? (
-            <ReturnIntakeForm 
-              details={returnDetails} 
-              setDetails={setReturnDetails}
-              appUser={appUser} 
-              // @ts-ignore
-              onApplyReturn={(refundValue: number) => {
-                toast.success(`₹${refundValue.toLocaleString()} refund verified! Please select a Refund Method (e.g. Cash, UPI) on the right sidebar to finalize.`);
-              }}
-            />
-           ) : mode === 'repair' ? (
-              <RepairIntakeForm 
-                details={repairDetails} 
-                setDetails={setRepairDetails} 
-                currentLocationId={selectedLocation}
-                onAddToBill={(finalItemData: any) => {
-                  setMode('normal');
-                  clearCart();
-                  if (setCart) {
-                    setCart([{
-                      id: finalItemData.inventory_id, 
-                      barcode: finalItemData.barcode,
-                      mrp: finalItemData.mrp,
-                      quantity: 1,
-                      repair_ticket_id: finalItemData.repair_ticket_id, 
-                      advance_paid: finalItemData.advance_paid,
-                      net_weight_g: finalItemData.net_weight_g,
-                      total_stone_weight_cts: finalItemData.total_stone_weight_cts,
-                      item_category: finalItemData.item_category
-                    }]);
-                    toast.success("Added to cart! Advance payment applied.");
-                  } else {
-                    toast.error("Cart error: Please ensure setCart is exported.");
-                  }
+        <POSHeader 
+          isHQ={isHQ} isLocked={isLocked} 
+          selectedLocation={selectedLocation} setSelectedLocation={setSelectedLocation} 
+          onWipeSession={handleWipeSession} 
+          onWarehousesLoaded={setAllBranches} 
+          isAdmin={isAdmin}
+          billingDate={billingDate}
+          setBillingDate={setBillingDate}
+          userRole={appUser?.role}
+          billedBy={billedBy}
+          setBilledBy={setBilledBy}
+        />
+
+        <ModeTabs mode={mode} setMode={setMode} />
+
+        <div className="flex-1 flex flex-col lg:flex-row overflow-hidden p-2 gap-2">
+          
+          {/* LEFT PANEL */}
+          <div className="flex-1 flex flex-col bg-white border border-slate-300 shadow-sm overflow-hidden rounded-sm min-h-[400px] lg:min-h-0">
+          {mode === 'custom' ? (
+               <CustomOrderForm 
+                 details={customOrderDetails} 
+                 setDetails={setCustomOrderDetails} 
+                 currentLocationId={selectedLocation}
+                 voucherAmount={checkoutHook.appliedVoucherAmount}
+                 onAddToBill={(finalItemData: any) => {
+                   setMode('normal');
+                   clearCart();
+                   if (setCart) {
+                     setCart([{
+                       id: finalItemData.inventory_id,
+                       barcode: finalItemData.barcode,
+                       mrp: finalItemData.mrp,
+                       quantity: 1,
+                       custom_order_id: finalItemData.custom_order_id,
+                       advance_paid: finalItemData.advance_paid,
+                       net_weight_g: finalItemData.net_weight_g,
+                       gross_weight_g: finalItemData.gross_weight_g,
+                       total_stone_weight_cts: finalItemData.total_stone_weight_cts,
+                       item_category: finalItemData.item_category,
+                       metal_type: finalItemData.metal_type,
+                       purity_karat: finalItemData.purity_karat
+                     }]);
+                     toast.success("Added to cart! Advance payment applied.");
+                   } else {
+                     toast.error("Cart error: Please ensure setCart is exported from useCart.");
+                   }
+                 }}
+               />
+            ) : mode === 'return' ? (
+              <ReturnIntakeForm 
+                details={returnDetails} 
+                setDetails={setReturnDetails}
+                appUser={appUser} 
+                // @ts-ignore
+                onApplyReturn={(refundValue: number) => {
+                  toast.success(`₹${refundValue.toLocaleString()} refund verified! Please select a Refund Method (e.g. Cash, UPI) on the right sidebar to finalize.`);
                 }}
               />
-           ) : (
-             <CartPanel 
-               mode={mode} 
-               cart={cart}
-               itemSearchTerm={itemSearchTerm}
-               setItemSearchTerm={setItemSearchTerm}
-               searchResults={searchResults}
-               processScannedItem={processScannedItem}
-               removeFromCart={removeFromCart}
-               onOpenScanner={() => setShowScanner(true)} 
-             />
-          )}
+             ) : mode === 'repair' ? (
+                <RepairIntakeForm 
+                  details={repairDetails} 
+                  setDetails={setRepairDetails} 
+                  currentLocationId={selectedLocation}
+                  onAddToBill={(finalItemData: any) => {
+                    setMode('normal');
+                    clearCart();
+                    if (setCart) {
+                      setCart([{
+                        id: finalItemData.inventory_id, 
+                        barcode: finalItemData.barcode,
+                        mrp: finalItemData.mrp,
+                        quantity: 1,
+                        repair_ticket_id: finalItemData.repair_ticket_id, 
+                        advance_paid: finalItemData.advance_paid,
+                        net_weight_g: finalItemData.net_weight_g,
+                        total_stone_weight_cts: finalItemData.total_stone_weight_cts,
+                        item_category: finalItemData.item_category
+                      }]);
+                      toast.success("Added to cart! Advance payment applied.");
+                    } else {
+                      toast.error("Cart error: Please ensure setCart is exported.");
+                    }
+                  }}
+                />
+             ) : (
+               <CartPanel 
+                 mode={mode} 
+                 cart={cart}
+                 itemSearchTerm={itemSearchTerm}
+                 setItemSearchTerm={setItemSearchTerm}
+                 searchResults={searchResults}
+                 processScannedItem={processScannedItem}
+                 removeFromCart={removeFromCart}
+                 onOpenScanner={() => setShowScanner(true)} 
+               />
+            )}
+          </div>
+
+          {/* RIGHT PANEL */}
+          <CheckoutSidebar 
+            mode={mode}
+            cartLength={cart.length}
+            cart={cart} 
+            subtotal={subtotal}
+            customers={customers}
+            setCustomers={setCustomers}
+            selectedCustomer={selectedCustomer}
+            setSelectedCustomer={setSelectedCustomer}
+            appUser={appUser}
+            selectedLocation={selectedLocation}
+            repairDetails={repairDetails}
+            customOrderDetails={customOrderDetails}
+            returnDetails={returnDetails} 
+            onPreviewRequest={handlePreviewRequest}
+            setMode={setMode}
+            {...checkoutHook} 
+          />
         </div>
+      </div> {/* ✨ End of the print:hidden wrapper */}
 
-        {/* RIGHT PANEL */}
-        <CheckoutSidebar 
-          mode={mode}
-          cartLength={cart.length}
-          cart={cart} 
-          subtotal={subtotal}
-          customers={customers}
-          setCustomers={setCustomers}
-          selectedCustomer={selectedCustomer}
-          setSelectedCustomer={setSelectedCustomer}
-          appUser={appUser}
-          selectedLocation={selectedLocation}
-          repairDetails={repairDetails}
-          customOrderDetails={customOrderDetails}
-          returnDetails={returnDetails} 
-          onPreviewRequest={handlePreviewRequest}
-          setMode={setMode}
-          {...checkoutHook} 
-        />
-      </div>
-
-      {/* MODALS */}
+      {/* ✨ 3. MODALS: Left outside the hidden wrapper so they can survive the print trap! */}
       <PosModals 
         mode={mode}
         showScanner={showScanner} 

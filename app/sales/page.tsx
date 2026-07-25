@@ -646,7 +646,7 @@ export default function AccountsMasterPage() {
         </div>
       </header>
 
-      <main className="p-3 sm:p-6 md:p-8 max-w-[1600px] w-full min-w-0 mx-auto space-y-5 animate-in fade-in duration-500">
+      <main className="print:hidden p-3 sm:p-6 md:p-8 max-w-[1600px] w-full min-w-0 mx-auto space-y-5 animate-in fade-in duration-500">
         
         {/* MOBILE-OPTIMIZED FILTERS */}
         <div className="flex flex-col gap-2.5 bg-white p-3 sm:p-2.5 rounded-2xl border border-zinc-200 shadow-sm w-full">
@@ -1561,27 +1561,63 @@ export default function AccountsMasterPage() {
               >
                 Close Window
               </Button>
+              {/* ✨ Notice the arrow function () => triggerPrint() */}
               <Button 
-                onClick={triggerPrint} 
-                className="h-9 sm:h-9 w-full sm:w-auto px-6 text-[11px] font-bold uppercase tracking-widest rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-[0_2px_10px_rgba(79,70,229,0.2)] transition-all"
-              >
-                <Printer className="h-3.5 w-3.5 mr-2" /> Print Document
-              </Button>
+  onClick={(e) => {
+    e.preventDefault();
+    triggerPrint();
+  }} 
+  className="h-9 sm:h-9 w-full sm:w-auto px-6 text-[11px] font-bold uppercase tracking-widest rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all"
+>
+  <Printer className="h-3.5 w-3.5 mr-2" /> Print Document
+</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        <div className="hidden"><InvoicePrintTemplate ref={printRef} data={invoiceToPrint} /></div>
-      </main>
+        </main>
 
+       {/* ✨ OFF-SCREEN WRAPPER: Pure CSS, absolutely NO inline styles (-10000px) */}
+<div id="print-wrapper" className="fixed top-0 left-0 -z-[9999] opacity-0 pointer-events-none">
+  
+  <div id="true-print-container" ref={printRef} className="w-[210mm] bg-white text-black">
+    <InvoicePrintTemplate data={invoiceToPrint} />
+  </div>
+
+</div>
+      
       <style dangerouslySetInnerHTML={{__html:`
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 10px; }
-        .pb-safe { padding-bottom: env(safe-area-inset-bottom, 1rem); }
-      `}} />
+  @media print {
+    /* 1. Hide the entire normal app UI */
+    body * {
+      visibility: hidden !important;
+    }
+    
+    /* 2. Un-hide the wrapper AND the true print container */
+    #print-wrapper, #print-wrapper *, 
+    #true-print-container, #true-print-container * {
+      visibility: visible !important;
+    }
+    
+    /* 3. Snap the wrapper perfectly to the top-left AND pull it to the front */
+    #print-wrapper {
+      position: absolute !important;
+      left: 0 !important;
+      top: 0 !important;
+      opacity: 1 !important;
+      z-index: 99999 !important; /* ✨ THE FIX: Pulls the invoice above the white background! */
+      width: 210mm !important;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+  }
+
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+  .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+  .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 10px; }
+`}} />
     </div>
   )
 }

@@ -21,20 +21,29 @@ export function PosModals({
   const customerPrintRef = useRef<HTMLDivElement>(null)
   const storePrintRef = useRef<HTMLDivElement>(null)
   
-  // Base trigger functions
+  // ✨ State to track which copy Android should natively print
+  const [printType, setPrintType] = useState<'customer' | 'store'>('customer')
+
   const triggerCustomerPrint = useReactToPrint({ contentRef: customerPrintRef })
   const triggerStorePrint = useReactToPrint({ contentRef: storePrintRef })
 
-  const handlePrintCustomer = () => {
+  const handlePrintCustomer = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
     const data = lastInvoiceData || previewData;
     if (!data) { toast.error("No data to print"); return; }
-    triggerCustomerPrint();
+    
+    setPrintType('customer');
+    // Tiny timeout ensures React state updates before the print spooler freezes the browser
+    setTimeout(() => triggerCustomerPrint(), 10);
   };
 
-  const handlePrintStore = () => {
+  const handlePrintStore = (e?: React.MouseEvent) => {
+    if (e) e.preventDefault();
     const data = lastInvoiceData || previewData;
     if (!data) { toast.error("No data to print"); return; }
-    triggerStorePrint();
+    
+    setPrintType('store');
+    setTimeout(() => triggerStorePrint(), 10);
   };
 
   const modeConfig: Record<string, { bg: string, text: string }> = {
@@ -49,26 +58,6 @@ export function PosModals({
 
   return (
     <>
-      {/* ✨ ROBUST PRINT CSS: Hide everything except our print refs */}
-      <style dangerouslySetInnerHTML={{__html: `
-        @media print {
-          @page { margin: 0; size: auto; } 
-          /* Hide UI completely */
-          body > *:not(#print-container-customer):not(#print-container-store) {
-            display: none !important;
-          }
-          /* Force visibility for the print containers */
-          #print-container-customer, #print-container-store {
-            display: block !important;
-            visibility: visible !important;
-            position: absolute !important;
-            top: 0 !important;
-            left: 0 !important;
-            width: 100% !important;
-          }
-        }
-      `}} />
-
       {/* 1. CAMERA SCANNER MODAL */}
       <Dialog open={showScanner} onOpenChange={setShowScanner}>
         <DialogContent className="print:hidden sm:max-w-md p-0 overflow-hidden bg-white border border-slate-200 rounded-2xl shadow-2xl">
@@ -158,15 +147,33 @@ export function PosModals({
         </DialogContent>
       </Dialog>
 
-      {/* ✨ STABLE DOM RENDERERS (Hidden from screen, visible to print) */}
-      <div className="hidden">
-         <div id="print-container-customer" ref={customerPrintRef} className="print-container bg-white flex flex-col mx-auto w-max">
-            <InvoicePrintTemplate data={lastInvoiceData || previewData} copyLabel="Customer Copy" />
-         </div>
-         <div id="print-container-store" ref={storePrintRef} className="print-container bg-white flex flex-col mx-auto w-max">
-            <InvoicePrintTemplate data={lastInvoiceData || previewData} copyLabel="Store Copy" />
-         </div>
+      {/* ✨ BULLETPROOF ANDROID/CHROME FALLBACK WRAPPER */}
+      <div id="print-wrapper" className="fixed top-0 left-0 -z-[9999] opacity-0 pointer-events-none print:static print:z-auto print:opacity-100 print:pointer-events-auto print:bg-white w-full flex justify-center">
+        
+        {/* Dynamic conditional render based on which button was clicked */}
+        <div className={printType === 'customer' ? 'block' : 'hidden print:hidden'}>
+          <div ref={customerPrintRef} className="w-[210mm] bg-white text-black">
+             <InvoicePrintTemplate data={lastInvoiceData || previewData} copyLabel="Customer Copy" />
+          </div>
+        </div>
+
+        <div className={printType === 'store' ? 'block' : 'hidden print:hidden'}>
+          <div ref={storePrintRef} className="w-[210mm] bg-white text-black">
+             <InvoicePrintTemplate data={lastInvoiceData || previewData} copyLabel="Store Copy" />
+          </div>
+        </div>
+
       </div>
+
+      {/* ✨ The Master Trap */}
+      <style dangerouslySetInnerHTML={{__html:`
+        @media print {
+          /* Kill the dark background and any active modals */
+          [data-radix-portal] { display: none !important; }
+          /* Set the absolute base to white so it doesn't print grey */
+          body { background-color: white !important; }
+        }
+      `}} />
     </>
   )
 }
