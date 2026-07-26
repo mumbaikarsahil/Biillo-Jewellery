@@ -8,7 +8,7 @@ import { useReactToPrint } from "react-to-print";
 import { 
   Loader2, CheckCircle2, PlusCircle, ArrowLeft, ChevronRight, 
   RefreshCw, Database, Printer, Ticket, FileSpreadsheet, Info, Share2,
-  MonitorSmartphone, QrCode, ArrowRight 
+  MonitorSmartphone, QrCode, ArrowRight, BookOpen, Truck
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -35,8 +35,6 @@ export default function GenerateVouchersPage() {
   } | null>(null);
 
   const [showSuccessModal, setShowSuccessModal] = useState(false);
-
-  // ✨ FIX 1: Updated the interface to match your database column
   const [printers, setPrinters] = useState<{id: string, distributor_name: string}[]>([]);
 
   const [formData, setFormData] = useState({
@@ -64,8 +62,7 @@ export default function GenerateVouchersPage() {
       const { data: lastBatch } = await supabase.from('voucher_batches').select('prefix').eq('company_id', appUser.company_id).order('created_at', { ascending: false }).limit(1).maybeSingle();
       if (lastBatch && lastBatch.prefix) setFormData(prev => ({ ...prev, prefix: lastBatch.prefix }));
 
-      // ✨ FIX 2: Selecting `distributor_name` instead of `name`
-      const { data: printersData, error } = await supabase
+      const { data: printersData } = await supabase
         .from('voucher_distributors')
         .select('id, distributor_name')
         .eq('company_id', appUser.company_id)
@@ -108,19 +105,23 @@ export default function GenerateVouchersPage() {
     return () => clearTimeout(timeoutId);
   }, [formData.prefix, fetchNextSequence]);
 
+  // ✨ FIX 2: Mathematical Sequence Update to prevent DB latency issues
   const handleResetAfterSuccess = () => {
     setShowSuccessModal(false);
     
+    const nextSequence = Number(formData.startingNumber) + Number(formData.quantity);
+    
     setFormData(prev => ({
       ...prev,
+      startingNumber: nextSequence, // Instantly jump to the correct next number
       quantity: 100,
       discountValue: 500,
       handlingFee: 0,
       printerName: ""
     }));
     
+    setSuccessBatch(null);
     setGenerationProgress(0);
-    setTimeout(() => fetchNextSequence(formData.prefix), 300);
   };
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -164,6 +165,8 @@ export default function GenerateVouchersPage() {
           company_id: companyId, 
           batch_no: batchNo, 
           prefix: prefix, 
+          start_sequence: startNum,
+          end_sequence: startNum + quantity - 1,
           quantity: quantity,
           discount_value: discount, 
           handling_fee: handlingFee, 
@@ -229,21 +232,16 @@ export default function GenerateVouchersPage() {
 
   const shareExcel = async () => {
     if (!successBatch) return;
-    
     const exportData = successBatch.codes.map((code, index) => ({
       "Sr No": index + 1, "Voucher Code": code, "Credit Value (₹)": successBatch.discount,
       "Handling Fee (₹)": successBatch.handlingFee, "Initial Expiry": successBatch.expiry,
       "Batch Ref": successBatch.batchNo, "Claim URL": `${baseUrl}/claim?code=${code}`
     }));
-    
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Vouchers");
-
     const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-    const file = new File([excelBuffer], `Vouchers_${successBatch.batchNo}.xlsx`, {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    });
+    const file = new File([excelBuffer], `Vouchers_${successBatch.batchNo}.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
       try {
@@ -253,16 +251,10 @@ export default function GenerateVouchersPage() {
           text: `Here is the Excel manifest for voucher batch ${successBatch.batchNo}.`,
         });
       } catch (error: any) {
-        if (error.name !== 'AbortError') {
-          toast({ title: "Sharing Failed", description: "Could not share the file.", variant: "destructive" });
-        }
+        if (error.name !== 'AbortError') toast({ title: "Sharing Failed", description: "Could not share the file.", variant: "destructive" });
       }
     } else {
-      toast({ 
-        title: "Not Supported", 
-        description: "Your device/browser does not support direct file sharing. Please use the Download button instead.", 
-        variant: "destructive" 
-      });
+      toast({ title: "Not Supported", description: "Your device does not support direct file sharing. Use Download instead.", variant: "destructive" });
     }
   };
 
@@ -300,9 +292,9 @@ export default function GenerateVouchersPage() {
             <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Reset Form
           </Button>
           <Separator orientation="vertical" className="h-4 mx-1" />
-          <Link href="/vouchers/track">
+          <Link href="/vouchers/batches">
             <Button variant="outline" size="sm" className="h-8 text-xs font-bold px-3 shadow-sm border-gray-200 bg-white text-gray-700">
-              <Database className="h-3.5 w-3.5 mr-1.5 text-gray-400" /> Voucher DB
+              <Database className="h-3.5 w-3.5 mr-1.5 text-gray-400" /> Ingest Inventory
             </Button>
           </Link>
         </div>
@@ -381,14 +373,10 @@ export default function GenerateVouchersPage() {
                   </div>
                 </div>
 
-                {/* ✨ FIX 3: Using `printer.distributor_name` correctly in the Select elements */}
                 {intendedUse === 'physical' && (
                   <div className="space-y-2">
                     <Label htmlFor="printerName" className="text-xs font-bold text-gray-500 uppercase tracking-tight">Printing Press Vendor</Label>
-                    <Select 
-                      value={formData.printerName} 
-                      onValueChange={(val) => setFormData(prev => ({ ...prev, printerName: val }))}
-                    >
+                    <Select value={formData.printerName} onValueChange={(val) => setFormData(prev => ({ ...prev, printerName: val }))}>
                       <SelectTrigger className="h-10 text-sm border-gray-200 focus:ring-primary rounded-md bg-gray-50">
                         <SelectValue placeholder="Select registered printing press..." />
                       </SelectTrigger>
@@ -400,9 +388,7 @@ export default function GenerateVouchersPage() {
                             </SelectItem>
                           ))
                         ) : (
-                          <SelectItem value="none" disabled>
-                            No printing presses found. Add one in the Distributors tab.
-                          </SelectItem>
+                          <SelectItem value="none" disabled>No printing presses found. Add one in the Partner Directory.</SelectItem>
                         )}
                       </SelectContent>
                     </Select>
@@ -426,132 +412,120 @@ export default function GenerateVouchersPage() {
             </CardContent>
           </Card>
 
+          {/* Static Workflow Guide in background */}
           <div className="md:col-span-2 space-y-6">
-            <Card className={`shadow-sm border-gray-200/60 overflow-hidden rounded-lg transition-all duration-500 ${successBatch ? 'bg-white' : 'bg-gray-50/50 opacity-80'}`}>
-              <CardHeader className="bg-gray-50/50 py-3 px-4 border-b border-gray-200/60">
+            <Card className="shadow-sm border-gray-200/60 bg-gray-50/50 opacity-90 overflow-hidden rounded-lg">
+              <CardHeader className="bg-gray-100/50 py-3 px-4 border-b border-gray-200/60">
                 <div className="flex items-center gap-2">
-                  {intendedUse === 'digital' ? <QrCode className="h-4 w-4 text-indigo-400" /> : <Printer className="h-4 w-4 text-gray-400" />}
-                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-tight">Post-Generation Actions</h3>
+                  <BookOpen className="h-4 w-4 text-gray-500" />
+                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-tight">Workflow Guide</h3>
                 </div>
               </CardHeader>
-              <CardContent className="pt-6 pb-6 text-center">
-                {successBatch ? (
-                  <div className="space-y-5">
-                    <div className="inline-flex h-12 w-12 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 mb-2">
-                       <CheckCircle2 className="h-6 w-6" />
-                    </div>
-                    <div>
-                      <p className="text-3xl font-black text-gray-900 leading-none">{successBatch.codes.length}</p>
-                      <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">Identifiers Ready</p>
-                    </div>
-                    
-                    <div className="p-3 rounded-md bg-gray-50 border border-gray-100 text-left">
-                       <p className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter">Batch Pointer</p>
-                       <p className="text-xs font-mono font-bold text-gray-700 mt-1">{successBatch.batchNo}</p>
-                    </div>
-
-                    <div className="flex flex-col gap-3 pt-2">
-                      <div className="flex gap-2">
-                        <Button onClick={downloadExcel} variant="outline" className="flex-1 h-11 text-[11px] font-semibold bg-background border-border rounded-lg shadow-sm transition-all text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/5">
-                          <FileSpreadsheet className="mr-1.5 h-4 w-4" />
-                          Download
-                        </Button>
-                        <Button onClick={shareExcel} variant="outline" className="flex-1 h-11 text-[11px] font-semibold bg-background border-border rounded-lg shadow-sm transition-all text-blue-600 hover:text-blue-700 hover:bg-blue-500/5">
-                          <Share2 className="mr-1.5 h-4 w-4" />
-                          Share List
-                        </Button>
-                      </div>
-                      
-                      {intendedUse === 'physical' ? (
-                        <>
-                          {successBatch.codes.length <= 1000 ? (
-                            <Button onClick={handlePrint} className="w-full h-11 text-xs font-semibold rounded-lg shadow-sm transition-all bg-slate-900 hover:bg-slate-800 text-white">
-                              <Printer className="mr-2 h-4 w-4" />
-                              Print Quick Strips
-                            </Button>
-                          ) : (
-                            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs font-medium text-left flex items-start gap-2">
-                              <Info className="w-4 h-4 mt-0.5 shrink-0" />
-                              <span>Batch size is too large for direct browser printing. Please use the downloaded Excel file to send to a commercial printing press.</span>
-                            </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="space-y-2 mt-2">
-                          <p className="text-[10px] text-gray-500 font-medium leading-tight">These codes are completely digital. Proceed to distribution to activate the Event QR.</p>
-                          <Link href="/vouchers" className="w-full block">
-                            <Button className="w-full h-11 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all">
-                              <QrCode className="mr-2 h-4 w-4" />
-                              Proceed to Event Allocation
-                            </Button>
-                          </Link>
-                        </div>
-                      )}
-
-                    </div>
+              <CardContent className="pt-6 pb-6 space-y-4">
+                <div className="flex gap-3">
+                  <div className="mt-1 h-6 w-6 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center shrink-0 font-bold text-xs">1</div>
+                  <div>
+                    <h4 className="text-sm font-bold text-gray-900">Generate Batch</h4>
+                    <p className="text-xs text-gray-500 mt-1">Configure sequence and quantity. The system auto-detects the last used number to prevent duplicates.</p>
                   </div>
-                ) : (
-                  <div className="py-8 space-y-3">
-                    <div className="h-10 w-10 rounded-lg bg-gray-100 border border-gray-200 mx-auto flex items-center justify-center">
-                       <Ticket className="h-5 w-5 text-gray-300" />
-                    </div>
-                    <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter">Pending Batch Creation</p>
+                </div>
+                <div className="flex gap-3">
+                  <div className="mt-1 h-6 w-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0 font-bold text-xs">2</div>
+                  <div>
+                    <h4 className="text-sm font-bold text-gray-900">Ingest Inventory</h4>
+                    <p className="text-xs text-gray-500 mt-1">Go to the Ingest Inventory tab to officially receive this batch and mark it as 'In Stock'.</p>
                   </div>
-                )}
+                </div>
+                <div className="flex gap-3">
+                  <div className="mt-1 h-6 w-6 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 font-bold text-xs">3</div>
+                  <div>
+                    <h4 className="text-sm font-bold text-gray-900">Issue & Transfer</h4>
+                    <p className="text-xs text-gray-500 mt-1">Move to the Issue & Transfer option to allot the vouchers to delivery agents or event partners.</p>
+                  </div>
+                </div>
               </CardContent>
             </Card>
-
-            <div className="p-4 rounded-xl border border-blue-100 bg-blue-50/30 space-y-2">
-              <div className="flex items-center gap-2 text-blue-900">
-                <Info className="h-3.5 w-3.5" />
-                <span className="text-[11px] font-bold uppercase tracking-tight">Voucher Lifecycle</span>
-              </div>
-              <p className="text-[11px] leading-relaxed text-blue-700 font-medium">
-                Vouchers are initially valid for <span className="font-bold">6 months</span>. Upon customer scan & registration, validity automatically shrinks to <span className="font-bold">2 months</span>.
-              </p>
-            </div>
           </div>
         </div>
       </main>
 
-      <Dialog open={showSuccessModal} onOpenChange={(open) => !open && handleResetAfterSuccess()}>
-        <DialogContent className="sm:max-w-md text-center flex flex-col items-center border-none shadow-2xl p-6 rounded-2xl">
-          <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-2 shadow-sm border border-emerald-200">
-            <CheckCircle2 className="w-8 h-8" />
-          </div>
-          <DialogHeader>
-            <DialogTitle className="text-2xl font-black text-slate-900 text-center tracking-tight">Batch Generated!</DialogTitle>
-            <DialogDescription className="text-center text-slate-500 mt-2 font-medium">
-              Successfully created <strong className="text-slate-800">{successBatch?.codes.length}</strong> sequential vouchers for batch <strong className="text-slate-800">{successBatch?.batchNo}</strong>.
+      {/* ✨ FIX 1: Strict Success Modal with Integrated Guidelines and Navigation */}
+      <Dialog open={showSuccessModal} onOpenChange={(open) => {
+          // Prevent closing by clicking outside or pressing Escape to force intentional navigation
+          if (!open) return; 
+      }}>
+        <DialogContent 
+          className="sm:max-w-xl text-center flex flex-col items-center border-none shadow-2xl p-0 rounded-2xl overflow-hidden"
+          onInteractOutside={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+        >
+          {/* Header Area */}
+          <div className="w-full bg-emerald-500 p-8 flex flex-col items-center justify-center relative">
+            <div className="w-16 h-16 bg-white text-emerald-600 rounded-full flex items-center justify-center mb-3 shadow-lg">
+              <CheckCircle2 className="w-8 h-8" />
+            </div>
+            <DialogTitle className="text-2xl font-black text-white tracking-tight">Batch Generated Successfully!</DialogTitle>
+            <DialogDescription className="text-emerald-50 mt-1 font-medium">
+              Created <strong className="text-white">{successBatch?.codes.length}</strong> vouchers for batch <strong className="font-mono text-white">{successBatch?.batchNo}</strong>
             </DialogDescription>
-          </DialogHeader>
-          
-          <div className="w-full bg-slate-50 border border-slate-100 p-4 rounded-xl mt-4 mb-2 text-left space-y-3 shadow-inner">
-            <div className="flex justify-between text-sm">
-              <span className="text-slate-500 font-bold uppercase tracking-wider text-[10px]">Format Type</span>
-              <span className="font-bold text-slate-800 flex items-center gap-1.5 text-xs">
-                {intendedUse === 'physical' ? <><Printer className="w-3.5 h-3.5 text-slate-400"/> Physical Booklets</> : <><QrCode className="w-3.5 h-3.5 text-indigo-500"/> Digital Event Pool</>}
-              </span>
-            </div>
-            <div className="flex justify-between text-sm border-t border-slate-200 pt-3">
-              <span className="text-slate-500 font-bold uppercase tracking-wider text-[10px]">Sequence Series</span>
-              <span className="font-mono font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-100 text-xs">
-                {successBatch?.codes[0]} <span className="text-slate-400 mx-1">→</span> {successBatch?.codes[(successBatch?.codes.length || 1) - 1]}
-              </span>
-            </div>
           </div>
 
-          <DialogFooter className="w-full sm:justify-center flex-col sm:flex-col gap-2 mt-4">
-            <Button 
-              className={`w-full text-white font-bold h-12 text-sm rounded-xl shadow-md transition-all ${intendedUse === 'physical' ? 'bg-slate-900 hover:bg-slate-800' : 'bg-indigo-600 hover:bg-indigo-700'}`}
-              onClick={handleResetAfterSuccess}
-            >
-              Continue to Actions <ArrowRight className="w-4 h-4 ml-2" />
-            </Button>
-          </DialogFooter>
+          <div className="w-full p-6 bg-white">
+            
+            {/* Action Buttons (Download/Print) moved inside the modal */}
+            <div className="flex gap-3 mb-6">
+              <Button onClick={downloadExcel} variant="outline" className="flex-1 h-12 text-xs font-bold bg-white border-gray-200 rounded-xl shadow-sm text-gray-700 hover:text-emerald-700 hover:bg-emerald-50 hover:border-emerald-200">
+                <FileSpreadsheet className="mr-2 h-4 w-4" /> Download Manifest
+              </Button>
+              {intendedUse === 'physical' && successBatch && successBatch.codes.length <= 1000 && (
+                <Button onClick={handlePrint} variant="outline" className="flex-1 h-12 text-xs font-bold bg-white border-gray-200 rounded-xl shadow-sm text-gray-700 hover:text-indigo-700 hover:bg-indigo-50 hover:border-indigo-200">
+                  <Printer className="mr-2 h-4 w-4" /> Print Quick Strips
+                </Button>
+              )}
+            </div>
+
+            {/* Strict Guidelines Required by Prompt */}
+            <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 text-left flex items-start gap-3 mb-6">
+              <Info className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
+              <div className="space-y-2 text-sm text-blue-900 leading-relaxed">
+                <p>
+                  <span className="font-bold">Next Steps:</span> Go to the <span className="font-semibold text-blue-700">Ingest Inventory</span> to receive this batch of vouchers, then move on to the <span className="font-semibold text-blue-700">Issue & Transfer</span> option to allot the vouchers as per the requirement.
+                </p>
+                <p className="text-xs text-blue-700/80">
+                  You can register new partners, delivery agents, and printing press suppliers via the Partner Directory option.
+                </p>
+              </div>
+            </div>
+
+            {/* Mandatory Navigation Routing */}
+            <DialogFooter className="w-full sm:justify-center flex-col sm:flex-col gap-3">
+              <div className="grid grid-cols-2 gap-3 w-full">
+                <Link href="/vouchers/batches" className="w-full">
+                  <Button className="w-full h-12 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl text-sm shadow-md">
+                    <Database className="w-4 h-4 mr-2" /> Ingest Inventory
+                  </Button>
+                </Link>
+                <Link href="/vouchers" className="w-full">
+                  <Button className="w-full h-12 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-sm shadow-md">
+                    <Ticket className="w-4 h-4 mr-2" /> Voucher Dashboard
+                  </Button>
+                </Link>
+              </div>
+              
+              {/* Reset Form Option */}
+              <Button 
+                variant="ghost" 
+                className="w-full mt-2 text-gray-500 hover:text-gray-900 text-xs font-semibold"
+                onClick={handleResetAfterSuccess}
+              >
+                Generate Another Batch (Reset Form)
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
+      {/* Hidden Print Wrapper */}
       {(successBatch && successBatch.codes.length <= 1000) && (
         <div className="hidden">
           <div ref={printRef}>

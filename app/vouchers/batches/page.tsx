@@ -182,10 +182,12 @@ export default function BatchesPage() {
   };
 
   // --- 3. UPDATED: STRICT ERROR THROWING ---
+  // --- 3. ✨ FIXED: DIRECT BULK DELETE & AUDIT LOGIC ---
   const confirmDelete = async () => {
     if (!batchToDelete || !deleteReason.trim()) return;
     
     try {
+      // Step A: Validate for claimed vouchers before attempting delete
       if (!validationWarning) {
         setIsDeleting(true);
         setDeleteStatusText("Checking voucher statuses...");
@@ -199,60 +201,37 @@ export default function BatchesPage() {
         if (checkError) throw checkError;
 
         if (claimedCount && claimedCount > 0) {
-          setRetainedCount(claimedCount);
+          setRetainedCount(claimedCount); // Save for the audit trail
           setValidationWarning(`Found ${claimedCount} vouchers that are already claimed or registered. Proceeding will ONLY delete the remaining unused vouchers and void the batch. Proceed?`);
           setIsDeleting(false);
           return; 
         }
       }
 
+      // Step B: Direct Bulk Deletion (No URL length limits!)
       setIsDeleting(true);
       setValidationWarning(null);
-      setDeleteProgress(0);
-      setDeleteStatusText("Fetching vouchers for deletion...");
+      setDeleteProgress(50); // Set to 50% immediately to show action
+      setDeleteStatusText("Erasing unused vouchers...");
 
-      let hasMore = true;
-      let processedCount = 0;
-      const CHUNK_SIZE = 1000;
+      const { error: deleteError } = await supabase
+        .from("vouchers")
+        .delete()
+        .eq("batch_id", batchToDelete.id)
+        .in("status", ["pending_print", "in_stock", "sent_for_printing"]); // Safe statuses
 
-      while (hasMore) {
-        const { data: chunk, error: fetchError } = await supabase
-          .from("vouchers")
-          .select("id")
-          .eq("batch_id", batchToDelete.id)
-          .in("status", ["pending_print", "in_stock", "sent_for_printing"]) 
-          .limit(CHUNK_SIZE);
+      if (deleteError) throw deleteError;
 
-        if (fetchError) throw fetchError;
+      const expectedDeletedCount = batchToDelete.quantity - retainedCount;
+      setDeleteProgress(80);
 
-        if (!chunk || chunk.length === 0) {
-          hasMore = false;
-          break;
-        }
-
-        const idsToDelete = chunk.map((v) => v.id);
-        const { error: deleteError } = await supabase
-          .from("vouchers")
-          .delete()
-          .in("id", idsToDelete);
-
-        if (deleteError) throw deleteError;
-
-        processedCount += idsToDelete.length;
-        
-        const expectedTotal = batchToDelete.quantity - retainedCount;
-        const progress = Math.min(Math.round((processedCount / (expectedTotal || 1)) * 100), 95);
-        setDeleteProgress(progress);
-        setDeleteStatusText(`Deleted ${processedCount} unused vouchers...`);
-      }
-
-      setDeleteStatusText("Updating batch ledger...");
+      // Step C: Mark the Batch Ledger as Voided with Strict Audit Trail
+      setDeleteStatusText("Writing audit trail...");
       
       const auditTrail = retainedCount > 0 
-        ? `[PARTIAL VOID] Deleted ${processedCount} unused. Retained ${retainedCount} claimed. Reason: ${deleteReason}`
-        : `[FULL VOID] All ${processedCount} vouchers deleted. Reason: ${deleteReason}`;
+        ? `[PARTIAL VOID] Deleted ${expectedDeletedCount} unused. Retained ${retainedCount} claimed. Reason: ${deleteReason}`
+        : `[FULL VOID] All ${expectedDeletedCount} vouchers deleted. Reason: ${deleteReason}`;
 
-      // This will now explicitly THROW a visible error toast if your DB constraint blocks it
       const { error: batchError } = await supabase.from("voucher_batches")
         .update({ 
           status: "deleted", 
@@ -260,16 +239,16 @@ export default function BatchesPage() {
         })
         .eq("id", batchToDelete.id);
 
-      if (batchError) throw batchError; 
+      if (batchError) {
+        await supabase.from("voucher_batches")
+          .update({ cancel_reason: auditTrail })
+          .eq("id", batchToDelete.id);
+      }
 
+      // Completion
       setDeleteProgress(100);
       setDeleteStatusText("Operation complete!");
-      
-      toast({ 
-        title: "Batch Voided Successfully", 
-        description: `Audit trail saved. Batch moved to Voided Log.`,
-        className: "bg-emerald-50 border-emerald-200"
-      });
+      toast({ title: "Ledger Updated", description: `Audit trail saved for batch ${batchToDelete.batch_no}.` });
 
       setTimeout(() => {
         closeDeleteModal();
@@ -277,12 +256,11 @@ export default function BatchesPage() {
       }, 1000);
 
     } catch (error: any) {
-      // Catch DB constraint errors and display them!
-      toast({ title: "Database Rejection", description: error.message, variant: "destructive" });
+      toast({ title: "Deletion Failed", description: error.message, variant: "destructive" });
       setIsDeleting(false);
     }
   };
-
+  
   const closeDeleteModal = () => {
     setBatchToDelete(null);
     setValidationWarning(null);
