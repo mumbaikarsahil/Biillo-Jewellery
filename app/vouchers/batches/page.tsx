@@ -17,7 +17,8 @@ import {
   Download,
   Share2,
   Trash2,
-  X
+  X,
+  AlertTriangle
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -41,6 +42,8 @@ interface VoucherBatch {
   id: string;
   batch_no: string;
   prefix: string;
+  start_sequence?: number | string; 
+  end_sequence?: number | string;   
   quantity: number;
   discount_value: number;
   printer_name: string;
@@ -54,6 +57,7 @@ export default function BatchesPage() {
   const { toast } = useToast();
   const [batches, setBatches] = useState<VoucherBatch[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'active' | 'deleted'>('active'); // ✨ NEW: Tabs State
   
   // Processing States
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -63,6 +67,10 @@ export default function BatchesPage() {
   const [batchToDelete, setBatchToDelete] = useState<VoucherBatch | null>(null);
   const [deleteReason, setDeleteReason] = useState("");
   const [isDeleting, setIsDeleting] = useState(false);
+  const [validationWarning, setValidationWarning] = useState<string | null>(null);
+  const [deleteProgress, setDeleteProgress] = useState(0);
+  const [deleteStatusText, setDeleteStatusText] = useState("");
+  const [retainedCount, setRetainedCount] = useState(0); 
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://biillo-jewellery.vercel.app';
 
@@ -86,6 +94,11 @@ export default function BatchesPage() {
   useEffect(() => {
     fetchBatches();
   }, []);
+
+  // Filter batches based on the selected tab
+  const filteredBatches = batches.filter(batch => 
+    activeTab === 'active' ? batch.status !== 'deleted' : batch.status === 'deleted'
+  );
 
   // --- 1. RECEIVE INVENTORY LOGIC ---
   const handleMarkAsReceived = async (batchId: string, batchNo: string) => {
@@ -117,7 +130,6 @@ export default function BatchesPage() {
   const handleExport = async (batch: VoucherBatch, mode: 'download' | 'share') => {
     setExportingId(batch.id);
     try {
-      // Fetch actual vouchers for this specific batch
       const { data: vouchers, error } = await supabase
         .from("vouchers")
         .select("code, discount_value, handling_fee, status, expiry_date")
@@ -159,7 +171,7 @@ export default function BatchesPage() {
           });
         } else {
           toast({ title: "Not Supported", description: "Sharing files is not supported on this browser. Downloading instead...", variant: "destructive" });
-          XLSX.writeFile(workbook, `Voucher_Manifest_${batch.batch_no}.xlsx`); // Fallback
+          XLSX.writeFile(workbook, `Voucher_Manifest_${batch.batch_no}.xlsx`);
         }
       }
     } catch (error: any) {
@@ -169,34 +181,117 @@ export default function BatchesPage() {
     }
   };
 
-  // --- 3. VOID / DELETE LOGIC ---
+  // --- 3. UPDATED: STRICT ERROR THROWING ---
   const confirmDelete = async () => {
     if (!batchToDelete || !deleteReason.trim()) return;
-    setIsDeleting(true);
-
+    
     try {
-      // 1. Update Batch Status
+      if (!validationWarning) {
+        setIsDeleting(true);
+        setDeleteStatusText("Checking voucher statuses...");
+        
+        const { count: claimedCount, error: checkError } = await supabase
+          .from("vouchers")
+          .select("*", { count: "exact", head: true })
+          .eq("batch_id", batchToDelete.id)
+          .in("status", ["claimed", "redeemed", "registered"]); 
+
+        if (checkError) throw checkError;
+
+        if (claimedCount && claimedCount > 0) {
+          setRetainedCount(claimedCount);
+          setValidationWarning(`Found ${claimedCount} vouchers that are already claimed or registered. Proceeding will ONLY delete the remaining unused vouchers and void the batch. Proceed?`);
+          setIsDeleting(false);
+          return; 
+        }
+      }
+
+      setIsDeleting(true);
+      setValidationWarning(null);
+      setDeleteProgress(0);
+      setDeleteStatusText("Fetching vouchers for deletion...");
+
+      let hasMore = true;
+      let processedCount = 0;
+      const CHUNK_SIZE = 1000;
+
+      while (hasMore) {
+        const { data: chunk, error: fetchError } = await supabase
+          .from("vouchers")
+          .select("id")
+          .eq("batch_id", batchToDelete.id)
+          .in("status", ["pending_print", "in_stock", "sent_for_printing"]) 
+          .limit(CHUNK_SIZE);
+
+        if (fetchError) throw fetchError;
+
+        if (!chunk || chunk.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        const idsToDelete = chunk.map((v) => v.id);
+        const { error: deleteError } = await supabase
+          .from("vouchers")
+          .delete()
+          .in("id", idsToDelete);
+
+        if (deleteError) throw deleteError;
+
+        processedCount += idsToDelete.length;
+        
+        const expectedTotal = batchToDelete.quantity - retainedCount;
+        const progress = Math.min(Math.round((processedCount / (expectedTotal || 1)) * 100), 95);
+        setDeleteProgress(progress);
+        setDeleteStatusText(`Deleted ${processedCount} unused vouchers...`);
+      }
+
+      setDeleteStatusText("Updating batch ledger...");
+      
+      const auditTrail = retainedCount > 0 
+        ? `[PARTIAL VOID] Deleted ${processedCount} unused. Retained ${retainedCount} claimed. Reason: ${deleteReason}`
+        : `[FULL VOID] All ${processedCount} vouchers deleted. Reason: ${deleteReason}`;
+
+      // This will now explicitly THROW a visible error toast if your DB constraint blocks it
       const { error: batchError } = await supabase.from("voucher_batches")
-        .update({ status: "deleted", cancel_reason: deleteReason })
+        .update({ 
+          status: "deleted", 
+          cancel_reason: auditTrail 
+        })
         .eq("id", batchToDelete.id);
-      if (batchError) throw batchError;
 
-      // 2. Void all associated active/pending vouchers to ensure they can't be claimed
-      const { error: voucherError } = await supabase.from("vouchers")
-        .update({ status: "voided" })
-        .eq("batch_id", batchToDelete.id);
-      if (voucherError) throw voucherError;
+      if (batchError) throw batchError; 
 
-      toast({ title: "Batch Voided", description: `Batch ${batchToDelete.batch_no} and its vouchers have been securely deleted.` });
-      setBatchToDelete(null);
-      setDeleteReason("");
-      fetchBatches();
+      setDeleteProgress(100);
+      setDeleteStatusText("Operation complete!");
+      
+      toast({ 
+        title: "Batch Voided Successfully", 
+        description: `Audit trail saved. Batch moved to Voided Log.`,
+        className: "bg-emerald-50 border-emerald-200"
+      });
+
+      setTimeout(() => {
+        closeDeleteModal();
+        fetchBatches();
+      }, 1000);
+
     } catch (error: any) {
-      toast({ title: "Deletion Failed", description: error.message, variant: "destructive" });
-    } finally {
+      // Catch DB constraint errors and display them!
+      toast({ title: "Database Rejection", description: error.message, variant: "destructive" });
       setIsDeleting(false);
     }
   };
+
+  const closeDeleteModal = () => {
+    setBatchToDelete(null);
+    setValidationWarning(null);
+    setDeleteReason("");
+    setDeleteProgress(0);
+    setDeleteStatusText("");
+    setRetainedCount(0);
+    setIsDeleting(false);
+  }
 
   const getStatusBadge = (status: VoucherBatch['status']) => {
     switch (status) {
@@ -230,7 +325,7 @@ export default function BatchesPage() {
   return (
     <div className="flex flex-col min-h-screen bg-muted/20 font-sans">
       
-      {/* MODERN GLASSMORPHISM HEADER */}
+      {/* HEADER */}
       <header className="sticky top-0 z-40 w-full bg-background/80 backdrop-blur-md border-b border-border px-4 h-14 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 overflow-hidden">
           <Link href="/vouchers">
@@ -268,18 +363,37 @@ export default function BatchesPage() {
 
       <main className="p-4 md:p-8 max-w-[1200px] w-full mx-auto space-y-6 animate-in fade-in duration-500">
         
-        {/* Page Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        {/* Page Header & Tabs */}
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
             <h2 className="text-2xl font-bold tracking-tight text-foreground">Purchase Orders & Ingestion</h2>
             <p className="text-sm text-muted-foreground">Track physical voucher assets, manage manifests, and secure your inventory.</p>
           </div>
-          <Link href="/vouchers/generate">
-            <Button size="sm" className="h-10 px-5 font-medium text-sm rounded-lg shadow-sm w-full sm:w-auto">
-              <Printer className="w-4 h-4 mr-2" />
-              New Order
-            </Button>
-          </Link>
+          
+          <div className="flex flex-wrap items-center gap-3">
+            {/* ✨ NEW: Tab Switcher UI */}
+            <div className="flex bg-muted/50 p-1 rounded-lg border border-border">
+              <button
+                onClick={() => setActiveTab('active')}
+                className={`px-4 py-1.5 text-sm font-semibold rounded-md transition-all ${activeTab === 'active' ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                Active Ledger
+              </button>
+              <button
+                onClick={() => setActiveTab('deleted')}
+                className={`px-4 py-1.5 text-sm font-semibold rounded-md transition-all ${activeTab === 'deleted' ? 'bg-background shadow-sm text-rose-600' : 'text-muted-foreground hover:text-rose-600'}`}
+              >
+                Voided Log
+              </button>
+            </div>
+
+            <Link href="/vouchers/generate">
+              <Button size="sm" className="h-10 px-5 font-medium text-sm rounded-lg shadow-sm w-full sm:w-auto">
+                <Printer className="w-4 h-4 mr-2" />
+                New Order
+              </Button>
+            </Link>
+          </div>
         </div>
 
         {/* Data Table */}
@@ -287,15 +401,19 @@ export default function BatchesPage() {
           <CardContent className="p-0">
             {isLoading ? (
               <TableSkeleton />
-            ) : batches.length === 0 ? (
+            ) : filteredBatches.length === 0 ? (
               <div className="text-center py-24 bg-muted/10">
                 <div className="h-14 w-14 rounded-full bg-secondary flex items-center justify-center mx-auto mb-4">
                   <Inbox className="w-6 h-6 text-muted-foreground/50" />
                 </div>
-                <p className="text-sm font-medium text-muted-foreground">No orders found in the ledger.</p>
-                <Link href="/vouchers/generate">
-                    <Button variant="link" className="text-sm mt-1 text-primary font-medium">Generate your first batch</Button>
-                </Link>
+                <p className="text-sm font-medium text-muted-foreground">
+                  {activeTab === 'active' ? "No active orders found in the ledger." : "No voided batches in the log."}
+                </p>
+                {activeTab === 'active' && (
+                  <Link href="/vouchers/generate">
+                      <Button variant="link" className="text-sm mt-1 text-primary font-medium">Generate your first batch</Button>
+                  </Link>
+                )}
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -311,16 +429,24 @@ export default function BatchesPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {batches.map((batch) => (
-                      <TableRow key={batch.id} className={`hover:bg-secondary/20 transition-colors border-b border-border/50 last:border-0 ${batch.status === 'deleted' ? 'opacity-60' : ''}`}>
+                    {filteredBatches.map((batch) => (
+                      <TableRow key={batch.id} className={`hover:bg-secondary/20 transition-colors border-b border-border/50 last:border-0 ${batch.status === 'deleted' ? 'bg-rose-500/5' : ''}`}>
                         <TableCell className="px-6 py-3.5">
                           <div className="flex flex-col">
                             <span className="font-mono font-bold text-sm text-foreground">{batch.batch_no}</span>
                             <span className="text-[11px] text-muted-foreground font-medium mt-0.5">
                               {format(new Date(batch.created_at), "MMM d, yyyy")} · Prefix: <span className="font-mono text-foreground/80">{batch.prefix}</span>
+                              {batch.start_sequence !== null && batch.end_sequence !== null && batch.start_sequence !== undefined && (
+                                <> · Seq: <span className="font-mono text-foreground/80">
+                                  {String(batch.start_sequence).padStart(4, '0')} - {String(batch.end_sequence).padStart(4, '0')}
+                                </span></>
+                              )}
                             </span>
-                            {batch.status === 'deleted' && (
-                               <span className="text-[10px] text-rose-500 font-semibold mt-1">Reason: {batch.cancel_reason}</span>
+                            
+                            {batch.cancel_reason && (
+                              <div className="mt-2 bg-rose-500/10 border border-rose-500/20 px-2.5 py-1.5 rounded text-[11px] text-rose-600 font-semibold leading-tight shadow-sm">
+                                {batch.cancel_reason}
+                              </div>
                             )}
                           </div>
                         </TableCell>
@@ -337,13 +463,10 @@ export default function BatchesPage() {
                           {getStatusBadge(batch.status)}
                         </TableCell>
                         
-                        {/* Dynamic Action Buttons */}
                         <TableCell className="px-6">
                           <div className="flex items-center justify-end gap-2">
-                            
                             {batch.status !== 'deleted' && (
                               <>
-                                {/* Receive Button (Only for Pending) */}
                                 {(batch.status === "generated" || batch.status === "sent_for_printing") && (
                                   <Button
                                     size="sm"
@@ -357,7 +480,6 @@ export default function BatchesPage() {
                                   </Button>
                                 )}
 
-                                {/* Export / Download Button (For Pending AND In-Stock) */}
                                 <Button
                                   size="icon"
                                   variant="ghost"
@@ -369,7 +491,6 @@ export default function BatchesPage() {
                                   {exportingId === batch.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                                 </Button>
 
-                                {/* Share Button */}
                                 <Button
                                   size="icon"
                                   variant="ghost"
@@ -383,7 +504,6 @@ export default function BatchesPage() {
 
                                 <Separator orientation="vertical" className="h-4 mx-1" />
 
-                                {/* Delete / Void Button */}
                                 <Button
                                   size="icon"
                                   variant="ghost"
@@ -395,12 +515,6 @@ export default function BatchesPage() {
                                 </Button>
                               </>
                             )}
-
-                            {/* If Deleted, Just show a disabled state or minimal info */}
-                            {batch.status === 'deleted' && (
-                                <span className="text-xs font-semibold text-muted-foreground italic mr-2">Audit Locked</span>
-                            )}
-                            
                           </div>
                         </TableCell>
                       </TableRow>
@@ -413,47 +527,73 @@ export default function BatchesPage() {
         </Card>
       </main>
 
-      {/* --- CUSTOM VOID/DELETE CONFIRMATION MODAL --- */}
       {batchToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <Card className="w-full max-w-md bg-card border-border shadow-2xl rounded-2xl overflow-hidden m-4 animate-in zoom-in-95 duration-200">
+            
             <div className="flex items-center justify-between px-6 py-4 border-b border-border bg-rose-500/5">
               <h3 className="text-lg font-bold text-rose-600 flex items-center gap-2">
                 <Trash2 className="h-5 w-5" />
                 Void Batch {batchToDelete.batch_no}
               </h3>
-              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md text-muted-foreground" onClick={() => setBatchToDelete(null)}>
+              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md text-muted-foreground" onClick={closeDeleteModal} disabled={isDeleting}>
                 <X className="h-4 w-4" />
               </Button>
             </div>
+            
             <div className="p-6 space-y-4">
               <p className="text-sm text-muted-foreground leading-relaxed">
-                This action will mark the batch as <span className="font-bold text-foreground">Deleted</span> in the ledger and immediately <span className="font-bold text-foreground">Void</span> all {batchToDelete.quantity} physical vouchers. This cannot be undone.
+                This action will mark the batch as <span className="font-bold text-foreground">Deleted</span> in the ledger and securely delete all {batchToDelete.quantity} physical vouchers from the database.
               </p>
+
+              {validationWarning && (
+                <div className="bg-amber-500/10 border border-amber-500/20 text-amber-700 p-3.5 rounded-lg text-sm flex items-start gap-2.5 shadow-sm">
+                  <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-amber-600" />
+                  <p className="font-medium leading-relaxed">{validationWarning}</p>
+                </div>
+              )}
               
+              {isDeleting && (deleteProgress > 0 || deleteStatusText) && (
+                <div className="space-y-2.5 pt-2">
+                  <div className="flex justify-between text-[11px] uppercase tracking-wider text-muted-foreground font-bold">
+                     <span>{deleteStatusText}</span>
+                     <span>{deleteProgress}%</span>
+                  </div>
+                  <div className="w-full bg-secondary rounded-full h-2 overflow-hidden shadow-inner">
+                     <div className="bg-rose-500 h-full transition-all duration-300 ease-out" style={{ width: `${deleteProgress}%` }} />
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-2 pt-2">
                 <Label className="text-sm font-medium text-foreground">Reason for voiding</Label>
                 <Input 
                   placeholder="e.g. Printing error, Lost in transit..." 
                   value={deleteReason} 
                   onChange={(e) => setDeleteReason(e.target.value)} 
+                  disabled={isDeleting}
                   className="h-11 rounded-lg bg-background border-input focus-visible:ring-rose-500"
                 />
               </div>
             </div>
+            
             <div className="px-6 py-4 border-t border-border bg-secondary/30 flex justify-end gap-3">
-              <Button variant="outline" className="rounded-lg h-10 px-4 font-semibold" onClick={() => setBatchToDelete(null)} disabled={isDeleting}>
+              <Button variant="outline" className="rounded-lg h-10 px-4 font-semibold" onClick={closeDeleteModal} disabled={isDeleting}>
                 Cancel
               </Button>
-              <Button variant="destructive" className="rounded-lg h-10 px-5 font-semibold bg-rose-600 hover:bg-rose-700" onClick={confirmDelete} disabled={isDeleting || !deleteReason.trim()}>
+              <Button 
+                variant="destructive" 
+                className="rounded-lg h-10 px-5 font-semibold bg-rose-600 hover:bg-rose-700 transition-all" 
+                onClick={confirmDelete} 
+                disabled={isDeleting || !deleteReason.trim()}
+              >
                 {isDeleting ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-                Confirm Void
+                {validationWarning ? "Delete Unused Vouchers" : "Confirm Void"}
               </Button>
             </div>
           </Card>
         </div>
       )}
-
     </div>
   );
 }
