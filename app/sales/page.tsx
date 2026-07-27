@@ -403,8 +403,27 @@ export default function AccountsMasterPage() {
           const it = i.inventory_items || {}
           return { mrp: i.rate || it.mrp || 0, barcode: it.barcode || 'N/A', item_category: it.item_category || 'Jewellery', metal_type: it.metal_type || '-', purity: it.purity_karat || '-', hsn_code: it.hsn_code || '7113', gross_wt: it.gross_weight_g || 0, net_wt: it.net_weight_g || 0, dia_wt: it.total_stone_weight_cts || 0 }
         }) || []
+        
         mappedData = {
-          mode: 'normal', invoice_number: invData.invoice_number, date: invData.created_at, customer: invData.customers, subtotal: invData.subtotal, discountAmount: invData.discount_amount, taxableValue: invData.taxable_value, cgstAmount: invData.cgst_amount, sgstAmount: invData.sgst_amount, exchangeValue: invData.exchange_value, voucherAmount: invData.voucher_discount, kittyPayment: invData.kitty_payment || 0, walletPayment: invData.wallet_payment || 0, finalTotal: invData.final_total, items: safeItems
+          mode: 'normal', 
+          invoice_number: invData.invoice_number, 
+          date: invData.created_at, 
+          customer: invData.customers, 
+          subtotal: invData.subtotal, 
+          discountAmount: invData.discount_amount, 
+          taxableValue: invData.taxable_value, 
+          cgstAmount: invData.cgst_amount, 
+          sgstAmount: invData.sgst_amount, 
+          exchangeValue: invData.exchange_value, 
+          voucherCode: invData.voucher_code,         // ✨ Added Voucher Code
+          voucherAmount: invData.voucher_discount, 
+          kittyPayment: invData.kitty_payment || 0, 
+          walletPayment: invData.wallet_payment || 0, 
+          finalTotal: invData.final_total, 
+          items: safeItems,
+          paymentMode: invData.payment_mode,         // ✨ Added Payment Mode
+          splitPayments: invData.split_payments,     // ✨ Added Split Payments JSON
+          paymentRemarks: invData.payment_remarks    // ✨ Added Remarks
         }
       } 
       else if (type === 'estimate') {
@@ -422,9 +441,30 @@ export default function AccountsMasterPage() {
       }
       else if (type === 'custom') {
         mappedData = {
-          mode: 'custom', invoice_number: item.order_number, date: item.created_at, customer: item.customers,
-          customOrder: { designCode: item.design_reference, category: item.item_category, expectedGoldWt: item.expected_gold_g, expectedDiamondCts: item.expected_diamond_cts, estimatedValue: item.estimated_value, advancePayment: item.advance_paid },
-          finalTotal: item.advance_paid
+          mode: 'custom', 
+          invoice_number: item.order_number, 
+          date: item.created_at, 
+          customer: item.customers,
+          customOrder: { 
+            designCode: item.design_reference, 
+            category: item.item_category, 
+            expectedGoldWt: item.expected_gold_g, 
+            expectedDiamondCts: item.expected_diamond_cts, 
+            estimatedValue: item.estimated_value, 
+            advancePayment: item.advance_paid 
+          },
+          // ✨ Added all missing calculation breakdown & payment fields!
+          subtotal: item.subtotal || item.estimated_value,
+          taxableValue: item.taxable_value,
+          cgstAmount: item.cgst_amount || item.cgst,
+          sgstAmount: item.sgst_amount || item.sgst,
+          voucherCode: item.voucher_code,
+          voucherAmount: item.voucher_amount || item.voucher_discount,
+          finalTotal: item.final_total || item.total_amount,
+          advancePayment: item.advance_paid,
+          paymentMode: item.payment_mode,
+          splitPayments: item.split_payments,
+          paymentRemarks: item.payment_remarks
         }
       }
       else if (type === 'repair') {
@@ -593,7 +633,7 @@ export default function AccountsMasterPage() {
     </div>
   );
 
-  // ✨ FIXED: SAFELY PARSES JSON OR STRINGIFIED JSON FOR SPLIT PAYMENTS
+  // ✨ FIXED: ROBUST JSON PARSER FOR ARRAYS & OBJECTS WITH CASE INSENSITIVITY
   const renderPaymentMode = (inv: any) => {
     if (inv.status === 'CANCELLED') return <span className="px-2 py-1 rounded bg-red-50 text-red-600 text-[10px] font-bold uppercase tracking-wider">CANCELLED</span>;
     
@@ -604,19 +644,34 @@ export default function AccountsMasterPage() {
       catch (e) { splits = null; }
     }
 
+    // Force uppercase for consistent matching (Split, split, SPLIT)
+    const paymentModeStr = (inv.payment_mode || 'UNKNOWN').toUpperCase();
+
     return (
       <div className="flex flex-col items-start gap-1">
         <span className="px-2 py-0.5 rounded bg-zinc-100 border border-zinc-200 text-zinc-700 text-[10px] font-bold uppercase tracking-wider">
-          {inv.payment_mode || 'UNKNOWN'}
+          {paymentModeStr}
         </span>
         
-        {inv.payment_mode === 'SPLIT' && splits && typeof splits === 'object' && (
+        {/* Render only if mode is SPLIT and data exists */}
+        {paymentModeStr === 'SPLIT' && splits && (
           <div className="flex flex-col gap-0.5 mt-1 border-l-2 border-indigo-200 pl-2">
-            {Object.entries(splits).map(([method, amount]: any) => (
-              <span key={method} className="text-[9px] font-medium text-zinc-500">
-                <strong className="text-zinc-700">{method}:</strong> ₹{Number(amount).toLocaleString()}
-              </span>
-            ))}
+            {/* Handle Array format: [{mode: 'CASH', amount: 100}, ...] */}
+            {Array.isArray(splits) ? (
+              splits.map((s: any, idx: number) => (
+                <span key={idx} className="text-[9px] font-medium text-zinc-500">
+                  <strong className="text-zinc-700">{s.mode || s.method || 'UNKNOWN'}:</strong> ₹{Number(s.amount || 0).toLocaleString()}
+                </span>
+              ))
+            ) : 
+            /* Handle Object format: {"CASH": 100, "UPI": 500} */
+            typeof splits === 'object' ? (
+              Object.entries(splits).map(([method, amount]: any) => (
+                <span key={method} className="text-[9px] font-medium text-zinc-500">
+                  <strong className="text-zinc-700">{method}:</strong> ₹{Number(amount || 0).toLocaleString()}
+                </span>
+              ))
+            ) : null}
           </div>
         )}
 
