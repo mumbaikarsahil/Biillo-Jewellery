@@ -40,7 +40,7 @@ import {
 } from '@/components/ui/table'
 import { Badge } from '@/components/ui/badge'
 
-// ✨ FIXED: Dynamic Top Scrollbar Sync Logic
+// Dynamic Top Scrollbar Sync Logic
 const SyncedTableWrapper = ({ children }: { children: React.ReactNode }) => {
   const topScrollRef = useRef<HTMLDivElement>(null);
   const bottomScrollRef = useRef<HTMLDivElement>(null);
@@ -73,7 +73,6 @@ const SyncedTableWrapper = ({ children }: { children: React.ReactNode }) => {
 
   return (
     <div className="flex flex-col w-full relative">
-      {/* Top Scrollbar */}
       <div 
         ref={topScrollRef} 
         onScroll={handleTopScroll}
@@ -82,13 +81,11 @@ const SyncedTableWrapper = ({ children }: { children: React.ReactNode }) => {
         <div style={{ width: `${contentWidth}px`, height: '1px' }}></div>
       </div>
       
-      {/* Actual Table Wrapper */}
       <div 
         ref={bottomScrollRef} 
         onScroll={handleBottomScroll}
         className="w-full overflow-x-auto custom-scrollbar flex-1 pb-4"
       >
-        {/* We use a w-max container to force the width calculations */}
         <div ref={contentRef} className="w-max min-w-full [&>div]:overflow-visible">
           {children}
         </div>
@@ -105,7 +102,7 @@ export default function AccountsMasterPage() {
   const [showFilters, setShowFilters] = useState(false)
   const [loading, setLoading] = useState(true)
   
-  // --- PAGINATION STATES ---
+  // PAGINATION STATES
   const [page, setPage] = useState(1)
   const [recordLimit, setRecordLimit] = useState(100)
   
@@ -116,14 +113,14 @@ export default function AccountsMasterPage() {
   const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0])
   const [search, setSearch] = useState('')
 
-  // --- LEDGER STATES ---
+  // LEDGER STATES
   const [invoices, setInvoices] = useState<any[]>([])
   const [estimates, setEstimates] = useState<any[]>([])
   const [customOrders, setCustomOrders] = useState<any[]>([])
   const [buybacks, setBuybacks] = useState<any[]>([])
   const [repairs, setRepairs] = useState<any[]>([])
   
-  // --- DYNAMIC KPI STATES ---
+  // KPI STATES
   const [salesKpis, setSalesKpis] = useState({ grossSales: 0, taxCollected: 0, b2bSales: 0, b2cSales: 0 })
   const [estimateKpis, setEstimateKpis] = useState({ totalValue: 0, count: 0 })
   const [customKpis, setCustomKpis] = useState({ totalValue: 0, advance: 0, pending: 0 })
@@ -415,15 +412,15 @@ export default function AccountsMasterPage() {
           cgstAmount: invData.cgst_amount, 
           sgstAmount: invData.sgst_amount, 
           exchangeValue: invData.exchange_value, 
-          voucherCode: invData.voucher_code,         // ✨ Added Voucher Code
+          voucherCode: invData.voucher_code,
           voucherAmount: invData.voucher_discount, 
           kittyPayment: invData.kitty_payment || 0, 
           walletPayment: invData.wallet_payment || 0, 
           finalTotal: invData.final_total, 
           items: safeItems,
-          paymentMode: invData.payment_mode,         // ✨ Added Payment Mode
-          splitPayments: invData.split_payments,     // ✨ Added Split Payments JSON
-          paymentRemarks: invData.payment_remarks    // ✨ Added Remarks
+          paymentMode: invData.payment_mode,
+          splitPayments: invData.split_payments,
+          paymentRemarks: invData.payment_remarks
         }
       } 
       else if (type === 'estimate') {
@@ -453,7 +450,6 @@ export default function AccountsMasterPage() {
             estimatedValue: item.estimated_value, 
             advancePayment: item.advance_paid 
           },
-          // ✨ Added all missing calculation breakdown & payment fields!
           subtotal: item.subtotal || item.estimated_value,
           taxableValue: item.taxable_value,
           cgstAmount: item.cgst_amount || item.cgst,
@@ -488,30 +484,43 @@ export default function AccountsMasterPage() {
     finally { setIsFetchingPreview(false) }
   }
 
+  // ✨ FIXED: Dynamic Cancel function handling both Sales & Custom Orders
   const executeCancelInvoice = async () => {
     if (!invoiceToCancel || !appUser) return;
     if (!cancelReason.trim()) return toast.error("A cancellation reason is strictly required for the audit trail.");
     
     setIsCancelling(true);
     try {
-      const { error: invError } = await supabase.from('invoices').update({
-        status: 'CANCELLED',
-        cancelled_at: new Date().toISOString(),
-        cancellation_reason: cancelReason.trim(),
-        cancelled_by: appUser.id
-      }).eq('id', invoiceToCancel.id);
+      const isCustom = !!invoiceToCancel.order_number;
+      const targetTable = isCustom ? 'custom_orders' : 'invoices';
       
-      if (invError) throw invError;
-
-      const itemIds = invoiceToCancel.invoice_items?.map((i: any) => i.item_id).filter(Boolean);
-      if (itemIds && itemIds.length > 0) {
-        await supabase.from('inventory_items').update({ status: 'in_stock' }).in('id', itemIds);
+      const updatePayload: any = {
+        status: 'CANCELLED',
+        cancellation_reason: cancelReason.trim(),
+      };
+      
+      if (!isCustom) {
+        updatePayload.cancelled_at = new Date().toISOString();
+        updatePayload.cancelled_by = appUser.id;
       }
 
+      const { error: invError } = await supabase.from(targetTable).update(updatePayload).eq('id', invoiceToCancel.id);
+      if (invError) throw invError;
+
+      // Only attempt to return inventory items if it was a normal invoice (Custom orders don't have linked physical stock)
+      if (!isCustom) {
+        const itemIds = invoiceToCancel.invoice_items?.map((i: any) => i.item_id).filter(Boolean);
+        if (itemIds && itemIds.length > 0) {
+          await supabase.from('inventory_items').update({ status: 'in_stock' }).in('id', itemIds);
+        }
+      }
+
+      // Re-activate voucher if used
       if (invoiceToCancel.voucher_code) {
         await supabase.from('vouchers').update({ status: 'registered' }).eq('code', invoiceToCancel.voucher_code);
       }
 
+      // Store credit refunds
       const kittyReturn = Number(invoiceToCancel.kitty_payment) || 0;
       const walletReturn = Number(invoiceToCancel.wallet_payment) || 0;
       if ((kittyReturn > 0 || walletReturn > 0) && invoiceToCancel.customer_id) {
@@ -524,79 +533,96 @@ export default function AccountsMasterPage() {
         }
       }
 
-      toast.success(`Invoice ${invoiceToCancel.invoice_number} has been voided and ledger reverted.`);
+      toast.success(`Document has been voided and ledger reverted.`);
       setInvoiceToCancel(null);
       setCancelReason('');
       fetchAccountingData();
     } catch (err: any) {
-      toast.error(err.message || "Failed to void the invoice.");
+      toast.error(err.message || "Failed to void the document.");
     } finally {
       setIsCancelling(false);
     }
   };
 
+  // ✨ FIXED: Dynamic Edit Handler loading states for Custom Orders
   const handleOpenEdit = (inv: any) => {
-    setInvoiceToEdit(inv);
+    const isCustom = !!inv.order_number;
+    setInvoiceToEdit({ ...inv, isCustom });
+
     const d = new Date(inv.created_at);
     const tzOffset = d.getTimezoneOffset() * 60000;
     const localISOTime = (new Date(d.getTime() - tzOffset)).toISOString().slice(0,16);
 
     setEditForm({
-      invoice_number: inv.invoice_number || '',
+      invoice_number: isCustom ? inv.order_number : (inv.invoice_number || ''),
       created_at: localISOTime,
-      subtotal: inv.subtotal,
-      discount_amount: inv.discount_amount,
-      taxable_value: inv.taxable_value,
-      cgst_amount: inv.cgst_amount,
-      sgst_amount: inv.sgst_amount,
-      final_total: inv.final_total,
+      subtotal: inv.subtotal || inv.estimated_value || 0,
+      discount_amount: inv.discount_amount || 0,
+      taxable_value: inv.taxable_value || 0,
+      cgst_amount: inv.cgst_amount || inv.cgst || 0,
+      sgst_amount: inv.sgst_amount || inv.sgst || 0,
+      final_total: inv.final_total || inv.total_amount || inv.estimated_value || 0,
       payment_remarks: inv.payment_remarks || ''
     });
   };
 
+  // ✨ FIXED: Dynamic Execute Edit function saving to correct tables
   const executeEditInvoice = async () => {
     if (!invoiceToEdit || !appUser) return;
     
+    const isCustom = invoiceToEdit.isCustom;
+    const targetTable = isCustom ? 'custom_orders' : 'invoices';
+    const idField = isCustom ? 'order_number' : 'invoice_number';
+
     const newInvoiceNo = editForm.invoice_number?.trim().toUpperCase();
-    if (!newInvoiceNo) return toast.error("Invoice number cannot be empty.");
+    if (!newInvoiceNo) return toast.error("Document number cannot be empty.");
 
     setIsEditing(true);
     try {
-      if (newInvoiceNo !== invoiceToEdit.invoice_number) {
+      if (newInvoiceNo !== invoiceToEdit[idField]) {
         const { data: existing, error: checkErr } = await supabase
-          .from('invoices')
+          .from(targetTable)
           .select('id')
           .eq('company_id', appUser.company_id)
-          .eq('invoice_number', newInvoiceNo)
+          .eq(idField, newInvoiceNo)
           .maybeSingle();
 
         if (existing) {
-          toast.error(`Invoice number ${newInvoiceNo} is already in use!`);
+          toast.error(`Document number ${newInvoiceNo} is already in use!`);
           setIsEditing(false);
           return;
         }
         if (checkErr) throw checkErr;
       }
 
-      const { error } = await supabase.from('invoices').update({
-        invoice_number: newInvoiceNo,
+      const payload: any = {
+        [idField]: newInvoiceNo,
         created_at: new Date(editForm.created_at).toISOString(),
         subtotal: Number(editForm.subtotal),
         discount_amount: Number(editForm.discount_amount),
         taxable_value: Number(editForm.taxable_value),
-        cgst_amount: Number(editForm.cgst_amount),
-        sgst_amount: Number(editForm.sgst_amount),
-        final_total: Number(editForm.final_total),
         payment_remarks: editForm.payment_remarks
-      }).eq('id', invoiceToEdit.id);
+      };
+
+      if (isCustom) {
+        payload.cgst = Number(editForm.cgst_amount);
+        payload.sgst = Number(editForm.sgst_amount);
+        payload.estimated_value = Number(editForm.final_total);
+      } else {
+        payload.cgst_amount = Number(editForm.cgst_amount);
+        payload.sgst_amount = Number(editForm.sgst_amount);
+        payload.final_total = Number(editForm.final_total);
+      }
+
+      const { error } = await supabase.from(targetTable).update(payload).eq('id', invoiceToEdit.id);
 
       if (error) throw error;
 
-      toast.success("Invoice financials and metadata updated successfully.");
+      toast.success("Document financials and metadata updated successfully.");
       setInvoiceToEdit(null);
       fetchAccountingData();
     } catch (err: any) {
-      toast.error(err.message || "Failed to update the invoice.");
+      toast.error(err.message || "Failed to update the document.");
     } finally {
       setIsEditing(false);
     }
@@ -633,18 +659,16 @@ export default function AccountsMasterPage() {
     </div>
   );
 
-  // ✨ FIXED: ROBUST JSON PARSER FOR ARRAYS & OBJECTS WITH CASE INSENSITIVITY
+  // ✨ FIXED: Improved JSON Parser with zero-value filtering and larger fonts
   const renderPaymentMode = (inv: any) => {
     if (inv.status === 'CANCELLED') return <span className="px-2 py-1 rounded bg-red-50 text-red-600 text-[10px] font-bold uppercase tracking-wider">CANCELLED</span>;
     
-    // Safely attempt to parse split_payments if it was returned as a string from the DB
     let splits = inv.split_payments;
     if (typeof splits === 'string') {
       try { splits = JSON.parse(splits); } 
       catch (e) { splits = null; }
     }
 
-    // Force uppercase for consistent matching (Split, split, SPLIT)
     const paymentModeStr = (inv.payment_mode || 'UNKNOWN').toUpperCase();
 
     return (
@@ -653,22 +677,23 @@ export default function AccountsMasterPage() {
           {paymentModeStr}
         </span>
         
-        {/* Render only if mode is SPLIT and data exists */}
         {paymentModeStr === 'SPLIT' && splits && (
-          <div className="flex flex-col gap-0.5 mt-1 border-l-2 border-indigo-200 pl-2">
-            {/* Handle Array format: [{mode: 'CASH', amount: 100}, ...] */}
+          <div className="flex flex-col gap-1 mt-1.5 border-l-2 border-indigo-200 pl-2.5">
             {Array.isArray(splits) ? (
-              splits.map((s: any, idx: number) => (
-                <span key={idx} className="text-[9px] font-medium text-zinc-500">
-                  <strong className="text-zinc-700">{s.mode || s.method || 'UNKNOWN'}:</strong> ₹{Number(s.amount || 0).toLocaleString()}
+              splits
+                .filter((s: any) => Number(s.amount || 0) > 0) // Hide zero amounts
+                .map((s: any, idx: number) => (
+                <span key={idx} className="text-[11px] font-medium text-zinc-600 capitalize tracking-tight">
+                  <strong className="text-zinc-800 uppercase">{s.mode || s.method || 'UNKNOWN'}:</strong> ₹{Number(s.amount || 0).toLocaleString()}
                 </span>
               ))
             ) : 
-            /* Handle Object format: {"CASH": 100, "UPI": 500} */
             typeof splits === 'object' ? (
-              Object.entries(splits).map(([method, amount]: any) => (
-                <span key={method} className="text-[9px] font-medium text-zinc-500">
-                  <strong className="text-zinc-700">{method}:</strong> ₹{Number(amount || 0).toLocaleString()}
+              Object.entries(splits)
+                .filter(([_, amount]: any) => Number(amount || 0) > 0) // Hide zero amounts
+                .map(([method, amount]: any) => (
+                <span key={method} className="text-[11px] font-medium text-zinc-600 capitalize tracking-tight">
+                  <strong className="text-zinc-800 uppercase">{method}:</strong> ₹{Number(amount || 0).toLocaleString()}
                 </span>
               ))
             ) : null}
@@ -676,7 +701,7 @@ export default function AccountsMasterPage() {
         )}
 
         {Number(inv.advance_adjusted) > 0 && (
-          <span className="text-[9px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded mt-0.5 border border-amber-100">
+          <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded mt-1 border border-amber-100">
             <strong>Advance Used:</strong> ₹{Number(inv.advance_adjusted).toLocaleString()}
           </span>
         )}
@@ -888,7 +913,7 @@ export default function AccountsMasterPage() {
           <TabsContent value="sales_register" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
               
-              {/* ✨ DESKTOP TABLE VIEW WITH TOP SCROLL SYNC */}
+              {/* DESKTOP TABLE VIEW */}
               <SyncedTableWrapper>
                 <Table className="w-full whitespace-nowrap border-b border-zinc-200">
                   <TableHeader className="bg-zinc-50/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
@@ -959,7 +984,7 @@ export default function AccountsMasterPage() {
                           <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 bg-emerald-50/30">₹{(Number(inv.sgst_amount) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[13px] font-black text-zinc-900 bg-slate-100 border-l border-zinc-200">₹{(Number(inv.final_total) || 0).toLocaleString()}</TableCell>
                           
-                          {/* ✨ DETAILED PAYMENT BREAKDOWN */}
+                          {/* DETAILED PAYMENT BREAKDOWN */}
                           <TableCell className="px-4 py-2 border-l border-zinc-200 align-top">
                              {renderPaymentMode(inv)}
                           </TableCell>
@@ -970,7 +995,7 @@ export default function AccountsMasterPage() {
                 </Table>
               </SyncedTableWrapper>
 
-              {/* ✨ MOBILE & TABLET CARD VIEW */}
+              {/* MOBILE & TABLET CARD VIEW */}
               <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {invoices.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No sales records found</div>
@@ -1157,14 +1182,29 @@ export default function AccountsMasterPage() {
                   <TableBody>
                     {customOrders.length === 0 ? (
                       <TableRow><TableCell colSpan={10} className="text-center py-12 text-zinc-400">No custom orders found</TableCell></TableRow>
-                    ) : customOrders.map((co) => (
-                        <TableRow key={co.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors">
+                    ) : customOrders.map((co) => {
+                        const isCancelled = co.status === 'CANCELLED';
+                        return (
+                        <TableRow key={co.id} className={`border-zinc-100 hover:bg-zinc-50/50 transition-colors ${isCancelled ? 'opacity-60 bg-red-50/30' : ''}`}>
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                            <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-purple-500 hover:text-purple-700 hover:bg-purple-100" onClick={() => handleOpenPreview(co, 'custom')}><Eye className="h-4 w-4" /></Button>
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-zinc-500 hover:text-purple-700 hover:bg-purple-100"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                              <DropdownMenuContent align="start" className="w-48 rounded-xl shadow-lg border-zinc-200">
+                                <DropdownMenuItem onClick={() => handleOpenPreview(co, 'custom')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View Bill</DropdownMenuItem>
+                                {/* ✨ FIXED: Add Edit and Cancel to Custom Orders Table */}
+                                {!isCancelled && (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onClick={() => handleOpenEdit(co)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => setInvoiceToCancel(co)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Order</DropdownMenuItem>
+                                  </>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
                           </TableCell>
                           <TableCell className="px-4 py-2 text-[12px] font-medium text-zinc-600 whitespace-nowrap">{format(new Date(co.created_at), 'dd MMM yy, HH:mm')}</TableCell>
                           <TableCell className="py-2 font-mono text-[12px] font-semibold text-zinc-900 border-r border-zinc-100">{co.order_number}</TableCell>
-                          <TableCell className="px-4 py-2"><span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest bg-purple-100 text-purple-700 border border-purple-200">{co.status.replace(/_/g, ' ')}</span></TableCell>
+                          <TableCell className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest ${isCancelled ? 'bg-red-100 text-red-600 border-red-200' : 'bg-purple-100 text-purple-700 border border-purple-200'}`}>{co.status.replace(/_/g, ' ')}</span></TableCell>
                           <TableCell className="px-4 py-2 min-w-[160px]">
                             <span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate block">{co.customers?.full_name || 'Walk-in'}</span>
                             {co.customers?.phone && <span className="text-[10px] text-zinc-500 font-mono">{co.customers.phone}</span>}
@@ -1187,7 +1227,7 @@ export default function AccountsMasterPage() {
                           <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-700 border-l border-purple-100">₹{(Number(co.estimated_value) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[13px] font-black text-emerald-600 border-l border-purple-100">₹{(Number(co.advance_paid) || 0).toLocaleString()}</TableCell>
                         </TableRow>
-                    ))}
+                    )})}
                   </TableBody>
                 </Table>
               </SyncedTableWrapper>
@@ -1195,19 +1235,34 @@ export default function AccountsMasterPage() {
               <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {customOrders.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No custom orders found</div>
-                ) : customOrders.map((co) => (
-                  <div key={co.id} className="p-4 flex flex-col gap-3 bg-white">
+                ) : customOrders.map((co) => {
+                  const isCancelled = co.status === 'CANCELLED';
+                  return (
+                  <div key={co.id} className={`p-4 flex flex-col gap-3 relative ${isCancelled ? 'opacity-60 bg-red-50/30' : 'bg-white'}`}>
                     <div className="flex justify-between items-start">
                       <div>
                         <div className="flex items-center gap-2 mb-1">
                           <span className="font-mono text-sm font-bold text-zinc-900">{co.order_number}</span>
-                          <Badge className="bg-purple-50 text-purple-700 border-purple-200 text-[9px] uppercase tracking-widest">{co.status.replace(/_/g, ' ')}</Badge>
+                          <Badge className={`text-[9px] uppercase tracking-widest ${isCancelled ? 'bg-red-100 text-red-600 border-red-200' : 'bg-purple-50 text-purple-700 border-purple-200'}`}>{co.status.replace(/_/g, ' ')}</Badge>
                         </div>
                         <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(co.created_at), 'dd MMM yy, hh:mm a')}</div>
                       </div>
-                      <Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-purple-600 border-zinc-200 hover:bg-purple-50" onClick={() => handleOpenPreview(co, 'custom')}>
-                        <Eye className="h-4 w-4" />
-                      </Button>
+                      
+                      {/* ✨ FIXED: Add Edit and Cancel to Custom Orders Mobile View */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-purple-600 border-zinc-200"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-lg border-zinc-200">
+                          <DropdownMenuItem onClick={() => handleOpenPreview(co, 'custom')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View Bill</DropdownMenuItem>
+                          {!isCancelled && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => handleOpenEdit(co)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setInvoiceToCancel(co)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Order</DropdownMenuItem>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+
                     </div>
                     
                     <div className="flex justify-between bg-zinc-50/50 p-2.5 rounded-lg border border-zinc-100">
@@ -1248,7 +1303,7 @@ export default function AccountsMasterPage() {
                       </div>
                     </div>
                   </div>
-                ))}
+                )})}
               </div>
               <PaginationControls />
             </Card>
@@ -1460,10 +1515,10 @@ export default function AccountsMasterPage() {
           <DialogContent className="sm:max-w-[425px]">
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-red-600">
-                <ShieldAlert className="w-5 h-5" /> Void Invoice
+                <ShieldAlert className="w-5 h-5" /> Void Document
               </DialogTitle>
               <DialogDescription>
-                You are about to permanently cancel Invoice <strong className="text-zinc-900">{invoiceToCancel?.invoice_number}</strong>. This will return items to stock and revert applied vouchers.
+                You are about to permanently cancel <strong className="text-zinc-900">{invoiceToCancel?.invoice_number || invoiceToCancel?.order_number}</strong>. This will revert applied vouchers and refund store credit if an advance was applied.
               </DialogDescription>
             </DialogHeader>
             <div className="grid gap-4 py-4">
@@ -1478,7 +1533,7 @@ export default function AccountsMasterPage() {
               </div>
             </div>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setInvoiceToCancel(null)}>Keep Invoice</Button>
+              <Button variant="outline" onClick={() => setInvoiceToCancel(null)}>Keep Document</Button>
               <Button variant="destructive" onClick={executeCancelInvoice} disabled={isCancelling || !cancelReason.trim()}>
                 {isCancelling ? 'Voiding...' : 'Confirm Void'}
               </Button>
@@ -1494,7 +1549,7 @@ export default function AccountsMasterPage() {
                 <Edit2 className="w-5 h-5" /> Edit Ledger Entry
               </DialogTitle>
               <DialogDescription className="text-xs font-medium text-zinc-500 mt-1.5">
-                Modify financial details and metadata for <strong className="text-zinc-900">{invoiceToEdit?.invoice_number}</strong>. This updates the ledger in-place.
+                Modify financial details and metadata for <strong className="text-zinc-900">{invoiceToEdit?.invoice_number || invoiceToEdit?.order_number}</strong>. This updates the ledger in-place.
               </DialogDescription>
             </DialogHeader>
             
@@ -1503,7 +1558,7 @@ export default function AccountsMasterPage() {
                 
                 {/* ROW 1: Identifiers & Dates */}
                 <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Invoice Number</Label>
+                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Document Number</Label>
                   <Input className="h-10 font-mono font-bold bg-white border-zinc-200" value={editForm.invoice_number} onChange={(e) => setEditForm({...editForm, invoice_number: e.target.value.toUpperCase()})} />
                 </div>
                 <div className="space-y-1.5">
@@ -1545,7 +1600,7 @@ export default function AccountsMasterPage() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] font-black uppercase tracking-widest text-indigo-600 mb-2 block">Net Final Total</Label>
+                    <Label className="text-[11px] font-black uppercase tracking-widest text-indigo-600 mb-2 block">{invoiceToEdit?.isCustom ? "Est. Order Value" : "Net Final Total"}</Label>
                     <Input type="number" className="h-14 font-mono font-black text-2xl border-indigo-200 bg-indigo-50/30 shadow-inner" value={editForm.final_total} onChange={(e) => setEditForm({...editForm, final_total: e.target.value})} />
                   </div>
                 </div>
@@ -1616,7 +1671,6 @@ export default function AccountsMasterPage() {
               >
                 Close Window
               </Button>
-              {/* ✨ Notice the arrow function () => triggerPrint() */}
               <Button 
   onClick={(e) => {
     e.preventDefault();
