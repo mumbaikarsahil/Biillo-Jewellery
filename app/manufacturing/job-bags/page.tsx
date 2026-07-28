@@ -780,7 +780,10 @@ export default function JobBagPage() {
                       <Badge className="bg-blue-100 text-blue-700 border-blue-200 text-[9px] uppercase tracking-widest font-bold px-2">{restock.warehouses?.name}</Badge>
                     </div>
                     <div className="text-[13px] font-semibold text-gray-700">Quantity: {restock.quantity}</div>
+                    
+                    {/* ✨ Added created_at display here */}
                     <div className="text-xs text-gray-500 mt-1.5 flex flex-col gap-1 font-medium">
+                      <span>Requested on: <span className="font-bold text-gray-700">{restock.created_at ? format(new Date(restock.created_at), 'dd MMM yyyy') : 'N/A'}</span></span>
                       {restock.required_by_date && <span>Required by: <span className="font-bold text-gray-700">{format(new Date(restock.required_by_date), 'dd MMM yyyy')}</span></span>}
                       {restock.remarks && <span className="italic text-gray-500 mt-1 bg-gray-50 p-2 rounded-md border border-gray-100">"{restock.remarks}"</span>}
                     </div>
@@ -857,8 +860,11 @@ export default function JobBagPage() {
                       <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest font-bold px-2">{rep.origin?.name}</Badge>
                     </div>
                     <div className="text-[13px] font-semibold text-gray-800">{rep.item_description}</div>
-                    <div className="text-xs text-gray-500 mt-1.5 font-medium">
-                      Recv. Weight: <span className="font-bold text-gray-700">{rep.gross_weight_g}g</span> • {rep.purity}
+                    
+                    {/* ✨ Added created_at display here */}
+                    <div className="text-xs text-gray-500 mt-1.5 flex flex-col gap-1 font-medium">
+                      <span>Logged on: <span className="font-bold text-gray-700">{rep.created_at ? format(new Date(rep.created_at), 'dd MMM yyyy') : 'N/A'}</span></span>
+                      <span>Recv. Weight: <span className="font-bold text-gray-700">{rep.gross_weight_g}g</span> • {rep.purity}</span>
                     </div>
                   </div>
                 ))}
@@ -933,8 +939,11 @@ export default function JobBagPage() {
                       <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[9px] uppercase tracking-widest font-bold px-2">{order.origin?.name}</Badge>
                     </div>
                     <div className="text-[13px] font-semibold text-gray-800">{order.design_reference}</div>
-                    <div className="text-xs text-gray-500 mt-1.5 font-medium">
-                      {order.item_category} • <span className="font-bold text-gray-700">{order.expected_gold_g || 'TBD'}g</span> Gold • <span className="font-bold text-gray-700">{order.expected_diamond_cts || 'TBD'}ct</span> Dia
+                    
+                    {/* ✨ Added created_at display here */}
+                    <div className="text-xs text-gray-500 mt-1.5 flex flex-col gap-1 font-medium">
+                      <span>Ordered on: <span className="font-bold text-gray-700">{order.created_at ? format(new Date(order.created_at), 'dd MMM yyyy') : 'N/A'}</span></span>
+                      <span>{order.item_category} • <span className="font-bold text-gray-700">{order.expected_gold_g || 'TBD'}g</span> Gold • <span className="font-bold text-gray-700">{order.expected_diamond_cts || 'TBD'}ct</span> Dia</span>
                     </div>
                   </div>
                 ))}
