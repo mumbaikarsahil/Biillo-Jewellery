@@ -87,12 +87,19 @@ export default function CatalogPage() {
     if (!appUser?.company_id) return;
     setIsLoading(true);
     try {
-      // 1. Fetch Catalog Data
-      const { data, error } = await supabase
+      // 1. Fetch Catalog Data - ✨ ADDED WAREHOUSE FILTER LOGIC HERE
+      let query = supabase
         .from("inventory_items")
         .select("sku_reference, item_category, metal_type, purity_karat, image_url, mrp, warehouse_id, status, total_stone_weight_cts")
         .eq("company_id", appUser.company_id)
         .neq("sku_reference", null);
+
+      // If a specific branch is selected, strictly filter the data to only return items associated with that branch
+      if (selectedLocation && selectedLocation !== 'ALL') {
+        query = query.eq('warehouse_id', selectedLocation);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
 
