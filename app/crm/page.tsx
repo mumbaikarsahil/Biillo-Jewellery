@@ -185,15 +185,13 @@ export default function CRMPage() {
   const buildServerQuery = (queryObj: any, tab: string) => {
     let q = queryObj.eq('company_id', appUser?.company_id);
     
-    if (selectedLocation !== 'ALL') q = q.eq('warehouse_id', selectedLocation);
+    // 🚨 FIX 1: Explicitly bypass the warehouse lock for the Assigned Calls tab 🚨
+    if (selectedLocation !== 'ALL' && tab !== 'assigned_calls') {
+       q = q.eq('warehouse_id', selectedLocation);
+    }
     
-    const last10 = debouncedSearch.replace(/\D/g, '').slice(-10);
     if (debouncedSearch) {
-      if (last10.length === 10) {
-        q = q.or(`full_name.ilike.%${debouncedSearch}%,phone.like.%${last10}%`);
-      } else {
-        q = q.ilike('full_name', `%${debouncedSearch}%`);
-      }
+       q = q.or(`full_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`);
     }
 
     if (activeAiFilter === 'dnd') {
@@ -214,9 +212,8 @@ export default function CRMPage() {
             q = q.eq('customer_status', 'Purchased');
           } else if (tab === 'kitty') {
             q = q.eq('customer_status', 'Kitty Member');
-          } else if (tab === 'assigned_calls') {
-            // Filter is handled directly in fetchPage via the inner join constraint
           }
+          // Note: 'assigned_calls' skips these extra filters seamlessly
        }
     }
     return q;
@@ -243,10 +240,13 @@ export default function CRMPage() {
         
         let voucherQ = supabase.from('customers').select('id, vouchers!inner(id)', {count: 'exact', head: true}).eq('company_id', appUser.company_id).neq('customer_status', 'DND');
         
+        // 🚨 FIX 2: Universal user ID fallback
+        const currentUserId = appUser.user_id || appUser.id;
+
         // Count assigned calls for this user
         let assignedCallsQ = supabase.from('customers').select('id, voucher_call_assignments!inner(id)', {count: 'exact', head: true})
           .eq('company_id', appUser.company_id)
-          .eq('voucher_call_assignments.assigned_to', appUser.id)
+          .eq('voucher_call_assignments.assigned_to', currentUserId)
           .eq('voucher_call_assignments.status', 'pending')
           .neq('customer_status', 'DND');
 
@@ -266,7 +266,7 @@ export default function CRMPage() {
            coldQ = coldQ.eq('warehouse_id', selectedLocation);
            dndQ = dndQ.eq('warehouse_id', selectedLocation);
            voucherQ = voucherQ.eq('warehouse_id', selectedLocation);
-           assignedCallsQ = assignedCallsQ.eq('warehouse_id', selectedLocation);
+           // explicitly bypassing assignedCallsQ here so the count is always accurate
         }
 
         const [f, p, k, vC, due, over, scheme, cold, dnd, seqTotal, seqToday, assignedCallsRes] = await Promise.all([
@@ -317,8 +317,10 @@ export default function CRMPage() {
       
       q = buildServerQuery(q, activeTab);
 
+      // 🚨 FIX 3: Apply the exact same user ID constraint to the data query
       if (activeTab === 'assigned_calls') {
-        q = q.eq('voucher_call_assignments.assigned_to', appUser.id).eq('voucher_call_assignments.status', 'pending');
+        const currentUserId = appUser.user_id || appUser.id;
+        q = q.eq('voucher_call_assignments.assigned_to', currentUserId).eq('voucher_call_assignments.status', 'pending');
       }
 
       if (voucherFilter === 'registered') q = q.eq('vouchers.status', 'registered');
@@ -348,7 +350,7 @@ export default function CRMPage() {
       setIsLoading(false);
     }
   }
-
+  
   useEffect(() => {
     setPage(0);
     fetchPage(0);
