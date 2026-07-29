@@ -18,7 +18,7 @@ import { toast } from 'sonner'
 import { 
   Users, Search, Store, Gem, FilterX, RefreshCw,
   UserPlus, UploadCloud, Settings, ChevronLeft, ChevronRight, MessageSquare, PhoneOff,
-  TicketPercent, ArrowUpDown, Filter, X
+  TicketPercent, ArrowUpDown, Filter, X, PhoneCall
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Separator } from '@radix-ui/react-separator'
@@ -84,9 +84,17 @@ export default function CRMPage() {
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState<number>(50) 
   
-  const [globalCounts, setGlobalCounts] = useState({ followups: 0, purchased: 0, kitty: 0, vouchers: 0, dnd: 0 })
-  const [metrics, setMetrics] = useState({ total: 0, dueToday: 0, overdue: 0, schemeCount: 0, coldCount: 0, dndCount: 0 })
-
+  const [globalCounts, setGlobalCounts] = useState({ followups: 0, purchased: 0, kitty: 0, vouchers: 0, dnd: 0, assignedCalls: 0 })
+  const [metrics, setMetrics] = useState({ 
+    total: 0, 
+    dueToday: 0, 
+    overdue: 0, 
+    schemeCount: 0, 
+    coldCount: 0, 
+    dndCount: 0,
+    sequences: { total: 0, today: 0 } 
+  })
+  
   // History States
   const [customerHistory, setCustomerHistory] = useState<any[]>([])
   const [isHistoryLoading, setIsHistoryLoading] = useState(false)
@@ -178,8 +186,14 @@ export default function CRMPage() {
     let q = queryObj.eq('company_id', appUser?.company_id);
     
     if (selectedLocation !== 'ALL') q = q.eq('warehouse_id', selectedLocation);
+    
+    const last10 = debouncedSearch.replace(/\D/g, '').slice(-10);
     if (debouncedSearch) {
-      q = q.or(`full_name.ilike.%${debouncedSearch}%,phone.ilike.%${debouncedSearch}%`);
+      if (last10.length === 10) {
+        q = q.or(`full_name.ilike.%${debouncedSearch}%,phone.like.%${last10}%`);
+      } else {
+        q = q.ilike('full_name', `%${debouncedSearch}%`);
+      }
     }
 
     if (activeAiFilter === 'dnd') {
@@ -200,6 +214,8 @@ export default function CRMPage() {
             q = q.eq('customer_status', 'Purchased');
           } else if (tab === 'kitty') {
             q = q.eq('customer_status', 'Kitty Member');
+          } else if (tab === 'assigned_calls') {
+            // Filter is handled directly in fetchPage via the inner join constraint
           }
        }
     }
@@ -216,6 +232,8 @@ export default function CRMPage() {
         const todayStr = new Date().toISOString().split('T')[0];
         const thirtyDaysAgo = new Date(); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
         const fourteenDaysAgo = new Date(); fourteenDaysAgo.setDate(fourteenDaysAgo.getDate() - 14);
+        const startOfTodayISO = new Date().setHours(0,0,0,0);
+        const startOfTodayStr = new Date(startOfTodayISO).toISOString()
 
         let dueQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).eq('next_followup_date', todayStr).neq('customer_status', 'DND');
         let overQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).lt('next_followup_date', todayStr).neq('customer_status', 'DND');
@@ -224,6 +242,22 @@ export default function CRMPage() {
         let dndQ = supabase.from('customers').select('*', {count: 'exact', head: true}).eq('company_id', appUser.company_id).eq('customer_status', 'DND');
         
         let voucherQ = supabase.from('customers').select('id, vouchers!inner(id)', {count: 'exact', head: true}).eq('company_id', appUser.company_id).neq('customer_status', 'DND');
+        
+        // Count assigned calls for this user
+        let assignedCallsQ = supabase.from('customers').select('id, voucher_call_assignments!inner(id)', {count: 'exact', head: true})
+          .eq('company_id', appUser.company_id)
+          .eq('voucher_call_assignments.assigned_to', appUser.id)
+          .eq('voucher_call_assignments.status', 'pending')
+          .neq('customer_status', 'DND');
+
+        let seqTotalQ = supabase
+          .from('voucher_message_sequences')
+          .select('*', { count: 'exact', head: true });
+
+        let seqTodayQ = supabase
+          .from('voucher_message_sequences')
+          .select('*', { count: 'exact', head: true })
+          .gte('created_at', startOfTodayStr);
 
         if (selectedLocation !== 'ALL') {
            dueQ = dueQ.eq('warehouse_id', selectedLocation);
@@ -232,17 +266,20 @@ export default function CRMPage() {
            coldQ = coldQ.eq('warehouse_id', selectedLocation);
            dndQ = dndQ.eq('warehouse_id', selectedLocation);
            voucherQ = voucherQ.eq('warehouse_id', selectedLocation);
+           assignedCallsQ = assignedCallsQ.eq('warehouse_id', selectedLocation);
         }
 
-        const [f, p, k, vC, due, over, scheme, cold, dnd] = await Promise.all([
-          getQ('followups'), getQ('purchased'), getQ('kitty'), voucherQ, dueQ, overQ, schemeQ, coldQ, dndQ
+        const [f, p, k, vC, due, over, scheme, cold, dnd, seqTotal, seqToday, assignedCallsRes] = await Promise.all([
+          getQ('followups'), getQ('purchased'), getQ('kitty'), voucherQ, dueQ, overQ, schemeQ, coldQ, dndQ,
+          seqTotalQ, seqTodayQ, assignedCallsQ
         ]);
-
+        
         setGlobalCounts({
           followups: f.count || 0,
           purchased: p.count || 0,
           kitty: k.count || 0,
           vouchers: vC.count || 0, 
+          assignedCalls: assignedCallsRes.count || 0,
           dnd: dnd.count || 0
         });
 
@@ -252,7 +289,11 @@ export default function CRMPage() {
           total: (f.count || 0) + (p.count || 0) + (k.count || 0) + (dnd.count || 0),
           schemeCount: scheme.count || 0,
           coldCount: cold.count || 0,
-          dndCount: dnd.count || 0
+          dndCount: dnd.count || 0,
+          sequences: {
+            total: seqTotal.count || 0,
+            today: seqToday.count || 0
+          }
         });
       } catch (e) { console.warn("Count Fetch Error:", e); }
     }
@@ -264,15 +305,21 @@ export default function CRMPage() {
     setIsLoading(true);
     try {
       const requireVoucherJoin = activeTab === 'vouchers' || voucherFilter === 'registered' || voucherFilter === 'redeemed';
+      const requireAssignmentJoin = activeTab === 'assigned_calls';
       
       let q = supabase.from('customers').select(`
         *, 
         kitty_plans(*),
         vouchers${requireVoucherJoin ? '!inner' : ''}(id, code, status, expiry_date, distributor_id, voucher_distributors(distributor_name)),
-        voucher_message_sequences(id, status)
+        voucher_message_sequences(id, status),
+        voucher_call_assignments${requireAssignmentJoin ? '!inner' : ''}(id, status, assigned_to)
       `);
       
       q = buildServerQuery(q, activeTab);
+
+      if (activeTab === 'assigned_calls') {
+        q = q.eq('voucher_call_assignments.assigned_to', appUser.id).eq('voucher_call_assignments.status', 'pending');
+      }
 
       if (voucherFilter === 'registered') q = q.eq('vouchers.status', 'registered');
       if (voucherFilter === 'redeemed') q = q.eq('vouchers.status', 'redeemed');
@@ -313,18 +360,29 @@ export default function CRMPage() {
     setIsHistoryLoading(true);
     
     try {
-      const [inv, ord, rep, est] = await Promise.all([
+      const [inv, ord, rep, est, webhooks] = await Promise.all([
         supabase.from('invoices').select('id, invoice_number, created_at, final_total, subtotal').eq('customer_id', customer.id),
         supabase.from('custom_orders').select('id, order_number, created_at, estimated_value, status').eq('customer_id', customer.id),
         supabase.from('repair_tickets').select('id, ticket_number, created_at, estimated_cost, status').eq('customer_id', customer.id),
-        supabase.from('estimates').select('id, estimate_number, created_at, total_amount').eq('customer_id', customer.id)
+        supabase.from('estimates').select('id, estimate_number, created_at, total_amount').eq('customer_id', customer.id),
+        supabase.from('crm_webhook_events')
+        .select('id, message, workflow, event_time, processed_status')
+        .eq('matched_customer_id', customer.id)
       ]);
 
       const combined = [
         ...(inv.data || []).map(i => ({ ...i, type: 'Invoice', date: i.created_at, ref: i.invoice_number, amt: i.final_total || i.subtotal })),
         ...(ord.data || []).map(o => ({ ...o, type: 'Custom Order', date: o.created_at, ref: o.order_number, amt: o.estimated_value })),
         ...(rep.data || []).map(r => ({ ...r, type: 'Repair', date: r.created_at, ref: r.ticket_number, amt: r.estimated_cost })),
-        ...(est.data || []).map(e => ({ ...e, type: 'Estimate', date: e.created_at, ref: e.estimate_number, amt: e.total_amount }))
+        ...(est.data || []).map(e => ({ ...e, type: 'Estimate', date: e.created_at, ref: e.estimate_number, amt: e.total_amount })),
+        ...(webhooks.data || []).map(w => ({
+          id: w.id,
+          type: 'WhatsApp Webhook',
+          date: w.event_time,
+          ref: w.workflow || 'Inbound Msg',
+          amt: 0,
+          notes: w.message
+        }))
       ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
       setCustomerHistory(combined);
@@ -374,6 +432,15 @@ export default function CRMPage() {
         if (logErr) throw logErr;
       }
 
+      // Automatically complete the assignment if this was triggered from the assigned tab
+      if (activeTab === 'assigned_calls') {
+          await supabase.from('voucher_call_assignments')
+             .update({ status: isDND ? 'dnd' : 'called', completed_at: new Date().toISOString() })
+             .eq('customer_id', selectedCustomer.id)
+             .eq('assigned_to', appUser?.id)
+             .eq('status', 'pending');
+      }
+
       let updatePayload: any = {
         last_interaction: `[CALL: ${callForm.outcome}] ${callForm.notes}`
       };
@@ -397,6 +464,9 @@ export default function CRMPage() {
       setIsCallModalOpen(false);
       setActiveCallRecordId(null);
       setCallForm({ outcome: 'Connected / Spoke to Customer', notes: '', next_call_date: '', next_call_time: '' });
+      
+      // Refresh count to update badge
+      setGlobalCounts(prev => ({...prev, assignedCalls: Math.max(0, prev.assignedCalls - 1)}));
       fetchPage(page);
 
     } catch (error: any) {
@@ -917,6 +987,7 @@ export default function CRMPage() {
           totalCustomers={metrics.total} 
           reminders={{dueToday: metrics.dueToday, overdue: metrics.overdue}} 
           activeKittyCount={globalCounts.kitty} 
+          sequences={metrics.sequences} 
         />
 
         {/* 4. COMMAND BAR */}
@@ -997,6 +1068,12 @@ export default function CRMPage() {
                 <TabsTrigger value="vouchers" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm text-teal-700 rounded-md whitespace-nowrap">
                   <TicketPercent className="w-3 h-3 mr-1.5 hidden sm:block" /> Voucher Customers <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-teal-50 text-teal-600 border-teal-100">{globalCounts.vouchers}</Badge>
                 </TabsTrigger>
+                
+                {/* NEW TAB: Assigned Calling */}
+                <TabsTrigger value="assigned_calls" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm text-amber-700 rounded-md whitespace-nowrap">
+                  <PhoneCall className="w-3 h-3 mr-1.5 hidden sm:block" /> Assigned Calling <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-amber-50 text-amber-600 border-amber-100">{globalCounts.assignedCalls}</Badge>
+                </TabsTrigger>
+
                 <TabsTrigger value="dnd" className="hidden">DND</TabsTrigger>
               </TabsList>
             </CardHeader>
@@ -1050,6 +1127,21 @@ export default function CRMPage() {
                     data={customers} 
                     loading={isLoading} 
                     emptyMessage="No Voucher Customers found for this branch."
+                    onMessage={openWhatsAppModal}
+                    onSchedule={openScheduleModal}
+                    onViewProfile={openProfileModal}
+                    onLogCall={openCallLoggerModal}
+                    onViewHistory={handleViewHistory}
+                 />
+                 <PaginationFooter />
+              </TabsContent>
+
+              {/* NEW TAB CONTENT: Assigned Calls */}
+              <TabsContent value="assigned_calls" className="h-full m-0 data-[state=active]:flex flex-col">
+                 <CustomerList 
+                    data={customers} 
+                    loading={isLoading} 
+                    emptyMessage="You have no pending assigned calls."
                     onMessage={openWhatsAppModal}
                     onSchedule={openScheduleModal}
                     onViewProfile={openProfileModal}

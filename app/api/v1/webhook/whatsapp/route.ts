@@ -24,11 +24,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing mandatory fields: userid and phone' }, { status: 400 });
     }
 
-    // 3. Clean and normalize the phone number (Strip spaces, country code checks)
-    let cleanPhone = String(phone).replace(/\D/g, '');
-    if (cleanPhone.length === 10) {
-      cleanPhone = '91' + cleanPhone; // Default to India prefix if pure 10 digit
+    // 3. Extract pure digits and grab exactly the last 10 digits
+    const rawDigits = String(phone).replace(/\D/g, '');
+    const last10Digits = rawDigits.slice(-10);
+
+    if (last10Digits.length !== 10) {
+      return NextResponse.json({ error: 'Invalid phone number length' }, { status: 400 });
     }
+
+    // Standardize saved format to start with 91 for new entries
+    const cleanPhone = '91' + last10Digits;
 
     // 4. Extract target company context (Pass it as part of a query param or hardcode it to your core system tenant ID)
     const companyId = req.nextUrl.searchParams.get('company_id'); 
@@ -36,12 +41,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing tenant context' }, { status: 400 });
     }
 
-    // 5. Query if the customer already exists in your CRM using the phone index
+    // 5. Query using LIKE %last10Digits to match both "9876543210" and "919876543210" in your DB
     const { data: matchedCustomer } = await supabaseAdmin
       .from('customers')
       .select('id')
-      .eq('phone', cleanPhone)
+      .like('phone', `%${last10Digits}`)
       .eq('company_id', companyId)
+      .limit(1)
       .maybeSingle();
 
     // 6. Write the payload directly to your events ledger table

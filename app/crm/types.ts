@@ -16,7 +16,7 @@ export interface CRMCustomer {
   phone: string
   email?: string | null
   city: string | null
-  address?: string | null  // <-- ADD THIS
+  address?: string | null
   pan_no?: string | null
   customer_status: string 
   next_followup_date: string | null
@@ -28,11 +28,23 @@ export interface CRMCustomer {
   warehouse_id?: string
   store_credit_balance?: number
   pavitram_points?: number
-  
-  // NEW: An array of active or past plans instead of flat fields
+  voucher_call_assignments?: any[];
+  // Array Relations
   kitty_plans?: KittyPlan[] 
-  vouchers?: any[];
-  voucher_message_sequences?: any[];
+  vouchers?: any[]
+  
+  // Strongly Typed Sequences & Webhooks
+  voucher_message_sequences?: Array<{
+    id: string
+    status: string
+  }>
+  crm_webhook_events?: Array<{
+    id: string
+    message: string
+    workflow: string;
+    event_time: string
+    processed_status: string
+  }>
 }
 
 export interface Warehouse {

@@ -1,6 +1,7 @@
 import React from 'react'
 import { Card, CardContent } from '@/components/ui/card'
-import { Users, AlertCircle, Gem } from 'lucide-react'
+import { Users, AlertCircle, Gem, MessageSquare, ArrowUpRight } from 'lucide-react'
+import Link from 'next/link'
 
 interface CRMMetricsProps {
   totalCustomers: number
@@ -9,53 +10,107 @@ interface CRMMetricsProps {
     overdue: number
   }
   activeKittyCount: number
+  sequences: {
+    total: number
+    today: number
+  }
 }
 
-export function CRMMetrics({ totalCustomers, reminders, activeKittyCount }: CRMMetricsProps) {
+export function CRMMetrics({
+  totalCustomers,
+  reminders,
+  activeKittyCount,
+  sequences,
+}: CRMMetricsProps) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 shrink-0">
-      <Card className="border-slate-200 shadow-sm rounded-xl">
-        <CardContent className="p-4 flex justify-between items-center">
-          <div>
-            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-1">Total Database</p>
-            <div className="text-2xl font-extrabold tracking-tight text-slate-900 leading-none">{totalCustomers}</div>
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 shrink-0">
+      {/* 1. Total Database */}
+      <Card className="border-zinc-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] rounded-lg">
+        <CardContent className="p-4 flex flex-col justify-between h-full">
+          <div className="flex items-center justify-between text-zinc-500 mb-3">
+            <span className="text-xs font-medium tracking-normal">Total Database</span>
+            <Users className="h-4 w-4 text-zinc-400" />
           </div>
-          <div className="h-10 w-10 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center">
-            <Users className="h-5 w-5 text-slate-400" />
+          <div>
+            <div className="text-2xl font-semibold tracking-tight text-zinc-900">
+              {totalCustomers.toLocaleString()}
+            </div>
+            <p className="text-[11px] text-zinc-400 mt-1">Registered customer records</p>
           </div>
         </CardContent>
       </Card>
 
-      <Card className="border-orange-200 shadow-sm bg-orange-50/30 rounded-xl">
-        <CardContent className="p-4 flex justify-between items-center">
-          <div>
-            <p className="text-[10px] font-bold text-orange-600 uppercase tracking-widest mb-1.5">Action Board</p>
-            <div className="flex gap-4">
-              <div className="flex flex-col">
-                <span className="text-xl font-extrabold text-orange-600 leading-none tracking-tight">{reminders.dueToday}</span>
-                <span className="text-[9px] font-bold text-orange-500 uppercase mt-0.5 tracking-wider">Due Today</span>
+      {/* 2. Action Board */}
+      <Card className="border-zinc-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] rounded-lg">
+        <CardContent className="p-4 flex flex-col justify-between h-full">
+          <div className="flex items-center justify-between text-zinc-500 mb-3">
+            <span className="text-xs font-medium tracking-normal">Action Board</span>
+            <AlertCircle className="h-4 w-4 text-zinc-400" />
+          </div>
+          <div className="flex items-baseline gap-6">
+            <div>
+              <div className="text-2xl font-semibold tracking-tight text-zinc-900">
+                {reminders.dueToday}
               </div>
-              <div className="w-px bg-orange-200 h-8 my-auto"></div>
-              <div className="flex flex-col">
-                <span className="text-xl font-extrabold text-red-600 leading-none tracking-tight">{reminders.overdue}</span>
-                <span className="text-[9px] font-bold text-red-500 uppercase mt-0.5 tracking-wider">Overdue</span>
+              <p className="text-[11px] text-zinc-500 mt-1 font-medium">Due today</p>
+            </div>
+            <div className="h-7 w-px bg-zinc-200" />
+            <div>
+              <div className="text-2xl font-semibold tracking-tight text-red-600">
+                {reminders.overdue}
               </div>
+              <p className="text-[11px] text-red-600/80 mt-1 font-medium">Overdue</p>
             </div>
           </div>
-          <div className="h-10 w-10 rounded-full bg-orange-100/50 border border-orange-100 flex items-center justify-center">
-            <AlertCircle className="h-5 w-5 text-orange-500" />
+        </CardContent>
+      </Card>
+
+      {/* 3. Active Kitty Plans */}
+      <Card className="border-zinc-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] rounded-lg">
+        <CardContent className="p-4 flex flex-col justify-between h-full">
+          <div className="flex items-center justify-between text-zinc-500 mb-3">
+            <span className="text-xs font-medium tracking-normal">Active Kitty Plans</span>
+            <Gem className="h-4 w-4 text-zinc-400" />
+          </div>
+          <div>
+            <div className="text-2xl font-semibold tracking-tight text-zinc-900">
+              {activeKittyCount.toLocaleString()}
+            </div>
+            <p className="text-[11px] text-zinc-400 mt-1">Ongoing savings accounts</p>
           </div>
         </CardContent>
       </Card>
 
-      <Card className="border-purple-200 shadow-sm bg-purple-50/30 rounded-xl">
-        <CardContent className="p-4 flex justify-between items-center">
-          <div>
-            <p className="text-[10px] font-bold text-purple-600 uppercase tracking-widest mb-1">Active Kitty Plans</p>
-            <div className="text-2xl font-extrabold tracking-tight text-purple-700 leading-none">{activeKittyCount}</div>
+      {/* 4. Voucher Sequences */}
+      <Card className="border-zinc-200/80 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.04)] rounded-lg">
+        <CardContent className="p-4 flex flex-col justify-between h-full">
+          <div className="flex items-center justify-between text-zinc-500 mb-3">
+            <span className="text-xs font-medium tracking-normal">Message Sequences</span>
+            <MessageSquare className="h-4 w-4 text-zinc-400" />
           </div>
-          <div className="h-10 w-10 rounded-full bg-purple-100/50 border border-purple-100 flex items-center justify-center">
-            <Gem className="h-5 w-5 text-purple-500" />
+          <div className="flex items-end justify-between">
+            <div className="flex items-baseline gap-5">
+              <div>
+                <div className="text-2xl font-semibold tracking-tight text-zinc-900">
+                  {sequences.total.toLocaleString()}
+                </div>
+                <p className="text-[11px] text-zinc-400 mt-1">Total sent</p>
+              </div>
+              <div className="h-7 w-px bg-zinc-200" />
+              <div>
+                <div className="text-2xl font-semibold tracking-tight text-zinc-900">
+                  +{sequences.today}
+                </div>
+                <p className="text-[11px] text-emerald-600 font-medium mt-1">Today</p>
+              </div>
+            </div>
+            <Link
+              href="/campaigns"
+              className="text-[11px] font-medium text-zinc-500 hover:text-zinc-900 flex items-center gap-0.5 transition-colors mb-0.5"
+            >
+              <span>More</span>
+              <ArrowUpRight className="h-3 w-3" />
+            </Link>
           </div>
         </CardContent>
       </Card>

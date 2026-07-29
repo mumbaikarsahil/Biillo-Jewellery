@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import {
   Home, Server, Monitor, QrCode, Wallet, PieChart, Compass,
   SlidersHorizontal, ShoppingBag, Hammer, Layers, BookOpen, Route, Users,
-  TicketPercent, LogOut, Menu, X, ChevronRight, PanelLeft, Building2, Box, MessageSquare, Brain
+  TicketPercent, LogOut, Menu, X, ChevronRight, PanelLeft, Building2, Box, MessageSquare, Brain, ShoppingCart
 } from 'lucide-react'
 
 // --- Configuration with Premium Icons ---
@@ -21,6 +21,7 @@ const allCoreModules = [
   { href: '/sales', label: 'Revenue', icon: Wallet, roles: ['owner', 'manager', 'branch_manager'] },
   { href: '/reports', label: 'Analytics', icon: PieChart, roles: ['owner', 'manager', 'branch_manager'] },
   { href: '/discovery', label: 'Discovery', icon: Compass, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
+  { href: '/ecommerce', label: 'E-Commerce', icon: SlidersHorizontal, roles: ['owner', 'manager'] },
 ]
 
 const allOperationModules = [
