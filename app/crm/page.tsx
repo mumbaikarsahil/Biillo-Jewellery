@@ -135,12 +135,19 @@ export default function CRMPage() {
   const [loyaltyForm, setLoyaltyForm] = useState({ 
     actionType: 'manual_add', amount: '', billedAmount: '', notes: '' 
   })
-  const [callForm, setCallForm] = useState({
-    outcome: 'Connected / Spoke to Customer',
+  const [callForm, setCallForm] = useState<{
+    outcome: string;
+    interest_level?: string;
+    notes: string;
+    next_call_date: string;
+    next_call_time: string;
+  }>({
+    outcome: '',
+    interest_level: undefined,
     notes: '',
     next_call_date: '',
     next_call_time: ''
-  })
+  });
 
   // Interaction States
   const [waTemplateId, setWaTemplateId] = useState<string>('')
@@ -414,35 +421,45 @@ export default function CRMPage() {
     setIsSubmitting(true);
     try {
       const isDND = callForm.outcome === 'Not Interested (Do Not Disturb)';
-      const callLogEntry = {
+      
+      // 1. Remove interest_level from the generic call log entry
+      const baseCallLogEntry = {
         outcome: callForm.outcome,
         notes: callForm.notes,
         next_call_date: callForm.next_call_date || null,
         next_call_time: callForm.next_call_time || null,
       };
 
+      // 2. Log to generic call_records table (using baseCallLogEntry)
       if (activeCallRecordId) {
-        const { error: logErr } = await supabase.from('call_records').update(callLogEntry).eq('id', activeCallRecordId);
+        const { error: logErr } = await supabase.from('call_records').update(baseCallLogEntry).eq('id', activeCallRecordId);
         if (logErr) throw logErr;
       } else {
         const { error: logErr } = await supabase.from('call_records').insert([{
           company_id: appUser?.company_id,
           customer_id: selectedCustomer.id,
           user_id: appUser?.id || appUser?.user_id,
-          ...callLogEntry
+          ...baseCallLogEntry
         }]);
         if (logErr) throw logErr;
       }
 
-      // Automatically complete the assignment if this was triggered from the assigned tab
+      // 3. Update the specific Voucher Assignment record (THIS gets the interest_level)
       if (activeTab === 'assigned_calls') {
           await supabase.from('voucher_call_assignments')
-             .update({ status: isDND ? 'dnd' : 'called', completed_at: new Date().toISOString() })
+             .update({ 
+                 status: isDND ? 'dnd' : 'called', 
+                 completed_at: new Date().toISOString(),
+                 call_outcome: callForm.outcome,
+                 interest_level: callForm.interest_level || null,
+                 call_notes: callForm.notes
+             })
              .eq('customer_id', selectedCustomer.id)
              .eq('assigned_to', appUser?.id)
              .eq('status', 'pending');
       }
 
+      // 4. Update the main Customer profile
       let updatePayload: any = {
         last_interaction: `[CALL: ${callForm.outcome}] ${callForm.notes}`
       };
@@ -463,9 +480,16 @@ export default function CRMPage() {
 
       toast.success(isDND ? 'Customer moved to DND List' : 'Call Logged & Timer Set!');
       
+      // 5. Reset states and refresh
       setIsCallModalOpen(false);
       setActiveCallRecordId(null);
-      setCallForm({ outcome: 'Connected / Spoke to Customer', notes: '', next_call_date: '', next_call_time: '' });
+      setCallForm({ 
+        outcome: 'Connected / Spoke to Customer', 
+        interest_level: undefined, 
+        notes: '', 
+        next_call_date: '', 
+        next_call_time: '' 
+      });
       
       // Refresh count to update badge
       setGlobalCounts(prev => ({...prev, assignedCalls: Math.max(0, prev.assignedCalls - 1)}));
@@ -477,7 +501,6 @@ export default function CRMPage() {
       setIsSubmitting(false);
     }
   }
-
   // --- CSV Import Handlers ---
   const handleDownloadSample = () => {
     const csvContent = "full_name,phone,city,customer_status,birth_date,anniversary_date,store_credit_balance\nJohn Doe,9876543210,Mumbai,Lead,01-01-1990,15-05-2015,0\nJane Smith,9123456789,Delhi,Purchased,20-08-1985,,1200\nRahul Sharma,9988776655,Pune,Kitty Member,10-12-1992,20-11-2020,0";

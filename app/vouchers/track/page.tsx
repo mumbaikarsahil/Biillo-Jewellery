@@ -118,6 +118,9 @@ interface TrackedVoucher {
     id: string;
     assigned_to: string;
     status: string;
+    call_outcome?: string | null;
+    interest_level?: string | null;
+    call_notes?: string | null;
   }[];
 }
 
@@ -266,7 +269,7 @@ export default function TrackVoucherPage() {
           voucher_distributions (payment_status, delivery_agent),
           customers (id, full_name, phone, convo360_user_id),
           last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name),
-          voucher_call_assignments${requiresInnerJoin ? '!inner' : ''} (id, assigned_to, status)
+          voucher_call_assignments${requiresInnerJoin ? '!inner' : ''} (id, assigned_to, status, call_outcome, interest_level, call_notes)
         `, { count: 'exact' });
 
       if (currentSort === 'newest') query = query.order('updated_at', { ascending: false, nullsFirst: false });
@@ -806,12 +809,41 @@ export default function TrackVoucherPage() {
                                       <User className="w-3.5 h-3.5 text-slate-400" /> {v.customers.full_name}
                                     </span>
                                     
-                                    {/* Minimal Assignment Badge */}
+                                    {/* Assignment Badge & Call Details */}
                                     {activeAssignment && (
-                                      <span className={`text-[10px] font-bold flex items-center gap-1.5 uppercase tracking-widest px-2 py-1 rounded-md border ${activeAssignment.status === 'pending' ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
-                                        <PhoneCall className="w-3 h-3" /> 
-                                        {teamMembers.find(m => m.id === activeAssignment.assigned_to)?.name?.split(' ')[0] || 'Staff'}
-                                      </span>
+                                      <div className="flex flex-col gap-1.5 mt-1">
+                                        <div className="flex items-center gap-2">
+                                          <span className={`text-[10px] font-bold flex items-center gap-1.5 uppercase tracking-widest px-2 py-1 rounded-md border w-fit ${activeAssignment.status === 'pending' ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
+                                            <PhoneCall className="w-3 h-3" /> 
+                                            {teamMembers.find(m => m.id === activeAssignment.assigned_to)?.name?.split(' ')[0] || 'Staff'}
+                                            {activeAssignment.status !== 'pending' && <span className="text-[9px] opacity-70 ml-1">({activeAssignment.status})</span>}
+                                          </span>
+                                          
+                                          {/* Show Interest Level Badge if it exists */}
+                                          {activeAssignment.interest_level && (
+                                            <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-md w-fit ${
+                                              activeAssignment.interest_level === 'High' ? 'bg-emerald-100 text-emerald-700' : 
+                                              activeAssignment.interest_level === 'Moderate' ? 'bg-blue-100 text-blue-700' : 
+                                              activeAssignment.interest_level === 'Not Interested' ? 'bg-rose-100 text-rose-700' : 
+                                              'bg-purple-100 text-purple-700'
+                                            }`}>
+                                              {activeAssignment.interest_level}
+                                            </span>
+                                          )}
+                                        </div>
+                                        
+                                        {/* Show Call Outcome & Notes if they exist */}
+                                        {activeAssignment.call_outcome && (
+                                          <div className="bg-slate-50 border border-slate-100 rounded-md p-2 mt-1">
+                                            <p className="text-[10px] font-semibold text-slate-700 uppercase tracking-wide mb-0.5">{activeAssignment.call_outcome}</p>
+                                            {activeAssignment.call_notes && (
+                                              <p className="text-xs text-slate-500 leading-snug line-clamp-2" title={activeAssignment.call_notes}>
+                                                "{activeAssignment.call_notes}"
+                                              </p>
+                                            )}
+                                          </div>
+                                        )}
+                                      </div>
                                     )}
                                   </div>
                                 )}

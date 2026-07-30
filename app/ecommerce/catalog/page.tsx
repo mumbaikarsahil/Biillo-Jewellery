@@ -4,7 +4,8 @@ import React, { useEffect, useState, useRef } from "react";
 import { 
   Plus, Search, Edit2, Image as ImageIcon, CheckCircle2, 
   XCircle, Globe, PackageSearch, Layers, FolderTree, 
-  Loader2, Settings2, CornerDownRight, UploadCloud, X
+  Loader2, Settings2, CornerDownRight, UploadCloud, X,
+  ArrowLeft, ArrowRight, Trash2, Video, Gem, Ruler
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -21,7 +22,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle,
+  Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
@@ -33,7 +34,8 @@ export default function EcommerceCatalogPage() {
   const { toast } = useToast();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const productFileInputRef = useRef<HTMLInputElement>(null);
+  const productImageInputRef = useRef<HTMLInputElement>(null);
+  const productVideoInputRef = useRef<HTMLInputElement>(null);
 
   // Data States
   const [categories, setCategories] = useState<any[]>([]);
@@ -48,9 +50,12 @@ export default function EcommerceCatalogPage() {
   const [isProductSheetOpen, setIsProductSheetOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isVideoUploading, setIsVideoUploading] = useState(false);
 
   // Form States
   const [categoryForm, setCategoryForm] = useState({ id: "", name: "", is_active: true, parent_id: "none", image_url: "" });
+  
+  // Expanded Product State matching the DB schema
   const [productForm, setProductForm] = useState({
     id: "",
     title: "",
@@ -58,20 +63,39 @@ export default function EcommerceCatalogPage() {
     sku_reference: "",
     legacy_item_no: "",
     description: "",
-    metal_type: "Gold",
-    purity_karat: "18K",
-    approx_weight_g: "",
-    stone_weight_cts: "",
     mrp: "",
-    cover_image_url: "",
+    gallery_images: [] as string[],
+    video_url: "",
     manufacturing_buffer_days: "14",
-    is_live: false
+    is_live: false,
+    
+    // Metal & Dimensions
+    metal_type: "Gold",
+    metal_color: "Yellow",
+    purity_karat: "18K",
+    item_size: "",
+    gross_weight_g: "",
+    net_weight_g: "",
+    
+    // Diamond Specs
+    diamond_shape: "",
+    diamond_color: "",
+    diamond_clarity: "",
+    
+    // Stone Breakdowns
+    stone_weight_cts: "", // Total
+    solitaire_weight_cts: "",
+    solitaire_pieces: "",
+    melee_weight_cts: "",
+    melee_pieces: "",
+    color_stone_weight_cts: "",
+    color_stone_pieces: "",
   });
 
   // ==========================================================================
   // UPLOAD LOGIC
   // ==========================================================================
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>, type: 'category' | 'product') => {
+  const handleCategoryUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !appUser?.company_id) return;
 
@@ -79,27 +103,92 @@ export default function EcommerceCatalogPage() {
     try {
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-      const filePath = `${appUser.company_id}/${type}s/${fileName}`;
+      const filePath = `${appUser.company_id}/categories/${fileName}`;
 
-      const { error: uploadError } = await supabase.storage
-        .from('ecommerce-assets')
-        .upload(filePath, file);
-
+      const { error: uploadError } = await supabase.storage.from('ecommerce-assets').upload(filePath, file);
       if (uploadError) throw uploadError;
 
       const { data } = supabase.storage.from('ecommerce-assets').getPublicUrl(filePath);
-
-      if (type === 'category') {
-        setCategoryForm(prev => ({ ...prev, image_url: data.publicUrl }));
-      } else {
-        setProductForm(prev => ({ ...prev, cover_image_url: data.publicUrl }));
-      }
+      setCategoryForm(prev => ({ ...prev, image_url: data.publicUrl }));
     } catch (err: any) {
       toast({ title: "Upload Failed", description: err.message, variant: "destructive" });
     } finally {
       setIsUploading(false);
-      if (e.target) e.target.value = ''; // reset input
+      if (e.target) e.target.value = ''; 
     }
+  };
+
+  const handleProductImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !appUser?.company_id) return;
+
+    setIsUploading(true);
+    try {
+      const uploadedUrls: string[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+        const filePath = `${appUser.company_id}/products/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage.from('ecommerce-assets').upload(filePath, file);
+        if (uploadError) throw uploadError;
+
+        const { data } = supabase.storage.from('ecommerce-assets').getPublicUrl(filePath);
+        uploadedUrls.push(data.publicUrl);
+      }
+      setProductForm(prev => ({ ...prev, gallery_images: [...prev.gallery_images, ...uploadedUrls] }));
+    } catch (err: any) {
+      toast({ title: "Image Upload Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsUploading(false);
+      if (e.target) e.target.value = ''; 
+    }
+  };
+
+  const handleProductVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !appUser?.company_id) return;
+
+    if (file.size > 10 * 1024 * 1024) { 
+      toast({ title: "File too large", description: "Please upload a short video under 10MB.", variant: "destructive" });
+      return;
+    }
+
+    setIsVideoUploading(true);
+    try {
+      const fileExt = file.name.split('.').pop();
+      const fileName = `vid-${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+      const filePath = `${appUser.company_id}/products/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage.from('ecommerce-assets').upload(filePath, file);
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from('ecommerce-assets').getPublicUrl(filePath);
+      setProductForm(prev => ({ ...prev, video_url: data.publicUrl }));
+    } catch (err: any) {
+      toast({ title: "Video Upload Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsVideoUploading(false);
+      if (e.target) e.target.value = ''; 
+    }
+  };
+
+  const moveImage = (index: number, direction: 'left' | 'right') => {
+    const newImages = [...productForm.gallery_images];
+    if (direction === 'left' && index > 0) {
+      [newImages[index - 1], newImages[index]] = [newImages[index], newImages[index - 1]];
+    } else if (direction === 'right' && index < newImages.length - 1) {
+      [newImages[index + 1], newImages[index]] = [newImages[index], newImages[index + 1]];
+    }
+    setProductForm({ ...productForm, gallery_images: newImages });
+  };
+
+  const removeImage = (index: number) => {
+    setProductForm({
+      ...productForm,
+      gallery_images: productForm.gallery_images.filter((_, i) => i !== index)
+    });
   };
 
   // ==========================================================================
@@ -112,7 +201,6 @@ export default function EcommerceCatalogPage() {
         .from("ecommerce_categories")
         .select("*")
         .eq("company_id", appUser.company_id)
-        .order("sort_order", { ascending: true })
         .order("name", { ascending: true });
 
       if (error) throw error;
@@ -245,8 +333,8 @@ export default function EcommerceCatalogPage() {
   // PRODUCT MANAGEMENT
   // ==========================================================================
   const handleSaveProduct = async () => {
-    if (!productForm.title || !productForm.sku_reference || !productForm.mrp || !productForm.category_id || !appUser) {
-      toast({ title: "Missing Fields", description: "Title, Category, Master SKU, and Base MRP are required.", variant: "destructive" });
+    if (!productForm.title || !productForm.mrp || !productForm.category_id || !appUser) {
+      toast({ title: "Missing Fields", description: "Title, Category, and Base MRP are required.", variant: "destructive" });
       return;
     }
     
@@ -257,15 +345,39 @@ export default function EcommerceCatalogPage() {
         category_id: productForm.category_id,
         title: productForm.title.trim(),
         slug: generateSlug(productForm.title),
-        sku_reference: productForm.sku_reference.trim().toUpperCase(),
-        legacy_item_no: productForm.legacy_item_no.trim() || null,
-        description: productForm.description.trim(),
-        metal_type: productForm.metal_type,
-        purity_karat: productForm.purity_karat,
-        approx_weight_g: Number(productForm.approx_weight_g) || 0,
+        sku_reference: productForm.sku_reference?.trim().toUpperCase() || null,
+        legacy_item_no: productForm.legacy_item_no?.trim() || null,
+        description: productForm.description?.trim() || null,
+        
+        // Media
+        gallery_images: productForm.gallery_images,
+        cover_image_url: productForm.gallery_images.length > 0 ? productForm.gallery_images[0] : null,
+        video_url: productForm.video_url?.trim() || null,
+        
+        // Metal & Dimensions
+        metal_type: productForm.metal_type?.trim() || null,
+        metal_color: productForm.metal_color?.trim() || null,
+        purity_karat: productForm.purity_karat?.trim() || null,
+        item_size: productForm.item_size?.trim() || null,
+        gross_weight_g: Number(productForm.gross_weight_g) || 0,
+        net_weight_g: Number(productForm.net_weight_g) || 0,
+        
+        // Diamond Specs
+        diamond_shape: productForm.diamond_shape?.trim() || null,
+        diamond_color: productForm.diamond_color?.trim() || null,
+        diamond_clarity: productForm.diamond_clarity?.trim() || null,
+        
+        // Stone Breakdowns
         stone_weight_cts: Number(productForm.stone_weight_cts) || 0,
+        solitaire_weight_cts: Number(productForm.solitaire_weight_cts) || 0,
+        solitaire_pieces: Number(productForm.solitaire_pieces) || 0,
+        melee_weight_cts: Number(productForm.melee_weight_cts) || 0,
+        melee_pieces: Number(productForm.melee_pieces) || 0,
+        color_stone_weight_cts: Number(productForm.color_stone_weight_cts) || 0,
+        color_stone_pieces: Number(productForm.color_stone_pieces) || 0,
+
+        // Financial & Fulfillment
         mrp: Number(productForm.mrp),
-        cover_image_url: productForm.cover_image_url.trim() || null,
         manufacturing_buffer_days: Number(productForm.manufacturing_buffer_days) || 14,
         is_live: productForm.is_live
       };
@@ -308,23 +420,51 @@ export default function EcommerceCatalogPage() {
       sku_reference: prod.sku_reference || "",
       legacy_item_no: prod.legacy_item_no || "",
       description: prod.description || "",
-      metal_type: prod.metal_type || "Gold",
-      purity_karat: prod.purity_karat || "18K",
-      approx_weight_g: prod.approx_weight_g?.toString() || "",
-      stone_weight_cts: prod.stone_weight_cts?.toString() || "",
       mrp: prod.mrp?.toString() || "",
-      cover_image_url: prod.cover_image_url || "",
+      gallery_images: prod.gallery_images || (prod.cover_image_url ? [prod.cover_image_url] : []),
+      video_url: prod.video_url || "",
       manufacturing_buffer_days: prod.manufacturing_buffer_days?.toString() || "14",
-      is_live: prod.is_live || false
+      is_live: prod.is_live || false,
+      
+      metal_type: prod.metal_type || "Gold",
+      metal_color: prod.metal_color || "Yellow",
+      purity_karat: prod.purity_karat || "18K",
+      item_size: prod.item_size || "",
+      gross_weight_g: prod.gross_weight_g?.toString() || "",
+      net_weight_g: prod.net_weight_g?.toString() || "",
+      
+      diamond_shape: prod.diamond_shape || "",
+      diamond_color: prod.diamond_color || "",
+      diamond_clarity: prod.diamond_clarity || "",
+      
+      stone_weight_cts: prod.stone_weight_cts?.toString() || "",
+      solitaire_weight_cts: prod.solitaire_weight_cts?.toString() || "",
+      solitaire_pieces: prod.solitaire_pieces?.toString() || "",
+      melee_weight_cts: prod.melee_weight_cts?.toString() || "",
+      melee_pieces: prod.melee_pieces?.toString() || "",
+      color_stone_weight_cts: prod.color_stone_weight_cts?.toString() || "",
+      color_stone_pieces: prod.color_stone_pieces?.toString() || "",
     });
     setIsProductSheetOpen(true);
+  };
+
+  const resetProductForm = () => {
+    setProductForm({
+      id: "", title: "", category_id: selectedCategoryId !== "all" ? selectedCategoryId : "", 
+      sku_reference: "", legacy_item_no: "", description: "", mrp: "", 
+      gallery_images: [], video_url: "", manufacturing_buffer_days: "14", is_live: false,
+      metal_type: "Gold", metal_color: "Yellow", purity_karat: "18K", item_size: "", gross_weight_g: "", net_weight_g: "",
+      diamond_shape: "", diamond_color: "", diamond_clarity: "", stone_weight_cts: "",
+      solitaire_weight_cts: "", solitaire_pieces: "", melee_weight_cts: "", melee_pieces: "", 
+      color_stone_weight_cts: "", color_stone_pieces: ""
+    });
   };
 
   const filteredProducts = products.filter(p => {
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
     return p.title.toLowerCase().includes(q) || 
-           p.sku_reference.toLowerCase().includes(q) || 
+           (p.sku_reference && p.sku_reference.toLowerCase().includes(q)) || 
            (p.legacy_item_no && p.legacy_item_no.toLowerCase().includes(q));
   });
 
@@ -335,7 +475,7 @@ export default function EcommerceCatalogPage() {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-2xl tracking-tight font-semibold text-zinc-900">Catalog</h1>
-          <p className="text-sm text-zinc-500 mt-1">Manage website display products and map them to physical ERP inventory.</p>
+          <p className="text-sm text-zinc-500 mt-1">Manage website display products and media sequences.</p>
         </div>
       </div>
 
@@ -392,11 +532,7 @@ export default function EcommerceCatalogPage() {
             <Button 
               className="w-full sm:w-auto h-9 px-4 bg-zinc-900 hover:bg-zinc-800 text-white font-medium text-sm rounded-lg shadow-sm transition-all"
               onClick={() => {
-                setProductForm({
-                  id: "", title: "", category_id: selectedCategoryId !== "all" ? selectedCategoryId : "", sku_reference: "", legacy_item_no: "",
-                  description: "", metal_type: "Gold", purity_karat: "18K", approx_weight_g: "", stone_weight_cts: "", mrp: "", cover_image_url: "",
-                  manufacturing_buffer_days: "14", is_live: false
-                });
+                resetProductForm();
                 setIsProductSheetOpen(true);
               }}
             >
@@ -427,8 +563,8 @@ export default function EcommerceCatalogPage() {
                     filteredProducts.map(product => (
                       <TableRow key={product.id} className="hover:bg-zinc-50/50 transition-colors border-zinc-100/50">
                         <TableCell className="px-4 py-3">
-                          {product.cover_image_url ? (
-                            <img src={product.cover_image_url} alt="Cover" className="w-10 h-10 rounded-md object-cover border border-zinc-200 shadow-sm" />
+                          {product.cover_image_url || (product.gallery_images && product.gallery_images.length > 0) ? (
+                            <img src={product.cover_image_url || product.gallery_images[0]} alt="Cover" className="w-10 h-10 rounded-md object-cover border border-zinc-200 shadow-sm" />
                           ) : (
                             <div className="w-10 h-10 rounded-md bg-zinc-100 border border-zinc-200/60 flex items-center justify-center">
                               <ImageIcon className="w-4 h-4 text-zinc-300" />
@@ -441,9 +577,13 @@ export default function EcommerceCatalogPage() {
                         </TableCell>
                         <TableCell className="px-4 py-3">
                           <div className="flex flex-col gap-1 items-start">
-                            <span className="text-[11px] font-mono font-medium text-zinc-700 bg-zinc-100 px-1.5 py-0.5 rounded flex items-center gap-1">
-                              <PackageSearch className="w-3 h-3 text-zinc-400" /> {product.sku_reference}
-                            </span>
+                            {product.sku_reference ? (
+                              <span className="text-[11px] font-mono font-medium text-zinc-700 bg-zinc-100 px-1.5 py-0.5 rounded flex items-center gap-1">
+                                <PackageSearch className="w-3 h-3 text-zinc-400" /> {product.sku_reference}
+                              </span>
+                            ) : (
+                              <span className="text-[11px] text-zinc-400 italic">No SKU</span>
+                            )}
                             {product.legacy_item_no && (
                               <span className="text-[10px] font-mono text-zinc-500 flex items-center gap-1 pl-1">
                                 <Layers className="w-3 h-3 opacity-50" /> {product.legacy_item_no}
@@ -501,7 +641,7 @@ export default function EcommerceCatalogPage() {
             
             {/* IMAGE UPLOAD */}
             <div className="flex flex-col items-center justify-center">
-              <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'category')} />
+              <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleCategoryUpload} />
               <div 
                 className="w-24 h-24 rounded-full border border-dashed border-zinc-300 bg-white flex flex-col items-center justify-center cursor-pointer hover:border-zinc-400 hover:bg-zinc-50 transition-all relative overflow-hidden shadow-sm"
                 onClick={() => fileInputRef.current?.click()}
@@ -565,7 +705,7 @@ export default function EcommerceCatalogPage() {
       {/* MASTER PRODUCT SHEET */}
       {/* ========================================================================== */}
       <Sheet open={isProductSheetOpen} onOpenChange={(o) => !o && setIsProductSheetOpen(false)}>
-        <SheetContent className="w-full sm:max-w-[480px] p-0 border-l border-zinc-200 shadow-2xl flex flex-col bg-white">
+        <SheetContent className="w-full sm:max-w-[550px] p-0 border-l border-zinc-200 shadow-2xl flex flex-col bg-white">
           <SheetHeader className="p-6 border-b border-zinc-100 shrink-0">
             <SheetTitle className="text-lg font-semibold tracking-tight text-zinc-900 flex items-center gap-2">
               <PackageSearch className="w-4 h-4 text-zinc-400" /> 
@@ -573,109 +713,248 @@ export default function EcommerceCatalogPage() {
             </SheetTitle>
           </SheetHeader>
           
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-8">
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-8 bg-zinc-50/30">
             
-            {/* PRODUCT IMAGE UPLOAD */}
-            <div>
-               <input type="file" ref={productFileInputRef} className="hidden" accept="image/*" onChange={(e) => handleFileUpload(e, 'product')} />
-               <div 
-                  className="w-full h-40 rounded-xl border border-dashed border-zinc-300 bg-zinc-50/50 flex flex-col items-center justify-center cursor-pointer hover:border-zinc-400 hover:bg-zinc-100 transition-all relative overflow-hidden"
-                  onClick={() => productFileInputRef.current?.click()}
-               >
-                 {isUploading ? (
-                    <Loader2 className="w-6 h-6 animate-spin text-zinc-400" />
-                 ) : productForm.cover_image_url ? (
-                    <>
-                      <img src={productForm.cover_image_url} alt="Product Cover" className="w-full h-full object-cover" />
-                      <div className="absolute top-2 right-2 bg-white/90 p-1.5 rounded-md shadow-sm text-zinc-700 hover:text-red-600" onClick={(e) => { e.stopPropagation(); setProductForm({...productForm, cover_image_url: ""}); }}>
-                        <X className="w-3.5 h-3.5" />
-                      </div>
-                    </>
-                 ) : (
-                    <>
-                      <UploadCloud className="w-6 h-6 text-zinc-300 mb-2" />
-                      <span className="text-xs font-medium text-zinc-500">Upload Cover Image</span>
-                    </>
-                 )}
-               </div>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Display Title</Label>
-                <Input className="h-9 font-medium border-zinc-200 text-sm focus-visible:ring-zinc-900" value={productForm.title} onChange={e => setProductForm({...productForm, title: e.target.value})} placeholder="e.g. Classic Solitaire Ring" />
-              </div>
-              <div>
-                <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Category Assignment</Label>
-                <select 
-                  className="w-full h-9 px-3 border border-zinc-200 rounded-md text-sm bg-white focus:ring-1 focus:ring-zinc-900 outline-none"
-                  value={productForm.category_id}
-                  onChange={e => setProductForm({...productForm, category_id: e.target.value})}
-                >
-                  <option value="" disabled>Select Target Category...</option>
-                  {renderCategoryOptions(null, 0)}
-                </select>
-              </div>
-            </div>
-
-            <Separator className="bg-zinc-100" />
-
-            {/* TRIAD KEYS */}
-            <div className="bg-zinc-50 border border-zinc-100 p-4 rounded-xl space-y-4">
-              <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500 flex items-center gap-1.5">
-                <Settings2 className="w-3.5 h-3.5" /> ERP Mapping Logic
+            {/* MEDIA GALLERY SECTION */}
+            <div className="space-y-4 bg-white p-5 rounded-xl border border-zinc-200/60 shadow-sm">
+              <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500 flex items-center gap-1.5 border-b border-zinc-100 pb-3">
+                <ImageIcon className="w-3.5 h-3.5" /> Media Gallery
               </h3>
+              
+              {/* Images Array */}
               <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                   <Label className="text-xs font-medium text-zinc-700">Images (Sequence matters)</Label>
+                   <span className="text-[10px] text-zinc-400">{productForm.gallery_images.length} added</span>
+                </div>
+                <input type="file" ref={productImageInputRef} className="hidden" accept="image/*" multiple onChange={handleProductImageUpload} />
+                <div className="grid grid-cols-4 gap-3">
+                  {productForm.gallery_images.map((url, idx) => (
+                    <div key={idx} className="relative aspect-square border border-zinc-200 rounded-lg group overflow-hidden bg-zinc-50">
+                      <img src={url} alt={`Preview ${idx+1}`} className="w-full h-full object-cover" />
+                      <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1">
+                        <div className="flex gap-1">
+                          <Button size="icon" variant="ghost" className="h-6 w-6 text-white hover:bg-white/20" onClick={() => moveImage(idx, 'left')} disabled={idx === 0}>
+                            <ArrowLeft className="w-3 h-3" />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="h-6 w-6 text-white hover:bg-white/20" onClick={() => moveImage(idx, 'right')} disabled={idx === productForm.gallery_images.length - 1}>
+                            <ArrowRight className="w-3 h-3" />
+                          </Button>
+                        </div>
+                        <Button size="icon" variant="ghost" className="h-6 w-6 text-white hover:bg-white/20" onClick={() => removeImage(idx)}>
+                          <Trash2 className="w-3 h-3 text-red-400" />
+                        </Button>
+                      </div>
+                      <Badge className="absolute top-1 left-1 bg-black/70 text-white border-none text-[9px] px-1 py-0 shadow-none">#{idx + 1}</Badge>
+                    </div>
+                  ))}
+                  <div 
+                    className="aspect-square rounded-lg border border-dashed border-zinc-300 bg-zinc-50 flex flex-col items-center justify-center cursor-pointer hover:border-zinc-400 hover:bg-zinc-100 transition-colors"
+                    onClick={() => productImageInputRef.current?.click()}
+                  >
+                    {isUploading ? (
+                      <Loader2 className="w-5 h-5 animate-spin text-zinc-400" />
+                    ) : (
+                      <>
+                        <Plus className="w-5 h-5 text-zinc-400 mb-1" />
+                        <span className="text-[9px] text-zinc-500 font-medium">Add Image</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <Separator className="bg-zinc-100" />
+
+              {/* Video Uploader */}
+              <div className="space-y-3">
+                <Label className="text-xs font-medium text-zinc-700 flex items-center justify-between">
+                  <span>Short Video Clip (2-4 sec)</span>
+                  <span className="text-[10px] text-zinc-400 font-normal">Optional</span>
+                </Label>
+                <input type="file" ref={productVideoInputRef} className="hidden" accept="video/mp4,video/quicktime,video/webm" onChange={handleProductVideoUpload} />
+                {productForm.video_url ? (
+                  <div className="relative w-full h-32 rounded-xl border border-zinc-200 overflow-hidden bg-black flex justify-center">
+                    <video src={productForm.video_url} autoPlay loop muted playsInline className="h-full object-cover" />
+                    <Button 
+                      size="icon" 
+                      variant="destructive" 
+                      className="absolute top-2 right-2 h-7 w-7 opacity-80 hover:opacity-100 rounded-md"
+                      onClick={() => setProductForm({ ...productForm, video_url: "" })}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div 
+                    className="w-full h-16 rounded-xl border border-dashed border-zinc-300 bg-zinc-50/50 flex flex-col items-center justify-center cursor-pointer hover:border-zinc-400 hover:bg-zinc-100 transition-all"
+                    onClick={() => productVideoInputRef.current?.click()}
+                  >
+                    {isVideoUploading ? (
+                      <Loader2 className="w-5 h-5 animate-spin text-zinc-400" />
+                    ) : (
+                      <div className="flex items-center gap-2 text-zinc-500">
+                        <Video className="w-4 h-4" />
+                        <span className="text-[11px] font-medium">Upload Video File</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* BASIC INFO */}
+            <div className="space-y-4 bg-white p-5 rounded-xl border border-zinc-200/60 shadow-sm">
+              <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500 border-b border-zinc-100 pb-3">Basic Info</h3>
+              <div className="space-y-4">
                 <div>
-                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Master SKU Reference <span className="text-red-500">*</span></Label>
-                  <Input className="h-9 font-mono text-sm border-zinc-200 uppercase bg-white focus-visible:ring-zinc-900" value={productForm.sku_reference} onChange={e => setProductForm({...productForm, sku_reference: e.target.value})} placeholder="e.g. RNG-042" />
-                  <p className="text-[10px] text-zinc-500 mt-1">Links to physical inventory designs.</p>
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Display Title <span className="text-red-500">*</span></Label>
+                  <Input className="h-9 font-medium border-zinc-200 text-sm focus-visible:ring-zinc-900" value={productForm.title} onChange={e => setProductForm({...productForm, title: e.target.value})} placeholder="e.g. Classic Solitaire Ring" />
                 </div>
                 <div>
-                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Legacy Item No (Fallback)</Label>
-                  <Input className="h-9 font-mono text-sm border-zinc-200 uppercase bg-white focus-visible:ring-zinc-900" value={productForm.legacy_item_no} onChange={e => setProductForm({...productForm, legacy_item_no: e.target.value})} placeholder="e.g. OLD-TAG-123" />
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Category Assignment <span className="text-red-500">*</span></Label>
+                  <select 
+                    className="w-full h-9 px-3 border border-zinc-200 rounded-md text-sm bg-white focus:ring-1 focus:ring-zinc-900 outline-none"
+                    value={productForm.category_id}
+                    onChange={e => setProductForm({...productForm, category_id: e.target.value})}
+                  >
+                    <option value="" disabled>Select Target Category...</option>
+                    {renderCategoryOptions(null, 0)}
+                  </select>
+                </div>
+                <div>
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Description</Label>
+                  <textarea 
+                    className="w-full h-20 p-3 border border-zinc-200 rounded-md text-sm bg-white focus:ring-1 focus:ring-zinc-900 outline-none resize-none custom-scrollbar"
+                    value={productForm.description}
+                    onChange={e => setProductForm({...productForm, description: e.target.value})}
+                    placeholder="Provide details about the design, inspiration, etc."
+                  />
                 </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Base MRP (₹)</Label>
-                <Input type="number" className="h-9 text-sm font-medium border-zinc-200 focus-visible:ring-zinc-900" value={productForm.mrp} onChange={e => setProductForm({...productForm, mrp: e.target.value})} />
-              </div>
-              <div>
-                <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Buffer (Days)</Label>
-                <Input type="number" className="h-9 text-sm font-medium border-zinc-200 focus-visible:ring-zinc-900" value={productForm.manufacturing_buffer_days} onChange={e => setProductForm({...productForm, manufacturing_buffer_days: e.target.value})} />
-              </div>
-            </div>
-
-            <Separator className="bg-zinc-100" />
-            
-            <div className="space-y-4">
-              <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Specifications</h3>
-              <div className="grid grid-cols-2 gap-3">
+            {/* METAL & DIMENSIONS */}
+            <div className="space-y-4 bg-white p-5 rounded-xl border border-zinc-200/60 shadow-sm">
+              <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500 flex items-center gap-1.5 border-b border-zinc-100 pb-3">
+                <Ruler className="w-3.5 h-3.5" /> Metal & Dimensions
+              </h3>
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <Label className="text-[10px] text-zinc-500 mb-1 block">Metal</Label>
-                  <Input className="h-8 text-xs border-zinc-200 focus-visible:ring-zinc-900" value={productForm.metal_type} onChange={e => setProductForm({...productForm, metal_type: e.target.value})} />
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Metal Type</Label>
+                  <Input className="h-9 text-sm border-zinc-200" value={productForm.metal_type} onChange={e => setProductForm({...productForm, metal_type: e.target.value})} placeholder="e.g. Gold" />
                 </div>
                 <div>
-                  <Label className="text-[10px] text-zinc-500 mb-1 block">Purity</Label>
-                  <Input className="h-8 text-xs border-zinc-200 focus-visible:ring-zinc-900" value={productForm.purity_karat} onChange={e => setProductForm({...productForm, purity_karat: e.target.value})} />
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Metal Color</Label>
+                  <Input className="h-9 text-sm border-zinc-200" value={productForm.metal_color} onChange={e => setProductForm({...productForm, metal_color: e.target.value})} placeholder="e.g. Rose Gold" />
                 </div>
                 <div>
-                  <Label className="text-[10px] text-zinc-500 mb-1 block">Approx Wt (g)</Label>
-                  <Input type="number" step="0.01" className="h-8 text-xs border-zinc-200 focus-visible:ring-zinc-900" value={productForm.approx_weight_g} onChange={e => setProductForm({...productForm, approx_weight_g: e.target.value})} />
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Purity (Karat)</Label>
+                  <Input className="h-9 text-sm border-zinc-200" value={productForm.purity_karat} onChange={e => setProductForm({...productForm, purity_karat: e.target.value})} placeholder="e.g. 18K" />
                 </div>
                 <div>
-                  <Label className="text-[10px] text-zinc-500 mb-1 block">Stone (cts)</Label>
-                  <Input type="number" step="0.01" className="h-8 text-xs border-zinc-200 focus-visible:ring-zinc-900" value={productForm.stone_weight_cts} onChange={e => setProductForm({...productForm, stone_weight_cts: e.target.value})} />
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Item Size / Dimensions</Label>
+                  <Input className="h-9 text-sm border-zinc-200" value={productForm.item_size} onChange={e => setProductForm({...productForm, item_size: e.target.value})} placeholder="e.g. Ring Size 12" />
+                </div>
+                <div>
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Gross Wt (g)</Label>
+                  <Input type="number" step="0.01" className="h-9 text-sm border-zinc-200" value={productForm.gross_weight_g} onChange={e => setProductForm({...productForm, gross_weight_g: e.target.value})} placeholder="0.00" />
+                </div>
+                <div>
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Net Wt (g)</Label>
+                  <Input type="number" step="0.01" className="h-9 text-sm border-zinc-200" value={productForm.net_weight_g} onChange={e => setProductForm({...productForm, net_weight_g: e.target.value})} placeholder="0.00" />
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center justify-between bg-zinc-50 border border-zinc-200 p-4 rounded-xl">
+            {/* DIAMONDS & STONES */}
+            <div className="space-y-4 bg-white p-5 rounded-xl border border-zinc-200/60 shadow-sm">
+              <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500 flex items-center gap-1.5 border-b border-zinc-100 pb-3">
+                <Gem className="w-3.5 h-3.5" /> Diamond & Stone Specs
+              </h3>
+              
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <Label className="text-[10px] text-zinc-500 mb-1 block">Shape</Label>
+                  <Input className="h-8 text-xs border-zinc-200" value={productForm.diamond_shape} onChange={e => setProductForm({...productForm, diamond_shape: e.target.value})} placeholder="Round" />
+                </div>
+                <div>
+                  <Label className="text-[10px] text-zinc-500 mb-1 block">Color</Label>
+                  <Input className="h-8 text-xs border-zinc-200" value={productForm.diamond_color} onChange={e => setProductForm({...productForm, diamond_color: e.target.value})} placeholder="E-F" />
+                </div>
+                <div>
+                  <Label className="text-[10px] text-zinc-500 mb-1 block">Clarity</Label>
+                  <Input className="h-8 text-xs border-zinc-200" value={productForm.diamond_clarity} onChange={e => setProductForm({...productForm, diamond_clarity: e.target.value})} placeholder="VVS" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-x-4 gap-y-3 pt-3 border-t border-zinc-50">
+                <div>
+                  <Label className="text-[10px] text-zinc-500 mb-1 block">Solitaire Weight (cts)</Label>
+                  <Input type="number" step="0.01" className="h-8 text-xs border-zinc-200" value={productForm.solitaire_weight_cts} onChange={e => setProductForm({...productForm, solitaire_weight_cts: e.target.value})} />
+                </div>
+                <div>
+                  <Label className="text-[10px] text-zinc-500 mb-1 block">Solitaire Pieces</Label>
+                  <Input type="number" className="h-8 text-xs border-zinc-200" value={productForm.solitaire_pieces} onChange={e => setProductForm({...productForm, solitaire_pieces: e.target.value})} />
+                </div>
+                <div>
+                  <Label className="text-[10px] text-zinc-500 mb-1 block">Melee Weight (cts)</Label>
+                  <Input type="number" step="0.01" className="h-8 text-xs border-zinc-200" value={productForm.melee_weight_cts} onChange={e => setProductForm({...productForm, melee_weight_cts: e.target.value})} />
+                </div>
+                <div>
+                  <Label className="text-[10px] text-zinc-500 mb-1 block">Melee Pieces</Label>
+                  <Input type="number" className="h-8 text-xs border-zinc-200" value={productForm.melee_pieces} onChange={e => setProductForm({...productForm, melee_pieces: e.target.value})} />
+                </div>
+                <div>
+                  <Label className="text-[10px] text-zinc-500 mb-1 block">Color Stone (cts)</Label>
+                  <Input type="number" step="0.01" className="h-8 text-xs border-zinc-200" value={productForm.color_stone_weight_cts} onChange={e => setProductForm({...productForm, color_stone_weight_cts: e.target.value})} />
+                </div>
+                <div>
+                  <Label className="text-[10px] text-zinc-500 mb-1 block">Color Stone Pieces</Label>
+                  <Input type="number" className="h-8 text-xs border-zinc-200" value={productForm.color_stone_pieces} onChange={e => setProductForm({...productForm, color_stone_pieces: e.target.value})} />
+                </div>
+                <div className="col-span-2 pt-2">
+                  <Label className="text-[10px] font-bold text-zinc-700 mb-1 block">Total Stone Weight (cts)</Label>
+                  <Input type="number" step="0.01" className="h-8 text-xs border-zinc-200 bg-zinc-50" value={productForm.stone_weight_cts} onChange={e => setProductForm({...productForm, stone_weight_cts: e.target.value})} />
+                </div>
+              </div>
+            </div>
+
+            {/* ERP MAPPING LOGIC */}
+            <div className="bg-amber-50/50 border border-amber-100 p-5 rounded-xl space-y-4 shadow-sm">
+              <h3 className="text-[11px] font-semibold uppercase tracking-widest text-amber-700 flex items-center gap-1.5">
+                <Settings2 className="w-3.5 h-3.5" /> ERP Integration Mapping
+              </h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs font-medium text-amber-900 mb-1.5 block">Master SKU (Optional)</Label>
+                  <Input className="h-9 font-mono text-xs border-amber-200 uppercase bg-white" value={productForm.sku_reference} onChange={e => setProductForm({...productForm, sku_reference: e.target.value})} placeholder="RNG-042" />
+                </div>
+                <div>
+                  <Label className="text-xs font-medium text-amber-900 mb-1.5 block">Legacy Item No (Fallback)</Label>
+                  <Input className="h-9 font-mono text-xs border-amber-200 uppercase bg-white" value={productForm.legacy_item_no} onChange={e => setProductForm({...productForm, legacy_item_no: e.target.value})} placeholder="OLD-TAG" />
+                </div>
+              </div>
+            </div>
+
+            {/* FINANCIAL & FULFILLMENT */}
+            <div className="space-y-4 bg-white p-5 rounded-xl border border-zinc-200/60 shadow-sm">
+              <h3 className="text-[11px] font-semibold uppercase tracking-widest text-zinc-500 border-b border-zinc-100 pb-3">Financials & Fulfillment</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Base MRP (₹) <span className="text-red-500">*</span></Label>
+                  <Input type="number" className="h-9 text-sm font-medium border-zinc-200 focus-visible:ring-zinc-900" value={productForm.mrp} onChange={e => setProductForm({...productForm, mrp: e.target.value})} />
+                </div>
+                <div>
+                  <Label className="text-xs font-medium text-zinc-700 mb-1.5 block">Buffer (Days)</Label>
+                  <Input type="number" className="h-9 text-sm font-medium border-zinc-200 focus-visible:ring-zinc-900" value={productForm.manufacturing_buffer_days} onChange={e => setProductForm({...productForm, manufacturing_buffer_days: e.target.value})} />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between bg-zinc-50 border border-zinc-200 p-4 rounded-xl shadow-sm">
               <div>
-                <p className="text-sm font-medium text-zinc-900">Publish to Web</p>
+                <p className="text-sm font-semibold text-zinc-900">Publish to Web</p>
                 <p className="text-[11px] text-zinc-500 mt-0.5">Allow customers to view and order.</p>
               </div>
               <Switch checked={productForm.is_live} onCheckedChange={v => setProductForm({...productForm, is_live: v})} className="data-[state=checked]:bg-zinc-900" />
@@ -683,8 +962,8 @@ export default function EcommerceCatalogPage() {
 
           </div>
 
-          <SheetFooter className="p-4 border-t border-zinc-100 shrink-0">
-            <Button onClick={handleSaveProduct} disabled={isSubmitting || isUploading} className="w-full h-10 bg-zinc-900 hover:bg-zinc-800 text-white font-medium text-sm rounded-lg shadow-sm transition-all">
+          <SheetFooter className="p-4 border-t border-zinc-100 shrink-0 bg-white">
+            <Button onClick={handleSaveProduct} disabled={isSubmitting || isUploading || isVideoUploading} className="w-full h-10 bg-zinc-900 hover:bg-zinc-800 text-white font-medium text-sm rounded-lg shadow-sm transition-all">
               {isSubmitting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
               {productForm.id ? "Update Profile" : "Save to Catalog"}
             </Button>

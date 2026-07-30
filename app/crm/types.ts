@@ -35,8 +35,12 @@ export interface CRMCustomer {
   
   // Strongly Typed Sequences & Webhooks
   voucher_message_sequences?: Array<{
-    id: string
-    status: string
+    id: string;
+    status: string;
+    voucher_code?: string;
+    current_step?: number;
+    interval_hours?: number;
+    next_send_at?: string;
   }>
   crm_webhook_events?: Array<{
     id: string
