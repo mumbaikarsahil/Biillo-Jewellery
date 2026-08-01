@@ -153,12 +153,16 @@ export function useCheckout({
   // ==============================================================
 
   const handleApplyVoucher = async (overrideCode?: string) => {
+    const validOverride = typeof overrideCode === 'string' ? overrideCode : undefined;
+    
     if (appliedKittyAmount > 0 || appliedCreditAmount > 0) {
       return toast.error("Clubbing Error", { description: "Cannot apply vouchers when Wallet or Kitty balances are in use." });
     }
 
-    if (!overrideCode && !voucherCode.trim()) return;
-    let codeToSearch = overrideCode || voucherCode.trim();
+    if (!validOverride && !voucherCode.trim()) return;
+    
+    let codeToSearch = validOverride || voucherCode.trim();
+    
     if (codeToSearch.includes('?code=')) {
       codeToSearch = codeToSearch.split('?code=')[1].split('&')[0];
     }

@@ -1,7 +1,6 @@
 import React from 'react'
 import { format } from "date-fns"
-// Add History to your lucide-react imports
-import { Phone, User, MessageCircle, Calendar, IndianRupee, Star, AlertCircle, Users, PhoneCall, Ticket, Store, History } from 'lucide-react'
+import { Phone, User, MessageCircle, Calendar, IndianRupee, Star, AlertCircle, Users, PhoneCall, Ticket, Store, History, MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -19,12 +18,12 @@ interface Props {
   onViewProfile: (c: CRMCustomer) => void
   onLogCall: (c: CRMCustomer) => void 
   isKitty?: boolean
-  
   onViewHistory: (c: CRMCustomer) => void
+  onViewWaActivity: (c: CRMCustomer) => void // ✨ NEW PROP
 }
 
 
-export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedule, onViewProfile, onLogCall, onViewHistory, isKitty = false }: Props) {
+export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedule, onViewProfile, onLogCall, onViewHistory, onViewWaActivity, isKitty = false }: Props) {
   if (loading) {
     return (
       <div className="p-5 space-y-3">
@@ -71,15 +70,10 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
     )
   }
 
-  // ✨ HELPER: Safely extracts the distributor name from the Supabase Join
   const getDistributorName = (voucher: any) => {
     if (!voucher) return "Direct Event / Campaign";
-    
     const distData = voucher.voucher_distributors;
-    
-    if (Array.isArray(distData)) {
-      return distData[0]?.distributor_name || "Direct Event / Campaign";
-    }
+    if (Array.isArray(distData)) return distData[0]?.distributor_name || "Direct Event / Campaign";
     return distData?.distributor_name || "Direct Event / Campaign";
   }
 
@@ -92,15 +86,14 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
             <TableRow className="hover:bg-transparent border-none">
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 px-6">Client Profile</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Follow-up Details</TableHead>
-              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Last Note</TableHead>
+              <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Last Note / Chat</TableHead>
               <TableHead className="w-[340px] text-right px-6"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {data.map((row) => {
-              // ✨ LOGIC: Smart Voucher Status Check
-              const activeVoucher = row.vouchers?.find(v => v.status === 'registered') 
-                                 || row.vouchers?.find(v => v.status === 'redeemed') 
+              const activeVoucher = row.vouchers?.find((v: any) => v.status === 'registered') 
+                                 || row.vouchers?.find((v: any) => v.status === 'redeemed') 
                                  || row.vouchers?.[0];
 
               let voucherText = "";
@@ -144,7 +137,6 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
 
                     <span className="text-[10px] text-slate-500 font-mono mt-0.5 flex items-center gap-1"><Phone className="w-2.5 h-2.5"/> {row.phone}</span>
 
-                    {/* ✨ NEW: Detailed Voucher Block */}
                     {activeVoucher && voucherText && (
                       <div className="mt-1.5 flex flex-col gap-1">
                         <div className="flex items-center gap-1.5 flex-wrap">
@@ -165,14 +157,32 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                 <TableCell className="py-3">
                   {renderFollowup(row.next_followup_date, row.followup_reason)}
                 </TableCell>
+                
+                {/* ✨ CLICKABLE WHATSAPP NOTE OR FALLBACK NOTE */}
                 <TableCell className="py-3">
-                  <span className="text-[11px] font-medium text-slate-500 truncate max-w-[200px] block" title={row.last_interaction || ''}>{row.last_interaction || '--'}</span>
+                  {(row as any).crm_webhook_events && (row as any).crm_webhook_events.length > 0 ? (
+                    <button 
+                      onClick={() => onViewWaActivity(row)} 
+                      className="inline-flex items-center gap-1.5 text-[#1DA851] bg-[#25D366]/10 hover:bg-[#25D366]/20 transition-colors font-medium px-2 py-1.5 rounded-md max-w-[220px] overflow-hidden text-left border border-[#25D366]/20 shadow-sm"
+                    >
+                      <MessageCircle className="w-3.5 h-3.5 shrink-0" /> 
+                      <span className="truncate text-[11px]">
+                        {(row as any).crm_webhook_events.sort((a: any, b: any) => new Date(b.event_time).getTime() - new Date(a.event_time).getTime())[0].message}
+                      </span>
+                    </button>
+                  ) : (
+                    <span className="text-[11px] font-medium text-slate-500 truncate max-w-[200px] block" title={row.last_interaction || ''}>{row.last_interaction || '--'}</span>
+                  )}
                 </TableCell>
+                
                 <TableCell className="text-right px-6 py-3">
                   <div className="flex justify-end gap-2">
-
                     <Button variant="outline" size="icon" className="h-8 w-8 text-amber-600 border-amber-200 bg-amber-50 hover:bg-amber-100 shrink-0" onClick={() => onViewHistory(row)} title="Purchase History">
-                      <History className="w-3.5 h-3.5 sm:mr-1.5" /> {/* Ensure you import { History } from 'lucide-react' */}
+                      <History className="w-3.5 h-3.5 sm:mr-0" />
+                    </Button>
+
+                    <Button variant="outline" size="icon" className="h-8 w-8 text-[#1DA851] border-[#25D366]/30 bg-[#25D366]/5 hover:bg-[#25D366]/20 shrink-0" onClick={() => onViewWaActivity(row)} title="WhatsApp Activity Log">
+                      <MessageSquare className="w-3.5 h-3.5" /> 
                     </Button>
                     
                     <Button variant="outline" size="sm" className="h-8 px-3 text-[10px] font-bold uppercase text-blue-700 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:text-blue-800" onClick={() => onLogCall(row)}>
@@ -201,9 +211,8 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
       {/* MOBILE VIEW */}
       <div className="md:hidden flex flex-col gap-3 p-3 bg-slate-50/50 flex-1 overflow-y-auto custom-scrollbar">
         {data.map((row) => {
-          // ✨ LOGIC: Smart Voucher Status Check (Mobile)
-          const activeVoucher = row.vouchers?.find(v => v.status === 'registered') 
-                             || row.vouchers?.find(v => v.status === 'redeemed') 
+          const activeVoucher = row.vouchers?.find((v: any) => v.status === 'registered') 
+                             || row.vouchers?.find((v: any) => v.status === 'redeemed') 
                              || row.vouchers?.[0];
 
           let voucherText = "";
@@ -227,7 +236,7 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
           return (
           <div key={row.id} className={cn("bg-white border rounded-xl p-4 shadow-sm flex flex-col gap-3", isKitty ? "border-purple-100" : "border-slate-200")}>
             <div className="flex justify-between items-start">
-              <div>
+              <div className="flex-1">
                 <button onClick={() => onViewProfile(row)} className="font-bold text-indigo-600 hover:underline text-sm flex items-center gap-2 text-left">
                   {row.full_name}
                 </button>
@@ -245,7 +254,6 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                 </div>
                 <p className="text-[11px] font-mono text-slate-500 mt-1.5 flex items-center gap-1"><Phone className="w-3 h-3"/> {row.phone}</p>
 
-                {/* ✨ NEW: Detailed Voucher Block (Mobile) */}
                 {activeVoucher && voucherText && (
                   <div className="mt-2.5 flex flex-col gap-1.5 p-2 bg-slate-50 rounded-lg border border-slate-100">
                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -262,10 +270,15 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                   </div>
                 )}
               </div>
-              <div className="flex gap-1.5">
+              <div className="flex gap-1.5 flex-wrap justify-end max-w-[80px]">
                 <Button size="icon" variant="outline" className="h-8 w-8 text-amber-600 border-amber-200 rounded-lg hover:bg-amber-100 shrink-0" onClick={() => onViewHistory(row)}>
                   <History className="h-4 w-4" />
                 </Button>
+
+                <Button size="icon" variant="outline" className="h-8 w-8 text-[#1DA851] border-[#25D366]/30 bg-[#25D366]/5 rounded-lg hover:bg-[#25D366]/20 shrink-0" onClick={() => onViewWaActivity(row)}>
+                  <MessageSquare className="h-4 w-4" />
+                </Button>
+
                 <Button size="icon" variant="outline" className="h-8 w-8 text-[#1DA851] border-slate-200 rounded-lg hover:bg-[#25D366]/10 shrink-0" onClick={() => onMessage(row)}>
                   <MessageCircle className="h-4 w-4" />
                 </Button>
@@ -275,8 +288,21 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
               </div>
             </div>
             
-            <div className="bg-slate-50 rounded-lg p-3 border border-slate-100 mt-1">
+            <div className="bg-slate-50 rounded-lg p-3 border border-slate-100 mt-1 flex flex-col gap-2">
               {renderFollowup(row.next_followup_date, row.followup_reason)}
+              
+              {/* ✨ MOBILE WHATSAPP NOTE */}
+              {(row as any).crm_webhook_events && (row as any).crm_webhook_events.length > 0 && (
+                <button 
+                  onClick={() => onViewWaActivity(row)} 
+                  className="mt-1 w-full inline-flex items-center gap-1.5 text-[#1DA851] bg-[#25D366]/10 border border-[#25D366]/20 font-medium px-2 py-1.5 rounded-md overflow-hidden text-left"
+                >
+                  <MessageCircle className="w-3.5 h-3.5 shrink-0" /> 
+                  <span className="truncate text-[11px]">
+                    {(row as any).crm_webhook_events.sort((a: any, b: any) => new Date(b.event_time).getTime() - new Date(a.event_time).getTime())[0].message}
+                  </span>
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-2 mt-1">

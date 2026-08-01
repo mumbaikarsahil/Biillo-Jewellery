@@ -103,8 +103,10 @@ export default function CRMPage() {
   // WhatsApp Integration States
   const [isSenderModalOpen, setIsSenderModalOpen] = useState(false);
   const [messageRecipients, setMessageRecipients] = useState<any[]>([]);
+  
 
   // Modals
+  const [isWaActivityModalOpen, setIsWaActivityModalOpen] = useState(false)
   const [activeCallRecordId, setActiveCallRecordId] = useState<string | null>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false)
   const [isAddKittyModalOpen, setIsAddKittyModalOpen] = useState(false)
@@ -824,6 +826,8 @@ export default function CRMPage() {
     setIsSenderModalOpen(true);
   }
 
+  
+
   const handleBulkBroadcast = () => {
     if (customers.length === 0) return toast.error("No customers found in the current filtered list.");
     
@@ -872,6 +876,36 @@ export default function CRMPage() {
       console.error("Failed to auto-log call attempt:", error);
     }
   }
+
+  const openWaActivityModal = async (customer: CRMCustomer) => {
+    setSelectedCustomer(customer);
+    setIsWaActivityModalOpen(true); // ONLY open the WhatsApp Modal
+    setIsHistoryLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from('crm_webhook_events')
+        .select('*')
+        .eq('matched_customer_id', customer.id);
+
+      if (error) throw error;
+
+      const formatted = (data || []).map(w => ({
+        id: w.id,
+        type: 'WhatsApp Webhook',
+        date: w.event_time || w.created_at, 
+        ref: w.workflow || 'Inbound Msg',
+        amt: 0,
+        notes: w.message
+      })).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+      setCustomerHistory(formatted);
+    } catch (err) {
+      console.error("WA Fetch Error", err);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
 
   const openProfileModal = (customer: CRMCustomer) => {
     setSelectedCustomer(customer);
@@ -1114,6 +1148,7 @@ export default function CRMPage() {
                     onViewProfile={openProfileModal}
                     onLogCall={openCallLoggerModal} 
                     onViewHistory={handleViewHistory}
+                    onViewWaActivity={openWaActivityModal}
                  />
                  <PaginationFooter />
               </TabsContent>
@@ -1128,6 +1163,7 @@ export default function CRMPage() {
                     onViewProfile={openProfileModal}
                     onLogCall={openCallLoggerModal}
                     onViewHistory={handleViewHistory}
+                    onViewWaActivity={openWaActivityModal}
                  />
                  <PaginationFooter />
               </TabsContent>
@@ -1143,6 +1179,7 @@ export default function CRMPage() {
                     onLogCall={openCallLoggerModal}
                     onViewHistory={handleViewHistory}
                     isKitty={true}
+                    onViewWaActivity={openWaActivityModal}
                  />
                  <PaginationFooter />
               </TabsContent>
@@ -1157,6 +1194,8 @@ export default function CRMPage() {
                     onViewProfile={openProfileModal}
                     onLogCall={openCallLoggerModal}
                     onViewHistory={handleViewHistory}
+                    onViewWaActivity={openWaActivityModal}
+
                  />
                  <PaginationFooter />
               </TabsContent>
@@ -1172,6 +1211,7 @@ export default function CRMPage() {
                     onViewProfile={openProfileModal}
                     onLogCall={openCallLoggerModal}
                     onViewHistory={handleViewHistory}
+                    onViewWaActivity={openWaActivityModal}
                  />
                  <PaginationFooter />
               </TabsContent>
@@ -1186,6 +1226,7 @@ export default function CRMPage() {
                     onViewProfile={openProfileModal}
                     onLogCall={openCallLoggerModal}
                     onViewHistory={handleViewHistory}
+                    onViewWaActivity={openWaActivityModal}
                  />
                  <PaginationFooter />
               </TabsContent>
@@ -1209,6 +1250,8 @@ export default function CRMPage() {
         isAddKittyModalOpen={isAddKittyModalOpen} setIsAddKittyModalOpen={setIsAddKittyModalOpen}
         isFollowupModalOpen={isFollowupModalOpen} setIsFollowupModalOpen={setIsFollowupModalOpen}
         isWhatsAppModalOpen={isWhatsAppModalOpen} setIsWhatsAppModalOpen={setIsWhatsAppModalOpen}
+        isWaActivityModalOpen={isWaActivityModalOpen} setIsWaActivityModalOpen={setIsWaActivityModalOpen} 
+        
         
         importFile={importFile} setImportFile={setImportFile}
         previewData={previewData}

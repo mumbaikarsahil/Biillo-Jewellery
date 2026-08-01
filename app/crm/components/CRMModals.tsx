@@ -35,20 +35,21 @@ interface CRMModalsProps {
   isFollowupModalOpen: boolean; setIsFollowupModalOpen: (v: boolean) => void;
   isWhatsAppModalOpen: boolean; setIsWhatsAppModalOpen: (v: boolean) => void;
   isHistoryModalOpen: boolean; setIsHistoryModalOpen: (val: boolean) => void;
+  isWaActivityModalOpen: boolean; setIsWaActivityModalOpen: (val: boolean) => void;
   customerHistory: any[];
   isHistoryLoading: boolean;
 
   isCallModalOpen: boolean; setIsCallModalOpen: (v: boolean) => void;
   callForm: {
     outcome: string;
-    interest_level?: string; // ✨ Added Interest Level Field
+    interest_level?: string; 
     notes: string;
     next_call_date: string;
     next_call_time: string;
   };
   setCallForm: React.Dispatch<React.SetStateAction<{
     outcome: string;
-    interest_level?: string; // ✨ Added Interest Level Field
+    interest_level?: string; 
     notes: string;
     next_call_date: string;
     next_call_time: string;
@@ -92,7 +93,6 @@ interface CRMModalsProps {
   openWhatsAppModal: (c: CRMCustomer, templateId?: string) => void;
 }
 
-// ✨ MODERN SAAS DIALOG CLASS (Vercel/ElevenLabs Aesthetic)
 const DIALOG_CONTENT_CLASS = "w-full border sm:border-zinc-200 sm:rounded-xl rounded-t-xl rounded-b-none bg-white shadow-xl p-0 overflow-hidden flex flex-col !top-auto !bottom-0 !translate-y-0 sm:!top-[10vh] sm:!bottom-auto max-h-[90vh] sm:max-h-[85vh]";
 
 export function CRMModals(props: CRMModalsProps) {
@@ -102,6 +102,7 @@ export function CRMModals(props: CRMModalsProps) {
     isProfileModalOpen, setIsProfileModalOpen, isLoyaltyModalOpen, setIsLoyaltyModalOpen,
     isAddModalOpen, setIsAddModalOpen, isAddKittyModalOpen, setIsAddKittyModalOpen,
     isFollowupModalOpen, setIsFollowupModalOpen, isWhatsAppModalOpen, setIsWhatsAppModalOpen,
+    isWaActivityModalOpen, setIsWaActivityModalOpen,
     
     isCallModalOpen, setIsCallModalOpen, callForm, setCallForm, handleLogCall,
 
@@ -119,6 +120,10 @@ export function CRMModals(props: CRMModalsProps) {
   const activeSequence = selectedCustomer?.voucher_message_sequences?.find((s: any) => ['active', 'paused'].includes(s.status)) as any;
   const [sequenceForm, setSequenceForm] = useState({ status: '', interval_hours: 96, current_step: 1 });
   const [isUpdatingSequence, setIsUpdatingSequence] = useState(false);
+
+  // ✨ Separate Activity Arrays for clean rendering
+  const waActivity = customerHistory?.filter((item: any) => item.type === 'WhatsApp Webhook') || [];
+  const purchaseActivity = customerHistory?.filter((item: any) => item.type !== 'WhatsApp Webhook') || [];
 
   useEffect(() => {
     if (isFollowupModalOpen && activeSequence) {
@@ -815,7 +820,6 @@ export function CRMModals(props: CRMModalsProps) {
                   <label className="text-sm font-medium text-zinc-700">Phone <span className="text-red-500">*</span></label>
                   <Input className="h-9 rounded-md text-sm font-mono border-zinc-200 bg-white" value={newKittyForm.phone} onChange={(e) => setNewKittyForm({...newKittyForm, phone: e.target.value})} />
                 </div>
-                {/* ... other manual fields can remain similarly styled ... */}
               </>
             )}
 
@@ -855,12 +859,12 @@ export function CRMModals(props: CRMModalsProps) {
         </DialogContent>
       </Dialog>
 
-      {/* PURCHASE HISTORY MODAL */}
+      {/* ✨ PURCHASE HISTORY MODAL */}
       <Dialog open={isHistoryModalOpen} onOpenChange={setIsHistoryModalOpen}>
         <DialogContent className={cn(DIALOG_CONTENT_CLASS, "sm:max-w-[450px]")}>
           <DialogHeader className="bg-white p-5 border-b border-zinc-200 shrink-0">
             <DialogTitle className="text-base font-semibold text-zinc-900 flex items-center gap-2">
-              <History className="w-4 h-4 text-zinc-500" /> Activity History
+              <History className="w-4 h-4 text-zinc-500" /> Purchase & Activity History
             </DialogTitle>
           </DialogHeader>
 
@@ -869,13 +873,13 @@ export function CRMModals(props: CRMModalsProps) {
               <div className="flex justify-center items-center py-10">
                 <Loader2 className="w-5 h-5 animate-spin text-zinc-400" />
               </div>
-            ) : customerHistory.length === 0 ? (
+            ) : purchaseActivity.length === 0 ? (
               <div className="text-center py-10 text-zinc-500 text-sm">
-                No previous transactions found.
+                No previous purchase or order history found.
               </div>
             ) : (
               <div className="space-y-3 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px before:h-full before:w-px before:bg-zinc-200">
-                {customerHistory.map((item: any, idx: number) => (
+                {purchaseActivity.map((item: any, idx: number) => (
                   <div key={idx} className="relative flex items-start gap-4">
                     <div className="flex items-center justify-center w-10 h-10 rounded-full border border-zinc-200 bg-white shadow-sm shrink-0 z-10">
                       {item.type === 'Invoice' && <IndianRupee className="w-4 h-4 text-zinc-600" />}
@@ -888,10 +892,19 @@ export function CRMModals(props: CRMModalsProps) {
                         <div className="font-medium text-zinc-900 text-sm">{item.type}</div>
                         <time className="text-xs text-zinc-500">{new Date(item.date).toLocaleDateString('en-IN')}</time>
                       </div>
-                      <div className="text-xs text-zinc-500 mb-2 font-mono">Ref: {item.ref}</div>
-                      <div className="text-sm font-medium text-zinc-900 border-t border-zinc-100 pt-2">
-                        ₹ {Number(item.amt || 0).toLocaleString()}
-                      </div>
+                      <div className="text-[11px] text-zinc-400 mb-2 font-mono uppercase tracking-widest">Ref: {item.ref}</div>
+                      
+                      {item.amt > 0 && (
+                        <div className="text-sm font-medium text-zinc-900 border-t border-zinc-100 pt-2">
+                          ₹ {Number(item.amt || 0).toLocaleString()}
+                        </div>
+                      )}
+
+                      {item.notes && (
+                        <div className="text-xs font-medium text-zinc-700 bg-zinc-50 border border-zinc-100 p-2.5 rounded-md mt-2 leading-relaxed">
+                          "{item.notes}"
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -907,7 +920,65 @@ export function CRMModals(props: CRMModalsProps) {
         </DialogContent>
       </Dialog>
 
-      {/* ✨ CALL LOGGER MODAL */}
+      {/* ✨ WHATSAPP ACTIVITY MODAL (Now using Vertical Timeline UI) */}
+      <Dialog open={isWaActivityModalOpen} onOpenChange={setIsWaActivityModalOpen}>
+        <DialogContent className={cn(DIALOG_CONTENT_CLASS, "sm:max-w-[450px]")}>
+          <DialogHeader className="bg-white p-5 border-b border-zinc-200 shrink-0">
+            <DialogTitle className="text-base font-semibold flex items-center gap-2 text-zinc-900">
+              <MessageCircle className="w-5 h-5 text-[#25D366]" /> WhatsApp Activity
+            </DialogTitle>
+            <DialogDescription className="text-sm text-zinc-500 mt-1">
+              Conversation timeline for {selectedCustomer?.full_name}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="p-5 overflow-y-auto custom-scrollbar bg-zinc-50 flex-1 max-h-[60vh]">
+            {isHistoryLoading ? (
+              <div className="flex justify-center items-center py-10">
+                <Loader2 className="w-5 h-5 animate-spin text-zinc-400" />
+              </div>
+            ) : waActivity.length === 0 ? (
+              <div className="text-center py-10 text-zinc-500 text-sm">
+                No WhatsApp activity found for this customer.
+              </div>
+            ) : (
+              <div className="space-y-3 relative before:absolute before:inset-0 before:ml-5 before:-translate-x-px before:h-full before:w-px before:bg-zinc-200">
+                {waActivity.map((item: any, idx: number) => (
+                  <div key={idx} className="relative flex items-start gap-4">
+                    <div className="flex items-center justify-center w-10 h-10 rounded-full border border-zinc-200 bg-white shadow-sm shrink-0 z-10">
+                      <MessageCircle className="w-5 h-5 text-[#25D366]" />
+                    </div>
+                    <div className="flex-1 p-3 rounded-lg border border-zinc-200 bg-white shadow-sm mt-1">
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="font-semibold text-sm text-[#25D366]">
+                          {item.ref || 'Inbound Msg'}
+                        </div>
+                        <time className="text-xs text-zinc-500">
+                          {new Date(item.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                        </time>
+                      </div>
+                      
+                      {item.notes && (
+                        <div className="text-[11px] font-medium text-zinc-700 bg-zinc-50 border border-zinc-100 p-2.5 rounded-md mt-2 leading-relaxed whitespace-pre-wrap">
+                          {item.notes}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="bg-white p-4 border-t border-zinc-200 shrink-0">
+            <Button variant="outline" className="w-full h-9 rounded-md text-sm font-medium text-zinc-700 bg-white hover:bg-zinc-50 border-zinc-200" onClick={() => setIsWaActivityModalOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* CALL LOGGER MODAL */}
       <Dialog open={isCallModalOpen} onOpenChange={setIsCallModalOpen}>
         <DialogContent className={cn(DIALOG_CONTENT_CLASS, "sm:max-w-[450px]")}>
           <DialogHeader className="bg-white p-5 border-b border-zinc-200 shrink-0">
@@ -940,7 +1011,7 @@ export function CRMModals(props: CRMModalsProps) {
               </Select>
             </div>
 
-            {/* ✨ CONDITIONAL INTEREST LEVEL DROPDOWN */}
+            {/* CONDITIONAL INTEREST LEVEL DROPDOWN */}
             {callForm.outcome === 'Connected / Spoke to Customer' && (
               <div className="space-y-1.5 animate-in fade-in slide-in-from-top-1">
                 <label className="text-sm font-medium text-zinc-700">Customer Interest Level <span className="text-red-500">*</span></label>
@@ -1084,7 +1155,7 @@ export function CRMModals(props: CRMModalsProps) {
         </DialogContent>
       </Dialog>
 
-      {/* WHATSAPP MODAL */}
+      {/* WHATSAPP MESSAGE SENDER MODAL */}
       <Dialog open={isWhatsAppModalOpen} onOpenChange={setIsWhatsAppModalOpen}>
         <DialogContent className={cn(DIALOG_CONTENT_CLASS, "sm:max-w-[450px]")}>
           <DialogHeader className="bg-white p-5 border-b border-zinc-200 shrink-0">

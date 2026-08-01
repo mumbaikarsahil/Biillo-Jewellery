@@ -161,7 +161,10 @@ export function VoucherExchangePanel(props: any) {
                 </div>
                 <button 
                   className="h-5 w-5 flex items-center justify-center rounded text-emerald-600 hover:bg-emerald-100 shrink-0 transition-colors"
-                  onClick={() => { props.setActiveVoucher(null); props.setHandlingFee('0'); }} 
+                  onClick={() => { 
+                    props.setActiveVoucher(null); 
+                    props.setHandlingFee?.('0'); 
+                  }} 
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -184,12 +187,13 @@ export function VoucherExchangePanel(props: any) {
                 onKeyDown={(e) => e.key === 'Enter' && props.handleApplyVoucher()} 
               />
               <Button 
-                variant="secondary" 
-                className="h-10 w-10 p-0 border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 transition-all text-slate-500 shrink-0" 
-                onClick={props.handleApplyVoucher}
-              >
-                <Check className="h-4 w-4"/>
-              </Button>
+    type="button" 
+    variant="secondary" 
+    className="..." 
+    onClick={() => props.handleApplyVoucher()} 
+  >
+    <Check className="h-4 w-4"/>
+  </Button>
             </div>
           )}
         </div>
