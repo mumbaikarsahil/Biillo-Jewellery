@@ -239,12 +239,19 @@ export default function AccountsMasterPage() {
       eData.forEach(est => eTotal += (Number(est.total_amount) || 0));
       setEstimateKpis({ totalValue: eTotal, count: eData.length })
 
-      let coTotal = 0; let coAdv = 0;
+      let coTotal = 0; let coAdv = 0; let coPending = 0;
       cData.forEach(co => {
-        coTotal += (Number(co.estimated_value) || 0);
-        coAdv += (Number(co.advance_paid) || 0);
+        if (co.status === 'CANCELLED') return;
+        
+        const finalTotal = Number(co.estimated_value) || 0;
+        const advancePaid = Number(co.advance_paid) || 0;
+        
+        coTotal += finalTotal;
+        coAdv += advancePaid;
+        // Calculate each order's pending balance (stopping at 0) and add it to the KPI sum
+        coPending += Math.max(0, finalTotal - advancePaid); 
       });
-      setCustomKpis({ totalValue: coTotal, advance: coAdv, pending: Math.max(0, coTotal - coAdv) })
+      setCustomKpis({ totalValue: coTotal, advance: coAdv, pending: coPending })
 
       let bbGross = 0; let bbDed = 0; let bbNet = 0;
       bData.forEach(bb => {
@@ -361,11 +368,25 @@ export default function AccountsMasterPage() {
     }
     else if (activeTab === 'custom_orders') {
       if (customOrders.length === 0) return toast.error("No custom orders to export");
-      const headers = ["Date", "Order Number", "Status", "Customer Name", "Phone", "Created By", "Category", "Design Ref", "Exp. Gold (g)", "Exp. Dia (cts)", "Voucher Code", "Estimated Value", "Advance Paid"];
-      const csvRows = customOrders.map(co => [
-        format(new Date(co.created_at), 'yyyy-MM-dd HH:mm:ss'), co.order_number, co.status, co.customers?.full_name || 'Walk-in', co.customers?.phone || '', co.profiles?.full_name || 'System',
-        co.item_category, co.design_reference, co.expected_gold_g, co.expected_diamond_cts, co.voucher_code || '', co.estimated_value, co.advance_paid
-      ]);
+      const headers = [
+        "Date", "Order Number", "Status", "Customer Name", "Phone", "Created By", 
+        "Category", "Design Ref", "Exp. Gold (g)", "Exp. Dia (cts)", 
+        "Base Value", "Manual Discount", "Voucher Code", "Voucher Amount", 
+        "Taxable Value", "CGST", "SGST", "Final Total", "Advance Paid", "Balance Due"
+      ];
+      const csvRows = customOrders.map(co => {
+        const finalTotal = Number(co.estimated_value) || 0;
+        const advancePaid = Number(co.advance_paid) || 0;
+        const balanceDue = Math.max(0, finalTotal - advancePaid);
+        return [
+          format(new Date(co.created_at), 'yyyy-MM-dd HH:mm:ss'), co.order_number, co.status, 
+          co.customers?.full_name || 'Walk-in', co.customers?.phone || '', co.profiles?.full_name || 'System',
+          co.item_category, co.design_reference, co.expected_gold_g, co.expected_diamond_cts, 
+          co.base_estimated_value || 0, co.discount_amount || 0, co.voucher_code || '', co.voucher_amount || co.voucher_discount || 0,
+          co.taxable_value || 0, co.cgst_amount || co.cgst || 0, co.sgst_amount || co.sgst || 0,
+          finalTotal, advancePaid, balanceDue
+        ]
+      });
       downloadBlob(headers, csvRows, `CustomOrders_${startDate}_to_${endDate}.csv`);
     }
     else if (activeTab === 'buybacks') {
@@ -437,6 +458,8 @@ export default function AccountsMasterPage() {
         }
       }
       else if (type === 'custom') {
+        const finalTotal = Number(item.estimated_value) || 0;
+        const advancePaid = Number(item.advance_paid) || 0;
         mappedData = {
           mode: 'custom', 
           invoice_number: item.order_number, 
@@ -447,17 +470,20 @@ export default function AccountsMasterPage() {
             category: item.item_category, 
             expectedGoldWt: item.expected_gold_g, 
             expectedDiamondCts: item.expected_diamond_cts, 
-            estimatedValue: item.estimated_value, 
-            advancePayment: item.advance_paid 
+            estimatedValue: finalTotal, 
+            advancePayment: advancePaid 
           },
-          subtotal: item.subtotal || item.estimated_value,
-          taxableValue: item.taxable_value,
-          cgstAmount: item.cgst_amount || item.cgst,
-          sgstAmount: item.sgst_amount || item.sgst,
+          // Standard financial breakdown mapped explicitly
+          subtotal: Number(item.base_estimated_value) || Number(item.subtotal) || 0,
+          discountAmount: Number(item.discount_amount) || 0,
           voucherCode: item.voucher_code,
-          voucherAmount: item.voucher_amount || item.voucher_discount,
-          finalTotal: item.final_total || item.total_amount,
-          advancePayment: item.advance_paid,
+          voucherAmount: Number(item.voucher_amount) || Number(item.voucher_discount) || 0,
+          taxableValue: Number(item.taxable_value) || 0,
+          cgstAmount: Number(item.cgst_amount) || Number(item.cgst) || 0,
+          sgstAmount: Number(item.sgst_amount) || Number(item.sgst) || 0,
+          finalTotal: finalTotal,
+          advancePayment: advancePaid,
+          balanceDue: Math.max(0, finalTotal - advancePaid), // explicitly passed
           paymentMode: item.payment_mode,
           splitPayments: item.split_payments,
           paymentRemarks: item.payment_remarks
@@ -484,7 +510,6 @@ export default function AccountsMasterPage() {
     finally { setIsFetchingPreview(false) }
   }
 
-  // ✨ FIXED: Dynamic Cancel function handling both Sales & Custom Orders
   const executeCancelInvoice = async () => {
     if (!invoiceToCancel || !appUser) return;
     if (!cancelReason.trim()) return toast.error("A cancellation reason is strictly required for the audit trail.");
@@ -507,7 +532,6 @@ export default function AccountsMasterPage() {
       const { error: invError } = await supabase.from(targetTable).update(updatePayload).eq('id', invoiceToCancel.id);
       if (invError) throw invError;
 
-      // Only attempt to return inventory items if it was a normal invoice (Custom orders don't have linked physical stock)
       if (!isCustom) {
         const itemIds = invoiceToCancel.invoice_items?.map((i: any) => i.item_id).filter(Boolean);
         if (itemIds && itemIds.length > 0) {
@@ -515,12 +539,10 @@ export default function AccountsMasterPage() {
         }
       }
 
-      // Re-activate voucher if used
       if (invoiceToCancel.voucher_code) {
         await supabase.from('vouchers').update({ status: 'registered' }).eq('code', invoiceToCancel.voucher_code);
       }
 
-      // Store credit refunds
       const kittyReturn = Number(invoiceToCancel.kitty_payment) || 0;
       const walletReturn = Number(invoiceToCancel.wallet_payment) || 0;
       if ((kittyReturn > 0 || walletReturn > 0) && invoiceToCancel.customer_id) {
@@ -544,7 +566,6 @@ export default function AccountsMasterPage() {
     }
   };
 
-  // ✨ FIXED: Dynamic Edit Handler loading states for Custom Orders
   const handleOpenEdit = (inv: any) => {
     const isCustom = !!inv.order_number;
     setInvoiceToEdit({ ...inv, isCustom });
@@ -556,17 +577,18 @@ export default function AccountsMasterPage() {
     setEditForm({
       invoice_number: isCustom ? inv.order_number : (inv.invoice_number || ''),
       created_at: localISOTime,
-      subtotal: inv.subtotal || inv.estimated_value || 0,
+      // Load raw subtotal for custom, standard subtotal for normal invoices
+      subtotal: isCustom ? (inv.base_estimated_value || 0) : (inv.subtotal || 0),
       discount_amount: inv.discount_amount || 0,
       taxable_value: inv.taxable_value || 0,
       cgst_amount: inv.cgst_amount || inv.cgst || 0,
       sgst_amount: inv.sgst_amount || inv.sgst || 0,
-      final_total: inv.final_total || inv.total_amount || inv.estimated_value || 0,
+      // Final total is estimated_value for custom, final_total for normal
+      final_total: isCustom ? (inv.estimated_value || 0) : (inv.final_total || 0),
       payment_remarks: inv.payment_remarks || ''
     });
   };
 
-  // ✨ FIXED: Dynamic Execute Edit function saving to correct tables
   const executeEditInvoice = async () => {
     if (!invoiceToEdit || !appUser) return;
     
@@ -598,17 +620,18 @@ export default function AccountsMasterPage() {
       const payload: any = {
         [idField]: newInvoiceNo,
         created_at: new Date(editForm.created_at).toISOString(),
-        subtotal: Number(editForm.subtotal),
         discount_amount: Number(editForm.discount_amount),
         taxable_value: Number(editForm.taxable_value),
         payment_remarks: editForm.payment_remarks
       };
 
       if (isCustom) {
+        payload.base_estimated_value = Number(editForm.subtotal);
         payload.cgst = Number(editForm.cgst_amount);
         payload.sgst = Number(editForm.sgst_amount);
         payload.estimated_value = Number(editForm.final_total);
       } else {
+        payload.subtotal = Number(editForm.subtotal);
         payload.cgst_amount = Number(editForm.cgst_amount);
         payload.sgst_amount = Number(editForm.sgst_amount);
         payload.final_total = Number(editForm.final_total);
@@ -659,7 +682,6 @@ export default function AccountsMasterPage() {
     </div>
   );
 
-  // ✨ FIXED: Improved JSON Parser with zero-value filtering and larger fonts
   const renderPaymentMode = (inv: any) => {
     if (inv.status === 'CANCELLED') return <span className="px-2 py-1 rounded bg-red-50 text-red-600 text-[10px] font-bold uppercase tracking-wider">CANCELLED</span>;
     
@@ -681,7 +703,7 @@ export default function AccountsMasterPage() {
           <div className="flex flex-col gap-1 mt-1.5 border-l-2 border-indigo-200 pl-2.5">
             {Array.isArray(splits) ? (
               splits
-                .filter((s: any) => Number(s.amount || 0) > 0) // Hide zero amounts
+                .filter((s: any) => Number(s.amount || 0) > 0)
                 .map((s: any, idx: number) => (
                 <span key={idx} className="text-[11px] font-medium text-zinc-600 capitalize tracking-tight">
                   <strong className="text-zinc-800 uppercase">{s.mode || s.method || 'UNKNOWN'}:</strong> ₹{Number(s.amount || 0).toLocaleString()}
@@ -690,7 +712,7 @@ export default function AccountsMasterPage() {
             ) : 
             typeof splits === 'object' ? (
               Object.entries(splits)
-                .filter(([_, amount]: any) => Number(amount || 0) > 0) // Hide zero amounts
+                .filter(([_, amount]: any) => Number(amount || 0) > 0)
                 .map(([method, amount]: any) => (
                 <span key={method} className="text-[11px] font-medium text-zinc-600 capitalize tracking-tight">
                   <strong className="text-zinc-800 uppercase">{method}:</strong> ₹{Number(amount || 0).toLocaleString()}
@@ -711,7 +733,6 @@ export default function AccountsMasterPage() {
 
   return (
     <div className="flex flex-col min-h-screen bg-zinc-50/50 font-sans pb-20 sm:pb-0 w-full max-w-[100vw] overflow-x-hidden">
-      {/* HEADER */}
       <header className="sticky top-0 z-30 w-full bg-white/80 backdrop-blur-md border-b border-zinc-200 px-4 h-14 flex items-center justify-between shadow-sm print:hidden">
         <div className="flex items-center gap-3">
           <div className="h-8 w-8 rounded-lg bg-zinc-900 flex items-center justify-center">
@@ -728,7 +749,6 @@ export default function AccountsMasterPage() {
 
       <main className="print:hidden p-3 sm:p-6 md:p-8 max-w-[1600px] w-full min-w-0 mx-auto space-y-5 animate-in fade-in duration-500">
         
-        {/* MOBILE-OPTIMIZED FILTERS */}
         <div className="flex flex-col gap-2.5 bg-white p-3 sm:p-2.5 rounded-2xl border border-zinc-200 shadow-sm w-full">
           <div className="flex items-center gap-2 w-full">
             <div className="relative flex-1">
@@ -742,7 +762,6 @@ export default function AccountsMasterPage() {
             <Button variant="outline" size="icon" className="h-9 w-9 rounded-full border-zinc-200 shrink-0 hidden sm:flex text-zinc-600 hover:bg-zinc-100" onClick={fetchAccountingData}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             </Button>
-            {/* ✨ UNIVERSAL EXPORT BUTTON FOR ALL TABS */}
             <Button className="h-9 text-xs font-medium rounded-full hidden sm:flex shrink-0 text-zinc-700 border border-zinc-200 bg-white hover:bg-zinc-50 shadow-sm" onClick={handleExportCSV}>
               <Download className="mr-2 h-3.5 w-3.5" /> Export Data to CSV
             </Button>
@@ -779,18 +798,17 @@ export default function AccountsMasterPage() {
           </div>
         </div>
 
-        {/* DYNAMIC ACCOUNTING KPIs BASED ON TAB */}
         {activeTab === 'sales_register' && (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 w-full animate-in fade-in duration-300">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
               <CardContent className="p-4 sm:p-5">
-                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5 text-zinc-400" /> Gross Value (inc. GST)</p>
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5 text-zinc-400" /> Gross Value</p>
                 {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{salesKpis.grossSales.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
               </CardContent>
             </Card>
             <Card className="shadow-sm border-emerald-200 bg-emerald-50/40 rounded-2xl w-full">
               <CardContent className="p-4 sm:p-5">
-                <p className="text-[10px] sm:text-[11px] font-medium text-emerald-700 mb-1 flex items-center gap-1.5"><Scale className="h-3.5 w-3.5" /> Est. Tax Liability</p>
+                <p className="text-[10px] sm:text-[11px] font-medium text-emerald-700 mb-1 flex items-center gap-1.5"><Scale className="h-3.5 w-3.5" /> Est. Tax</p>
                 {loading ? <Skeleton className="h-8 w-20 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-emerald-900 mt-1">₹{salesKpis.taxCollected.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
               </CardContent>
             </Card>
@@ -865,7 +883,7 @@ export default function AccountsMasterPage() {
             </Card>
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full">
               <CardContent className="p-4 sm:p-5">
-                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><HandCoins className="h-3.5 w-3.5 text-zinc-400" /> Net Total Refunds</p>
+                <p className="text-[10px] sm:text-[11px] font-medium text-zinc-500 mb-1 flex items-center gap-1.5"><HandCoins className="h-3.5 w-3.5 text-zinc-400" /> Net Refunds</p>
                 {loading ? <Skeleton className="h-8 w-24 mt-1" /> : <p className="text-xl sm:text-3xl font-semibold tracking-tighter text-zinc-900 mt-1">₹{buybackKpis.netRefund.toLocaleString(undefined, {maximumFractionDigits: 0})}</p>}
               </CardContent>
             </Card>
@@ -913,7 +931,6 @@ export default function AccountsMasterPage() {
           <TabsContent value="sales_register" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
               
-              {/* DESKTOP TABLE VIEW */}
               <SyncedTableWrapper>
                 <Table className="w-full whitespace-nowrap border-b border-zinc-200">
                   <TableHeader className="bg-zinc-50/80 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
@@ -984,7 +1001,6 @@ export default function AccountsMasterPage() {
                           <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 bg-emerald-50/30">₹{(Number(inv.sgst_amount) || 0).toLocaleString()}</TableCell>
                           <TableCell className="py-2 text-right text-[13px] font-black text-zinc-900 bg-slate-100 border-l border-zinc-200">₹{(Number(inv.final_total) || 0).toLocaleString()}</TableCell>
                           
-                          {/* DETAILED PAYMENT BREAKDOWN */}
                           <TableCell className="px-4 py-2 border-l border-zinc-200 align-top">
                              {renderPaymentMode(inv)}
                           </TableCell>
@@ -995,7 +1011,6 @@ export default function AccountsMasterPage() {
                 </Table>
               </SyncedTableWrapper>
 
-              {/* MOBILE & TABLET CARD VIEW */}
               <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {invoices.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No sales records found</div>
@@ -1163,6 +1178,8 @@ export default function AccountsMasterPage() {
           {/* ========================================================================= */}
           <TabsContent value="custom_orders" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
+              
+              {/* DESKTOP TABLE VIEW */}
               <SyncedTableWrapper>
                 <Table className="w-full whitespace-nowrap border-b border-zinc-200">
                   <TableHeader className="bg-purple-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
@@ -1172,18 +1189,35 @@ export default function AccountsMasterPage() {
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Order No</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider border-r border-purple-100">Status</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Customer</TableHead>
-                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider border-l border-purple-100 pl-4">Created By</TableHead>
-                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Category / Design</TableHead>
-                      <TableHead className="h-11 text-[10px] font-bold text-teal-700 uppercase tracking-wider border-l border-purple-100">Voucher</TableHead>
-                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100">Est. Value</TableHead>
-                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100">Advance Paid</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider border-l border-purple-100">Category / Design</TableHead>
+                      
+                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100 bg-slate-50/50">Base Value</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-rose-600 uppercase tracking-wider text-right border-l border-purple-100 bg-slate-50/50">Deductions Breakdown</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100 bg-slate-50/50">Taxable</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100 bg-emerald-50/30">Taxes (C+S)</TableHead>
+                      
+                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider text-right border-l border-purple-100 bg-slate-100">Final Total</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-emerald-700 uppercase tracking-wider text-right border-l border-emerald-200 bg-emerald-50">Advance Paid</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider text-right border-l border-amber-200 bg-amber-50">Balance Due</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {customOrders.length === 0 ? (
-                      <TableRow><TableCell colSpan={10} className="text-center py-12 text-zinc-400">No custom orders found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={13} className="text-center py-12 text-zinc-400">No custom orders found</TableCell></TableRow>
                     ) : customOrders.map((co) => {
                         const isCancelled = co.status === 'CANCELLED';
+                        
+                        // Exact mathematical breakdown
+                        const baseValue = Number(co.base_estimated_value) || 0;
+                        const manualDiscount = Number(co.discount_amount) || 0;
+                        const voucherAmt = Number(co.voucher_amount) || Number(co.voucher_discount) || 0;
+                        const totalDeductions = manualDiscount + voucherAmt;
+                        const taxableValue = Number(co.taxable_value) || 0;
+                        const totalTaxes = (Number(co.cgst_amount) || Number(co.cgst) || 0) + (Number(co.sgst_amount) || Number(co.sgst) || 0);
+                        const finalTotal = Number(co.estimated_value) || 0;
+                        const advancePaid = Number(co.advance_paid) || 0;
+                        const balanceDue = Math.max(0, finalTotal - advancePaid);
+
                         return (
                         <TableRow key={co.id} className={`border-zinc-100 hover:bg-zinc-50/50 transition-colors ${isCancelled ? 'opacity-60 bg-red-50/30' : ''}`}>
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
@@ -1191,7 +1225,6 @@ export default function AccountsMasterPage() {
                               <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-zinc-500 hover:text-purple-700 hover:bg-purple-100"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                               <DropdownMenuContent align="start" className="w-48 rounded-xl shadow-lg border-zinc-200">
                                 <DropdownMenuItem onClick={() => handleOpenPreview(co, 'custom')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View Bill</DropdownMenuItem>
-                                {/* ✨ FIXED: Add Edit and Cancel to Custom Orders Table */}
                                 {!isCancelled && (
                                   <>
                                     <DropdownMenuSeparator />
@@ -1209,34 +1242,64 @@ export default function AccountsMasterPage() {
                             <span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate block">{co.customers?.full_name || 'Walk-in'}</span>
                             {co.customers?.phone && <span className="text-[10px] text-zinc-500 font-mono">{co.customers.phone}</span>}
                           </TableCell>
-                          <TableCell className="px-4 py-2 border-l border-purple-100"><span className="text-[12px] font-medium text-zinc-700 whitespace-nowrap">{co.profiles?.full_name || 'System'}</span></TableCell>
-                          <TableCell className="py-2">
+                          <TableCell className="py-2 border-l border-purple-100 px-4">
                              <span className="text-[12px] font-semibold text-zinc-800 block">{co.item_category}</span>
                              <span className="text-[10px] text-zinc-500 font-mono">{co.design_reference}</span>
                           </TableCell>
-                          <TableCell className="px-4 py-2 border-l border-purple-100">
-                             {co.voucher_code ? (
-                                <div className="flex flex-col">
-                                   <span className="text-[10px] font-mono font-bold text-teal-700 bg-teal-50 px-1.5 py-0.5 rounded uppercase">{co.voucher_code}</span>
-                                   <span className="text-[10px] font-bold text-teal-600 mt-0.5">- ₹{Number(co.voucher_amount).toLocaleString()}</span>
-                                </div>
-                             ) : (
-                                <span className="text-[10px] text-zinc-400 font-medium">None</span>
-                             )}
+                          
+                          {/* Financials Sequence */}
+                          <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-700 border-l border-purple-100 bg-slate-50/50">₹{baseValue.toLocaleString()}</TableCell>
+                          
+                          {/* ✨ DETAILED DEDUCTIONS COLUMN */}
+                          <TableCell className="py-1.5 text-right text-[11px] font-bold text-rose-500 border-l border-purple-100 bg-slate-50/50">
+                            {totalDeductions > 0 ? (
+                              <div className="flex flex-col items-end justify-center gap-0.5">
+                                {manualDiscount > 0 && (
+                                  <span className="text-[10px] leading-tight flex items-center">
+                                    <span className="text-rose-400 font-medium mr-1.5 uppercase text-[8.5px] tracking-wider">Manual:</span>
+                                    -₹{manualDiscount.toLocaleString()}
+                                  </span>
+                                )}
+                                {voucherAmt > 0 && (
+                                  <span className="text-[10px] leading-tight flex items-center">
+                                    <span className="text-rose-400 font-medium mr-1.5 uppercase text-[8.5px] tracking-wider">Voucher ({co.voucher_code}):</span>
+                                    -₹{voucherAmt.toLocaleString()}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              "- ₹0"
+                            )}
                           </TableCell>
-                          <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-700 border-l border-purple-100">₹{(Number(co.estimated_value) || 0).toLocaleString()}</TableCell>
-                          <TableCell className="py-2 text-right text-[13px] font-black text-emerald-600 border-l border-purple-100">₹{(Number(co.advance_paid) || 0).toLocaleString()}</TableCell>
+
+                          <TableCell className="py-2 text-right text-[12px] font-bold text-zinc-800 border-l border-purple-100 bg-slate-50/50">₹{taxableValue.toLocaleString()}</TableCell>
+                          <TableCell className="py-2 text-right text-[12px] font-medium text-emerald-600 border-l border-purple-100 bg-emerald-50/30">+ ₹{totalTaxes.toLocaleString()}</TableCell>
+                          
+                          <TableCell className="py-2 text-right text-[13px] font-black text-indigo-700 border-l border-purple-100 bg-slate-100">₹{finalTotal.toLocaleString()}</TableCell>
+                          <TableCell className="py-2 text-right text-[13px] font-black text-emerald-600 border-l border-emerald-200 bg-emerald-50/50">₹{advancePaid.toLocaleString()}</TableCell>
+                          <TableCell className="py-2 text-right text-[13px] font-black text-amber-700 border-l border-amber-200 bg-amber-50/50">₹{balanceDue.toLocaleString()}</TableCell>
                         </TableRow>
                     )})}
                   </TableBody>
                 </Table>
               </SyncedTableWrapper>
 
+              {/* MOBILE CARD VIEW */}
               <div className="xl:hidden flex flex-col divide-y divide-zinc-100 flex-1 overflow-y-auto">
                 {customOrders.length === 0 ? (
                   <div className="text-center py-12 text-zinc-400 text-sm">No custom orders found</div>
                 ) : customOrders.map((co) => {
                   const isCancelled = co.status === 'CANCELLED';
+                  const baseValue = Number(co.base_estimated_value) || 0;
+                  const manualDiscount = Number(co.discount_amount) || 0;
+                  const voucherAmt = Number(co.voucher_amount) || Number(co.voucher_discount) || 0;
+                  const totalDeductions = manualDiscount + voucherAmt;
+                  const taxableValue = Number(co.taxable_value) || 0;
+                  const totalTaxes = (Number(co.cgst_amount) || Number(co.cgst) || 0) + (Number(co.sgst_amount) || Number(co.sgst) || 0);
+                  const finalTotal = Number(co.estimated_value) || 0;
+                  const advancePaid = Number(co.advance_paid) || 0;
+                  const balanceDue = Math.max(0, finalTotal - advancePaid);
+
                   return (
                   <div key={co.id} className={`p-4 flex flex-col gap-3 relative ${isCancelled ? 'opacity-60 bg-red-50/30' : 'bg-white'}`}>
                     <div className="flex justify-between items-start">
@@ -1248,7 +1311,6 @@ export default function AccountsMasterPage() {
                         <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(co.created_at), 'dd MMM yy, hh:mm a')}</div>
                       </div>
                       
-                      {/* ✨ FIXED: Add Edit and Cancel to Custom Orders Mobile View */}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-purple-600 border-zinc-200"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-lg border-zinc-200">
@@ -1272,34 +1334,63 @@ export default function AccountsMasterPage() {
                         {co.customers?.phone && <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{co.customers.phone}</p>}
                       </div>
                       <div className="text-right border-l border-zinc-200 pl-3">
-                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Created By</p>
-                        <p className="text-xs font-semibold text-zinc-800">{co.profiles?.full_name || 'System'}</p>
+                        <p className="text-[9px] text-zinc-400 font-bold uppercase tracking-widest mb-0.5">Category / Design</p>
+                        <p className="text-xs font-semibold text-zinc-800">{co.item_category}</p>
+                        <p className="text-[10px] text-zinc-500 font-mono mt-0.5">{co.design_reference}</p>
                       </div>
                     </div>
 
-                    {co.voucher_code && (
-                       <div className="flex justify-between items-center bg-teal-50/50 px-2.5 py-1.5 rounded-lg border border-teal-100">
-                          <div className="flex items-center gap-1.5">
-                             <Ticket className="w-3 h-3 text-teal-600" />
-                             <span className="text-[10px] font-mono font-bold text-teal-700 uppercase">{co.voucher_code}</span>
-                          </div>
-                          <span className="text-[10px] font-bold text-teal-600">- ₹{Number(co.voucher_amount).toLocaleString()}</span>
+                    <div className="bg-slate-50 border border-zinc-200 rounded-lg p-3 space-y-2 mt-1">
+                       <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-bold text-zinc-500 uppercase">Base Value</span>
+                          <span className="text-xs font-medium text-zinc-800">₹{baseValue.toLocaleString()}</span>
                        </div>
-                    )}
+                       
+                       {/* ✨ DETAILED DEDUCTIONS FOR MOBILE */}
+                       {totalDeductions > 0 ? (
+                         <>
+                           {manualDiscount > 0 && (
+                             <div className="flex justify-between items-center">
+                                <span className="text-[10px] font-bold text-rose-500 uppercase">Manual Discount</span>
+                                <span className="text-xs font-bold text-rose-500">- ₹{manualDiscount.toLocaleString()}</span>
+                             </div>
+                           )}
+                           {voucherAmt > 0 && (
+                             <div className="flex justify-between items-center">
+                                <span className="text-[10px] font-bold text-rose-500 uppercase">Voucher ({co.voucher_code})</span>
+                                <span className="text-xs font-bold text-rose-500">- ₹{voucherAmt.toLocaleString()}</span>
+                             </div>
+                           )}
+                         </>
+                       ) : (
+                         <div className="flex justify-between items-center">
+                            <span className="text-[10px] font-bold text-rose-500 uppercase">Deductions</span>
+                            <span className="text-xs font-bold text-rose-500">- ₹0</span>
+                         </div>
+                       )}
 
-                    <div className="mt-1">
-                      <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Category / Design</p>
-                      <p className="text-xs font-semibold text-zinc-800">{co.item_category} <span className="text-[10px] text-zinc-500 font-mono ml-1">({co.design_reference})</span></p>
+                       <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-bold text-zinc-500 uppercase">Taxable</span>
+                          <span className="text-xs font-bold text-zinc-800">₹{taxableValue.toLocaleString()}</span>
+                       </div>
+                       <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-bold text-emerald-600 uppercase">Taxes</span>
+                          <span className="text-xs font-medium text-emerald-600">+ ₹{totalTaxes.toLocaleString()}</span>
+                       </div>
+                       <div className="pt-2 border-t border-zinc-200 flex justify-between items-center">
+                          <span className="text-[11px] font-black text-indigo-700 uppercase">Final Total</span>
+                          <span className="text-sm font-black text-indigo-700">₹{finalTotal.toLocaleString()}</span>
+                       </div>
                     </div>
 
-                    <div className="flex justify-between items-end pt-2 border-t border-zinc-100">
-                      <div>
-                        <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Est. Value</p>
-                        <p className="text-xs font-medium text-zinc-700">₹{(Number(co.estimated_value) || 0).toLocaleString()}</p>
+                    <div className="flex justify-between items-end pt-2 border-t border-zinc-100 mt-1">
+                      <div className="bg-emerald-50/50 px-2 py-1 rounded border border-emerald-100">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-emerald-600 mb-0.5">Advance Paid</p>
+                        <p className="text-xs font-black text-emerald-700">₹{advancePaid.toLocaleString()}</p>
                       </div>
-                      <div className="text-right">
-                        <p className="text-[9px] font-bold uppercase tracking-widest text-zinc-400 mb-0.5">Advance Paid</p>
-                        <p className="text-lg font-black text-emerald-600 tracking-tight">₹{(Number(co.advance_paid) || 0).toLocaleString()}</p>
+                      <div className="bg-amber-50/50 px-2 py-1 rounded border border-amber-100 text-right">
+                        <p className="text-[9px] font-bold uppercase tracking-widest text-amber-700 mb-0.5">Balance Due</p>
+                        <p className="text-sm font-black text-amber-700 tracking-tight">₹{balanceDue.toLocaleString()}</p>
                       </div>
                     </div>
                   </div>
@@ -1308,7 +1399,7 @@ export default function AccountsMasterPage() {
               <PaginationControls />
             </Card>
           </TabsContent>
-
+          
           {/* ========================================================================= */}
           {/* TAB 4: BUYBACKS / RETURNS */}
           {/* ========================================================================= */}
@@ -1574,7 +1665,7 @@ export default function AccountsMasterPage() {
 
                 {/* ROW 2: Core Financials */}
                 <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Subtotal</Label>
+                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">{invoiceToEdit?.isCustom ? "Base Estimated Value" : "Subtotal"}</Label>
                   <Input type="number" className="h-10 font-mono font-medium" value={editForm.subtotal} onChange={(e) => setEditForm({...editForm, subtotal: e.target.value})} />
                 </div>
                 <div className="space-y-1.5">
@@ -1617,7 +1708,7 @@ export default function AccountsMasterPage() {
           </DialogContent>
         </Dialog>
 
-        {/* --- PRINT MODAL (Windows 11 Aesthetic) --- */}
+        {/* --- PRINT MODAL --- */}
         <Dialog open={showPreviewModal} onOpenChange={setShowPreviewModal}>
           <DialogContent 
             className="max-w-[900px] w-full h-[100dvh] sm:h-[90vh] sm:w-[95vw] border border-zinc-200/50 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] p-0 rounded-none sm:rounded-2xl bg-white/95 backdrop-blur-xl flex flex-col m-0 sm:m-auto overflow-hidden ring-1 ring-black/5"
@@ -1672,21 +1763,17 @@ export default function AccountsMasterPage() {
                 Close Window
               </Button>
               <Button 
-  onClick={(e) => {
-    e.preventDefault();
-    triggerPrint();
-  }} 
-  className="h-9 sm:h-9 w-full sm:w-auto px-6 text-[11px] font-bold uppercase tracking-widest rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all"
->
-  <Printer className="h-3.5 w-3.5 mr-2" /> Print Document
-</Button>
+                onClick={(e) => { e.preventDefault(); triggerPrint(); }} 
+                className="h-9 sm:h-9 w-full sm:w-auto px-6 text-[11px] font-bold uppercase tracking-widest rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm transition-all"
+              >
+                <Printer className="h-3.5 w-3.5 mr-2" /> Print Document
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
         </main>
 
-       {/* ✨ OFF-SCREEN WRAPPER: Pure CSS, absolutely NO inline styles (-10000px) */}
 <div id="print-wrapper" className="fixed top-0 left-0 -z-[9999] opacity-0 pointer-events-none">
   
   <div id="true-print-container" ref={printRef} className="w-[210mm] bg-white text-black">
@@ -1697,30 +1784,24 @@ export default function AccountsMasterPage() {
       
       <style dangerouslySetInnerHTML={{__html:`
   @media print {
-    /* 1. Hide the entire normal app UI */
     body * {
       visibility: hidden !important;
     }
-    
-    /* 2. Un-hide the wrapper AND the true print container */
     #print-wrapper, #print-wrapper *, 
     #true-print-container, #true-print-container * {
       visibility: visible !important;
     }
-    
-    /* 3. Snap the wrapper perfectly to the top-left AND pull it to the front */
     #print-wrapper {
       position: absolute !important;
       left: 0 !important;
       top: 0 !important;
       opacity: 1 !important;
-      z-index: 99999 !important; /* ✨ THE FIX: Pulls the invoice above the white background! */
+      z-index: 99999 !important;
       width: 210mm !important;
       margin: 0 !important;
       padding: 0 !important;
     }
   }
-
   .no-scrollbar::-webkit-scrollbar { display: none; }
   .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
   .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }

@@ -63,6 +63,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const repair = data.repair 
     const returnDetails = data.returnDetails
 
+    // Use exact values passed from parent component (No recalculating)
     const subtotal = data.subtotal || 0
     const manualDiscount = data.discountAmount || 0
     
@@ -76,23 +77,16 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
     const exchangeVal = data.exchangeValue || 0
     const handlingFee = data.handlingFee || 0
-    
     const effectiveVoucherCredit = data.voucherAmount || 0 
 
-    // --- CUSTOM ORDER CALCULATIONS ---
-    const customBaseEstimate = Number(customOrder?.estimatedValue || 0);
-    const customTaxable = Math.max(0, customBaseEstimate - manualDiscount - exchangeVal - effectiveVoucherCredit); 
-    const customCgst = customTaxable * 0.015;
-    const customSgst = customTaxable * 0.015;
-    const customTotalEstimate = Math.round(customTaxable + customCgst + customSgst);
-    const customAdvancePaid = Number(customOrder?.advancePayment || 0);
-    
+    // --- CUSTOM ORDER VARIABLES ---
+    const customAdvancePaid = Number(data.advancePayment || customOrder?.advancePayment || 0);
     const appliedKitty = data.appliedKitty || 0;
     const appliedCredit = data.appliedCredit || 0;
     const totalSettlements = appliedKitty + appliedCredit;
 
-    const customEstimatedBalance = Math.max(0, customTotalEstimate - customAdvancePaid - totalSettlements);
-    const customTotalAdvanceReceived = customAdvancePaid + effectiveVoucherCredit;
+    // Use passed balanceDue or calculate if missing
+    const customEstimatedBalance = data.balanceDue ?? Math.max(0, (data.finalTotal || 0) - customAdvancePaid - totalSettlements);
 
     let docTitle = "TAX INVOICE" 
     let docNoLabel = "Invoice No. :"
@@ -394,7 +388,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 <span className="text-[10px] font-bold text-slate-800 uppercase mr-3 shrink-0">Amt. In Words :</span> 
                 <span className="text-[11px] font-bold text-slate-800 uppercase leading-tight tracking-wide">
                   Rupees {numberToWords(
-                    mode === 'custom' ? customTotalAdvanceReceived :
+                    mode === 'custom' ? customAdvancePaid :
                     mode === 'return' ? Number(returnDetails?.calculatedRefund || data.finalTotal || 0) : 
                     Number(data.finalTotal || 0)
                   )}
@@ -404,16 +398,17 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
             <div className={`w-1/2 p-3 space-y-1.5 text-sm font-semibold text-slate-800 ${isEstimate ? 'bg-white' : 'bg-white/40'}`}>
               
+              {/* ✨ EXACT FINANCIAL FLOW FOR CUSTOM ORDERS */}
               {mode === 'custom' && customOrder ? (
                 <>
                   <div className="flex justify-between text-slate-600 mb-1">
                     <span>Estimated Base Value</span>
-                    <span>₹ {customBaseEstimate.toLocaleString('en-IN')}</span>
+                    <span>₹ {subtotal.toLocaleString('en-IN')}</span>
                   </div>
                   
                   {manualDiscount > 0 && (
-                    <div className="flex justify-between text-slate-600">
-                      <span> Discount</span>
+                    <div className="flex justify-between text-rose-600">
+                      <span>Discount</span>
                       <span>- ₹ {manualDiscount.toLocaleString('en-IN')}</span>
                     </div>
                   )}
@@ -434,26 +429,26 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
                   <div className="flex justify-between border-t border-slate-200 pt-1 mt-1 text-slate-800 font-semibold">
                     <span>Estimated Taxable Value</span>
-                    <span>₹ {customTaxable.toLocaleString('en-IN')}</span>
+                    <span>₹ {taxableValue.toLocaleString('en-IN')}</span>
                   </div>
                   
                   <div className="flex justify-between text-xs text-slate-600 mt-1">
                     <span>Estimated CGST (1.5%)</span>
-                    <span>+ ₹ {customCgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                    <span>+ ₹ {cgstAmount.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
                   </div>
                   <div className="flex justify-between text-xs text-slate-600 pb-1">
                     <span>Estimated SGST (1.5%)</span>
-                    <span>+ ₹ {customSgst.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
+                    <span>+ ₹ {sgstAmount.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}</span>
                   </div>
                   
                   <div className="flex justify-between py-1.5 mt-1 border-t border-slate-300 text-lg font-black text-slate-900">
                     <span>Total Estimated Amount</span>
-                    <span>₹ {customTotalEstimate.toLocaleString('en-IN')}</span>
+                    <span>₹ {(data.finalTotal || 0).toLocaleString('en-IN')}</span>
                   </div>
                   
                   {customAdvancePaid > 0 && (
                     <div className="flex justify-between text-emerald-600 font-semibold mt-1">
-                      <span>Advance Paid (Cash/Bank)</span>
+                      <span>Advance Received</span>
                       <span>- ₹ {customAdvancePaid.toLocaleString('en-IN')}</span>
                     </div>
                   )}
@@ -595,7 +590,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
           <div className="mt-auto flex flex-col shrink-0">
             <div className="grid grid-cols-3 items-end text-sm font-bold mb-3 mt-4 relative">
               <div className="text-center px-6 relative">
-                {/* ✨ STAMP REMOVED HERE AS REQUESTED */}
                 <div className="border-t border-black pt-1 text-[11px] uppercase tracking-wider">
                   {(mode === 'repair' || mode === 'return') ? 'Customer Signature' : 'Customer / Receiver Signature'}
                 </div>
