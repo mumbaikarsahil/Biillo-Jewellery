@@ -79,10 +79,15 @@ export async function middleware(request: NextRequest) {
     const isAdminOverrideRoute = path.startsWith('/transfer/direct')
     
     const isCrmRoute = path.startsWith('/crm')
+    const isVoucherRoute = path.startsWith('/vouchers')
     
-    // ✨ NEW: Split the Voucher routes to apply different rules
-    const isVoucherTrackRoute = path.startsWith('/vouchers/track')
-    const isGeneralVoucherRoute = path === '/vouchers' || (path.startsWith('/vouchers') && !isVoucherTrackRoute)
+    // ✨ NEW: Explicitly list the routes forbidden to the CRM Manager
+    const isRestrictedVoucherSubRoute = 
+      path.startsWith('/vouchers/generate') || 
+      path.startsWith('/vouchers/batches') || 
+      path.startsWith('/vouchers/distribute') || 
+      path.startsWith('/vouchers/return') || 
+      path.startsWith('/vouchers/distributors')
     
     const isOpsRoute = path.startsWith('/purchases') || path.startsWith('/manufacturing') || path.startsWith('/inventory') || path.startsWith('/transfer') || path.startsWith('/catalog')
     const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/transfer') || path.startsWith('/catalog') || path.startsWith('/reports')
@@ -96,37 +101,38 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
-    // Block non-CRM managers from the CRM module
     if (isCrmRoute && role !== 'crm_manager') {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
-    // Block non-Voucher managers from the main Voucher module (Creation/Settings)
-    if (isGeneralVoucherRoute && role !== 'voucher_manager') {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
-    }
-
-    // /vouchers/track is shared between Voucher Manager & CRM Manager ONLY
-    if (isVoucherTrackRoute && role !== 'voucher_manager' && role !== 'crm_manager') {
-      return NextResponse.redirect(new URL('/dashboard', request.url))
+    // ✨ UPDATED: Voucher Access Logic
+    if (isVoucherRoute) {
+      if (role === 'crm_manager') {
+        // CRM managers CAN access /vouchers and /vouchers/track
+        // BUT they are blocked from generating, distributing, etc.
+        if (isRestrictedVoucherSubRoute) {
+          return NextResponse.redirect(new URL('/vouchers', request.url))
+        }
+      } else if (role !== 'voucher_manager') {
+        // Everyone else (except voucher_manager, owner, manager) is completely blocked
+        return NextResponse.redirect(new URL('/dashboard', request.url))
+      }
     }
 
     // ----------------------------------------------------
     // ALLOWLISTS (Keeping roles inside their sandboxes)
     // ----------------------------------------------------
     
-    // ✨ Rule: CRM Manager
-    // They are ONLY allowed in /crm OR /vouchers/track
+    // Rule: CRM Manager
     if (role === 'crm_manager') {
-      if (!isCrmRoute && !isVoucherTrackRoute) {
+      if (!isCrmRoute && !isVoucherRoute) {
         return NextResponse.redirect(new URL('/dashboard', request.url))
       }
     }
 
-    // ✨ Rule: Voucher Manager
-    // They are allowed in ALL /vouchers/* routes (General + Track)
+    // Rule: Voucher Manager
     if (role === 'voucher_manager') {
-      if (!isGeneralVoucherRoute && !isVoucherTrackRoute) {
+      if (!isVoucherRoute) {
         return NextResponse.redirect(new URL('/dashboard', request.url))
       }
     }
