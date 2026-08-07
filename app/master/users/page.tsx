@@ -203,6 +203,8 @@ export default function UsersManagementPage() {
                     <SelectItem value="voucher_manager">Voucher Manager</SelectItem>
                     <SelectItem value="branch_manager">Branch Manager</SelectItem>
                     <SelectItem value="sales_person">Sales Person (POS/CRM)</SelectItem>
+                    <SelectItem value="crm_manager">CRM Manager (CRM/Track Voucher)</SelectItem>
+
                     {/* NEW SHADOW ROLES */}
                     <SelectItem value="shadow_manager">Shadow Manager (Read-Only)</SelectItem>
                     <SelectItem value="shadow_sales">Shadow Sales (Read-Only)</SelectItem>

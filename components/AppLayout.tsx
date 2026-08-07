@@ -31,10 +31,14 @@ const allOperationModules = [
   { href: '/inventory', label: 'Vault Stock', icon: Layers, roles: ['owner', 'manager', 'operations_manager', 'branch_manager'] },
   { href: '/catalog', label: 'Catalog', icon: BookOpen, roles: ['owner', 'manager', 'operations_manager', 'branch_manager'] },
   { href: '/transfer', label: 'Logistics', icon: Route, roles: ['owner', 'manager', 'operations_manager', 'branch_manager', 'shadow_manager'] },
-  { href: '/crm', label: 'CRM', icon: Users, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
-  { href: '/whatsapp', label: 'Whatsapp API', icon: MessageSquare, roles: ['owner', 'manager'] },
-  { href: '/vouchers', label: 'Vouchers', icon: TicketPercent, roles: ['owner', 'manager', 'voucher_manager'] },
   
+  // ✨ UPDATED: Restricted to Owner, Manager, and CRM Manager
+  { href: '/crm', label: 'CRM', icon: Users, roles: ['owner', 'manager', 'crm_manager', 'branch_manager','sales_person'] },
+  
+  { href: '/whatsapp', label: 'Whatsapp API', icon: MessageSquare, roles: ['owner', 'manager'] },
+  
+  // ✨ UPDATED: Replaced voucher_manager with crm_manager to match middleware
+  { href: '/vouchers', label: 'Vouchers', icon: TicketPercent, roles: ['owner', 'manager', 'crm_manager'] },
 ]
 
 export function AppLayout({ children, appUser }: { children: React.ReactNode, appUser?: any }) {

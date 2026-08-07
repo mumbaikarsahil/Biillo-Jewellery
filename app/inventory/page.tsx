@@ -212,15 +212,21 @@ export default function InventoryPage() {
 
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
 
-  // ✨ ADDED 'gifting' to the counts state
-  const [counts, setCounts] = useState({ active: 0, exchange: 0, buyback: 0, repair: 0, others: 0, sold: 0, gifting: 0 })
+  // ✨ ADDED 'packaging' to the counts state
+  const [counts, setCounts] = useState({ active: 0, exchange: 0, buyback: 0, repair: 0, others: 0, sold: 0, gifting: 0, packaging: 0 })
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false)
 
-  // ✨ NEW: Gifting Inventory State
+  // Gifting Inventory State
   const [giftingItems, setGiftingItems] = useState<any[]>([])
   const [isAddGiftModalOpen, setIsAddGiftModalOpen] = useState(false)
   const [isAddingGift, setIsAddingGift] = useState(false)
   const [giftForm, setGiftForm] = useState({ item_name: 'Golden Rose', warehouse_id: '', quantity: 1 })
+
+  // ✨ NEW: Packaging Inventory State
+  const [packagingItems, setPackagingItems] = useState<any[]>([])
+  const [isAddPackagingModalOpen, setIsAddPackagingModalOpen] = useState(false)
+  const [isAddingPackaging, setIsAddingPackaging] = useState(false)
+  const [packagingForm, setPackagingForm] = useState({ item_name: '', item_category: 'Ring Box', warehouse_id: '', quantity: 1 })
 
   const [diamondRates, setDiamondRates] = useState<Record<string, number>>({})
 
@@ -492,12 +498,16 @@ export default function InventoryPage() {
         if (selectedLocation !== 'ALL') repQ = repQ.eq('origin_warehouse_id', selectedLocation);
         if (debouncedSearch) repQ = repQ.or(`ticket_number.ilike.%${debouncedSearch}%,item_description.ilike.%${debouncedSearch}%`);
 
-        // ✨ Fetching Gifting counts
+        // Fetching Gifting counts
         let giftQ = supabase.from('gifting_inventory').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id);
         if (selectedLocation !== 'ALL') giftQ = giftQ.eq('warehouse_id', selectedLocation);
 
-        const [a, e, b, s, r, o, g] = await Promise.all([
-          getQ('active'), getQ('exchange'), getQ('buyback'), getQ('sold'), repQ, getQ('others'), giftQ
+        // ✨ Fetching Packaging counts
+        let packQ = supabase.from('packaging_inventory').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id);
+        if (selectedLocation !== 'ALL') packQ = packQ.eq('warehouse_id', selectedLocation);
+
+        const [a, e, b, s, r, o, g, p] = await Promise.all([
+          getQ('active'), getQ('exchange'), getQ('buyback'), getQ('sold'), repQ, getQ('others'), giftQ, packQ
         ]);
 
         setCounts({
@@ -507,7 +517,8 @@ export default function InventoryPage() {
           sold: s.count || 0,
           repair: r.count || 0,
           others: o.count || 0,
-          gifting: g.count || 0
+          gifting: g.count || 0,
+          packaging: p.count || 0
         });
       } catch (e) {
         console.warn("Count Fetch Error:", e);
@@ -523,7 +534,7 @@ export default function InventoryPage() {
     try {
       let combined: InventoryItem[] = [];
 
-      // ✨ NEW: Fetch Gifting Inventory
+      // Fetch Gifting Inventory
       if (activeTab === 'gifting') {
         let giftQuery = supabase.from('gifting_inventory').select('*').eq('company_id', appUser.company_id);
         if (selectedLocation !== 'ALL') giftQuery = giftQuery.eq('warehouse_id', selectedLocation);
@@ -532,6 +543,19 @@ export default function InventoryPage() {
         if (error) throw new Error(error.message);
         
         setGiftingItems(data || []);
+        setLoading(false);
+        return; 
+      }
+
+      // ✨ NEW: Fetch Packaging Inventory
+      if (activeTab === 'packaging') {
+        let packQuery = supabase.from('packaging_inventory').select('*').eq('company_id', appUser.company_id);
+        if (selectedLocation !== 'ALL') packQuery = packQuery.eq('warehouse_id', selectedLocation);
+        
+        const { data, error } = await packQuery.order('item_name');
+        if (error) throw new Error(error.message);
+        
+        setPackagingItems(data || []);
         setLoading(false);
         return; 
       }
@@ -598,7 +622,6 @@ export default function InventoryPage() {
     fetchPage(0);
   }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, filterSolitaire, filterDiaWt, debouncedPriceRange, isPriceFilterActive, activeTab, pageSize])
 
-  // ✨ NEW: Add Gifting Stock Function
   const handleAddGiftStock = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEdit || !appUser) return;
@@ -635,9 +658,8 @@ export default function InventoryPage() {
       toast.success(`Successfully added ${giftForm.quantity} x ${giftForm.item_name}`);
       setIsAddGiftModalOpen(false);
       setGiftForm({ item_name: 'Golden Rose', warehouse_id: '', quantity: 1 });
-      fetchPage(0); // Refresh Gifting Tab
+      fetchPage(0); 
       
-      // Update count state manually
       setCounts(prev => ({ ...prev, gifting: prev.gifting + (existing ? 0 : 1) }));
     } catch (err: any) {
       toast.error("Failed to add gift stock: " + err.message);
@@ -646,8 +668,56 @@ export default function InventoryPage() {
     }
   };
 
+  // ✨ NEW: Add Packaging Stock Function
+  const handleAddPackagingStock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canEdit || !appUser) return;
+    if (!packagingForm.item_name || !packagingForm.warehouse_id || packagingForm.quantity <= 0) return toast.error("Invalid form details");
+
+    setIsAddingPackaging(true);
+    try {
+      const { data: existing } = await supabase.from('packaging_inventory')
+        .select('id, stock_count')
+        .eq('company_id', appUser.company_id)
+        .eq('warehouse_id', packagingForm.warehouse_id)
+        .eq('item_name', packagingForm.item_name)
+        .maybeSingle();
+
+      if (existing) {
+        const { error } = await supabase.from('packaging_inventory')
+          .update({ 
+            stock_count: existing.stock_count + packagingForm.quantity, 
+            last_updated: new Date().toISOString() 
+          })
+          .eq('id', existing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.from('packaging_inventory')
+          .insert({
+            company_id: appUser.company_id,
+            warehouse_id: packagingForm.warehouse_id,
+            item_name: packagingForm.item_name,
+            item_category: packagingForm.item_category,
+            stock_count: packagingForm.quantity
+          });
+        if (error) throw error;
+      }
+
+      toast.success(`Successfully added ${packagingForm.quantity} x ${packagingForm.item_name}`);
+      setIsAddPackagingModalOpen(false);
+      setPackagingForm({ item_name: '', item_category: 'Ring Box', warehouse_id: '', quantity: 1 });
+      fetchPage(0); // Refresh Packaging Tab
+      
+      setCounts(prev => ({ ...prev, packaging: prev.packaging + (existing ? 0 : 1) }));
+    } catch (err: any) {
+      toast.error("Failed to add packaging stock: " + err.message);
+    } finally {
+      setIsAddingPackaging(false);
+    }
+  };
+
   const handleSelectAllGlobal = async () => {
-    if (!appUser || activeTab === 'gifting') return;
+    if (!appUser || activeTab === 'gifting' || activeTab === 'packaging') return;
     setIsFetchingGlobal(true)
     try {
       let allFetchedData: any[] = [];
@@ -1406,9 +1476,14 @@ export default function InventoryPage() {
                 Sold / Archive <Badge className="ml-1.5 bg-slate-100 text-slate-600 shadow-none px-1.5">{counts.sold}</Badge>
               </TabsTrigger>
               
-              {/* ✨ NEW GIFTING TAB */}
+              {/* ✨ GIFTING TAB */}
               <TabsTrigger value="gifting" className="rounded-none border-b-2 border-transparent data-[state=active]:border-rose-500 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-rose-600 data-[state=active]:text-rose-600 transition-all">
                 Gifting Items <Badge className="ml-1.5 bg-rose-50 text-rose-600 shadow-none px-1.5">{counts.gifting}</Badge>
+              </TabsTrigger>
+              
+              {/* ✨ NEW PACKAGING TAB */}
+              <TabsTrigger value="packaging" className="rounded-none border-b-2 border-transparent data-[state=active]:border-cyan-500 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-cyan-600 data-[state=active]:text-cyan-600 transition-all">
+                Packaging <Badge className="ml-1.5 bg-cyan-50 text-cyan-600 shadow-none px-1.5">{counts.packaging}</Badge>
               </TabsTrigger>
             </TabsList>
           </div>
@@ -1439,7 +1514,7 @@ export default function InventoryPage() {
              </TabsContent>
           ))}
 
-          {/* ✨ NEW GIFTING TAB CONTENT */}
+          {/* GIFTING TAB CONTENT */}
           <TabsContent value="gifting">
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative flex flex-col">
               {loading && <GeminiLoader />}
@@ -1479,9 +1554,61 @@ export default function InventoryPage() {
             </div>
           </TabsContent>
 
+          {/* ✨ NEW PACKAGING TAB CONTENT */}
+          <TabsContent value="packaging">
+            <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative flex flex-col">
+              {loading && <GeminiLoader />}
+              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                <h2 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+                  <Box className="w-4 h-4 text-cyan-500" /> Store Packaging Inventory
+                </h2>
+                {canEdit && (
+                  <Button onClick={() => setIsAddPackagingModalOpen(true)} size="sm" className="h-8 bg-slate-900 text-white hover:bg-slate-800 text-xs font-bold">
+                    <Plus className="w-3.5 h-3.5 mr-1.5" /> Add Stock
+                  </Button>
+                )}
+              </div>
+              <div className="p-4 flex-1 overflow-auto custom-scrollbar">
+                {packagingItems.length === 0 && !loading ? (
+                  <div className="text-center py-12 text-slate-400 text-sm font-medium">No packaging items found.</div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {packagingItems.map(pack => (
+                      <div key={pack.id} className="border border-slate-200 rounded-xl p-4 shadow-sm bg-white flex flex-col gap-2 relative overflow-hidden">
+                        {pack.stock_count <= (pack.reorder_level || 50) && (
+                           <div className="absolute top-0 right-0 w-16 h-16 pointer-events-none overflow-hidden">
+                             <div className="absolute top-2 -right-6 w-24 bg-rose-500 text-white text-[8px] font-bold uppercase tracking-widest text-center py-0.5 rotate-45 shadow-sm">
+                               Low Stock
+                             </div>
+                           </div>
+                        )}
+                        <div className="flex justify-between items-start pr-6">
+                          <div>
+                            <h3 className="font-bold text-slate-800 text-sm leading-tight">{pack.item_name}</h3>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">{pack.item_category}</p>
+                          </div>
+                          <Badge className={cn("shadow-none text-xs", pack.stock_count <= (pack.reorder_level || 50) ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700")}>
+                            {pack.stock_count} left
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-slate-500 mt-2 flex items-center gap-1.5">
+                          <Store className="w-3.5 h-3.5" />
+                          {getWarehouseName(pack.warehouse_id)}
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-1">
+                          Last Updated: {formatDateShort(pack.last_updated)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </TabsContent>
+
         </Tabs>
 
-        {selectedIds.length > 0 && activeTab !== 'gifting' && (
+        {selectedIds.length > 0 && activeTab !== 'gifting' && activeTab !== 'packaging' && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white p-1.5 rounded-[1.25rem] shadow-2xl flex items-center gap-2 border border-slate-700/50 animate-in slide-in-from-bottom-8">
             <div className="flex items-center gap-2 pl-3 pr-4 border-r border-slate-700">
               <div className="h-7 w-7 bg-indigo-500 rounded-lg flex items-center justify-center text-[11px] font-bold shadow-inner">
@@ -1525,7 +1652,7 @@ export default function InventoryPage() {
         )}
       </main>
 
-      {/* ✨ NEW ADD GIFTING STOCK MODAL */}
+      {/* ADD GIFTING STOCK MODAL */}
       <Dialog open={isAddGiftModalOpen} onOpenChange={setIsAddGiftModalOpen}>
         <DialogContent className="sm:max-w-[400px]">
           <DialogHeader>
@@ -1556,6 +1683,59 @@ export default function InventoryPage() {
               <Button type="button" variant="ghost" onClick={() => setIsAddGiftModalOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={isAddingGift} className="bg-slate-900 text-white hover:bg-slate-800">
                 {isAddingGift ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Check className="w-4 h-4 mr-2" />} Add Stock
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ✨ NEW ADD PACKAGING STOCK MODAL */}
+      <Dialog open={isAddPackagingModalOpen} onOpenChange={setIsAddPackagingModalOpen}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>Add Packaging Stock</DialogTitle>
+            <DialogDescription>Increase the inventory for boxes, frames, and bags.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleAddPackagingStock} className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Category</Label>
+              <Select required value={packagingForm.item_category} onValueChange={v => setPackagingForm({...packagingForm, item_category: v})}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select Category" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Ring Box">Ring Box</SelectItem>
+                  <SelectItem value="Necklace Box">Necklace Box</SelectItem>
+                  <SelectItem value="Bangle Box">Bangle Box</SelectItem>
+                  <SelectItem value="Carry Bag">Carry Bag</SelectItem>
+                  <SelectItem value="Frame">Frame</SelectItem>
+                  <SelectItem value="Other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Item Description</Label>
+              <Input required value={packagingForm.item_name} onChange={e => setPackagingForm({...packagingForm, item_name: e.target.value})} placeholder="e.g. Red Velvet Ring Box" />
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Target Location / Warehouse</Label>
+              <Select required value={packagingForm.warehouse_id} onValueChange={v => setPackagingForm({...packagingForm, warehouse_id: v})}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select Warehouse" />
+                </SelectTrigger>
+                <SelectContent>
+                  {warehouses.map(w => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Quantity to Add</Label>
+              <Input required type="number" min="1" value={packagingForm.quantity} onChange={e => setPackagingForm({...packagingForm, quantity: Number(e.target.value)})} />
+            </div>
+            <DialogFooter className="mt-4">
+              <Button type="button" variant="ghost" onClick={() => setIsAddPackagingModalOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={isAddingPackaging} className="bg-slate-900 text-white hover:bg-slate-800">
+                {isAddingPackaging ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Check className="w-4 h-4 mr-2" />} Add Stock
               </Button>
             </DialogFooter>
           </form>
