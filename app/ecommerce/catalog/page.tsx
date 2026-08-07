@@ -252,10 +252,23 @@ export default function EcommerceCatalogPage() {
     if (!categoryForm.name.trim() || !appUser) return;
     setIsSubmitting(true);
     try {
+      // ✨ NEW LOGIC: Find the parent category to get its slug
+      let parentSlug = "";
+      if (categoryForm.parent_id !== "none") {
+        const parentCategory = categories.find(c => c.id === categoryForm.parent_id);
+        if (parentCategory && parentCategory.slug) {
+          parentSlug = parentCategory.slug;
+        }
+      }
+
+      // ✨ NEW LOGIC: Combine parent slug with new category name
+      const cleanNameSlug = generateSlug(categoryForm.name);
+      const finalSlug = parentSlug ? `${parentSlug}-${cleanNameSlug}` : cleanNameSlug;
+
       const payload: any = {
         company_id: appUser.company_id,
         name: categoryForm.name.trim(),
-        slug: generateSlug(categoryForm.name),
+        slug: finalSlug, // ✨ Saves as "rings-casual" instead of just "casual"
         is_active: categoryForm.is_active,
         parent_id: categoryForm.parent_id === "none" ? null : categoryForm.parent_id,
         image_url: categoryForm.image_url || null

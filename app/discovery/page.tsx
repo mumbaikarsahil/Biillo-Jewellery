@@ -15,13 +15,13 @@ import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
 import { 
   Search, ArrowRight, Loader2, QrCode, Store, Camera, X, Gem, Image as ImageIcon,
-  UserPlus, User, MessageCircle, Phone, MapPin, CheckCircle2
+  UserPlus, User, MessageCircle, Phone, MapPin, CheckCircle2, Gift, History
 } from 'lucide-react'
 import { Scanner } from '@yudiel/react-qr-scanner'
+import { cn } from '@/lib/utils'
 
-// ✨ NEW: Import the WhatsApp Sender Modal
 import { WhatsAppSenderModal } from '@/components/WhatsAppSenderModal'
-import { Label } from 'recharts'
+import { Label } from '@/components/ui/label'
 
 interface ProductDiscovery {
   id: string
@@ -64,6 +64,11 @@ interface Customer {
   customer_status?: string;
 }
 
+interface AvailableGift {
+  item_name: string;
+  stock_count: number;
+}
+
 export default function DiscoveryPage() {
   const { appUser, loading: authLoading } = useAuth()
   const router = useRouter()
@@ -76,17 +81,20 @@ export default function DiscoveryPage() {
   const [fetching, setFetching] = useState(false)
   const [showScanner, setShowScanner] = useState(false)
 
-  // ✨ NEW: Customer Check-in State
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
-  const [custSearchTerm, setCustSearchTerm] = useState('')
-  const [custResults, setCustResults] = useState<Customer[]>([])
+  // Customer & Check-in State
+  const [phoneInput, setPhoneInput] = useState('')
   const [isSearchingCust, setIsSearchingCust] = useState(false)
+  const [existingCustomer, setExistingCustomer] = useState<Customer | null>(null)
+  const [newCustForm, setNewCustForm] = useState({ full_name: '', city: '' })
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [isCheckedIn, setIsCheckedIn] = useState(false)
   
-  const [isRegisterMode, setIsRegisterMode] = useState(false)
-  const [isRegistering, setIsRegistering] = useState(false)
-  const [newCustForm, setNewCustForm] = useState({ full_name: '', phone: '', city: '' })
+  // Gifting State
+  const [availableGifts, setAvailableGifts] = useState<AvailableGift[]>([])
+  const [selectedGift, setSelectedGift] = useState<string>('none')
+  const [isCheckingGifts, setIsCheckingGifts] = useState(false)
 
-  // ✨ NEW: WhatsApp State
+  // WhatsApp State
   const [isWaModalOpen, setIsWaModalOpen] = useState(false)
 
   useEffect(() => {
@@ -101,7 +109,6 @@ export default function DiscoveryPage() {
           .order('name')
 
         if (whData) setWarehouses(whData)
-
       } catch (err) {
         toast.error('Failed to load initial data')
       }
@@ -109,73 +116,158 @@ export default function DiscoveryPage() {
     init()
   }, [appUser])
 
-  // ✨ NEW: Customer Search Effect
+  // Fetch available gifts dynamically based on location
   useEffect(() => {
-    const searchCustomers = async () => {
-      if (custSearchTerm.length < 3) {
-        setCustResults([]);
+    const fetchGifts = async () => {
+      if (!appUser || !selectedLocation || selectedLocation === 'ALL') {
+        setAvailableGifts([]);
+        setSelectedGift('none');
         return;
       }
-      setIsSearchingCust(true);
+      setIsCheckingGifts(true);
       try {
         const { data, error } = await supabase
-          .from('customers')
-          .select('id, full_name, phone, city, customer_status')
-          .eq('company_id', appUser?.company_id)
-          .or(`full_name.ilike.%${custSearchTerm}%,phone.ilike.%${custSearchTerm}%`)
-          .limit(5);
-        
+          .from('gifting_inventory')
+          .select('item_name, stock_count')
+          .eq('company_id', appUser.company_id)
+          .eq('warehouse_id', selectedLocation)
+          .gt('stock_count', 0)
+          .order('item_name');
+
         if (error) throw error;
-        setCustResults(data || []);
-      } catch (error) {
-        console.error("Failed to search customers", error);
+        setAvailableGifts(data || []);
+        // Reset selection if previously selected gift is no longer available
+        if (data && !data.find(g => g.item_name === selectedGift)) {
+          setSelectedGift('none');
+        }
+      } catch (err) {
+        console.error("Error fetching gifts:", err);
       } finally {
-        setIsSearchingCust(false);
+        setIsCheckingGifts(false);
       }
     };
 
-    const timer = setTimeout(searchCustomers, 400);
-    return () => clearTimeout(timer);
-  }, [custSearchTerm, appUser]);
+    fetchGifts();
+  }, [appUser, selectedLocation]);
 
-  // ✨ NEW: Register Customer Logic
-  const handleRegisterCustomer = async (e: React.FormEvent) => {
+  const handlePhoneChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const cleanPhone = e.target.value.replace(/\D/g, '');
+    setPhoneInput(cleanPhone);
+    setIsCheckedIn(false); // Reset check-in state if number changes
+
+    if (cleanPhone.length === 10) {
+      setIsSearchingCust(true);
+      try {
+        const { data } = await supabase
+          .from('customers')
+          .select('id, full_name, phone, city, customer_status')
+          .eq('company_id', appUser?.company_id)
+          .eq('phone', cleanPhone)
+          .maybeSingle();
+        
+        setExistingCustomer(data || null);
+      } catch (error) {
+        console.error("Failed to search customer", error);
+      } finally {
+        setIsSearchingCust(false);
+      }
+    } else {
+      setExistingCustomer(null);
+    }
+  };
+
+  const processGiftIssue = async (customerId: string) => {
+    if (selectedGift !== 'none' && selectedLocation && selectedLocation !== 'ALL') {
+      try {
+        // 1. Deduct from inventory safely
+        const { error: giftErr } = await supabase.rpc('issue_gifting_item', {
+          p_company_id: appUser?.company_id,
+          p_warehouse_id: selectedLocation,
+          p_item_name: selectedGift
+        });
+
+        if (giftErr) throw giftErr;
+
+        // 2. Log in the lifecycle ledger
+        await supabase.from('customer_gifts_history').insert({
+          company_id: appUser?.company_id,
+          customer_id: customerId,
+          warehouse_id: selectedLocation,
+          gift_name: selectedGift
+        });
+
+        toast.success(`${selectedGift} successfully issued and logged!`);
+        
+        // Update local available gifts to prevent lag
+        setAvailableGifts(prev => prev.map(g => 
+          g.item_name === selectedGift ? { ...g, stock_count: g.stock_count - 1 } : g
+        ).filter(g => g.stock_count > 0));
+        setSelectedGift('none');
+        
+      } catch (err: any) {
+        toast.error(`Failed to issue gift: ${err.message}`);
+      }
+    }
+  };
+
+  const handleAction = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newCustForm.full_name || !newCustForm.phone) return toast.error("Name and phone are required.");
-    
-    const cleanPhone = newCustForm.phone.replace(/\D/g, '');
-    if (cleanPhone.length !== 10) return toast.error("Enter a valid 10-digit phone number.");
+    if (phoneInput.length !== 10) return toast.error("Enter a valid 10-digit phone number.");
+    if (selectedGift !== 'none' && (!selectedLocation || selectedLocation === 'ALL')) {
+      return toast.error("Please select a specific store context to issue a gift.");
+    }
 
-    setIsRegistering(true);
+    setIsProcessing(true);
     try {
-      const payload = {
-        company_id: appUser?.company_id,
-        warehouse_id: selectedLocation === 'ALL' ? null : selectedLocation,
-        full_name: newCustForm.full_name.trim(),
-        phone: cleanPhone,
-        city: newCustForm.city.trim() || null,
-        customer_status: 'Store Visit', // SETTING STATUS AS REQUESTED
-        last_interaction: 'Walk-in Discovery Check-in'
-      };
+      let activeCustomerId = existingCustomer?.id;
 
-      const { data, error } = await supabase
-        .from('customers')
-        .insert([payload])
-        .select()
-        .single();
+      if (existingCustomer) {
+        // Update interaction for existing
+        await supabase
+          .from('customers')
+          .update({ 
+            customer_status: 'Store Visit', 
+            last_interaction: 'Walk-in Discovery Check-in' 
+          })
+          .eq('id', existingCustomer.id);
+        
+        toast.success("Walk-in recorded successfully!");
+      } else {
+        // Register new customer
+        if (!newCustForm.full_name) return toast.error("Name is required for new customers.");
+        
+        const payload = {
+          company_id: appUser?.company_id,
+          warehouse_id: selectedLocation === 'ALL' ? null : selectedLocation,
+          full_name: newCustForm.full_name.trim(),
+          phone: phoneInput,
+          city: newCustForm.city.trim() || null,
+          customer_status: 'Store Visit', 
+          last_interaction: 'Walk-in Discovery Check-in',
+        };
 
-      if (error) throw error;
+        const { data, error } = await supabase
+          .from('customers')
+          .insert([payload])
+          .select()
+          .single();
 
-      toast.success("Customer checked in successfully!");
-      setSelectedCustomer(data);
-      setIsRegisterMode(false);
-      setNewCustForm({ full_name: '', phone: '', city: '' });
-      setCustSearchTerm('');
-      setCustResults([]);
+        if (error) throw error;
+        activeCustomerId = data.id;
+        setExistingCustomer(data);
+        toast.success("Customer registered & checked in successfully!");
+      }
+
+      // Process gift if selected
+      if (activeCustomerId) {
+        await processGiftIssue(activeCustomerId);
+      }
+
+      setIsCheckedIn(true);
     } catch (err: any) {
-      toast.error(`Registration failed: ${err.message}`);
+      toast.error(`Operation failed: ${err.message}`);
     } finally {
-      setIsRegistering(false);
+      setIsProcessing(false);
     }
   };
 
@@ -220,8 +312,7 @@ export default function DiscoveryPage() {
       const prodWhId = String(product.warehouse_id || '').toLowerCase().trim();
       const currWhId = String(selectedLocation || '').toLowerCase().trim();
 
-      // Pass customer ID in URL if selected
-      const custParam = selectedCustomer ? `&customer_id=${selectedCustomer.id}` : '';
+      const custParam = existingCustomer ? `&customer_id=${existingCustomer.id}` : '';
 
       if (prodWhId && currWhId !== 'all' && currWhId !== prodWhId) {
         if (isLocked) {
@@ -317,107 +408,130 @@ export default function DiscoveryPage() {
       {/* MAIN WORKSPACE */}
       <main className="p-4 sm:p-6 flex-1 w-full max-w-5xl mx-auto space-y-6">
         
-        {/* ✨ NEW: CUSTOMER CHECK-IN MODULE */}
+        {/* CUSTOMER WALK-IN MODULE */}
         <Card className="shadow-sm border-slate-200 bg-white rounded-xl overflow-visible z-30 relative">
-          <CardContent className="p-3 sm:p-4">
-            {selectedCustomer ? (
-              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-teal-50/50 border border-teal-100 rounded-lg p-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-teal-100 text-teal-600 rounded-full flex items-center justify-center shrink-0">
-                    <User className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-teal-600 flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" /> Checked In
-                    </p>
-                    <p className="text-sm font-bold text-slate-900 leading-tight">{selectedCustomer.full_name}</p>
-                    <p className="text-xs font-medium text-slate-500">{selectedCustomer.phone}</p>
+          <CardContent className="p-4 sm:p-5">
+            <form onSubmit={handleAction} className="flex flex-col gap-4">
+              
+              <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-end w-full">
+                
+                {/* Phone Input (Primary trigger) */}
+                <div className="space-y-1.5 w-full sm:flex-1 relative">
+                  <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Customer Phone *</Label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                    <Input 
+                      required 
+                      type="tel" 
+                      maxLength={10} 
+                      placeholder="10-digit number" 
+                      className={cn("h-10 pl-9 text-sm font-medium transition-colors", 
+                        phoneInput.length === 10 && existingCustomer ? "bg-emerald-50 border-emerald-200" : "bg-slate-50 border-slate-200"
+                      )} 
+                      value={phoneInput} 
+                      onChange={handlePhoneChange} 
+                    />
+                    {isSearchingCust && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-slate-400" />}
+                    {phoneInput.length === 10 && !isSearchingCust && existingCustomer && (
+                      <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-500" />
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2 w-full sm:w-auto">
-                  <Button 
-                    onClick={() => setIsWaModalOpen(true)}
-                    className="flex-1 sm:flex-none h-9 bg-[#25D366] hover:bg-[#20bd5a] text-white font-bold text-xs rounded-lg shadow-sm"
-                  >
-                    <MessageCircle className="w-4 h-4 mr-1.5" /> Send Welcome
-                  </Button>
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    onClick={() => setSelectedCustomer(null)}
-                    className="h-9 w-9 text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-lg shrink-0"
-                  >
-                    <X className="w-4 h-4" />
-                  </Button>
-                </div>
+
+                {/* Dynamic Fields based on Search Result */}
+                {phoneInput.length === 10 && !isSearchingCust && !existingCustomer && (
+                  <>
+                    <div className="space-y-1.5 w-full sm:flex-1 animate-in fade-in slide-in-from-left-2">
+                      <Label className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">New Customer Name *</Label>
+                      <Input required placeholder="Full Name" className="h-10 text-sm bg-white border-indigo-200 focus-visible:ring-indigo-500" value={newCustForm.full_name} onChange={e => setNewCustForm({...newCustForm, full_name: e.target.value})} />
+                    </div>
+                    <div className="space-y-1.5 w-full sm:flex-[0.5] animate-in fade-in slide-in-from-left-2">
+                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">City</Label>
+                      <Input placeholder="City" className="h-10 text-sm bg-slate-50" value={newCustForm.city} onChange={e => setNewCustForm({...newCustForm, city: e.target.value})} />
+                    </div>
+                  </>
+                )}
+
+                {/* Existing Customer Display */}
+                {phoneInput.length === 10 && !isSearchingCust && existingCustomer && (
+                  <div className="w-full sm:flex-1 h-10 flex items-center px-4 bg-slate-50 border border-slate-200 rounded-lg animate-in fade-in">
+                    <User className="w-4 h-4 text-slate-400 mr-2 shrink-0" />
+                    <span className="text-sm font-bold text-slate-800 truncate">{existingCustomer.full_name}</span>
+                    {existingCustomer.city && <span className="text-xs text-slate-500 ml-2 truncate">({existingCustomer.city})</span>}
+                  </div>
+                )}
+
+                {/* Gifting Selector (Only shows if valid number & store selected) */}
+                {phoneInput.length === 10 && (!selectedLocation || selectedLocation === 'ALL' ? (
+                  <div className="w-full sm:w-auto h-10 px-4 flex items-center justify-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-400 shrink-0">
+                    Select branch to issue gifts
+                  </div>
+                ) : (
+                  <div className="w-full sm:w-48 shrink-0">
+                    <Select value={selectedGift} onValueChange={setSelectedGift}>
+                      <SelectTrigger className="h-10 border-slate-200 bg-white focus:ring-amber-500">
+                        <Gift className={cn("w-4 h-4 mr-2", selectedGift !== 'none' ? "text-amber-500" : "text-slate-400")} />
+                        <SelectValue placeholder="Issue Gift..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none" className="text-xs font-semibold text-slate-500">No Gift</SelectItem>
+                        {isCheckingGifts ? (
+                          <div className="p-2 flex items-center justify-center"><Loader2 className="w-4 h-4 animate-spin text-slate-400" /></div>
+                        ) : availableGifts.length === 0 ? (
+                          <SelectItem value="empty" disabled className="text-xs italic text-slate-400">Inventory Empty</SelectItem>
+                        ) : (
+                          availableGifts.map(gift => (
+                            <SelectItem key={gift.item_name} value={gift.item_name} className="text-xs font-bold text-slate-800">
+                              {gift.item_name} <span className="text-slate-400 font-normal ml-1">({gift.stock_count} left)</span>
+                            </SelectItem>
+                          ))
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                ))}
               </div>
-            ) : isRegisterMode ? (
-              <form onSubmit={handleRegisterCustomer} className="flex flex-col sm:flex-row gap-3 items-start sm:items-end animate-in fade-in duration-300">
-                <div className="space-y-1 w-full sm:flex-1">
-                  <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Full Name *</Label>
-                  <Input required placeholder="Customer Name" className="h-9 text-xs bg-slate-50" value={newCustForm.full_name} onChange={e => setNewCustForm({...newCustForm, full_name: e.target.value})} />
-                </div>
-                <div className="space-y-1 w-full sm:flex-1">
-                  <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Phone *</Label>
-                  <Input required type="tel" maxLength={10} placeholder="10-digit number" className="h-9 text-xs bg-slate-50" value={newCustForm.phone} onChange={e => setNewCustForm({...newCustForm, phone: e.target.value.replace(/\D/g, '')})} />
-                </div>
-                <div className="space-y-1 w-full sm:flex-1">
-                  <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">City</Label>
-                  <Input placeholder="City" className="h-9 text-xs bg-slate-50" value={newCustForm.city} onChange={e => setNewCustForm({...newCustForm, city: e.target.value})} />
-                </div>
-                <div className="flex gap-2 w-full sm:w-auto mt-2 sm:mt-0">
-                  <Button type="button" variant="ghost" className="h-9 text-xs font-semibold text-slate-500 hover:bg-slate-100" onClick={() => setIsRegisterMode(false)}>Cancel</Button>
-                  <Button type="submit" disabled={isRegistering} className="h-9 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold w-full sm:w-auto">
-                    {isRegistering ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <UserPlus className="w-3.5 h-3.5 mr-1.5" />}
-                    Check In
-                  </Button>
-                </div>
-              </form>
-            ) : (
-              <div className="flex flex-col sm:flex-row gap-3 items-center w-full">
-                <div className="relative w-full sm:flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                  <Input 
-                    placeholder="Search existing customer by phone or name..."
-                    className="h-10 pl-9 text-sm bg-slate-50 border-slate-200 focus-visible:ring-indigo-500"
-                    value={custSearchTerm}
-                    onChange={e => setCustSearchTerm(e.target.value)}
-                  />
-                  {isSearchingCust && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-slate-400" />}
+
+              {/* Action Bar */}
+              {phoneInput.length === 10 && !isSearchingCust && (
+                <div className="flex gap-2 w-full justify-end mt-2 pt-4 border-t border-slate-100 animate-in fade-in">
                   
-                  {/* Custom Autocomplete Dropdown */}
-                  {custSearchTerm.length >= 3 && custResults.length > 0 && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl z-50 overflow-hidden">
-                      {custResults.map(cust => (
-                        <div 
-                          key={cust.id} 
-                          className="px-4 py-2.5 hover:bg-slate-50 cursor-pointer flex flex-col border-b border-slate-100 last:border-0"
-                          onClick={() => {
-                            setSelectedCustomer(cust);
-                            setCustSearchTerm('');
-                            setCustResults([]);
-                          }}
-                        >
-                          <span className="text-sm font-bold text-slate-800">{cust.full_name}</span>
-                          <span className="text-xs text-slate-500 font-medium">{cust.phone} {cust.city ? `• ${cust.city}` : ''}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {custSearchTerm.length >= 3 && custResults.length === 0 && !isSearchingCust && (
-                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-xl z-50 px-4 py-3 text-xs text-slate-500 font-medium text-center">
-                      No customer found. Try registering them!
-                    </div>
+                  {/* Show WA and Check-in button ONLY if they are an existing customer or after they have registered in this session */}
+                  {existingCustomer ? (
+                    <>
+                      <Button 
+                        type="button"
+                        onClick={() => setIsWaModalOpen(true)}
+                        className="h-10 bg-[#25D366] hover:bg-[#20bd5a] text-white font-bold text-xs shadow-sm flex-1 sm:flex-none"
+                      >
+                        <MessageCircle className="w-4 h-4 mr-1.5" /> WhatsApp
+                      </Button>
+                      <Button 
+                        type="submit" 
+                        disabled={isProcessing || isCheckedIn} 
+                        className={cn("h-10 text-white text-xs font-bold px-6 flex-1 sm:flex-none", 
+                          isCheckedIn ? "bg-emerald-600 hover:bg-emerald-700" : "bg-slate-900 hover:bg-slate-800"
+                        )}
+                      >
+                        {isProcessing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : 
+                         isCheckedIn ? <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" /> : 
+                         <Store className="w-3.5 h-3.5 mr-1.5" />}
+                        {isCheckedIn ? "Checked In" : "Log Walk-in"}
+                      </Button>
+                    </>
+                  ) : (
+                    <Button 
+                      type="submit" 
+                      disabled={isProcessing} 
+                      className="h-10 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-8 w-full sm:w-auto shadow-sm"
+                    >
+                      {isProcessing ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" /> : <UserPlus className="w-3.5 h-3.5 mr-1.5" />}
+                      Register & Check In
+                    </Button>
                   )}
                 </div>
-                <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
-                  <span className="text-xs font-bold text-slate-300 uppercase tracking-widest hidden sm:block">OR</span>
-                  <Button onClick={() => setIsRegisterMode(true)} className="h-10 w-full sm:w-auto bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 shadow-sm text-xs font-bold">
-                    <UserPlus className="w-3.5 h-3.5 mr-1.5 text-indigo-500" /> New Walk-in
-                  </Button>
-                </div>
-              </div>
-            )}
+              )}
+            </form>
           </CardContent>
         </Card>
 
@@ -617,7 +731,7 @@ export default function DiscoveryPage() {
                   onClick={handleCheckout} 
                   className="flex-[2] h-12 text-sm font-bold bg-slate-900 hover:bg-slate-800 text-white rounded-lg shadow-sm uppercase tracking-widest"
                 >
-                  Send to POS {selectedCustomer && '(w/ Customer)'} <ArrowRight className="w-4 h-4 ml-2" />
+                  Send to POS {existingCustomer && '(w/ Customer)'} <ArrowRight className="w-4 h-4 ml-2" />
                 </Button>
               </div>
             </div>
@@ -637,11 +751,10 @@ export default function DiscoveryPage() {
 
       </main>
 
-      {/* ✨ NEW: WhatsApp Sender Modal */}
       <WhatsAppSenderModal 
         isOpen={isWaModalOpen}
         onClose={() => setIsWaModalOpen(false)}
-        recipients={selectedCustomer ? [{ phone: selectedCustomer.phone, name: selectedCustomer.full_name }] : []}
+        recipients={existingCustomer ? [{ phone: existingCustomer.phone, name: existingCustomer.full_name }] : []}
       />
     </div>
   )
