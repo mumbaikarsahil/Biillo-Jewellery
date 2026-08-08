@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { 
   Send, Package, ArrowRight, ArrowLeft, ChevronRight, 
   Database, Loader2, Warehouse, Boxes, Info, Printer, ShieldCheck, Wrench,
-  AlertCircle 
+  AlertCircle, Gift, Box
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
@@ -19,6 +19,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { Input } from '@/components/ui/input'
 
 export default function NewTransferPage() {
   const { appUser } = useAuth()
@@ -52,13 +53,21 @@ export default function NewTransferPage() {
         const { data: wh } = await supabase.from('warehouses').select('*').eq('company_id', appUser.company_id);
         setWarehouses(wh || []);
 
-        // FORK IN THE ROAD: Fetch Repairs OR Inventory based on URL
+        // FORK IN THE ROAD: Fetch Repairs OR (Inventory + Gifting + Packaging)
         if (transferType === 'repair') {
            const { data: rep } = await supabase.from('repair_tickets').select('*').in('id', activeIds);
-           setItems(rep || []);
+           setItems((rep || []).map(r => ({ ...r, _type: 'repair' })));
         } else {
+           // Query all 3 tables (UUIDs are globally unique, so they will only match their correct table)
            const { data: itm } = await supabase.from('inventory_items').select('*').in('id', activeIds);
-           setItems(itm || []);
+           const { data: gift } = await supabase.from('gifting_inventory').select('*').in('id', activeIds);
+           const { data: pack } = await supabase.from('packaging_inventory').select('*').in('id', activeIds);
+           
+           const mappedItm = (itm || []).map(i => ({ ...i, _type: 'inventory' }));
+           const mappedGift = (gift || []).map(g => ({ ...g, _type: 'gifting', transfer_qty: 1 }));
+           const mappedPack = (pack || []).map(p => ({ ...p, _type: 'packaging', transfer_qty: 1 }));
+
+           setItems([...mappedItm, ...mappedGift, ...mappedPack]);
         }
       } finally {
         setIsLoading(false)
@@ -68,20 +77,29 @@ export default function NewTransferPage() {
   }, [appUser]);
 
   // Determine source warehouse dynamically based on item type
-  const sourceWarehouseId = transferType === 'repair' 
-    ? (items[0]?.current_warehouse_id || items[0]?.origin_warehouse_id) 
-    : items[0]?.warehouse_id;
-    
+  const sourceWarehouseId = items[0]?.warehouse_id || items[0]?.current_warehouse_id || items[0]?.origin_warehouse_id;
   const sourceWarehouse = warehouses.find(w => w.id === sourceWarehouseId);
+
+  const updateBulkQty = (id: string, qty: number) => {
+    setItems(prev => prev.map(item => {
+      if (item.id === id) {
+        let finalQty = isNaN(qty) ? 1 : qty;
+        if (finalQty > item.stock_count) finalQty = item.stock_count; // Cap at max available
+        if (finalQty < 1) finalQty = 1; // Min 1
+        return { ...item, transfer_qty: finalQty };
+      }
+      return item;
+    }));
+  }
 
   const handleDispatch = async () => {
     if (!toWarehouseId) return toast.error("Please select a destination branch");
     
-    // ✨ FIX: Pre-Flight Check to block double transfers
-    const alreadyInTransit = items.some(itm => itm.status && itm.status.includes('transit'));
+    // ✨ FIX: Pre-Flight Check to block double transfers for strictly tracked items
+    const alreadyInTransit = items.some(itm => itm._type === 'inventory' && itm.status && itm.status.includes('transit'));
     if (alreadyInTransit) {
         return toast.error("Action Denied", {
-            description: "One or more selected items are already in transit. You cannot transfer them again."
+            description: "One or more selected jewelry items are already in transit. You cannot transfer them again."
         });
     }
 
@@ -89,27 +107,40 @@ export default function NewTransferPage() {
 
     try {
       const transferNo = `TRF-${Date.now().toString().slice(-6)}`
-      // Generate Secure Hashes and Seal
       const sealNumber = `SL-${Math.floor(100000 + Math.random() * 900000)}`
       const outerQrHash = `OUT-${crypto.randomUUID().slice(0,8).toUpperCase()}`
       const innerQrHash = `INN-${crypto.randomUUID().slice(0,8).toUpperCase()}`
       
+      // Separate Bulk items for JSON storage
+      const bulkItems = items.filter(i => i._type === 'gifting' || i._type === 'packaging').map(i => ({
+         id: i.id,
+         _type: i._type,
+         item_name: i.item_name,
+         quantity: i.transfer_qty
+      }));
+
       // 1. Create the Main Transfer Record
+      const transferPayload: any = {
+        company_id: appUser?.company_id,
+        transfer_number: transferNo,
+        from_warehouse_id: sourceWarehouseId,
+        to_warehouse_id: toWarehouseId,
+        status: 'in_transit',
+        transfer_category: transferType, 
+        dispatched_by: appUser?.user_id,
+        dispatched_at: new Date(),
+        seal_number: sealNumber,
+        outer_qr_hash: outerQrHash,
+        inner_qr_hash: innerQrHash,
+      };
+
+      if (bulkItems.length > 0) {
+        transferPayload.bulk_items = bulkItems;
+      }
+
       const { data: transfer, error: tErr } = await supabase
         .from('stock_transfers')
-        .insert({
-          company_id: appUser?.company_id,
-          transfer_number: transferNo,
-          from_warehouse_id: sourceWarehouseId,
-          to_warehouse_id: toWarehouseId,
-          status: 'in_transit',
-          transfer_category: transferType, // Marks it as 'repair' or 'inventory'
-          dispatched_by: appUser?.user_id,
-          dispatched_at: new Date(),
-          seal_number: sealNumber,
-          outer_qr_hash: outerQrHash,
-          inner_qr_hash: innerQrHash
-        })
+        .insert(transferPayload)
         .select()
         .single();
 
@@ -131,16 +162,34 @@ export default function NewTransferPage() {
          if (statusErr) throw new Error(`Repair Status Update Failed: ${statusErr.message}`)
             
       } else {
-         // Normal Inventory Flow
-         const lines = items.map(itm => ({ transfer_id: transfer.id, item_id: itm.id }))
-         
-         const { error: lineErr } = await supabase.from('stock_transfer_item_lines').insert(lines)
-         if (lineErr) throw new Error(`Inventory Line Insert Failed: ${lineErr.message}`)
-         
-         const { error: statusErr } = await supabase.from('inventory_items')
-            .update({ status: 'transit' }) 
-            .in('id', activeIds)
-         if (statusErr) throw new Error(`Inventory Status Update Failed: ${statusErr.message}`)
+         // Normal Inventory Line Creation
+         const invItems = items.filter(i => i._type === 'inventory');
+         if (invItems.length > 0) {
+           const lines = invItems.map(itm => ({ transfer_id: transfer.id, item_id: itm.id }))
+           
+           const { error: lineErr } = await supabase.from('stock_transfer_item_lines').insert(lines)
+           if (lineErr) throw new Error(`Inventory Line Insert Failed: ${lineErr.message}`)
+           
+           const { error: statusErr } = await supabase.from('inventory_items')
+              .update({ status: 'transit' }) 
+              .in('id', invItems.map(i => i.id))
+           if (statusErr) throw new Error(`Inventory Status Update Failed: ${statusErr.message}`)
+         }
+
+         // ✨ NEW: Deduct Stock for Gifting and Packaging
+         for (const bulk of bulkItems) {
+            const tableName = bulk._type === 'gifting' ? 'gifting_inventory' : 'packaging_inventory';
+            
+            // Read current count safely
+            const { data: curr } = await supabase.from(tableName).select('stock_count').eq('id', bulk.id).single();
+            
+            if (curr && curr.stock_count >= bulk.quantity) {
+               const { error: updErr } = await supabase.from(tableName).update({ stock_count: curr.stock_count - bulk.quantity }).eq('id', bulk.id);
+               if (updErr) throw new Error(`Failed to deduct stock for ${bulk.item_name}`);
+            } else {
+               throw new Error(`Insufficient stock available for ${bulk.item_name} at time of dispatch.`);
+            }
+         }
       }
 
       toast.success("Consignment Dispatched & Secured")
@@ -262,7 +311,7 @@ export default function NewTransferPage() {
                 Consignment Content
               </h3>
             </div>
-            <Badge className="text-[10px] font-bold bg-white">{items.length} Units</Badge>
+            <Badge className="text-[10px] font-bold bg-white">{items.length} Tracking Lines</Badge>
           </CardHeader>
           <CardContent className="p-0">
             {isLoading ? (
@@ -273,36 +322,57 @@ export default function NewTransferPage() {
                   <TableHeader className="bg-gray-50/30">
                     <TableRow>
                       <TableHead className="text-[10px] font-bold uppercase text-gray-400 h-9 px-6">
-                        {transferType === 'repair' ? 'Ticket #' : 'Barcode / SKU'}
+                        Identifier
                       </TableHead>
                       <TableHead className="text-[10px] font-bold uppercase text-gray-400 h-9 px-4">
-                        {transferType === 'repair' ? 'Description' : 'Category'}
+                        Category
                       </TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase text-gray-400 h-9 px-4 text-right">
-                        {transferType === 'repair' ? 'Gross Wt.' : 'Net Wt.'}
+                      <TableHead className="text-[10px] font-bold uppercase text-gray-400 h-9 px-6 text-right">
+                        Quantity / Weight
                       </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {items.map((itm) => {
-                      const inTransit = itm.status && itm.status.includes('transit');
+                      const isBulk = itm._type === 'gifting' || itm._type === 'packaging';
+                      const inTransit = itm._type === 'inventory' && itm.status && itm.status.includes('transit');
+                      
                       return (
                       <TableRow key={itm.id} className="border-b last:border-0 hover:bg-gray-50/50">
                         <TableCell className="px-6 py-3 font-mono text-xs font-bold text-gray-900 flex items-center gap-2">
-                          {transferType === 'repair' ? itm.ticket_number : itm.barcode}
-                          {/* ✨ FIX: Visual indicator for the user */}
+                          {isBulk ? itm.item_name : (transferType === 'repair' ? itm.ticket_number : itm.barcode)}
+                          
+                          {itm._type === 'gifting' && <Badge variant="outline" className="ml-2 text-[9px] h-4 bg-rose-50 text-rose-600 border-rose-200 shadow-none"><Gift className="w-2.5 h-2.5 mr-1"/> GIFTING</Badge>}
+                          {itm._type === 'packaging' && <Badge variant="outline" className="ml-2 text-[9px] h-4 bg-cyan-50 text-cyan-600 border-cyan-200 shadow-none"><Box className="w-2.5 h-2.5 mr-1"/> PACKAGING</Badge>}
+
+                          {/* Warning for standard inventory already in transit */}
                           {inTransit && (
-                            <Badge variant="destructive" className="h-4 text-[9px] px-1 ml-2 flex items-center gap-1">
-                            <AlertCircle className="w-3 h-3" /> 
-                            Already In Transit
-                          </Badge>
+                            <Badge variant="destructive" className="h-4 text-[9px] px-1 ml-2 flex items-center gap-1 shadow-none">
+                              <AlertCircle className="w-3 h-3" /> Already In Transit
+                            </Badge>
                           )}
                         </TableCell>
-                        <TableCell className="px-4 text-[13px] font-medium text-gray-600">
-                          {transferType === 'repair' ? itm.item_description : itm.item_category}
+                        
+                        <TableCell className="px-4 text-[13px] font-medium text-gray-600 uppercase tracking-wider text-[10px]">
+                          {isBulk ? itm._type : (transferType === 'repair' ? itm.item_description : itm.item_category)}
                         </TableCell>
-                        <TableCell className="px-4 text-right text-[13px] font-medium text-gray-500">
-                          {transferType === 'repair' ? `${itm.gross_weight_g}g` : `${itm.net_weight_g}g`}
+                        
+                        <TableCell className="px-6 text-right text-[13px] font-medium text-gray-500">
+                          {isBulk ? (
+                            <div className="flex items-center justify-end gap-2">
+                              <Input 
+                                type="number" 
+                                min={1} 
+                                max={itm.stock_count} 
+                                value={itm.transfer_qty} 
+                                onChange={(e) => updateBulkQty(itm.id, parseInt(e.target.value))}
+                                className="w-16 h-7 text-right font-mono text-xs bg-white focus-visible:ring-indigo-500"
+                              />
+                              <span className="text-[10px] text-gray-400">/ {itm.stock_count}</span>
+                            </div>
+                          ) : (
+                            transferType === 'repair' ? `${itm.gross_weight_g}g` : `${itm.net_weight_g}g`
+                          )}
                         </TableCell>
                       </TableRow>
                     )})}
@@ -315,16 +385,16 @@ export default function NewTransferPage() {
 
         <div className="flex flex-col md:flex-row items-center gap-6 pt-4">
            <div className="flex-1 flex items-start gap-3 p-4 rounded-xl border border-blue-100 bg-blue-50/50">
-             <Info className="h-4 w-4 text-blue-500 mt-0.5" />
+             <Info className="h-4 w-4 text-blue-500 mt-0.5 shrink-0" />
              <p className="text-[11px] text-blue-700 font-medium leading-relaxed uppercase tracking-tight">
-               Dispatching will log this {transferType} transit and generate <span className="font-bold">Outer & Inner QR Security Keys</span>.
+               Dispatching will log this {transferType} transit and generate <span className="font-bold">Outer & Inner QR Security Keys</span>. Bulk items (gifts/packaging) will be deducted from source inventory immediately.
              </p>
            </div>
            
            <Button 
             onClick={handleDispatch} 
             className="w-full md:w-[280px] h-12 text-sm font-bold uppercase tracking-widest shadow-lg bg-slate-900 hover:bg-slate-800" 
-            disabled={isDispatching || isLoading || !toWarehouseId || items.some(itm => itm.status?.includes('transit'))}
+            disabled={isDispatching || isLoading || !toWarehouseId || items.some(itm => itm._type === 'inventory' && itm.status?.includes('transit'))}
            >
             {isDispatching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
             {isDispatching ? "Securing Vault..." : "Seal & Dispatch"}

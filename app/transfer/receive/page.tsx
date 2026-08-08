@@ -5,13 +5,13 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { 
   Search, ArrowLeft, RefreshCw, Loader2, Warehouse, 
-  Boxes, Info, Camera, X, QrCode, ShieldAlert, CheckSquare, Square, Wrench
+  Boxes, Info, Camera, X, QrCode, ShieldAlert, CheckSquare, Square, Wrench, Gift, Box
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Scanner } from '@yudiel/react-qr-scanner'
 
 import { useAuth } from '@/hooks/useAuth'
-import { useStoreLocation } from '@/hooks/useStoreLocation' // ✨ Imported the hook
+import { useStoreLocation } from '@/hooks/useStoreLocation' 
 import { supabase } from '@/lib/supabaseClient'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -50,7 +50,6 @@ export default function ReceiveStockPage() {
   const router = useRouter()
   const { appUser } = useAuth()
   
-  // ✨ INTEGRATED GLOBAL LOCATION STATE
   const { isHQ, selectedLocation } = useStoreLocation() 
 
   const [searchInput, setSearchInput] = useState('')
@@ -113,8 +112,7 @@ export default function ReceiveStockPage() {
       return toast.error(`Invalid QR Code or Hash: ${cleanInput}`)
     }
 
-    // ✨ STRICT LOCATION SECURITY CHECK ✨
-    // If the user is NOT HQ, and the transfer destination does not match their currently active branch location, block them!
+    // STRICT LOCATION SECURITY CHECK
     if (!isHQ && selectedLocation !== 'ALL' && data.to_warehouse_id !== selectedLocation) {
       return toast.error(`Unauthorized: This parcel is routed to ${data.to.name}, not your current location.`);
     }
@@ -125,6 +123,7 @@ export default function ReceiveStockPage() {
     if (isRepair && data.repair_lines) {
       normalizedItems = data.repair_lines.map((line: any) => ({
         id: line.repair_ticket_id,
+        _type: 'repair',
         barcode: line.repair_tickets.ticket_number,
         category: line.repair_tickets.item_description,
         weight: line.repair_tickets.gross_weight_g,
@@ -134,12 +133,29 @@ export default function ReceiveStockPage() {
     } else if (data.item_lines) {
       normalizedItems = data.item_lines.map((line: any) => ({
         id: line.item_id,
+        _type: 'inventory',
         barcode: line.inventory_items.barcode,
         category: line.inventory_items.item_category,
         weight: line.inventory_items.net_weight_g,
         weightLabel: 'g Net',
         originalData: line.inventory_items
       }))
+    }
+
+    // ✨ NEW: Map bulk items (gifting and packaging) from the JSON field
+    if (data.bulk_items && Array.isArray(data.bulk_items)) {
+      data.bulk_items.forEach((bulkItem: any) => {
+        normalizedItems.push({
+          id: bulkItem.id, // Using the same ID string from source to represent this line item
+          _type: bulkItem._type, // 'gifting' or 'packaging'
+          item_name: bulkItem.item_name,
+          barcode: bulkItem.item_name,
+          category: bulkItem._type === 'gifting' ? 'Promotional Gift' : 'Store Packaging',
+          weight: bulkItem.quantity,
+          weightLabel: 'Units',
+          originalData: bulkItem
+        });
+      });
     }
 
     data.normalizedItems = normalizedItems
@@ -218,19 +234,26 @@ export default function ReceiveStockPage() {
       const isDisputed = tickedItems.size < transferData.normalizedItems.length
       const isRepair = transferData.transfer_category === 'repair'
 
-      // Separate the items into happy path vs disputed
+      // Separate the items into happy path vs disputed, categorized by type
       const successIds: string[] = []
       const disputedIds: string[] = []
+      const successBulkItems: any[] = []
 
       transferData.normalizedItems.forEach((item: any) => {
         if (tickedItems.has(item.id)) {
-          successIds.push(item.id)
+          if (item._type === 'gifting' || item._type === 'packaging') {
+            successBulkItems.push(item)
+          } else {
+            successIds.push(item.id)
+          }
         } else {
-          disputedIds.push(item.id)
+          if (item._type === 'inventory' || item._type === 'repair') {
+            disputedIds.push(item.id)
+          }
         }
       })
 
-      // 1. Process the Successfully Received Items
+      // 1. Process Successfully Received Main Inventory/Repairs
       if (successIds.length > 0) {
         if (isRepair) {
            const sampleItem = transferData.normalizedItems.find((i: any) => i.id === successIds[0]);
@@ -258,6 +281,41 @@ export default function ReceiveStockPage() {
         }
       }
 
+      // ✨ NEW: 1.5 Process Successfully Received Bulk Items (Gifts & Packaging)
+      if (successBulkItems.length > 0) {
+        for (const bulk of successBulkItems) {
+          const tableName = bulk._type === 'gifting' ? 'gifting_inventory' : 'packaging_inventory';
+          
+          // Check if the destination warehouse already has this item
+          const { data: existing } = await supabase.from(tableName)
+            .select('id, stock_count')
+            .eq('company_id', appUser?.company_id)
+            .eq('warehouse_id', transferData.to_warehouse_id)
+            .eq('item_name', bulk.item_name)
+            .maybeSingle();
+
+          if (existing) {
+            // Update existing stock
+            const { error: updErr } = await supabase.from(tableName)
+              .update({ stock_count: existing.stock_count + bulk.weight, last_updated: new Date().toISOString() })
+              .eq('id', existing.id);
+            if (updErr) throw new Error(`Failed to ingest ${bulk.item_name}`);
+          } else {
+            // Insert new stock record for this warehouse
+            const insertPayload: any = {
+              company_id: appUser?.company_id,
+              warehouse_id: transferData.to_warehouse_id,
+              item_name: bulk.item_name,
+              stock_count: bulk.weight
+            };
+            if (bulk._type === 'packaging') insertPayload.item_category = 'Received Packaging';
+
+            const { error: insErr } = await supabase.from(tableName).insert(insertPayload);
+            if (insErr) throw new Error(`Failed to create inventory record for ${bulk.item_name}`);
+          }
+        }
+      }
+
       // 2. Process the Disputed Items (Lock them down)
       if (disputedIds.length > 0) {
         if (isRepair) {
@@ -282,7 +340,6 @@ export default function ReceiveStockPage() {
       }
 
       // 3. Update Transfer Status
-      // If some items were missing, the transfer is partially received, not complete.
       const newTransferStatus = isDisputed ? 'partially_received' : 'completed';
 
       const { error: trfErr } = await supabase
@@ -296,7 +353,7 @@ export default function ReceiveStockPage() {
       if (trfErr) throw new Error("Transfer Update Failed: " + trfErr.message)
 
       if (isDisputed) {
-        toast.error(`DISPUTE LOGGED: ${disputedIds.length} items missing. Anomalies have been quarantined.`, { duration: 8000 })
+        toast.error(`DISPUTE LOGGED: ${transferData.normalizedItems.length - tickedItems.size} items missing. Anomalies have been quarantined.`, { duration: 8000 })
       } else {
         toast.success(isRepair ? "Repairs successfully checked in!" : "Stock ingested perfectly into vault!")
       }
@@ -330,6 +387,9 @@ export default function ReceiveStockPage() {
                 handleScanInput(codes[0].rawValue);
               }
             }} components={{ finder: true }} />
+          </div>
+          <div className="p-6 bg-slate-900 text-center text-xs text-slate-400 uppercase tracking-widest">
+            Point camera at the jewelry QR tag
           </div>
         </div>
       )}
@@ -451,7 +511,11 @@ export default function ReceiveStockPage() {
                   >
                     {isTicked ? <CheckSquare className="h-6 w-6 text-emerald-600 shrink-0" /> : <Square className="h-6 w-6 text-slate-300 shrink-0" />}
                     <div className="flex-1">
-                      <p className="text-sm font-mono font-bold text-slate-900">{item.barcode}</p>
+                      <p className="text-sm font-mono font-bold text-slate-900 flex items-center gap-2">
+                        {item.barcode}
+                        {item._type === 'gifting' && <Badge variant="outline" className="text-[8px] h-4 bg-rose-50 text-rose-600 border-rose-200 shadow-none"><Gift className="w-2.5 h-2.5 mr-1"/> GIFTING</Badge>}
+                        {item._type === 'packaging' && <Badge variant="outline" className="text-[8px] h-4 bg-cyan-50 text-cyan-600 border-cyan-200 shadow-none"><Box className="w-2.5 h-2.5 mr-1"/> PACKAGING</Badge>}
+                      </p>
                       <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">{item.category}</p>
                     </div>
                     <div className="text-right">

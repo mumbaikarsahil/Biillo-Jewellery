@@ -166,7 +166,7 @@ export default function InventoryPage() {
   const router = useRouter()
   
   const [items, setItems] = useState<InventoryItem[]>([])
-  const [itemCache, setItemCache] = useState<Record<string, InventoryItem>>({})
+  const [itemCache, setItemCache] = useState<Record<string, any>>({})
 
   const [loading, setLoading] = useState(true)
   const [isFetchingMore, setIsFetchingMore] = useState(false)
@@ -212,7 +212,6 @@ export default function InventoryPage() {
 
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
 
-  // ✨ ADDED 'packaging' to the counts state
   const [counts, setCounts] = useState({ active: 0, exchange: 0, buyback: 0, repair: 0, others: 0, sold: 0, gifting: 0, packaging: 0 })
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false)
 
@@ -222,7 +221,7 @@ export default function InventoryPage() {
   const [isAddingGift, setIsAddingGift] = useState(false)
   const [giftForm, setGiftForm] = useState({ item_name: 'Golden Rose', warehouse_id: '', quantity: 1 })
 
-  // ✨ NEW: Packaging Inventory State
+  // Packaging Inventory State
   const [packagingItems, setPackagingItems] = useState<any[]>([])
   const [isAddPackagingModalOpen, setIsAddPackagingModalOpen] = useState(false)
   const [isAddingPackaging, setIsAddingPackaging] = useState(false)
@@ -498,11 +497,9 @@ export default function InventoryPage() {
         if (selectedLocation !== 'ALL') repQ = repQ.eq('origin_warehouse_id', selectedLocation);
         if (debouncedSearch) repQ = repQ.or(`ticket_number.ilike.%${debouncedSearch}%,item_description.ilike.%${debouncedSearch}%`);
 
-        // Fetching Gifting counts
         let giftQ = supabase.from('gifting_inventory').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id);
         if (selectedLocation !== 'ALL') giftQ = giftQ.eq('warehouse_id', selectedLocation);
 
-        // ✨ Fetching Packaging counts
         let packQ = supabase.from('packaging_inventory').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id);
         if (selectedLocation !== 'ALL') packQ = packQ.eq('warehouse_id', selectedLocation);
 
@@ -534,7 +531,7 @@ export default function InventoryPage() {
     try {
       let combined: InventoryItem[] = [];
 
-      // Fetch Gifting Inventory
+      // ✨ UPDATED: Fetch Gifting Inventory & store in cache
       if (activeTab === 'gifting') {
         let giftQuery = supabase.from('gifting_inventory').select('*').eq('company_id', appUser.company_id);
         if (selectedLocation !== 'ALL') giftQuery = giftQuery.eq('warehouse_id', selectedLocation);
@@ -543,11 +540,16 @@ export default function InventoryPage() {
         if (error) throw new Error(error.message);
         
         setGiftingItems(data || []);
+        setItemCache(prev => {
+          const next = {...prev};
+          (data || []).forEach(d => { next[d.id] = { ...d, _type: 'gifting', warehouse_id: d.warehouse_id } as any });
+          return next;
+        });
         setLoading(false);
         return; 
       }
 
-      // ✨ NEW: Fetch Packaging Inventory
+      // ✨ UPDATED: Fetch Packaging Inventory & store in cache
       if (activeTab === 'packaging') {
         let packQuery = supabase.from('packaging_inventory').select('*').eq('company_id', appUser.company_id);
         if (selectedLocation !== 'ALL') packQuery = packQuery.eq('warehouse_id', selectedLocation);
@@ -556,6 +558,11 @@ export default function InventoryPage() {
         if (error) throw new Error(error.message);
         
         setPackagingItems(data || []);
+        setItemCache(prev => {
+          const next = {...prev};
+          (data || []).forEach(d => { next[d.id] = { ...d, _type: 'packaging', warehouse_id: d.warehouse_id } as any });
+          return next;
+        });
         setLoading(false);
         return; 
       }
@@ -668,7 +675,6 @@ export default function InventoryPage() {
     }
   };
 
-  // ✨ NEW: Add Packaging Stock Function
   const handleAddPackagingStock = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEdit || !appUser) return;
@@ -1534,9 +1540,15 @@ export default function InventoryPage() {
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                     {giftingItems.map(gift => (
-                      <div key={gift.id} className="border border-slate-200 rounded-xl p-4 shadow-sm bg-white flex flex-col gap-2">
+                      <div key={gift.id} className={cn("border rounded-xl p-4 shadow-sm bg-white flex flex-col gap-2 transition-all", selectedIds.includes(gift.id) ? "border-indigo-500 ring-2 ring-indigo-500 bg-indigo-50/10" : "border-slate-200")}>
                         <div className="flex justify-between items-start">
-                          <h3 className="font-bold text-slate-800">{gift.item_name}</h3>
+                          <div className="flex items-center gap-2">
+                             <Checkbox 
+                               checked={selectedIds.includes(gift.id)}
+                               onCheckedChange={() => setSelectedIds(prev => prev.includes(gift.id) ? prev.filter(i => i !== gift.id) : [...prev, gift.id])}
+                             />
+                             <h3 className="font-bold text-slate-800">{gift.item_name}</h3>
+                          </div>
                           <Badge className="bg-emerald-50 text-emerald-700 shadow-none text-xs">{gift.stock_count} in stock</Badge>
                         </div>
                         <div className="text-xs text-slate-500 mt-2 flex items-center gap-1.5">
@@ -1574,7 +1586,7 @@ export default function InventoryPage() {
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                     {packagingItems.map(pack => (
-                      <div key={pack.id} className="border border-slate-200 rounded-xl p-4 shadow-sm bg-white flex flex-col gap-2 relative overflow-hidden">
+                      <div key={pack.id} className={cn("border rounded-xl p-4 shadow-sm bg-white flex flex-col gap-2 relative overflow-hidden transition-all", selectedIds.includes(pack.id) ? "border-indigo-500 ring-2 ring-indigo-500 bg-indigo-50/10" : "border-slate-200")}>
                         {pack.stock_count <= (pack.reorder_level || 50) && (
                            <div className="absolute top-0 right-0 w-16 h-16 pointer-events-none overflow-hidden">
                              <div className="absolute top-2 -right-6 w-24 bg-rose-500 text-white text-[8px] font-bold uppercase tracking-widest text-center py-0.5 rotate-45 shadow-sm">
@@ -1583,9 +1595,16 @@ export default function InventoryPage() {
                            </div>
                         )}
                         <div className="flex justify-between items-start pr-6">
-                          <div>
-                            <h3 className="font-bold text-slate-800 text-sm leading-tight">{pack.item_name}</h3>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">{pack.item_category}</p>
+                          <div className="flex items-start gap-2">
+                            <Checkbox 
+                               checked={selectedIds.includes(pack.id)}
+                               onCheckedChange={() => setSelectedIds(prev => prev.includes(pack.id) ? prev.filter(i => i !== pack.id) : [...prev, pack.id])}
+                               className="mt-0.5"
+                             />
+                            <div>
+                              <h3 className="font-bold text-slate-800 text-sm leading-tight">{pack.item_name}</h3>
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">{pack.item_category}</p>
+                            </div>
                           </div>
                           <Badge className={cn("shadow-none text-xs", pack.stock_count <= (pack.reorder_level || 50) ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700")}>
                             {pack.stock_count} left
@@ -1608,7 +1627,7 @@ export default function InventoryPage() {
 
         </Tabs>
 
-        {selectedIds.length > 0 && activeTab !== 'gifting' && activeTab !== 'packaging' && (
+        {selectedIds.length > 0 && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white p-1.5 rounded-[1.25rem] shadow-2xl flex items-center gap-2 border border-slate-700/50 animate-in slide-in-from-bottom-8">
             <div className="flex items-center gap-2 pl-3 pr-4 border-r border-slate-700">
               <div className="h-7 w-7 bg-indigo-500 rounded-lg flex items-center justify-center text-[11px] font-bold shadow-inner">
@@ -1618,17 +1637,30 @@ export default function InventoryPage() {
             </div>
             
             <div className="flex items-center gap-1 pr-1">
-              <Button 
-                size="sm" 
-                onClick={handleSelectAllGlobal} 
-                disabled={isFetchingGlobal || (counts[activeTab as keyof typeof counts] === items.length && items.length > 0)}
-                className="h-8 px-3 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-sm transition-none"
-              >
-                {isFetchingGlobal ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Database className="w-3.5 h-3.5 mr-1.5" />}
-                Select all {counts[activeTab as keyof typeof counts] || 0} in {activeTab.toUpperCase()}
-              </Button>
+              {activeTab === 'gifting' || activeTab === 'packaging' ? (
+                 <Button 
+                   size="sm" 
+                   onClick={() => {
+                     const visibleIds = activeTab === 'gifting' ? giftingItems.map(i=>i.id) : packagingItems.map(i=>i.id);
+                     setSelectedIds(Array.from(new Set([...selectedIds, ...visibleIds])));
+                   }} 
+                   className="h-8 px-3 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-sm transition-none"
+                 >
+                   <CheckSquare className="w-3.5 h-3.5 mr-1.5" /> Select All in View
+                 </Button>
+              ) : (
+                <Button 
+                  size="sm" 
+                  onClick={handleSelectAllGlobal} 
+                  disabled={isFetchingGlobal || (counts[activeTab as keyof typeof counts] === items.length && items.length > 0)}
+                  className="h-8 px-3 text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-sm transition-none"
+                >
+                  {isFetchingGlobal ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Database className="w-3.5 h-3.5 mr-1.5" />}
+                  Select all {counts[activeTab as keyof typeof counts] || 0} in {activeTab.toUpperCase()}
+                </Button>
+              )}
 
-              {canEdit && (
+              {canEdit && activeTab !== 'gifting' && activeTab !== 'packaging' && (
                 <>
                   <Button size="sm" onClick={handleOpenCalc} className="h-8 px-4 text-xs font-semibold bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl shadow-sm transition-none whitespace-nowrap border border-emerald-400/50">
                     <Calculator className="w-3.5 h-3.5 mr-1.5" /> Calc MRP

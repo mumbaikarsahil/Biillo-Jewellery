@@ -4,7 +4,7 @@ import React, { useEffect, useState, useRef, use } from 'react'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabaseClient'
 import { Button } from '@/components/ui/button'
-import { Printer, ArrowLeft, AlertTriangle, Scissors, FileText, Package } from 'lucide-react'
+import { Printer, ArrowLeft, AlertTriangle, Scissors, FileText, Package, Gift, Box } from 'lucide-react'
 import QRCode from 'react-qr-code'
 import { useReactToPrint } from 'react-to-print'
 import { Badge } from '@/components/ui/badge'
@@ -25,9 +25,16 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
     const fetchTransfer = async () => {
       const { data } = await supabase
         .from('stock_transfers')
-        .select('*, from:from_warehouse_id(name), to:to_warehouse_id(name), items:stock_transfer_item_lines(inventory_items(*))')
+        .select(`
+          *, 
+          from:from_warehouse_id(name), 
+          to:to_warehouse_id(name), 
+          items:stock_transfer_item_lines(inventory_items(*)),
+          repairs:stock_transfer_repair_lines(repair_tickets(*))
+        `)
         .eq('id', transferId)
         .single()
+      
       setTransfer(data)
     }
     if (transferId) fetchTransfer()
@@ -44,11 +51,69 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
   }
 
   const isDisputed = transfer.status === 'disputed'
+
+  // ✨ COMPUTE UNIFIED LINE ITEMS
+  const inventoryLines = (transfer.items || []).map((line: any) => {
+    const item = line.inventory_items;
+    return {
+      id: item.id,
+      type: 'Inventory',
+      barcode: item.barcode,
+      category: item.item_category,
+      desc: `${item.metal_type} ${item.purity_karat}`,
+      grossWt: item.gross_weight_g || 0,
+      netWt: item.net_weight_g || 0,
+      stoneWt: item.total_stone_weight_cts || 0,
+      mrp: item.mrp || 0,
+      diamondSpecs: [item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' ') || 'Plain Metal',
+      solDetails: Number(item.solitaire_weight_cts) > 0 ? `Sol:${item.solitaire_weight_cts}ct(${item.solitaire_pieces || 0}p)` : '',
+      meleeDetails: Number(item.melee_weight_cts) > 0 ? `Mel:${item.melee_weight_cts}ct(${item.melee_pieces || 0}p)` : ''
+    }
+  });
+
+  const repairLines = (transfer.repairs || []).map((line: any) => {
+    const rep = line.repair_tickets;
+    return {
+      id: rep.id,
+      type: 'Repair',
+      barcode: rep.ticket_number,
+      category: rep.item_description || 'Service',
+      desc: rep.purity || 'N/A',
+      grossWt: rep.gross_weight_g || 0,
+      netWt: rep.issued_gold_g || 0,
+      stoneWt: rep.issued_diamond_cts || 0,
+      mrp: rep.actual_cost || 0,
+      diamondSpecs: rep.stone_shape || 'Mixed',
+      solDetails: '',
+      meleeDetails: ''
+    }
+  });
+
+  // ✨ PARSE JSON BULK ITEMS
+  const bulkLines = (transfer.bulk_items || []).map((bulk: any) => {
+    return {
+      id: bulk.id,
+      type: bulk._type === 'gifting' ? 'Gifting' : 'Packaging',
+      barcode: bulk.item_name,
+      category: bulk._type === 'gifting' ? 'Promotional' : 'Store Packaging',
+      desc: `${bulk.quantity} Unit(s)`,
+      grossWt: 0,
+      netWt: 0,
+      stoneWt: 0,
+      mrp: 0,
+      diamondSpecs: 'N/A',
+      solDetails: '',
+      meleeDetails: ''
+    }
+  });
+
+  const allLedgerItems = [...inventoryLines, ...repairLines, ...bulkLines];
   
-  const totalGrossWeight = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.gross_weight_g || 0), 0) || 0;
-  const totalNetWeight = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.net_weight_g || 0), 0) || 0;
-  const totalStoneWeight = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.total_stone_weight_cts || 0), 0) || 0;
-  const totalMRP = transfer.items?.reduce((sum: number, line: any) => sum + (line.inventory_items?.mrp || 0), 0) || 0;
+  const totalGrossWeight = allLedgerItems.reduce((sum, item) => sum + item.grossWt, 0);
+  const totalNetWeight = allLedgerItems.reduce((sum, item) => sum + item.netWt, 0);
+  const totalStoneWeight = allLedgerItems.reduce((sum, item) => sum + item.stoneWt, 0);
+  const totalMRP = allLedgerItems.reduce((sum, item) => sum + item.mrp, 0);
+  const totalBulkUnits = bulkLines.reduce((sum: number, item: any) => sum + parseInt(item.desc.split(' ')[0]), 0);
   
   const fromCode = transfer.from?.name?.substring(0, 4).toUpperCase() || 'ORIG';
   const toCode = transfer.to?.name?.substring(0, 4).toUpperCase() || 'DEST';
@@ -90,7 +155,6 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
         </div>
       </header>
 
-      {/* ✨ REWRITTEN MAIN SECTION: Actionable Instruction Cards */}
       <main className="max-w-5xl mx-auto p-4 sm:p-8 space-y-6 print:hidden">
         {isDisputed && (
           <div className="bg-red-50 border-2 border-red-500 rounded-xl p-6 flex items-start gap-4 shadow-sm animate-in fade-in">
@@ -118,7 +182,7 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
               </div>
               <h3 className="text-xl font-bold text-slate-900">HO Transfer Ledger</h3>
               <p className="text-sm text-slate-500 mt-2 mb-8 leading-relaxed">
-                A high-density A4 manifest detailing every asset, its metal specs, stone weights, and MRP. Used for internal auditing, record-keeping, and physical verification.
+                A high-density A4 manifest detailing every asset, its metal specs, stone weights, bulk quantities, and MRP.
               </p>
               <div className="mt-auto w-full">
                 <Button onClick={handlePrintMaster} className="w-full h-12 text-sm font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-sm transition-all active:scale-95">
@@ -205,41 +269,41 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
             <thead>
               <tr className="border-y border-black bg-gray-100">
                 <th className="py-1 px-1 font-bold uppercase tracking-wider w-6">#</th>
-                <th className="py-1 px-1 font-bold uppercase tracking-wider">Asset (Barcode / Cat)</th>
-                <th className="py-1 px-1 font-bold uppercase tracking-wider">Metal (Type / Wt)</th>
+                <th className="py-1 px-1 font-bold uppercase tracking-wider">Asset / Item</th>
+                <th className="py-1 px-1 font-bold uppercase tracking-wider">Specs (Type / Wt / Qty)</th>
                 <th className="py-1 px-1 font-bold uppercase tracking-wider">Stone Details</th>
                 <th className="py-1 px-1 font-bold uppercase tracking-wider text-right w-12">Stn Wt</th>
                 <th className="py-1 px-1 font-bold uppercase tracking-wider text-right w-16">MRP (₹)</th>
               </tr>
             </thead>
             <tbody>
-              {transfer.items?.map((line: any, idx: number) => {
-                 if(!line.inventory_items) return null;
-                 const item = line.inventory_items;
-                 
-                 const diamondSpecs = [item.diamond_shape, item.diamond_color, item.diamond_clarity].filter(Boolean).join(' ') || 'Plain Metal';
-                 
-                 let stoneDetails = [];
-                 if (Number(item.solitaire_weight_cts) > 0) stoneDetails.push(`Sol:${item.solitaire_weight_cts}ct(${item.solitaire_pieces || 0}p)`);
-                 if (Number(item.melee_weight_cts) > 0) stoneDetails.push(`Mel:${item.melee_weight_cts}ct(${item.melee_pieces || 0}p)`);
+              {allLedgerItems.map((item, idx) => {
+                 let stoneDetailsArr = [];
+                 if (item.solDetails) stoneDetailsArr.push(item.solDetails);
+                 if (item.meleeDetails) stoneDetailsArr.push(item.meleeDetails);
                  
                  return (
                   <tr key={idx} className="border-b border-gray-200 even:bg-gray-50 break-inside-avoid leading-tight">
                     <td className="py-0.5 px-1 font-bold text-gray-400 align-top tabular-nums">{idx + 1}.</td>
                     <td className="py-0.5 px-1 align-top">
                       <span className="font-mono font-bold text-[10px]">{item.barcode}</span>
-                      <span className="text-gray-500 ml-1 uppercase">({item.item_category})</span>
+                      <span className="text-gray-500 ml-1 uppercase">({item.category})</span>
+                      {item.type === 'Gifting' && <span className="ml-1 text-[8px] border border-black px-0.5 font-bold uppercase">GIFT</span>}
+                      {item.type === 'Packaging' && <span className="ml-1 text-[8px] border border-black px-0.5 font-bold uppercase">PACK</span>}
+                      {item.type === 'Repair' && <span className="ml-1 text-[8px] border border-black px-0.5 font-bold uppercase">REP</span>}
                     </td>
                     <td className="py-0.5 px-1 align-top">
-                      <span className="font-bold">{item.metal_type} {item.purity_karat}</span>
-                      <span className="text-gray-500 ml-1 tabular-nums">| G:{(item.gross_weight_g || 0).toFixed(3)}g N:{(item.net_weight_g || 0).toFixed(3)}g</span>
+                      <span className="font-bold">{item.desc}</span>
+                      {item.type === 'Inventory' || item.type === 'Repair' ? (
+                        <span className="text-gray-500 ml-1 tabular-nums">| G:{(item.grossWt || 0).toFixed(3)}g N:{(item.netWt || 0).toFixed(3)}g</span>
+                      ) : null}
                     </td>
                     <td className="py-0.5 px-1 align-top truncate max-w-[150px]">
-                      <span className="font-bold">{diamondSpecs}</span>
-                      {stoneDetails.length > 0 && <span className="text-gray-500 ml-1 tabular-nums">| {stoneDetails.join(' ')}</span>}
+                      <span className="font-bold">{item.diamondSpecs}</span>
+                      {stoneDetailsArr.length > 0 && <span className="text-gray-500 ml-1 tabular-nums">| {stoneDetailsArr.join(' ')}</span>}
                     </td>
                     <td className="py-0.5 px-1 text-right font-bold align-top tabular-nums">
-                      {(item.total_stone_weight_cts || 0).toFixed(2)}
+                      {(item.stoneWt || 0).toFixed(2)}
                     </td>
                     <td className="py-0.5 px-1 text-right font-bold align-top tabular-nums text-[10px]">
                       {(item.mrp || 0).toLocaleString('en-IN')}
@@ -252,10 +316,10 @@ export default function TransferVoucher({ params }: { params: Promise<{ id: stri
             <tfoot>
               <tr className="border-y-[2px] border-black bg-gray-100 break-inside-avoid">
                 <td colSpan={2} className="py-1 px-1 text-right font-black uppercase tracking-widest text-[10px]">
-                  Totals ({transfer.items?.length || 0} Items)
+                  Totals ({allLedgerItems.length} Lines)
                 </td>
                 <td className="py-1 px-1 font-bold text-gray-700 tabular-nums">
-                  G: {totalGrossWeight.toFixed(3)}g | N: {totalNetWeight.toFixed(3)}g
+                  G: {totalGrossWeight.toFixed(3)}g | N: {totalNetWeight.toFixed(3)}g {totalBulkUnits > 0 ? `| ${totalBulkUnits} Bulk Units` : ''}
                 </td>
                 <td className="py-1 px-1 text-right"></td>
                 <td className="py-1 px-1 text-right font-black tabular-nums">
