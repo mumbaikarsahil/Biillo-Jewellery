@@ -143,37 +143,43 @@ export default function WarehousePage() {
 
     try {
       if (editingId) {
-        // ✨ ADDED: Passing new fields to update_warehouse RPC
-        const { error } = await supabase.rpc('update_warehouse', {
-          _warehouse_id: editingId,
-          _company_id: appUser.company_id,
-          _warehouse_code: values.warehouse_code,
-          _name: values.name,
-          _warehouse_type: values.warehouse_type,
-          _address: sanitizeValue(values.address),
-          _contact_number: sanitizeValue(values.contact_number),
-          _gstin: sanitizeValue(values.gstin),
-          _exchange_policy_text: sanitizeValue(values.exchange_policy_text),
-          _invoice_banner_url: sanitizeValue(values.invoice_banner_url),
-          _is_active: values.is_active
-        })
+        // ✨ FIX: Use standard Supabase .update() instead of the broken RPC
+        const { error } = await supabase
+          .from('warehouses')
+          .update({
+            warehouse_code: values.warehouse_code,
+            name: values.name,
+            warehouse_type: values.warehouse_type,
+            address: sanitizeValue(values.address),
+            contact_number: sanitizeValue(values.contact_number),
+            gstin: sanitizeValue(values.gstin),
+            exchange_policy_text: sanitizeValue(values.exchange_policy_text),
+            invoice_banner_url: sanitizeValue(values.invoice_banner_url),
+            is_active: values.is_active,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', editingId)
+          .eq('company_id', appUser.company_id); // Safety check
 
         if (error) throw error
         toast.success('Location Updated Successfully')
         
       } else {
-        // ✨ ADDED: Passing new fields to create_warehouse RPC
-        const { error } = await supabase.rpc('create_warehouse', {
-          _user_id: appUser.user_id,
-          _warehouse_code: values.warehouse_code,
-          _name: values.name,
-          _warehouse_type: values.warehouse_type,
-          _address: sanitizeValue(values.address),            
-          _contact_number: sanitizeValue(values.contact_number), 
-          _gstin: sanitizeValue(values.gstin),
-          _exchange_policy_text: sanitizeValue(values.exchange_policy_text),
-          _invoice_banner_url: sanitizeValue(values.invoice_banner_url)
-        })
+        // ✨ FIX: Use standard Supabase .insert() instead of the broken RPC
+        const { error } = await supabase
+          .from('warehouses')
+          .insert({
+            company_id: appUser.company_id, // Link it directly to the user's tenant
+            warehouse_code: values.warehouse_code,
+            name: values.name,
+            warehouse_type: values.warehouse_type,
+            address: sanitizeValue(values.address),            
+            contact_number: sanitizeValue(values.contact_number), 
+            gstin: sanitizeValue(values.gstin),
+            exchange_policy_text: sanitizeValue(values.exchange_policy_text),
+            invoice_banner_url: sanitizeValue(values.invoice_banner_url),
+            is_active: values.is_active
+          });
 
         if (error) throw error
         toast.success('Location Created Successfully')
@@ -183,7 +189,8 @@ export default function WarehousePage() {
       fetchWarehouses()
     } catch (err: any) {
       console.error("Supabase Error:", err);
-      if (err.message?.includes('idx_warehouse_company_code') || err.message?.includes('unique')) {
+      // Catch specific constraint violations
+      if (err.message?.includes('idx_warehouse_company_code') || err.message?.includes('unique') || err.code === '23505') {
         toast.error('Location Code already exists')
       } else {
         toast.error(err.message || 'An unexpected error occurred')
@@ -192,7 +199,6 @@ export default function WarehousePage() {
       setIsSubmitting(false)
     }
   }
-
   const filtered = warehouses.filter((w) =>
     w.name.toLowerCase().includes(search.toLowerCase()) ||
     w.warehouse_code.toLowerCase().includes(search.toLowerCase())

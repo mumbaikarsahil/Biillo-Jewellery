@@ -247,7 +247,7 @@ export const ERP_INTENTS = {
     }
   },
 
-  // ---------------------------------------------------------------------------
+ // ---------------------------------------------------------------------------
   // 3. VOUCHER & CAMPAIGN MASTER
   // ---------------------------------------------------------------------------
   query_vouchers_master: {
@@ -285,15 +285,45 @@ export const ERP_INTENTS = {
         return { module: "Voucher Search", results: data };
       }
 
+      // ✨ FIX: Advanced "Fuzzy" Search to catch A-1, A1, and A 1 variations
+      let matchedDistributorIds: string[] = [];
+      let actualPartyName = "All Parties";
+
+      if (params.party_name) {
+        // Converts "A 1 Dress" into a highly forgiving SQL wildcard: "%A%1%Dress%"
+        // This ignores spaces, dashes, dots, and commas.
+        const fuzzySearchTerm = params.party_name.split(/[\s\-.,]+/).filter(Boolean).join('%');
+        
+        const { data: distData, error: distErr } = await supabase
+          .from('voucher_distributors')
+          .select('id, distributor_name')
+          .ilike('distributor_name', `%${fuzzySearchTerm}%`);
+
+        if (distErr) return { error: distErr.message };
+
+        // If it STILL fails, give a clear error back to the AI
+        if (!distData || distData.length === 0) {
+          return {
+            module: "Voucher Operations",
+            status: "Search Failed",
+            reason: `Could not find any distributor matching "${params.party_name}". Please verify the exact name in the Master Config.`
+          };
+        }
+        
+        matchedDistributorIds = distData.map(d => d.id);
+        actualPartyName = distData.map(d => d.distributor_name).join(', ');
+      }
+
       // 3. Voucher Distributions Tracking (Payments & Delivery Agents)
       if (params.metric === 'distributions') {
         let q = supabase
           .from('voucher_distributions')
-          .select('quantity, total_amount, payment_status, delivery_agent, created_at, voucher_distributors!inner(distributor_name)')
+          .select('quantity, total_amount, payment_status, delivery_agent, created_at, voucher_distributors(distributor_name)')
           .eq('company_id', companyId);
 
-        if (params.party_name) {
-          q = q.ilike('voucher_distributors.distributor_name', `%${params.party_name}%`);
+        // Apply the resolved IDs
+        if (matchedDistributorIds.length > 0) {
+          q = q.in('distributor_id', matchedDistributorIds);
         }
         if (params.frequency) {
           q = q.gte('created_at', dateFilter.start).lte('created_at', dateFilter.end);
@@ -302,7 +332,6 @@ export const ERP_INTENTS = {
         const { data, error } = await q.limit(500);
         if (error) return { error: error.message };
 
-        // Pre-format financial summaries for the AI
         const paymentSummary = data?.reduce((acc: any, curr: any) => {
           const status = curr.payment_status || 'Unknown';
           acc[status] = (acc[status] || 0) + Number(curr.total_amount || 0);
@@ -317,7 +346,7 @@ export const ERP_INTENTS = {
         return {
           module: "Voucher Distributions & Payments",
           timeframe: params.frequency || "All Time",
-          party_filter: params.party_name || "All Parties",
+          party_filter: actualPartyName,
           total_distribution_batches: data?.length || 0,
           total_vouchers_distributed: data?.reduce((sum, d) => sum + Number(d.quantity || 0), 0) || 0,
           payment_summary: formattedPaymentSummary,
@@ -325,7 +354,7 @@ export const ERP_INTENTS = {
         };
       }
 
-      // 4. Voucher Call Assignments Tracking (Telecalling & Conversions)
+      // 4. Voucher Call Assignments Tracking
       if (params.metric === 'calls') {
         let q = supabase
           .from('voucher_call_assignments')
@@ -360,20 +389,15 @@ export const ERP_INTENTS = {
         };
       }
 
-      // 5. Ultra-Fast Parallel Counting Function for 1,00,000+ Voucher Rows
+      // 5. Ultra-Fast Parallel Counting Function
       const getExactCount = async (statusFilter: string | string[]) => {
-        let selectQuery = 'id, voucher_batches!inner(company_id)';
-        
-        if (params.party_name) {
-          selectQuery += ', voucher_distributors!inner(distributor_name)';
-        }
-
         let q = supabase.from('vouchers')
-          .select(selectQuery, { count: 'exact', head: true }) 
+          .select('id, voucher_batches!inner(company_id)', { count: 'exact', head: true }) 
           .eq('voucher_batches.company_id', companyId);
 
-        if (params.party_name) {
-          q = q.ilike('voucher_distributors.distributor_name', `%${params.party_name}%`);
+        // ✨ Use the resolved IDs directly on the root table instead of doing nested inner joins
+        if (matchedDistributorIds.length > 0) {
+          q = q.in('distributor_id', matchedDistributorIds);
         }
 
         if (Array.isArray(statusFilter)) {
@@ -401,7 +425,7 @@ export const ERP_INTENTS = {
       return {
         module: "Voucher Operations & General Stock",
         timeframe: params.frequency || "All Time",
-        party_filter: params.party_name || "All Parties",
+        party_filter: actualPartyName,
         vouchers_in_stock: inStockCount,
         vouchers_pending_print: pendingPrintCount,
         vouchers_delivered: deliveredCount,
@@ -410,7 +434,6 @@ export const ERP_INTENTS = {
       };
     }
   },
-
   // ---------------------------------------------------------------------------
   // 4. CRM & KITTY MASTER
   // ---------------------------------------------------------------------------

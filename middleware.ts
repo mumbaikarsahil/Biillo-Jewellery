@@ -90,10 +90,8 @@ export async function middleware(request: NextRequest) {
       path.startsWith('/vouchers/distributors')
     
     const isOpsRoute = path.startsWith('/purchases') || path.startsWith('/manufacturing') || path.startsWith('/inventory') || path.startsWith('/transfer') || path.startsWith('/catalog')
-    const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/transfer') || path.startsWith('/catalog') || path.startsWith('/reports')
-    const isSalesRoute = path.startsWith('/discovery') || path.startsWith('/pos') || path.startsWith('/catalog')
-
-    // ----------------------------------------------------
+    const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/transfer') || path.startsWith('/catalog') || path.startsWith('/reports') || path.startsWith('/crm')
+    const isSalesRoute = path.startsWith('/discovery') || path.startsWith('/pos') || path.startsWith('/catalog') || path.startsWith('/crm')
     // STRICT DENIALS (Cross-role access prevention)
     // ----------------------------------------------------
     
@@ -101,10 +99,9 @@ export async function middleware(request: NextRequest) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
-    if (isCrmRoute && role !== 'crm_manager') {
+    if (isCrmRoute && !['crm_manager', 'branch_manager', 'sales_person'].includes(role)) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
-
     // ✨ UPDATED: Voucher Access Logic
     if (isVoucherRoute) {
       if (role === 'crm_manager') {
