@@ -2,37 +2,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { format, isPast, addDays } from "date-fns";
+import { format, isPast } from "date-fns";
 import { 
-  Search, 
-  Store, 
-  CheckCircle2, 
-  Package, 
-  Loader2,
-  ArrowLeft,
-  ChevronRight,
-  ChevronLeft,
-  RefreshCw,
-  Database,
-  CheckSquare,
-  Filter,
-  User,
-  Truck,
-  ScanFace,
-  ShieldAlert,
-  MapPin,
-  Phone,
-  ExternalLink,
-  Download,
-  BellRing,
-  Megaphone,
-  Trash2,
-  ArrowUpDown, 
-  Settings2,
-  PhoneCall,
-  UserPlus,
-  Sparkles,
-  X
+  Search, Store, Package, Loader2, ArrowLeft, ChevronRight, ChevronLeft,
+  RefreshCw, Database, CheckSquare, Filter, User, ShieldAlert, Phone,
+  Download, BellRing, Megaphone, ArrowUpDown, Settings2, PhoneCall,
+  CheckCircle2, X
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -42,33 +17,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
-  Card,
-  CardContent,
-  CardHeader,
-} from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 
@@ -89,9 +44,6 @@ interface TrackedVoucher {
   last_scanned_at: string | null;
   updated_at: string | null; 
   
-  last_scanned_warehouse_id?: string | null;
-  last_scanned_warehouse?: { name: string } | null;
-
   customers?: {
     id: string;
     full_name: string;
@@ -102,7 +54,6 @@ interface TrackedVoucher {
   voucher_batches: {
     batch_no: string;
     created_at?: string;
-    received_at?: string | null;
   };
   voucher_distributors?: {
     distributor_name: string;
@@ -117,6 +68,7 @@ interface TrackedVoucher {
   voucher_call_assignments?: {
     id: string;
     assigned_to: string;
+    assigned_by: string; 
     status: string;
     call_outcome?: string | null;
     interest_level?: string | null;
@@ -128,7 +80,11 @@ export default function TrackVoucherPage() {
   const { toast } = useToast();
   const { appUser } = useAuth(); 
 
-  // --- MASTER LIST STATE (PAGINATED) ---
+  // --- EXPORT MODAL STATE ---
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isExportingAll, setIsExportingAll] = useState(false);
+
+  // --- MASTER LIST STATE ---
   const [listData, setListData] = useState<TrackedVoucher[]>([]);
   const [isListLoading, setIsListLoading] = useState(false);
   const [localSearch, setLocalSearch] = useState("");
@@ -136,15 +92,15 @@ export default function TrackVoucherPage() {
   const [pageSize, setPageSize] = useState(50); 
   const [totalCount, setTotalCount] = useState(0);
 
-  // --- ADVANCED FILTERS STATE ---
+  // --- ADVANCED UNIFIED FILTERS STATE ---
+  const [isFiltersOpen, setIsFiltersOpen] = useState(false);
   const [activeFilter, setActiveFilter] = useState("all");
   const [assignmentFilter, setAssignmentFilter] = useState("all");
-  const [distributors, setDistributors] = useState<any[]>([]);
-  const [batches, setBatches] = useState<any[]>([]);
+  const [outcomeFilter, setOutcomeFilter] = useState("all");
+  const [interestFilter, setInterestFilter] = useState("all");
   const [selectedFilterDistributor, setSelectedFilterDistributor] = useState("all");
-  const [selectedFilterBatch, setSelectedFilterBatch] = useState("all");
   
-  // --- SORTING & RANGE STATE ---
+  const [distributors, setDistributors] = useState<any[]>([]);
   const [sortOrder, setSortOrder] = useState("newest"); 
   const [searchMode, setSearchMode] = useState<'text' | 'range'>('text');
   const [fromCode, setFromCode] = useState("");
@@ -152,23 +108,15 @@ export default function TrackVoucherPage() {
   
   // --- BULK ACTION STATE ---
   const [selectedVouchers, setSelectedVouchers] = useState<Set<string>>(new Set());
-  const [bulkHandlingFee, setBulkHandlingFee] = useState("");
-  const [bulkExpiryDate, setBulkExpiryDate] = useState(""); 
-  const [bulkOverrideReason, setBulkOverrideReason] = useState("");
 
   // --- MASTER UPDATE MODAL STATE ---
   const [isMasterEditModalOpen, setIsMasterEditModalOpen] = useState(false);
   const [isUpdatingBulk, setIsUpdatingBulk] = useState(false);
   const [masterEditForm, setMasterEditForm] = useState({
-    status: 'no_change',
-    distributor_id: 'no_change',
-    distributed_at: '',
-    expiry_date: '',
-    handling_fee: '',
-    override_reason: ''
+    status: 'no_change', distributor_id: 'no_change', distributed_at: '', expiry_date: '', handling_fee: '', override_reason: ''
   });
 
-  // --- BULK VOID MODAL STATE ---
+  // --- VOID MODAL STATE ---
   const [isVoidModalOpen, setIsVoidModalOpen] = useState(false);
   const [bulkVoidReason, setBulkVoidReason] = useState("");
   const [isVoidingBulk, setIsVoidingBulk] = useState(false);
@@ -186,20 +134,12 @@ export default function TrackVoucherPage() {
   const [isQueryingExpiry, setIsQueryingExpiry] = useState(false);
   const [isQueryingRegistered, setIsQueryingRegistered] = useState(false);
   const [activeTemplateContext, setActiveTemplateContext] = useState<"reminder" | "welcome">("reminder");
-
-  // --- CUSTOM EXPIRY REMINDER MODAL STATE ---
   const [isRemindModalOpen, setIsRemindModalOpen] = useState(false);
-  const [remindDays, setRemindDays] = useState("7");
-  const [remindStatus, setRemindStatus] = useState("both");
-  const [remindError, setRemindError] = useState<string | null>(null); 
 
   useEffect(() => {
     const fetchFiltersData = async () => {
       const { data: dData } = await supabase.from("voucher_distributors").select("id, distributor_name").order("distributor_name");
       if (dData) setDistributors(dData);
-
-      const { data: bData } = await supabase.from("voucher_batches").select("id, batch_no").order("created_at", { ascending: false });
-      if (bData) setBatches(bData);
     };
     fetchFiltersData();
   }, []);
@@ -248,16 +188,15 @@ export default function TrackVoucherPage() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      fetchVoucherList(activeFilter, assignmentFilter, currentPage, localSearch, sortOrder);
+      fetchVoucherList();
     }, 400); 
     return () => clearTimeout(timer);
-  }, [activeFilter, assignmentFilter, selectedFilterDistributor, selectedFilterBatch, currentPage, localSearch, pageSize, sortOrder, searchMode, fromCode, toCode]);
+  }, [activeFilter, assignmentFilter, outcomeFilter, interestFilter, selectedFilterDistributor, currentPage, localSearch, pageSize, sortOrder, searchMode, fromCode, toCode]);
 
-  const fetchVoucherList = async (tabStatus: string, assignStatus: string, page: number, searchKeyword: string, currentSort: string) => {
+  const fetchVoucherList = async () => {
     setIsListLoading(true);
     try {
-      // ✨ FIX 1: We must use !inner join for BOTH 'assigned' and 'called' to physically hide unmatched vouchers
-      const requiresInnerJoin = assignStatus === "assigned" || assignStatus === "called";
+      const requiresInnerJoin = assignmentFilter === "assigned" || assignmentFilter === "called" || outcomeFilter !== "all" || interestFilter !== "all";
 
       let query = supabase
         .from("vouchers")
@@ -269,53 +208,48 @@ export default function TrackVoucherPage() {
           voucher_distributions (payment_status, delivery_agent),
           customers (id, full_name, phone, convo360_user_id),
           last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name),
-          voucher_call_assignments${requiresInnerJoin ? '!inner' : ''} (id, assigned_to, status, call_outcome, interest_level, call_notes)
+          voucher_call_assignments${requiresInnerJoin ? '!inner' : ''} (id, assigned_to, assigned_by, status, call_outcome, interest_level, call_notes)
         `, { count: 'exact' });
 
-      if (currentSort === 'newest') query = query.order('updated_at', { ascending: false, nullsFirst: false });
-      else if (currentSort === 'oldest') query = query.order('updated_at', { ascending: true, nullsFirst: false });
-      else if (currentSort === 'code_desc') query = query.order('code', { ascending: false });
+      if (sortOrder === 'newest') query = query.order('updated_at', { ascending: false, nullsFirst: false });
+      else if (sortOrder === 'oldest') query = query.order('updated_at', { ascending: true, nullsFirst: false });
+      else if (sortOrder === 'code_desc') query = query.order('code', { ascending: false });
       else query = query.order('code', { ascending: true }); 
 
-      query = query.range(page * pageSize, (page + 1) * pageSize - 1);
+      query = query.range(currentPage * pageSize, (currentPage + 1) * pageSize - 1);
 
-      // --- STATUS LOGIC ---
-      if (tabStatus === "expired") {
+      // Status Filter
+      if (activeFilter === "expired") {
         query = query.in("status", ["distributed", "in_stock", "registered"]).lt("expiry_date", new Date().toISOString());
-      } else if (tabStatus !== "all") {
-        query = query.eq("status", tabStatus);
+      } else if (activeFilter !== "all") {
+        query = query.eq("status", activeFilter);
       }
 
-      // --- ✨ FIX 2: CALLING ASSIGNMENT LOGIC ---
-      if (assignStatus === "assigned") {
+      // Calling Logic Filter
+      if (assignmentFilter === "assigned") {
         query = query.eq("voucher_call_assignments.status", "pending");
-      } else if (assignStatus === "called") {
-        // Includes both 'called' and 'dnd' as completed tasks
+      } else if (assignmentFilter === "called") {
         query = query.in("voucher_call_assignments.status", ["called", "dnd"]);
-      } else if (assignStatus === "unassigned") {
-        // Must be registered to even be eligible for calling
+      } else if (assignmentFilter === "unassigned") {
         query = query.eq("status", "registered");
-        
-        // Fetch all vouchers that have ANY call assignment
         const { data: assigned } = await supabase.from('voucher_call_assignments').select('voucher_id');
         const assignedIds = assigned?.map(a => a.voucher_id).filter(Boolean) || [];
-        
-        // Exclude them from the list
-        if (assignedIds.length > 0) {
-          query = query.not('id', 'in', `(${assignedIds.join(',')})`);
-        }
+        if (assignedIds.length > 0) query = query.not('id', 'in', `(${assignedIds.join(',')})`);
       }
 
-      // --- SEARCH LOGIC ---
-      if (searchMode === 'text' && searchKeyword.trim()) {
-        query = query.ilike("code", `%${searchKeyword.trim()}%`);
+      // Outcomes & Interest Filters
+      if (outcomeFilter !== "all") query = query.eq("voucher_call_assignments.call_outcome", outcomeFilter);
+      if (interestFilter !== "all") query = query.eq("voucher_call_assignments.interest_level", interestFilter);
+
+      // Search Logic
+      if (searchMode === 'text' && localSearch.trim()) {
+        query = query.ilike("code", `%${localSearch.trim()}%`);
       } else if (searchMode === 'range') {
         if (fromCode.trim()) query = query.gte("code", fromCode.trim().toUpperCase());
         if (toCode.trim()) query = query.lte("code", toCode.trim().toUpperCase());
       }
 
       if (selectedFilterDistributor !== "all") query = query.eq("distributor_id", selectedFilterDistributor);
-      if (selectedFilterBatch !== "all") query = query.eq("batch_id", selectedFilterBatch);
 
       const { data, count, error } = await query;
       
@@ -330,7 +264,7 @@ export default function TrackVoucherPage() {
     }
   };
 
-  
+  // --- RESTORED CORE FUNCTIONS ---
   const handleAssignCalls = async () => {
     if (!selectedAssignee) return toast({ title: "Action Required", description: "Select a team member to assign the calls to.", variant: "destructive" });
 
@@ -360,7 +294,7 @@ export default function TrackVoucherPage() {
       setSelectedVouchers(new Set());
       setSelectedAssignee("");
       fetchAssignmentMetrics();
-      fetchVoucherList(activeFilter, assignmentFilter, currentPage, localSearch, sortOrder); 
+      fetchVoucherList(); 
     } catch (error: any) {
       toast({ title: "Assignment Failed", description: error.message, variant: "destructive" });
     } finally {
@@ -391,7 +325,7 @@ export default function TrackVoucherPage() {
       if (error) throw error;
 
       toast({ title: "Master Update Successful", description: `Updated ${idsToUpdate.length} vouchers.` });
-      fetchVoucherList(activeFilter, assignmentFilter, currentPage, localSearch, sortOrder);
+      fetchVoucherList();
       setSelectedVouchers(new Set());
       setIsMasterEditModalOpen(false);
       setMasterEditForm({ status: 'no_change', distributor_id: 'no_change', distributed_at: '', expiry_date: '', handling_fee: '', override_reason: '' });
@@ -418,7 +352,7 @@ export default function TrackVoucherPage() {
       if (error) throw error;
 
       toast({ title: "Vouchers Voided", description: `Successfully voided ${idsToUpdate.length} vouchers.` });
-      fetchVoucherList(activeFilter, assignmentFilter, currentPage, localSearch, sortOrder);
+      fetchVoucherList();
       setSelectedVouchers(new Set());
       setBulkVoidReason("");
       setIsVoidModalOpen(false);
@@ -451,38 +385,52 @@ export default function TrackVoucherPage() {
 
   const getActiveAssignment = (v: TrackedVoucher) => {
     if (!v.voucher_call_assignments || v.voucher_call_assignments.length === 0) return null;
-    const pending = v.voucher_call_assignments.find(a => a.status === 'pending');
-    return pending || v.voucher_call_assignments[0];
+    return v.voucher_call_assignments.find(a => a.status === 'pending') || v.voucher_call_assignments[0];
   };
 
   const StatusBadge = ({ status }: { status: string }) => {
     switch (status) {
-      case 'pending_print': return <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200 text-xs font-semibold h-6 px-2 shadow-none">Pending</Badge>;
-      case 'in_stock': return <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs font-semibold h-6 px-2 shadow-none">In Stock</Badge>;
-      case 'distributed': return <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200 text-xs font-semibold h-6 px-2 shadow-none">Issued</Badge>;
-      case 'registered': return <Badge variant="outline" className="bg-teal-50 text-teal-700 border-teal-200 text-xs font-semibold h-6 px-2 shadow-none">Registered</Badge>;
-      case 'redeemed': return <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs font-semibold h-6 px-2 shadow-none">Redeemed</Badge>;
+      case 'pending_print': return <Badge variant="outline" className="bg-zinc-100 text-zinc-700 border-zinc-200 shadow-none font-medium">Pending</Badge>;
+      case 'in_stock': return <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 shadow-none font-medium">In Stock</Badge>;
+      case 'distributed': return <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200 shadow-none font-medium">Issued</Badge>;
+      case 'registered': return <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 shadow-none font-medium">Registered</Badge>;
+      case 'redeemed': return <Badge variant="outline" className="bg-emerald-500 text-white border-emerald-600 shadow-none font-medium">Redeemed</Badge>;
       case 'expired':
-      case 'voided': return <Badge variant="outline" className="bg-rose-50 text-rose-700 border-rose-200 text-xs font-semibold h-6 px-2 shadow-none capitalize">{status}</Badge>;
-      default: return <Badge variant="secondary" className="text-xs font-medium h-6 capitalize shadow-none">{status}</Badge>;
+      case 'voided': return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 shadow-none font-medium capitalize">{status}</Badge>;
+      default: return <Badge variant="secondary" className="shadow-none font-medium capitalize">{status}</Badge>;
     }
   };
 
-  const downloadCSV = () => {
-    if (listData.length === 0) return toast({ title: "No Data", description: "There is no data to export matching your current filters." });
+  // --- EXPORT LOGIC ---
+  const generateCSV = (dataToExport: TrackedVoucher[], filenamePrefix: string) => {
+    if (dataToExport.length === 0) return toast({ title: "No Data", description: "No data to export." });
+    
     const headers = [
-      "Voucher Code", "Batch No", "Current Status", "Discount Value (INR)", "Handling Fee (INR)",
-      "Scan Attempts", "Partner / Distributor", "Registered Customer", "Customer Phone",
-      "Assigned Caller", "Call Status", "Expiry Date", "Redeemed Date", "Last Updated"
+      "Voucher Code", "Batch No", "Current Status", "Discount (INR)", "Handling Fee (INR)",
+      "Partner / Distributor", "Registered Customer", "Customer Phone",
+      "Assigned To", "Assigned By", "Call Status", "Call Outcome", "Interest Level",
+      "Expiry Date", "Redeemed Date", "Last Updated"
     ];
 
-    const csvRows = listData.map(v => {
+    const csvRows = dataToExport.map(v => {
       const assignment = getActiveAssignment(v);
-      const assigneeName = assignment ? teamMembers.find(m => m.id === assignment.assigned_to)?.name || 'Unknown Staff' : 'None';
+      const assigneeName = assignment ? teamMembers.find(m => m.id === assignment.assigned_to)?.name || 'Unknown' : 'None';
+      const assignerName = assignment ? teamMembers.find(m => m.id === assignment.assigned_by)?.name || 'Unknown' : 'None';
+      
       return [
-        v.code, v.voucher_batches?.batch_no || '', getDisplayStatus(v).toUpperCase(), v.discount_value, v.handling_fee || 0,
-        v.scan_count || 0, v.voucher_distributors?.distributor_name || 'Unassigned', v.customers?.full_name || 'None', v.customers?.phone || 'None',
-        assigneeName, assignment ? assignment.status.toUpperCase() : 'NONE',
+        v.code, 
+        v.voucher_batches?.batch_no || '', 
+        getDisplayStatus(v).toUpperCase(), 
+        v.discount_value, 
+        v.handling_fee || 0,
+        v.voucher_distributors?.distributor_name || 'Unassigned', 
+        v.customers?.full_name || 'None', 
+        v.customers?.phone || 'None',
+        assigneeName, 
+        assignerName, 
+        assignment ? assignment.status.toUpperCase() : 'NONE',
+        assignment?.call_outcome || 'NONE',
+        assignment?.interest_level || 'NONE',
         v.expiry_date ? format(new Date(v.expiry_date), "yyyy-MM-dd") : 'None',
         v.redeemed_at ? format(new Date(v.redeemed_at), "yyyy-MM-dd") : 'None',
         v.updated_at ? format(new Date(v.updated_at), "yyyy-MM-dd HH:mm") : 'None'
@@ -492,435 +440,552 @@ export default function TrackVoucherPage() {
     const csvContent = [headers.join(","), ...csvRows].join("\n");
     const link = document.createElement("a");
     link.href = URL.createObjectURL(new Blob([csvContent], { type: "text/csv;charset=utf-8;" }));
-    link.download = `Vouchers_Page${currentPage+1}_Export_${format(new Date(), "yyyyMMdd_HHmm")}.csv`;
+    link.download = `${filenamePrefix}_${format(new Date(), "yyyyMMdd_HHmm")}.csv`;
     link.click();
-    toast({ title: "Export Started", description: "Your CSV file is downloading." });
+  };
+
+  const exportCurrentPage = () => {
+    setIsExportModalOpen(false);
+    generateCSV(listData, `Vouchers_Page${currentPage + 1}`);
+    toast({ title: "Export Started", description: "Your CSV is downloading." });
+  };
+
+  const exportAllData = async () => {
+    setIsExportModalOpen(false);
+    setIsExportingAll(true);
+    toast({ title: "Compiling Data", description: `Fetching all ${totalCount} records from the database. Please wait...`, duration: 5000 });
+
+    try {
+      let allRecords: TrackedVoucher[] = [];
+      const chunkSize = 1000;
+      let currentOffset = 0;
+      let hasMore = true;
+
+      // Pre-fetch assigned IDs if filtering by 'unassigned' to avoid doing it in every loop
+      let unassignedFilterIds: string[] = [];
+      if (assignmentFilter === "unassigned") {
+        const { data: assigned } = await supabase.from('voucher_call_assignments').select('voucher_id');
+        unassignedFilterIds = assigned?.map(a => a.voucher_id).filter(Boolean) || [];
+      }
+
+      while (hasMore) {
+        const requiresInnerJoin = assignmentFilter === "assigned" || assignmentFilter === "called" || outcomeFilter !== "all" || interestFilter !== "all";
+
+        let query = supabase
+          .from("vouchers")
+          .select(`
+            id, code, discount_value, handling_fee, status, expiry_date, distributed_at, redeemed_at,
+            is_manual_override, updated_by_user, scan_count, last_scanned_at, updated_at,
+            voucher_batches (batch_no),
+            voucher_distributors (distributor_name, distributor_type, phone),
+            voucher_distributions (payment_status, delivery_agent),
+            customers (id, full_name, phone, convo360_user_id),
+            last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name),
+            voucher_call_assignments${requiresInnerJoin ? '!inner' : ''} (id, assigned_to, assigned_by, status, call_outcome, interest_level, call_notes)
+          `);
+
+        if (sortOrder === 'newest') query = query.order('updated_at', { ascending: false, nullsFirst: false });
+        else if (sortOrder === 'oldest') query = query.order('updated_at', { ascending: true, nullsFirst: false });
+        else if (sortOrder === 'code_desc') query = query.order('code', { ascending: false });
+        else query = query.order('code', { ascending: true }); 
+
+        // Apply Status Filter
+        if (activeFilter === "expired") {
+          query = query.in("status", ["distributed", "in_stock", "registered"]).lt("expiry_date", new Date().toISOString());
+        } else if (activeFilter !== "all") {
+          query = query.eq("status", activeFilter);
+        }
+
+        // Apply Calling Logic Filter
+        if (assignmentFilter === "assigned") query = query.eq("voucher_call_assignments.status", "pending");
+        else if (assignmentFilter === "called") query = query.in("voucher_call_assignments.status", ["called", "dnd"]);
+        else if (assignmentFilter === "unassigned") {
+          query = query.eq("status", "registered");
+          if (unassignedFilterIds.length > 0) query = query.not('id', 'in', `(${unassignedFilterIds.join(',')})`);
+        }
+
+        // Apply Outcomes, Interest, Distributor, & Search Filters
+        if (outcomeFilter !== "all") query = query.eq("voucher_call_assignments.call_outcome", outcomeFilter);
+        if (interestFilter !== "all") query = query.eq("voucher_call_assignments.interest_level", interestFilter);
+        if (selectedFilterDistributor !== "all") query = query.eq("distributor_id", selectedFilterDistributor);
+        
+        if (searchMode === 'text' && localSearch.trim()) {
+          query = query.ilike("code", `%${localSearch.trim()}%`);
+        } else if (searchMode === 'range') {
+          if (fromCode.trim()) query = query.gte("code", fromCode.trim().toUpperCase());
+          if (toCode.trim()) query = query.lte("code", toCode.trim().toUpperCase());
+        }
+
+        // Fetch chunk
+        query = query.range(currentOffset, currentOffset + chunkSize - 1);
+        const { data, error } = await query;
+        
+        if (error) throw error;
+
+        if (data && data.length > 0) {
+          allRecords = [...allRecords, ...(data as any)];
+          currentOffset += chunkSize;
+          if (data.length < chunkSize) hasMore = false;
+        } else {
+          hasMore = false;
+        }
+      }
+
+      generateCSV(allRecords, "Vouchers_Global_Export");
+      toast({ title: "Export Complete", description: `Successfully exported ${allRecords.length} records.` });
+    } catch (error: any) {
+      toast({ title: "Export Failed", description: error.message, variant: "destructive" });
+    } finally {
+      setIsExportingAll(false);
+    }
   };
 
   const totalPages = Math.ceil(totalCount / pageSize);
-  // ✨ Add "called" to the assignmentFilter includes array:
-  const canBulkUpdate = ["all", "pending_print", "in_stock", "distributed", "registered", "assigned", "expired"].includes(activeFilter) || ["assigned", "unassigned", "called"].includes(assignmentFilter);
+  const activeFiltersCount = [activeFilter, assignmentFilter, outcomeFilter, interestFilter, selectedFilterDistributor].filter(f => f !== 'all').length;
 
   return (
-    <div className="flex flex-col min-h-screen bg-[#fafafa] font-sans selection:bg-indigo-100">
-
-      {/* --- ENTERPRISE IDE-STYLE TOOLBAR HEADER --- */}
-      <header className="sticky top-0 z-40 w-full bg-white border-b border-slate-200 px-4 h-14 flex items-center justify-between shadow-sm box-border">
-        <div className="flex items-center gap-3 overflow-hidden">
+    <div className="flex flex-col min-h-screen bg-[#FAFAFA] font-sans selection:bg-zinc-200">
+      {/* VERCEL-STYLE TOP BAR */}
+      <header className="sticky top-0 z-40 w-full bg-white border-b border-zinc-200 px-6 h-14 flex items-center justify-between shadow-[0_1px_2px_rgba(0,0,0,0.02)] box-border">
+        <div className="flex items-center gap-4 overflow-hidden">
           <Link href="/vouchers">
-            <Button variant="ghost" size="icon" className="h-9 w-9 rounded hover:bg-slate-100 transition-colors">
-              <ArrowLeft className="h-5 w-5 text-slate-500" />
+            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-md hover:bg-zinc-100 text-zinc-500">
+              <ArrowLeft className="h-4 w-4" />
             </Button>
           </Link>
-          
-          <div className="h-5 w-[1px] bg-slate-200 hidden sm:block" />
-          
-          <nav className="flex items-center gap-2 text-sm whitespace-nowrap overflow-hidden">
-            <Link href="/vouchers" className="text-slate-500 hover:text-slate-900 transition-colors font-medium">Vouchers</Link>
-            <ChevronRight className="h-4 w-4 text-slate-400" />
-            <span className="font-semibold text-slate-900 select-none">Track & Audit</span>
-            
-            <div className="ml-3 hidden md:flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 border border-emerald-100">
-              <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              <span className="text-xs font-bold text-emerald-700 tracking-wide">Live DB</span>
-            </div>
+          <div className="h-4 w-[1px] bg-zinc-200" />
+          <nav className="flex items-center gap-2 text-[13px] font-medium tracking-tight">
+            <Link href="/vouchers" className="text-zinc-500 hover:text-zinc-900 transition-colors">Vouchers</Link>
+            <ChevronRight className="h-4 w-4 text-zinc-300" />
+            <span className="text-zinc-900 select-none">Tracking Ledger</span>
           </nav>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" className="h-9 px-3 text-sm font-medium text-slate-600 hover:text-slate-900" onClick={() => fetchVoucherList(activeFilter, assignmentFilter, currentPage, localSearch, sortOrder)}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${isListLoading ? "animate-spin text-slate-900" : ""}`} />
-            Refresh
-          </Button>
-          <div className="h-5 w-[1px] bg-slate-200 mx-1" />
-          <Button size="sm" className="h-9 text-sm font-semibold px-4 bg-slate-900 hover:bg-slate-800 text-white rounded-md shadow-sm" onClick={() => { setCurrentPage(0); setLocalSearch(""); }}>
-            <Database className="h-4 w-4 mr-2" />
-            Sync Data
+        <div className="flex items-center gap-3">
+        <Button 
+            variant="outline" 
+            size="sm" 
+            className="h-8 text-[13px] border-zinc-200 text-zinc-700 shadow-sm font-medium hover:bg-zinc-50" 
+            onClick={() => setIsExportModalOpen(true)}
+            disabled={listData.length === 0 || isExportingAll}
+          >
+            {isExportingAll ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-2" />} 
+            {isExportingAll ? "Exporting..." : "Export"}
           </Button>
         </div>
       </header>
 
-      <main className="p-4 md:p-6 lg:p-8 max-w-[1500px] w-full mx-auto space-y-6">
+      <main className="p-6 md:p-8 max-w-[1600px] w-full mx-auto space-y-6">
 
-        {/* --- 1. ASSIGNMENT METRICS DASHBOARD --- */}
-        {assignmentMetrics.length > 0 && (
+       {/* --- COMPACT ASSIGNMENT METRICS DASHBOARD --- */}
+       {assignmentMetrics.length > 0 && (
           <section className="space-y-3 animate-in fade-in duration-300">
-            <h2 className="text-sm font-bold text-slate-500 tracking-wide flex items-center gap-2">
-              <PhoneCall className="w-4 h-4" /> Team Calling Assignments
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {assignmentMetrics.map(member => (
-                <div key={member.name} className="bg-white border border-slate-200 p-4 rounded-xl shadow-sm flex flex-col justify-between">
-                  <div className="flex items-center justify-between text-slate-500 mb-3">
-                    <span className="text-sm font-semibold tracking-tight text-slate-700">{member.name}</span>
-                    <User className="h-4 w-4 text-slate-400" />
-                  </div>
-                  <div className="flex items-baseline gap-4 mt-1">
-                    <div>
-                      <div className="text-2xl font-bold tracking-tight text-slate-900">{member.pending}</div>
-                      <p className="text-xs font-bold text-amber-500 uppercase tracking-widest mt-0.5">Pending</p>
-                    </div>
-                    <div className="h-8 w-px bg-slate-100" />
-                    <div>
-                      <div className="text-2xl font-bold tracking-tight text-slate-900">{member.completed}</div>
-                      <p className="text-xs font-bold text-emerald-500 uppercase tracking-widest mt-0.5">Done</p>
-                    </div>
-                    <div className="h-8 w-px bg-slate-100" />
-                    <div>
-                      <div className="text-2xl font-bold tracking-tight text-slate-900">{member.dnd}</div>
-                      <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-0.5">DND</p>
-                    </div>
-                  </div>
+            
+            {/* Header & Legend */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h2 className="text-sm font-bold text-zinc-500 tracking-wide flex items-center gap-2">
+                <PhoneCall className="w-4 h-4" /> Team Calling Assignments
+              </h2>
+              
+              {/* ✨ NEW: Color Nomenclature Legend */}
+              <div className="flex items-center gap-3 text-[11px] font-medium text-zinc-500 bg-white border border-zinc-200 px-2.5 py-1 rounded-md shadow-sm">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Pending
                 </div>
-              ))}
+                <div className="w-px h-3 bg-zinc-200" />
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" /> Done
+                </div>
+                <div className="w-px h-3 bg-zinc-200" />
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" /> DND
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {assignmentMetrics.map(member => {
+        
+                const initials = member.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+                
+                return (
+                  <div key={member.name} className="bg-white border border-zinc-200 p-2.5 rounded-lg shadow-sm flex items-center justify-between gap-4 hover:border-zinc-300 transition-colors">
+                    
+                    {/* User Info */}
+                    <div className="flex items-center gap-2.5 truncate">
+                      <div className="h-7 w-7 rounded-full bg-zinc-100 border border-zinc-200 flex items-center justify-center shrink-0">
+                        <span className="text-[10px] font-bold text-zinc-600">
+                          {initials || <User className="w-3.5 h-3.5" />}
+                        </span>
+                      </div>
+                      <span className="text-[13px] font-semibold text-zinc-800 truncate" title={member.name}>
+                        {member.name}
+                      </span>
+                    </div>
+
+                    {/* Compact Metrics Pills */}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex items-center gap-1.5 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-100" title="Pending Calls">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                        <span className="text-[11px] font-bold text-amber-700">{member.pending}</span>
+                      </div>
+                      
+                      <div className="flex items-center gap-1.5 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-100" title="Completed Calls">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        <span className="text-[11px] font-bold text-emerald-700">{member.completed}</span>
+                      </div>
+                      
+                      <div className="flex items-center gap-1.5 bg-zinc-100 px-2 py-0.5 rounded-md border border-zinc-200" title="Do Not Disturb">
+                        <span className="w-1.5 h-1.5 rounded-full bg-zinc-400" />
+                        <span className="text-[11px] font-bold text-zinc-600">{member.dnd}</span>
+                      </div>
+                    </div>
+
+                  </div>
+                );
+              })}
             </div>
           </section>
         )}
 
-        {/* --- 2. MASTER FILTERABLE LIST SECTION --- */}
-        <section className="space-y-4 animate-in fade-in duration-300">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-            <div className="flex flex-col gap-1">
-              <h2 className="text-xl font-semibold text-slate-900 tracking-tight">Master Ledger</h2>
-              <p className="text-sm text-slate-500">Filter, audit, and assign campaign tracking.</p>
-            </div>
+        {/* --- UNIFIED FILTER & SEARCH COMMAND BAR (ELEVENLABS / OLX STYLE) --- */}
+        <section className="bg-white border border-zinc-200 rounded-xl shadow-sm overflow-hidden animate-in fade-in duration-300">
+          <div className="p-2 flex flex-col sm:flex-row items-center gap-2 bg-white">
             
-            <div className="flex items-center gap-3">
-              <Button onClick={() => setIsRemindModalOpen(true)} disabled={isQueryingExpiry} className="bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 shadow-sm font-semibold text-sm h-10 rounded-md px-4">
-                <BellRing className="w-4 h-4 mr-2" /> Remind
-              </Button>
-              <Button onClick={handleBroadcastRegistered} disabled={isQueryingRegistered} className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 shadow-sm font-semibold text-sm h-10 rounded-md px-4">
-                {isQueryingRegistered ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Megaphone className="w-4 h-4 mr-2" />} Broadcast
-              </Button>
-              <Button variant="outline" onClick={downloadCSV} disabled={listData.length === 0} className="bg-white border-slate-200 text-slate-600 hover:bg-slate-50 shadow-sm font-semibold text-sm h-10 rounded-md px-4">
-                <Download className="w-4 h-4 mr-2" /> Export
+            {/* Search Input */}
+            <div className="relative flex-1 w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
+              <Input 
+                placeholder="Search codes..." 
+                className="w-full pl-9 h-10 border-0 focus-visible:ring-0 text-sm placeholder:text-zinc-400 font-medium"
+                value={localSearch}
+                onChange={(e) => { setLocalSearch(e.target.value); setCurrentPage(0); }}
+              />
+            </div>
+
+            <div className="h-6 w-[1px] bg-zinc-200 hidden sm:block" />
+
+            {/* Filter Toggle & Quick Sort */}
+            <div className="flex items-center gap-2 pr-2 w-full sm:w-auto">
+              <Select value={sortOrder} onValueChange={(val) => { setSortOrder(val); setCurrentPage(0); }}>
+                <SelectTrigger className="h-9 border-0 shadow-none text-[13px] font-medium text-zinc-600 focus:ring-0 w-auto hover:bg-zinc-50 rounded-md">
+                  <ArrowUpDown className="w-3.5 h-3.5 mr-2 text-zinc-400" /> <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end" className="border-zinc-200 rounded-lg shadow-md">
+                  <SelectItem value="newest" className="text-[13px]">Newest First</SelectItem>
+                  <SelectItem value="oldest" className="text-[13px]">Oldest First</SelectItem>
+                  <SelectItem value="code_asc" className="text-[13px]">Code (A-Z)</SelectItem>
+                  <SelectItem value="code_desc" className="text-[13px]">Code (Z-A)</SelectItem>
+                </SelectContent>
+              </Select>
+              
+              <Button 
+                variant={isFiltersOpen ? "default" : "outline"} 
+                className={`h-9 text-[13px] font-medium px-4 shadow-sm transition-all ${isFiltersOpen ? 'bg-zinc-900 text-white' : 'border-zinc-200 text-zinc-700 bg-white hover:bg-zinc-50'}`}
+                onClick={() => setIsFiltersOpen(!isFiltersOpen)}
+              >
+                <Filter className="w-3.5 h-3.5 mr-2" />
+                Filters
+                {activeFiltersCount > 0 && (
+                  <span className="ml-2 flex items-center justify-center w-4 h-4 rounded-full bg-zinc-200 text-zinc-800 text-[10px] font-bold">
+                    {activeFiltersCount}
+                  </span>
+                )}
               </Button>
             </div>
           </div>
 
-          <div className="border border-slate-200 bg-white rounded-xl shadow-sm overflow-hidden flex flex-col">
-            
-            {/* --- MINIMALIST UNIFIED COMMAND BAR --- */}
-            <div className="flex flex-wrap items-center gap-3 p-4 border-b border-slate-100 bg-slate-50/50">
+          {/* EXPANDABLE MULTI-FILTER DRAWER */}
+          {isFiltersOpen && (
+            <div className="border-t border-zinc-100 bg-zinc-50/50 p-5 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4 animate-in slide-in-from-top-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Voucher Status</Label>
+                <Select value={activeFilter} onValueChange={(val) => { setActiveFilter(val); setCurrentPage(0); }}>
+                  <SelectTrigger className="h-9 bg-white border-zinc-200 text-[13px] shadow-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent className="border-zinc-200">
+                    <SelectItem value="all">All Statuses</SelectItem>
+                    <SelectItem value="pending_print">Pending Print</SelectItem>
+                    <SelectItem value="in_stock">In Stock</SelectItem>
+                    <SelectItem value="distributed">Issued</SelectItem>
+                    <SelectItem value="registered">Registered</SelectItem>
+                    <SelectItem value="redeemed">Redeemed</SelectItem>
+                    <SelectItem value="expired">Expired</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Telecalling Status</Label>
+                <Select value={assignmentFilter} onValueChange={(val) => { setAssignmentFilter(val); setCurrentPage(0); }}>
+                  <SelectTrigger className="h-9 bg-white border-zinc-200 text-[13px] shadow-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent className="border-zinc-200">
+                    <SelectItem value="all">All Assignments</SelectItem>
+                    <SelectItem value="assigned">Assigned (Pending)</SelectItem>
+                    <SelectItem value="called">Assigned (Completed)</SelectItem>
+                    <SelectItem value="unassigned">Not Assigned</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Call Outcome</Label>
+                <Select value={outcomeFilter} onValueChange={(val) => { setOutcomeFilter(val); setCurrentPage(0); }}>
+                  <SelectTrigger className="h-9 bg-white border-zinc-200 text-[13px] shadow-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent className="border-zinc-200">
+                    <SelectItem value="all">All Outcomes</SelectItem>
+                    <SelectItem value="Connected / Spoke to Customer">Connected</SelectItem>
+                    <SelectItem value="Ringing / No Answer">No Answer</SelectItem>
+                    <SelectItem value="Not Interested (Do Not Disturb)">DND</SelectItem>
+                    <SelectItem value="Wrong Number">Wrong Number</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Customer Interest</Label>
+                <Select value={interestFilter} onValueChange={(val) => { setInterestFilter(val); setCurrentPage(0); }}>
+                  <SelectTrigger className="h-9 bg-white border-zinc-200 text-[13px] shadow-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent className="border-zinc-200">
+                    <SelectItem value="all">All Levels</SelectItem>
+                    <SelectItem value="High">High</SelectItem>
+                    <SelectItem value="Moderate">Moderate</SelectItem>
+                    <SelectItem value="Not Interested">Not Interested</SelectItem>
+                    <SelectItem value="Already Claimed Voucher">Already Claimed</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* RESTORED: Distributor / Partner Filter */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Partner / Distributor</Label>
+                <Select value={selectedFilterDistributor} onValueChange={(val) => { setSelectedFilterDistributor(val); setCurrentPage(0); }}>
+                  <SelectTrigger className="h-9 bg-white border-zinc-200 text-[13px] shadow-sm"><SelectValue /></SelectTrigger>
+                  <SelectContent className="border-zinc-200">
+                    <SelectItem value="all">All Partners</SelectItem>
+                    {distributors.map(d => <SelectItem key={d.id} value={d.id}>{d.distributor_name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
               
-              {/* Text/Range Toggle */}
-              <div className="flex bg-white rounded-md border border-slate-200 p-1 shadow-sm">
-                <Button size="sm" variant={searchMode === 'text' ? 'default' : 'ghost'} className="h-8 text-xs font-semibold px-3 rounded shadow-none" onClick={() => setSearchMode('text')}>Text</Button>
-                <Button size="sm" variant={searchMode === 'range' ? 'default' : 'ghost'} className="h-8 text-xs font-semibold px-3 rounded shadow-none" onClick={() => setSearchMode('range')}>Range</Button>
+              <div className="col-span-1 md:col-span-5 flex justify-end pt-2 border-t border-zinc-200/60 mt-2">
+                 <Button variant="ghost" size="sm" className="text-xs text-zinc-500 hover:text-zinc-900" onClick={() => {
+                   setActiveFilter('all'); setAssignmentFilter('all'); setOutcomeFilter('all'); setInterestFilter('all'); setSelectedFilterDistributor('all'); setLocalSearch('');
+                 }}>
+                   Reset Filters
+                 </Button>
               </div>
-
-              {/* Conditional Search Inputs */}
-              {searchMode === 'text' ? (
-                <div className="relative w-full sm:w-[220px]">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-                  <Input 
-                    placeholder="Search codes..." 
-                    className="pl-9 h-10 text-sm bg-white border-slate-200 shadow-sm rounded-md"
-                    value={localSearch}
-                    onChange={(e) => { setLocalSearch(e.target.value); setCurrentPage(0); }}
-                  />
-                </div>
-              ) : (
-                <div className="flex items-center gap-2">
-                  <Input placeholder="From" className="h-10 text-sm w-[110px] uppercase font-mono shadow-sm bg-white" value={fromCode} onChange={(e) => setFromCode(e.target.value.toUpperCase())} />
-                  <span className="text-slate-300 font-bold">-</span>
-                  <Input placeholder="To" className="h-10 text-sm w-[110px] uppercase font-mono shadow-sm bg-white" value={toCode} onChange={(e) => setToCode(e.target.value.toUpperCase())} />
-                </div>
-              )}
-
-              <div className="h-6 w-px bg-slate-200 mx-1 hidden lg:block" />
-
-              {/* Minimal Selects */}
-              <Select value={activeFilter} onValueChange={(val) => { setActiveFilter(val); setCurrentPage(0); }}>
-                <SelectTrigger className="h-10 text-sm border-slate-200 hover:bg-white shadow-sm rounded-md px-3 min-w-[140px] bg-white">
-                  <span className="text-slate-400 mr-2 font-medium">Status:</span>
-                  <span className="font-semibold text-slate-700 truncate"><SelectValue /></span>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  <SelectItem value="pending_print">Pending Print</SelectItem>
-                  <SelectItem value="in_stock">In Stock</SelectItem>
-                  <SelectItem value="distributed">Issued</SelectItem>
-                  <SelectItem value="registered">Registered</SelectItem>
-                  <SelectItem value="redeemed">Redeemed</SelectItem>
-                  <SelectItem value="expired">Expired</SelectItem>
-                  <SelectItem value="voided">Voided</SelectItem>
-                </SelectContent>
-              </Select>
-
-              {/* ✨ NEW ASSIGNMENT STATUS FILTER */}
-              <Select value={assignmentFilter} onValueChange={(val) => { setAssignmentFilter(val); setCurrentPage(0); }}>
-                <SelectTrigger className="h-10 text-sm border-slate-200 hover:bg-white shadow-sm rounded-md px-3 min-w-[150px] bg-white">
-                  <span className="text-slate-400 mr-2 font-medium">Calling:</span>
-                  <span className="font-semibold text-slate-700 truncate"><SelectValue /></span>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Leads</SelectItem>
-                  <SelectItem value="assigned" className="text-teal-600 font-medium">Assigned (Pending)</SelectItem>
-                  <SelectItem value="called" className="text-emerald-600 font-medium">Assigned (Completed)</SelectItem>
-                  <SelectItem value="unassigned" className="text-rose-600 font-medium">Not Assigned</SelectItem>
-                  
-                </SelectContent>
-              </Select>
-
-              <Select value={selectedFilterDistributor} onValueChange={(val) => { setSelectedFilterDistributor(val); setCurrentPage(0); }}>
-                <SelectTrigger className="h-10 text-sm border-slate-200 hover:bg-white shadow-sm rounded-md px-3 w-[160px] bg-white">
-                  <span className="text-slate-400 mr-2 font-medium">Partner:</span>
-                  <span className="font-semibold text-slate-700 truncate"><SelectValue /></span>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Partners</SelectItem>
-                  {distributors.map(d => <SelectItem key={d.id} value={d.id}>{d.distributor_name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-
-              <Select value={sortOrder} onValueChange={(val) => { setSortOrder(val); setCurrentPage(0); }}>
-                <SelectTrigger className="h-10 text-sm border-slate-200 hover:bg-white shadow-sm rounded-md px-3 w-[140px] bg-white ml-auto lg:ml-0">
-                  <ArrowUpDown className="w-4 h-4 text-slate-400 mr-2" />
-                  <span className="font-semibold text-slate-700 truncate"><SelectValue /></span>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="newest">Newest First</SelectItem>
-                  <SelectItem value="oldest">Oldest First</SelectItem>
-                  <SelectItem value="code_asc">Code (A-Z)</SelectItem>
-                  <SelectItem value="code_desc">Code (Z-A)</SelectItem>
-                </SelectContent>
-              </Select>
-
-              {(selectedFilterDistributor !== "all" || selectedFilterBatch !== "all" || activeFilter !== "all" || assignmentFilter !== "all" || localSearch || sortOrder !== "newest") && (
-                <Button variant="ghost" className="h-10 text-sm font-semibold text-rose-500 hover:bg-rose-50 rounded-md px-3" onClick={() => { 
-                  setSelectedFilterDistributor("all"); setSelectedFilterBatch("all"); setActiveFilter("all"); setAssignmentFilter("all"); setLocalSearch(""); setSortOrder("newest"); setCurrentPage(0);
-                }}>
-                  Clear Filters
-                </Button>
-              )}
             </div>
+          )}
+        </section>
 
-            {/* --- ACTION BAR (WHEN SELECTED) --- */}
-            {canBulkUpdate && selectedVouchers.size > 0 && (
-              <div className="bg-indigo-50/50 border-b border-indigo-100 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in slide-in-from-top-1">
-                <div className="flex items-center gap-3 shrink-0 px-2">
-                  <CheckSquare className="h-5 w-5 text-indigo-500" />
-                  <span className="text-sm font-semibold text-indigo-900">{selectedVouchers.size} Selected</span>
-                </div>
-                
-                <div className="flex flex-wrap items-center gap-3">
-                  <Button className="bg-white border border-teal-200 text-teal-700 hover:bg-teal-50 shadow-sm font-semibold h-9 text-sm px-4 rounded-md" onClick={() => setIsAssignModalOpen(true)}>
-                    <PhoneCall className="w-4 h-4 mr-2" /> Assign Calls
-                  </Button>
-                  <Button className="bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 shadow-sm font-semibold h-9 text-sm px-4 rounded-md" onClick={() => setIsMasterEditModalOpen(true)}>
-                    <Settings2 className="w-4 h-4 mr-2" /> Bulk Edit
-                  </Button>
-                  <Button variant="ghost" className="text-rose-600 hover:bg-rose-50 font-semibold h-9 text-sm px-4 rounded-md" onClick={() => setIsVoidModalOpen(true)}>
-                    Void Selected
-                  </Button>
-                </div>
-              </div>
-            )}
+        {/* --- ACTION BAR (WHEN SELECTED) --- */}
+        {selectedVouchers.size > 0 && (
+          <div className="bg-zinc-900 border border-zinc-800 p-3 px-4 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in slide-in-from-bottom-4 shadow-xl fixed bottom-8 left-1/2 -translate-x-1/2 w-full max-w-2xl z-50">
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="bg-zinc-800 text-white text-xs font-bold px-2 py-1 rounded-md">{selectedVouchers.size}</div>
+              <span className="text-[13px] font-medium text-zinc-300">Vouchers Selected</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button size="sm" className="bg-zinc-800 hover:bg-zinc-700 text-white border-none h-8 text-[13px]" onClick={() => setIsAssignModalOpen(true)}>
+                <PhoneCall className="w-3.5 h-3.5 mr-2" /> Assign Leads
+              </Button>
+              <Button size="sm" className="bg-zinc-800 hover:bg-zinc-700 text-white border-none h-8 text-[13px]" onClick={() => setIsMasterEditModalOpen(true)}>
+                <Settings2 className="w-3.5 h-3.5 mr-2" /> Edit Status
+              </Button>
+              <Button size="sm" variant="ghost" className="text-rose-400 hover:bg-rose-500/20 hover:text-rose-300 h-8 text-[13px]" onClick={() => setIsVoidModalOpen(true)}>
+                Void
+              </Button>
+              <Button size="icon" variant="ghost" className="h-8 w-8 text-zinc-400 hover:text-white" onClick={() => setSelectedVouchers(new Set())}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+        )}
 
-            {/* --- DATA TABLE --- */}
-            <div className="bg-white">
-              {isListLoading ? (
-                <div className="flex flex-col items-center justify-center py-24">
-                  <Loader2 className="w-8 h-8 animate-spin text-slate-300 mb-4" />
-                  <span className="text-xs font-bold uppercase tracking-widest text-slate-400">Syncing Database...</span>
-                </div>
-              ) : listData.length === 0 ? (
-                <div className="text-center py-24">
-                  <Package className="w-12 h-12 mx-auto mb-4 text-slate-200" />
-                  <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">No matching records</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto custom-scrollbar min-h-[400px]">
-                  <Table>
-                    <TableHeader className="bg-slate-50 border-b border-slate-200">
-                      <TableRow className="hover:bg-transparent">
-                        {canBulkUpdate && (
-                          <TableHead className="w-12 px-5 text-center">
-                            <input 
-                              type="checkbox" 
-                              className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600 cursor-pointer"
-                              checked={selectedVouchers.size === listData.length && listData.length > 0}
-                              onChange={toggleAll}
-                            />
-                          </TableHead>
-                        )}
-                        <TableHead className="text-xs font-semibold text-slate-500 h-11 px-5">Code Identifier</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-500 h-11 px-5 text-center">Scans</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-500 h-11 px-5 text-right">Value (₹)</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-500 h-11 px-5 text-right">Fee (₹)</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-500 h-11 px-5">Logistics & Customer</TableHead>
-                        <TableHead className="text-xs font-semibold text-slate-500 h-11 px-5 text-center pr-6">Status</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {listData.map((v) => {
-                        const activeAssignment = getActiveAssignment(v);
+        {/* --- SLEEK DATA TABLE --- */}
+        <div className="bg-white border border-zinc-200 rounded-xl shadow-sm overflow-hidden">
+          {isListLoading ? (
+            <div className="flex flex-col items-center justify-center py-32">
+              <Loader2 className="w-6 h-6 animate-spin text-zinc-400 mb-3" />
+              <span className="text-[11px] font-bold uppercase tracking-widest text-zinc-400">Loading Records</span>
+            </div>
+          ) : listData.length === 0 ? (
+            <div className="text-center py-32">
+              <Database className="w-10 h-10 mx-auto mb-3 text-zinc-200" />
+              <p className="text-[11px] font-bold text-zinc-400 uppercase tracking-widest">No Records Found</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto custom-scrollbar">
+              <Table>
+                <TableHeader className="bg-zinc-50 border-b border-zinc-200">
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="w-12 px-5 text-center">
+                      <input 
+                        type="checkbox" 
+                        className="w-3.5 h-3.5 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 cursor-pointer"
+                        checked={selectedVouchers.size === listData.length && listData.length > 0}
+                        onChange={toggleAll}
+                      />
+                    </TableHead>
+                    <TableHead className="text-[12px] font-semibold text-zinc-500 h-10 px-5">Identifier</TableHead>
+                    
+                    {/* RESTORED: Distributor/Partner Column */}
+                    <TableHead className="text-[12px] font-semibold text-zinc-500 h-10 px-5">Partner / Distributor</TableHead>
+                    
+                    <TableHead className="text-[12px] font-semibold text-zinc-500 h-10 px-5">Registered Customer</TableHead>
+                    <TableHead className="text-[12px] font-semibold text-zinc-500 h-10 px-5">Telecalling Status</TableHead>
+                    <TableHead className="text-[12px] font-semibold text-zinc-500 h-10 px-5 text-right">Value (₹)</TableHead>
+                    <TableHead className="text-[12px] font-semibold text-zinc-500 h-10 px-5 text-center pr-6">System Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {listData.map((v) => {
+                    const activeAssignment = getActiveAssignment(v);
 
-                        return (
-                          <TableRow key={v.id} className={`hover:bg-slate-50/50 border-b border-slate-100 ${selectedVouchers.has(v.id) ? 'bg-indigo-50/20' : ''}`}>
-                            {canBulkUpdate && (
-                              <TableCell className="px-5 text-center">
-                                <input 
-                                  type="checkbox" 
-                                  className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600 cursor-pointer"
-                                  checked={selectedVouchers.has(v.id)}
-                                  onChange={() => toggleSelection(v.id)}
-                                />
-                              </TableCell>
-                            )}
-                            <TableCell className="px-5 py-4">
-                              <span className="font-mono font-semibold text-sm text-slate-900 block">{v.code}</span>
-                              <span className="text-xs text-slate-400 font-sans mt-1 block">
-                                {v.updated_at ? format(new Date(v.updated_at), 'dd MMM, HH:mm') : ''}
-                              </span>
-                              {v.is_manual_override && (
-                                <span className="flex items-center gap-1.5 text-[10px] font-bold text-rose-500 mt-2 uppercase tracking-widest">
-                                  <ShieldAlert className="w-3 h-3" /> Overridden
+                    return (
+                      <TableRow key={v.id} className={`hover:bg-zinc-50/50 border-b border-zinc-100 transition-colors ${selectedVouchers.has(v.id) ? 'bg-zinc-50' : ''}`}>
+                        <TableCell className="px-5 text-center">
+                          <input 
+                            type="checkbox" 
+                            className="w-3.5 h-3.5 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-900 cursor-pointer"
+                            checked={selectedVouchers.has(v.id)}
+                            onChange={() => toggleSelection(v.id)}
+                          />
+                        </TableCell>
+                        
+                        {/* IDENTIFIER */}
+                        <TableCell className="px-5 py-3">
+                          <span className="font-mono font-medium text-[13px] text-zinc-900 tracking-tight block">{v.code}</span>
+                          <span className="text-[11px] text-zinc-400 mt-1 block">
+                            {v.updated_at ? format(new Date(v.updated_at), 'dd MMM, HH:mm') : ''}
+                          </span>
+                        </TableCell>
+
+                        {/* RESTORED: DISTRIBUTOR DETAILS */}
+                        <TableCell className="px-5 py-3">
+                          {v.voucher_distributors ? (
+                            <span className="font-medium text-[12px] text-zinc-700 flex items-center gap-2">
+                              <Store className="w-3.5 h-3.5 text-zinc-400" /> {v.voucher_distributors.distributor_name}
+                            </span>
+                          ) : (
+                            <span className="text-[12px] italic text-zinc-400">Unassigned</span>
+                          )}
+                        </TableCell>
+
+                        {/* ENHANCED CUSTOMER DETAILS */}
+                        <TableCell className="px-5 py-3">
+                          {v.customers ? (
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-[13px] text-zinc-900">{v.customers.full_name}</span>
+                              <span className="font-mono text-[11px] text-zinc-500 mt-0.5">{v.customers.phone}</span>
+                            </div>
+                          ) : (
+                            <span className="text-[12px] italic text-zinc-400">Unregistered</span>
+                          )}
+                        </TableCell>
+
+                        {/* ENHANCED TELECALLING METRICS */}
+                        <TableCell className="px-5 py-3">
+                          {activeAssignment ? (
+                            <div className="flex flex-col gap-1.5">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[11px] font-semibold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded-md flex items-center gap-1.5 w-fit">
+                                  <PhoneCall className="w-3 h-3 text-zinc-500" />
+                                  {teamMembers.find(m => m.id === activeAssignment.assigned_to)?.name?.split(' ')[0] || 'Staff'}
                                 </span>
-                              )}
-                            </TableCell>
-                            
-                            <TableCell className="px-5 text-center">
-                              <span className="text-sm font-semibold text-slate-500">{v.scan_count}</span>
-                            </TableCell>
-
-                            <TableCell className="px-5 font-bold text-emerald-600 text-sm text-right">{v.discount_value.toLocaleString()}</TableCell>
-                            
-                            <TableCell className="px-5 text-right">
-                              <div className="flex flex-col items-end">
-                                <span className="font-semibold text-slate-700 text-sm">{v.handling_fee || 0}</span>
-                                {v.voucher_distributions?.payment_status && (
-                                  <span className={`text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded mt-1.5 ${v.voucher_distributions.payment_status === 'paid' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
-                                    {v.voucher_distributions.payment_status}
+                                {activeAssignment.interest_level && (
+                                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wider ${
+                                    activeAssignment.interest_level === 'High' ? 'text-emerald-700 bg-emerald-50' :
+                                    activeAssignment.interest_level === 'Moderate' ? 'text-blue-700 bg-blue-50' :
+                                    activeAssignment.interest_level === 'Not Interested' ? 'text-rose-700 bg-rose-50' :
+                                    'text-zinc-600 bg-zinc-100'
+                                  }`}>
+                                    {activeAssignment.interest_level}
                                   </span>
                                 )}
                               </div>
-                            </TableCell>
-                            
-                            <TableCell className="px-5 py-3">
-                              <div className="flex flex-col items-start gap-2">
-                                <span className="font-medium text-xs text-slate-600 flex items-center gap-2">
-                                  <Store className="w-4 h-4 text-slate-300" /> {v.voucher_distributors?.distributor_name || <span className="text-slate-400 italic">Unassigned</span>}
-                                </span>
-                                {v.customers && (
-                                  <div className="flex flex-col sm:flex-row sm:items-center gap-2 mt-1">
-                                    <span className="font-semibold text-xs text-slate-800 flex items-center gap-1.5 bg-slate-100 px-2 py-1 rounded-md">
-                                      <User className="w-3.5 h-3.5 text-slate-400" /> {v.customers.full_name}
-                                    </span>
-                                    
-                                    {/* Assignment Badge & Call Details */}
-                                    {activeAssignment && (
-                                      <div className="flex flex-col gap-1.5 mt-1">
-                                        <div className="flex items-center gap-2">
-                                          <span className={`text-[10px] font-bold flex items-center gap-1.5 uppercase tracking-widest px-2 py-1 rounded-md border w-fit ${activeAssignment.status === 'pending' ? 'bg-amber-50 text-amber-600 border-amber-100' : 'bg-slate-50 text-slate-500 border-slate-200'}`}>
-                                            <PhoneCall className="w-3 h-3" /> 
-                                            {teamMembers.find(m => m.id === activeAssignment.assigned_to)?.name?.split(' ')[0] || 'Staff'}
-                                            {activeAssignment.status !== 'pending' && <span className="text-[9px] opacity-70 ml-1">({activeAssignment.status})</span>}
-                                          </span>
-                                          
-                                          {/* Show Interest Level Badge if it exists */}
-                                          {activeAssignment.interest_level && (
-                                            <span className={`text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-md w-fit ${
-                                              activeAssignment.interest_level === 'High' ? 'bg-emerald-100 text-emerald-700' : 
-                                              activeAssignment.interest_level === 'Moderate' ? 'bg-blue-100 text-blue-700' : 
-                                              activeAssignment.interest_level === 'Not Interested' ? 'bg-rose-100 text-rose-700' : 
-                                              'bg-purple-100 text-purple-700'
-                                            }`}>
-                                              {activeAssignment.interest_level}
-                                            </span>
-                                          )}
-                                        </div>
-                                        
-                                        {/* Show Call Outcome & Notes if they exist */}
-                                        {activeAssignment.call_outcome && (
-                                          <div className="bg-slate-50 border border-slate-100 rounded-md p-2 mt-1">
-                                            <p className="text-[10px] font-semibold text-slate-700 uppercase tracking-wide mb-0.5">{activeAssignment.call_outcome}</p>
-                                            {activeAssignment.call_notes && (
-                                              <p className="text-xs text-slate-500 leading-snug line-clamp-2" title={activeAssignment.call_notes}>
-                                                "{activeAssignment.call_notes}"
-                                              </p>
-                                            )}
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            </TableCell>
-                            
-                            <TableCell className="px-5 text-center pr-6"><StatusBadge status={getDisplayStatus(v)} /></TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
+                              {activeAssignment.call_outcome && (
+                                <p className="text-[11px] text-zinc-500 leading-tight">
+                                  <span className="font-medium text-zinc-700">{activeAssignment.call_outcome}</span>
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-zinc-300">-</span>
+                          )}
+                        </TableCell>
+
+                        <TableCell className="px-5 font-semibold text-zinc-900 text-[13px] text-right">{v.discount_value.toLocaleString()}</TableCell>
+                        
+                        <TableCell className="px-5 text-center pr-6"><StatusBadge status={getDisplayStatus(v)} /></TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </div>
-            
-            {/* SERVER-SIDE PAGINATION FOOTER */}
-            {totalCount > 0 && (
-              <div className="bg-slate-50 border-t border-slate-200 px-5 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-                <div className="flex items-center gap-4 text-xs font-medium text-slate-500">
-                  <div className="flex items-center gap-2">
-                    <span>Rows per page:</span>
-                    <Select value={pageSize.toString()} onValueChange={(v) => { setPageSize(Number(v)); setCurrentPage(0); }}>
-                      <SelectTrigger className="h-8 w-[70px] bg-white border-slate-200 shadow-sm text-xs rounded-md">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="50">50</SelectItem>
-                        <SelectItem value="100">100</SelectItem>
-                        <SelectItem value="200">200</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <span className="hidden sm:inline">
-                    Showing <span className="font-semibold text-slate-700">{currentPage * pageSize + 1}</span> to <span className="font-semibold text-slate-700">{Math.min((currentPage + 1) * pageSize, totalCount)}</span> of <span className="font-semibold text-slate-700">{totalCount}</span>
-                  </span>
-                </div>
+          )}
 
-                <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm" className="h-8 w-8 p-0 text-slate-600 bg-white border-slate-200 shadow-sm rounded-md hover:bg-slate-50" onClick={() => setCurrentPage(p => Math.max(0, p - 1))} disabled={currentPage === 0 || isListLoading}>
-                    <ChevronLeft className="w-4 h-4" />
-                  </Button>
-                  <span className="text-xs font-semibold text-slate-400 px-2">Page {currentPage + 1} of {totalPages}</span>
-                  <Button variant="outline" size="sm" className="h-8 w-8 p-0 text-slate-600 bg-white border-slate-200 shadow-sm rounded-md hover:bg-slate-50" onClick={() => setCurrentPage(p => p + 1)} disabled={(currentPage + 1) * pageSize >= totalCount || isListLoading}>
-                    <ChevronRight className="w-4 h-4" />
-                  </Button>
-                </div>
+          {/* SERVER-SIDE PAGINATION FOOTER */}
+          {totalCount > 0 && (
+            <div className="bg-white border-t border-zinc-200 px-5 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Select value={pageSize.toString()} onValueChange={(v) => { setPageSize(Number(v)); setCurrentPage(0); }}>
+                  <SelectTrigger className="h-8 w-[70px] bg-white border-zinc-200 shadow-none text-[12px] font-medium rounded-md">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="50" className="text-[12px]">50</SelectItem>
+                    <SelectItem value="100" className="text-[12px]">100</SelectItem>
+                  </SelectContent>
+                </Select>
+                <span className="text-[12px] font-medium text-zinc-500 ml-2">
+                  Showing {currentPage * pageSize + 1}-{Math.min((currentPage + 1) * pageSize, totalCount)} of {totalCount}
+                </span>
               </div>
-            )}
-          </div>
-        </section>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-500 hover:bg-zinc-100" onClick={() => setCurrentPage(p => Math.max(0, p - 1))} disabled={currentPage === 0 || isListLoading}>
+                  <ChevronLeft className="w-4 h-4" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-zinc-500 hover:bg-zinc-100" onClick={() => setCurrentPage(p => p + 1)} disabled={(currentPage + 1) * pageSize >= totalCount || isListLoading}>
+                  <ChevronRight className="w-4 h-4" />
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
 
-        {/* MODALS */}
+        {/* ========================================================= */}
+        {/* MODALS SECTION                                              */}
+        {/* ========================================================= */}
+        
+        {/* ASSIGNMENT MODAL */}
         <Dialog open={isAssignModalOpen} onOpenChange={setIsAssignModalOpen}>
-          <DialogContent className="sm:max-w-[450px] border-none shadow-xl rounded-2xl bg-white p-0 overflow-hidden">
-            <DialogHeader className="bg-slate-50 border-b border-slate-100 p-6 pb-5">
-              <DialogTitle className="flex items-center gap-2 text-slate-800 text-lg font-semibold">
+          {/* ✨ FIX: Added max-h-[90dvh] flex flex-col and w-[95vw] for mobile */}
+          <DialogContent className="sm:max-w-[450px] w-[95vw] max-h-[90dvh] flex flex-col border-none shadow-xl rounded-2xl bg-white p-0 overflow-hidden">
+            <DialogHeader className="bg-zinc-50 border-b border-zinc-100 p-6 pb-5 shrink-0">
+              <DialogTitle className="flex items-center gap-2 text-zinc-800 text-lg font-semibold">
                 <PhoneCall className="w-5 h-5 text-teal-600" /> Assign Call Queue
               </DialogTitle>
-              <DialogDescription className="text-sm text-slate-500 mt-1.5">
-                Delegate <strong className="text-slate-700 font-bold">{selectedVouchers.size}</strong> selected leads to a team member.
+              <DialogDescription className="text-sm text-zinc-500 mt-1.5">
+                Delegate <strong className="text-zinc-700 font-bold">{selectedVouchers.size}</strong> selected leads to a team member.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="p-6 space-y-5">
+            {/* ✨ FIX: Added flex-1 overflow-y-auto to allow only the middle to scroll */}
+            <div className="p-6 space-y-5 flex-1 overflow-y-auto custom-scrollbar">
               <div className="space-y-2.5">
-                <Label className="text-xs font-semibold text-slate-600">Assign To</Label>
+                <Label className="text-xs font-semibold text-zinc-600">Assign To</Label>
                 <Select value={selectedAssignee} onValueChange={setSelectedAssignee}>
-                  <SelectTrigger className="h-10 bg-white border-slate-200 text-sm shadow-sm rounded-lg">
+                  <SelectTrigger className="h-10 bg-white border-zinc-200 text-sm shadow-sm rounded-lg">
                     <SelectValue placeholder="Choose user..." />
                   </SelectTrigger>
                   <SelectContent>
                     {teamMembers.map(member => (
                       <SelectItem key={member.id} value={member.id}>
                         <div className="flex items-center justify-between w-full pr-4 gap-4">
-                          <span className="font-medium text-slate-700 text-sm">{member.name}</span>
-                          <span className="text-[10px] text-slate-400 uppercase font-bold tracking-widest">{member.role}</span>
+                          <span className="font-medium text-zinc-700 text-sm">{member.name}</span>
+                          <span className="text-[10px] text-zinc-400 uppercase font-bold tracking-widest">{member.role}</span>
                         </div>
                       </SelectItem>
                     ))}
@@ -934,11 +999,11 @@ export default function TrackVoucherPage() {
               </div>
             </div>
 
-            <DialogFooter className="bg-slate-50 p-5 border-t border-slate-100">
-              <Button variant="ghost" className="h-10 text-sm font-semibold rounded-lg px-4" onClick={() => setIsAssignModalOpen(false)}>Cancel</Button>
-              <Button onClick={handleAssignCalls} disabled={isAssigning || !selectedAssignee} className="h-10 text-sm font-semibold bg-teal-600 hover:bg-teal-700 text-white rounded-lg shadow-sm px-6">
-                {isAssigning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
-                Confirm Assignment
+            {/* ✨ FIX: shrink-0 pins footer to the bottom */}
+            <DialogFooter className="bg-zinc-50 p-5 border-t border-zinc-100 shrink-0 flex flex-col sm:flex-row gap-3">
+              <Button variant="ghost" className="h-10 text-sm font-semibold rounded-lg px-4 w-full sm:w-auto" onClick={() => setIsAssignModalOpen(false)}>Cancel</Button>
+              <Button onClick={handleAssignCalls} disabled={isAssigning || !selectedAssignee} className="h-10 text-sm font-semibold bg-teal-600 hover:bg-teal-700 text-white rounded-lg shadow-sm px-6 w-full sm:w-auto">
+                {isAssigning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Confirm Assignment
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -946,25 +1011,26 @@ export default function TrackVoucherPage() {
 
         {/* MASTER UPDATE MODAL */}
         <Dialog open={isMasterEditModalOpen} onOpenChange={setIsMasterEditModalOpen}>
-          <DialogContent className="sm:max-w-[550px] border-none shadow-xl rounded-2xl p-0 overflow-hidden bg-white">
-            <DialogHeader className="bg-slate-50 border-b border-slate-100 p-6 pb-5">
-              <DialogTitle className="flex items-center gap-2 text-slate-800 text-lg font-semibold">
+          {/* ✨ FIX: Flexbox bounding keeps it completely on screen */}
+          <DialogContent className="sm:max-w-[550px] w-[95vw] max-h-[90dvh] flex flex-col border-none shadow-xl rounded-2xl bg-white p-0 overflow-hidden">
+            <DialogHeader className="p-6 pb-2 shrink-0">
+              <DialogTitle className="flex items-center gap-2 text-zinc-800 text-lg font-semibold">
                 <Settings2 className="w-5 h-5 text-indigo-600" /> Master Update
               </DialogTitle>
-              <DialogDescription className="text-sm text-slate-500 mt-1.5">
-                Applying forced overrides to <strong className="text-slate-700 font-bold">{selectedVouchers.size}</strong> vouchers.
+              <DialogDescription className="text-sm text-zinc-500 mt-1.5">
+                Applying forced overrides to <strong className="text-zinc-700 font-bold">{selectedVouchers.size}</strong> vouchers.
               </DialogDescription>
             </DialogHeader>
 
-            <div className="p-6 space-y-5 max-h-[60vh] overflow-y-auto custom-scrollbar">
-              <div className="space-y-2.5">
-                <Label className="text-xs font-semibold text-slate-600">Override Status</Label>
+            <div className="p-6 pt-4 space-y-4 flex-1 overflow-y-auto custom-scrollbar">
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Override Status</Label>
                 <Select value={masterEditForm.status} onValueChange={(val) => setMasterEditForm({...masterEditForm, status: val})}>
-                  <SelectTrigger className="h-10 bg-white border-slate-200 text-sm shadow-sm rounded-lg">
+                  <SelectTrigger className="h-11 bg-white border-zinc-200 text-sm shadow-sm rounded-xl focus:ring-zinc-900">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="no_change" className="text-slate-400 italic">No Change</SelectItem>
+                  <SelectContent className="border-zinc-200 rounded-xl shadow-md">
+                    <SelectItem value="no_change" className="text-zinc-400 italic">No Change</SelectItem>
                     <SelectItem value="pending_print">Pending Print</SelectItem>
                     <SelectItem value="in_stock">In Stock</SelectItem>
                     <SelectItem value="distributed">Issued</SelectItem>
@@ -976,45 +1042,45 @@ export default function TrackVoucherPage() {
                 </Select>
               </div>
 
-              <div className="space-y-2.5">
-                <Label className="text-xs font-semibold text-slate-600">Override Distributor</Label>
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Override Distributor</Label>
                 <Select value={masterEditForm.distributor_id} onValueChange={(val) => setMasterEditForm({...masterEditForm, distributor_id: val})}>
-                  <SelectTrigger className="h-10 bg-white border-slate-200 text-sm shadow-sm rounded-lg">
+                  <SelectTrigger className="h-11 bg-white border-zinc-200 text-sm shadow-sm rounded-xl focus:ring-zinc-900">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="no_change" className="text-slate-400 italic">No Change</SelectItem>
+                  <SelectContent className="border-zinc-200 rounded-xl shadow-md max-h-[200px]">
+                    <SelectItem value="no_change" className="text-zinc-400 italic">No Change</SelectItem>
                     <SelectItem value="clear" className="text-rose-500 font-semibold">Clear Partner</SelectItem>
                     {distributors.map(d => <SelectItem key={d.id} value={d.id}>{d.distributor_name}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
 
-              <div className="grid grid-cols-2 gap-5">
-                <div className="space-y-2.5">
-                  <Label className="text-xs font-semibold text-slate-600">Issue Date</Label>
-                  <Input type="datetime-local" className="h-10 text-sm rounded-lg shadow-sm border-slate-200 bg-white" value={masterEditForm.distributed_at} onChange={(e) => setMasterEditForm({...masterEditForm, distributed_at: e.target.value})} />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Issue Date</Label>
+                  <Input type="datetime-local" className="h-11 text-sm rounded-xl shadow-sm border-zinc-200 bg-white focus:ring-zinc-900 w-full" value={masterEditForm.distributed_at} onChange={(e) => setMasterEditForm({...masterEditForm, distributed_at: e.target.value})} />
                 </div>
-                <div className="space-y-2.5">
-                  <Label className="text-xs font-semibold text-slate-600">Expiry Date</Label>
-                  <Input type="date" className="h-10 text-sm rounded-lg shadow-sm border-slate-200 bg-white" value={masterEditForm.expiry_date} onChange={(e) => setMasterEditForm({...masterEditForm, expiry_date: e.target.value})} />
+                <div className="space-y-2">
+                  <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Expiry Date</Label>
+                  <Input type="date" className="h-11 text-sm rounded-xl shadow-sm border-zinc-200 bg-white focus:ring-zinc-900 w-full" value={masterEditForm.expiry_date} onChange={(e) => setMasterEditForm({...masterEditForm, expiry_date: e.target.value})} />
                 </div>
               </div>
 
-              <div className="space-y-2.5 border-t border-slate-100 pt-5">
-                <Label className="text-xs font-semibold text-slate-600">Handling Fee Override (₹)</Label>
-                <Input type="number" placeholder="Leave blank to skip..." className="h-10 text-sm rounded-lg shadow-sm border-slate-200 bg-white" value={masterEditForm.handling_fee} onChange={(e) => setMasterEditForm({...masterEditForm, handling_fee: e.target.value})} />
+              <div className="space-y-2 pt-2">
+                <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Handling Fee Override (₹)</Label>
+                <Input type="number" placeholder="Leave blank to skip..." className="h-11 text-sm rounded-xl shadow-sm border-zinc-200 bg-white focus:ring-zinc-900" value={masterEditForm.handling_fee} onChange={(e) => setMasterEditForm({...masterEditForm, handling_fee: e.target.value})} />
               </div>
 
-              <div className="space-y-2.5 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                <Label className="text-xs font-bold text-slate-700">Audit Trail Reason *</Label>
-                <Input type="text" placeholder="Why are you making this edit?" className="h-10 text-sm bg-white border-slate-300 shadow-sm rounded-lg" value={masterEditForm.override_reason} onChange={(e) => setMasterEditForm({...masterEditForm, override_reason: e.target.value})} />
+              <div className="space-y-2 pt-2">
+                <Label className="text-xs font-semibold text-zinc-700">Audit Trail Reason <span className="text-rose-500">*</span></Label>
+                <Input type="text" placeholder="Why are you making this edit?" className="h-11 text-sm bg-white border-zinc-300 shadow-sm rounded-xl focus:border-zinc-500 focus:ring-zinc-900 transition-colors" value={masterEditForm.override_reason} onChange={(e) => setMasterEditForm({...masterEditForm, override_reason: e.target.value})} />
               </div>
             </div>
 
-            <DialogFooter className="bg-slate-50 p-5 border-t border-slate-100">
-              <Button variant="ghost" className="h-10 text-sm font-semibold rounded-lg px-4" onClick={() => setIsMasterEditModalOpen(false)}>Cancel</Button>
-              <Button onClick={handleMasterUpdate} disabled={isUpdatingBulk || !masterEditForm.override_reason.trim()} className="h-10 text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg shadow-sm px-6">
+            <DialogFooter className="p-6 border-t border-zinc-100 bg-zinc-50 shrink-0 flex flex-col sm:flex-row gap-3">
+              <Button variant="outline" className="h-11 text-sm font-semibold rounded-xl px-6 border-zinc-200 text-zinc-700 hover:bg-zinc-50 w-full sm:w-auto" onClick={() => setIsMasterEditModalOpen(false)}>Cancel</Button>
+              <Button onClick={handleMasterUpdate} disabled={isUpdatingBulk || !masterEditForm.override_reason.trim()} className="h-11 text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl shadow-sm px-8 w-full sm:w-auto">
                 {isUpdatingBulk ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Execute Update
               </Button>
             </DialogFooter>
@@ -1023,30 +1089,58 @@ export default function TrackVoucherPage() {
 
         {/* BULK VOID MODAL */}
         <Dialog open={isVoidModalOpen} onOpenChange={setIsVoidModalOpen}>
-          <DialogContent className="sm:max-w-[450px] border-none shadow-xl rounded-2xl bg-white p-0">
-            <DialogHeader className="p-6 pb-2">
+          <DialogContent className="sm:max-w-[450px] w-[95vw] max-h-[90dvh] flex flex-col border-none shadow-xl rounded-2xl bg-white p-0">
+            <DialogHeader className="p-6 pb-2 shrink-0">
               <DialogTitle className="flex items-center gap-2 text-rose-600 text-lg font-semibold">
                 <ShieldAlert className="w-5 h-5" /> Void Selected Vouchers
               </DialogTitle>
-              <DialogDescription className="text-sm text-slate-500 mt-1.5">
-                You are about to permanently void <strong className="text-slate-700 font-bold">{selectedVouchers.size}</strong> vouchers.
+              <DialogDescription className="text-sm text-zinc-500 mt-1.5">
+                You are about to permanently void <strong className="text-zinc-700 font-bold">{selectedVouchers.size}</strong> vouchers. This action will explicitly override their current status.
               </DialogDescription>
             </DialogHeader>
-            <div className="p-6 pt-2">
-              <div className="space-y-2.5">
-                <Label className="text-xs font-semibold text-slate-600">Reason (Required)</Label>
-                <Input className="h-10 text-sm border-slate-200 shadow-sm rounded-lg" placeholder="e.g. Lost in transit..." value={bulkVoidReason} onChange={(e) => setBulkVoidReason(e.target.value)} />
+            
+            <div className="p-6 pt-4 flex-1 overflow-y-auto">
+              <div className="space-y-2">
+                <Label className="text-xs font-semibold text-zinc-700">Reason (Required) <span className="text-rose-500">*</span></Label>
+                <Input className="h-11 text-sm border-zinc-300 shadow-sm rounded-xl focus:border-zinc-500 focus:ring-zinc-900 transition-colors" placeholder="e.g. Lost in transit, printed incorrectly..." value={bulkVoidReason} onChange={(e) => setBulkVoidReason(e.target.value)} />
               </div>
             </div>
-            <DialogFooter className="p-6 pt-0">
-              <Button variant="ghost" className="h-10 text-sm font-semibold rounded-lg px-4" onClick={() => setIsVoidModalOpen(false)}>Cancel</Button>
-              <Button variant="destructive" className="h-10 text-sm font-semibold shadow-sm rounded-lg px-6" onClick={handleBulkVoid} disabled={isVoidingBulk || !bulkVoidReason.trim()}>
+
+            <DialogFooter className="p-6 border-t border-zinc-100 bg-zinc-50 shrink-0 flex flex-col sm:flex-row gap-3">
+              <Button variant="outline" className="h-11 text-sm font-semibold rounded-xl px-6 border-zinc-200 text-zinc-700 hover:bg-zinc-50 w-full sm:w-auto" onClick={() => setIsVoidModalOpen(false)}>Cancel</Button>
+              <Button variant="destructive" className="h-11 text-sm font-semibold shadow-sm rounded-xl px-8 w-full sm:w-auto" onClick={handleBulkVoid} disabled={isVoidingBulk || !bulkVoidReason.trim()}>
                 {isVoidingBulk ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null} Confirm Void
               </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
+        {/* EXPORT OPTIONS MODAL */}
+        <Dialog open={isExportModalOpen} onOpenChange={setIsExportModalOpen}>
+          <DialogContent className="sm:max-w-[420px] w-[95vw] max-h-[90dvh] flex flex-col border-none shadow-xl rounded-2xl bg-white p-0">
+            <DialogHeader className="p-6 pb-2 shrink-0">
+              <DialogTitle className="flex items-center gap-2 text-zinc-800 text-lg font-semibold">
+                <Download className="w-5 h-5 text-zinc-500" /> Export Data
+              </DialogTitle>
+              <DialogDescription className="text-sm text-zinc-500 mt-1.5">
+                Choose how much data you want to export based on your current filters.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="p-6 pt-4 flex flex-col gap-3 flex-1 overflow-y-auto">
+              <Button variant="outline" className="w-full h-auto flex flex-col items-start justify-center p-4 border-zinc-200 hover:bg-zinc-50 hover:border-zinc-300 transition-all rounded-xl text-left shadow-sm" onClick={exportCurrentPage}>
+                <span className="font-semibold text-zinc-900 text-sm">Export Current Page</span>
+                <span className="text-xs text-zinc-500 font-normal mt-1">Downloads only the {listData.length} records currently visible on this screen.</span>
+              </Button>
+              
+              <Button variant="outline" className="w-full h-auto flex flex-col items-start justify-center p-4 border-zinc-200 hover:bg-zinc-50 hover:border-zinc-300 transition-all rounded-xl text-left shadow-sm" onClick={exportAllData}>
+                <span className="font-semibold text-zinc-900 text-sm">Export All Matching Records</span>
+                <span className="text-xs text-zinc-500 font-normal mt-1 whitespace-normal">Compiles all {totalCount} records from the database across all pages.</span>
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
+        <WhatsAppSenderModal isOpen={isSenderModalOpen} onClose={() => setIsSenderModalOpen(false)} recipients={messageRecipients} defaultTemplateName={activeTemplateContext === "welcome" ? "welcome_registered_voucher" : "voucher_expiry_reminder"} />
         <WhatsAppSenderModal isOpen={isSenderModalOpen} onClose={() => setIsSenderModalOpen(false)} recipients={messageRecipients} defaultTemplateName={activeTemplateContext === "welcome" ? "welcome_registered_voucher" : "voucher_expiry_reminder"} />
 
       </main>

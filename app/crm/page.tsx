@@ -138,12 +138,14 @@ export default function CRMPage() {
     actionType: 'manual_add', amount: '', billedAmount: '', notes: '' 
   })
   const [callForm, setCallForm] = useState<{
+    caller_profile_id: string;
     outcome: string;
     interest_level?: string;
     notes: string;
     next_call_date: string;
     next_call_time: string;
   }>({
+    caller_profile_id: '',
     outcome: '',
     interest_level: undefined,
     notes: '',
@@ -486,6 +488,7 @@ export default function CRMPage() {
       setIsCallModalOpen(false);
       setActiveCallRecordId(null);
       setCallForm({ 
+        caller_profile_id: '',
         outcome: 'Connected / Spoke to Customer', 
         interest_level: undefined, 
         notes: '', 
@@ -859,7 +862,7 @@ export default function CRMPage() {
     window.location.href = `tel:+91${cleanPhone}`;
 
     setIsCallModalOpen(true);
-    setCallForm({ outcome: 'Connected / Spoke to Customer', notes: '', next_call_date: '', next_call_time: '' });
+    setCallForm({ caller_profile_id: '',outcome: 'Connected / Spoke to Customer', notes: '', next_call_date: '', next_call_time: '' });
 
     try {
       const { data, error } = await supabase.from('call_records').insert([{

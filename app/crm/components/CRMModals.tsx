@@ -41,6 +41,7 @@ interface CRMModalsProps {
 
   isCallModalOpen: boolean; setIsCallModalOpen: (v: boolean) => void;
   callForm: {
+    caller_profile_id: string;
     outcome: string;
     interest_level?: string; 
     notes: string;
@@ -48,7 +49,8 @@ interface CRMModalsProps {
     next_call_time: string;
   };
   setCallForm: React.Dispatch<React.SetStateAction<{
-    outcome: string;
+    caller_profile_id: string;
+      outcome: string;
     interest_level?: string; 
     notes: string;
     next_call_date: string;
@@ -120,6 +122,32 @@ export function CRMModals(props: CRMModalsProps) {
   const activeSequence = selectedCustomer?.voucher_message_sequences?.find((s: any) => ['active', 'paused'].includes(s.status)) as any;
   const [sequenceForm, setSequenceForm] = useState({ status: '', interval_hours: 96, current_step: 1 });
   const [isUpdatingSequence, setIsUpdatingSequence] = useState(false);
+
+  // 1. Add the state to hold the fetched profiles
+const [profilesList, setProfilesList] = useState<any[]>([]);
+
+// 2. Add this useEffect to fetch the active users from Supabase
+useEffect(() => {
+  const fetchProfiles = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, role')
+        .eq('is_active', true) // Only show active employees
+        .order('full_name', { ascending: true });
+
+      if (error) throw error;
+      
+      if (data) {
+        setProfilesList(data);
+      }
+    } catch (error) {
+      console.error("Error fetching profiles:", error);
+    }
+  };
+
+  fetchProfiles();
+}, []);
 
   // ✨ Separate Activity Arrays for clean rendering
   const waActivity = customerHistory?.filter((item: any) => item.type === 'WhatsApp Webhook') || [];
@@ -989,7 +1017,26 @@ export function CRMModals(props: CRMModalsProps) {
           </DialogHeader>
 
           <div className="space-y-4 p-5 bg-zinc-50 overflow-y-auto custom-scrollbar flex-1">
-            <div className="space-y-1.5">
+            
+            {/* NEW: USER / CALLER SELECTOR */}
+            <div className="space-y-1.5 animate-in fade-in slide-in-from-top-1">
+              <label className="text-sm font-medium text-zinc-700">Logged By (Caller) <span className="text-red-500">*</span></label>
+              <Select value={callForm.caller_profile_id || ''} onValueChange={(val) => setCallForm({ ...callForm, caller_profile_id: val })}>
+                <SelectTrigger className="h-9 rounded-md text-sm bg-white border-zinc-200 focus:ring-1 focus:ring-zinc-900">
+                  <SelectValue placeholder="Select user..." />
+                </SelectTrigger>
+                <SelectContent className="rounded-md border-zinc-200 shadow-md">
+                  {/* Ensure profilesList is fetched in your parent component containing { id, full_name, role } */}
+                  {profilesList?.map((profile: any) => (
+                    <SelectItem key={profile.id} value={profile.id} className="text-sm">
+                      {profile.full_name} <span className="text-zinc-400 capitalize">({profile.role?.replace('_', ' ')})</span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5 animate-in fade-in slide-in-from-top-1 delay-75">
               <label className="text-sm font-medium text-zinc-700">Call Outcome <span className="text-red-500">*</span></label>
               <Select value={callForm.outcome} onValueChange={(val) => setCallForm({ ...callForm, outcome: val, interest_level: undefined })}>
                 <SelectTrigger className="h-9 rounded-md text-sm bg-white border-zinc-200 focus:ring-1 focus:ring-zinc-900">
@@ -1030,7 +1077,7 @@ export function CRMModals(props: CRMModalsProps) {
               </div>
             )}
 
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 animate-in fade-in slide-in-from-top-1 delay-150">
               <label className="text-sm font-medium text-zinc-700">Interaction Notes <span className="text-red-500">*</span></label>
               <textarea
                 placeholder="Details of the interaction..."
@@ -1041,7 +1088,7 @@ export function CRMModals(props: CRMModalsProps) {
             </div>
 
             {callForm.outcome !== 'Not Interested (Do Not Disturb)' && (
-              <div className="grid grid-cols-2 gap-4 pt-4 border-t border-zinc-200">
+              <div className="grid grid-cols-2 gap-4 pt-4 border-t border-zinc-200 animate-in fade-in slide-in-from-top-1 delay-200">
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium text-zinc-700">Next Call Date</label>
                   <Input type="date" className="h-9 rounded-md text-sm bg-white border-zinc-200 focus:ring-1 focus:ring-zinc-900" value={callForm.next_call_date} onChange={(e) => setCallForm({ ...callForm, next_call_date: e.target.value })} />
@@ -1058,7 +1105,8 @@ export function CRMModals(props: CRMModalsProps) {
             <Button variant="outline" className="w-full sm:flex-1 h-9 rounded-md text-sm font-medium text-zinc-700 bg-white hover:bg-zinc-50 border-zinc-200 shadow-sm" onClick={() => setIsCallModalOpen(false)}>Cancel</Button>
             <Button 
               disabled={
-                isSubmitting || 
+                isSubmitting ||
+                !callForm.caller_profile_id || 
                 !callForm.outcome || 
                 !callForm.notes.trim() || 
                 (callForm.outcome === 'Connected / Spoke to Customer' && !callForm.interest_level)
@@ -1071,6 +1119,7 @@ export function CRMModals(props: CRMModalsProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
 
       {/* SCHEDULE / AUTOMATION CONTROL MODAL */}
       <Dialog open={isFollowupModalOpen} onOpenChange={setIsFollowupModalOpen}>

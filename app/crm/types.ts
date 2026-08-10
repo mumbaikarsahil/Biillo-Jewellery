@@ -32,6 +32,7 @@ export interface CRMCustomer {
   // Array Relations
   kitty_plans?: KittyPlan[] 
   vouchers?: any[]
+  caller_profile_id?: string
   
   // Strongly Typed Sequences & Webhooks
   voucher_message_sequences?: Array<{
