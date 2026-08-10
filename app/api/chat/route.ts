@@ -12,12 +12,13 @@ CRITICAL ROUTING RULES (MUST FOLLOW):
 2. NEVER return null if the question is about Stock, Tops, Rings, Items, Barcodes, or Valuation -> ALWAYS map to "query_inventory_master".
 3. NEVER return null if the question is about Job bags, Karigars, Artisans, or Repairs -> ALWAYS map to "query_manufacturing_master".
 4. NEVER return null if the question is about Customers, Points, Credit, or Kitty plans -> ALWAYS map to "query_crm_master".
-5. If a parameter (like warehouse_name or invoice_number) is not explicitly mentioned by the user, leave it null/undefined. Do NOT fail the intent!
+5. NEVER return null if the question is about Vouchers, Voucher Stock, Call Assignments, Telecalling Status, Delivery Agents, or Party/Distributor Payments -> ALWAYS map to "query_vouchers_master".
+6. If a parameter (like warehouse_name, party_name, or invoice_number) is not explicitly mentioned by the user, leave it null/undefined. Do NOT fail the intent!
 
 ====================================================================
 EXPLICIT FEW-SHOT EXAMPLES (Memorize these routing patterns):
 User: "What is our total sales revenue today?"
-Output: {"intent": "query_sales_master", "parameters": {"days_back": 1}}
+Output: {"intent": "query_sales_master", "parameters": {"frequency": "Daily"}}
 
 User: "How many tops are at Andheri West?"
 Output: {"intent": "query_inventory_master", "parameters": {"warehouse_name": "Andheri", "search_term": "tops"}}
@@ -33,6 +34,21 @@ Output: {"intent": "query_crm_master", "parameters": {"phone_number": "987654321
 
 User: "Do we have any pending branch restock requests?"
 Output: {"intent": "query_operations_master", "parameters": {"operation_type": "restocks"}}
+
+User: "How many vouchers are in stock?"
+Output: {"intent": "query_vouchers_master", "parameters": {}}
+
+User: "Show me voucher call assignments status"
+Output: {"intent": "query_vouchers_master", "parameters": {"metric": "calls"}}
+
+User: "What about vouchers which are sent for calling?"
+Output: {"intent": "query_vouchers_master", "parameters": {"metric": "calls"}}
+
+User: "Check voucher distribution payments and delivery agents"
+Output: {"intent": "query_vouchers_master", "parameters": {"metric": "distributions"}}
+
+User: "How many vouchers were delivered to party Ramesh?"
+Output: {"intent": "query_vouchers_master", "parameters": {"party_name": "Ramesh", "metric": "distributions"}}
 ====================================================================
 
 STORE & BRANCH KEYWORD MAPPING:
@@ -101,11 +117,17 @@ export async function POST(req: Request) {
       // Step 3: Translate raw JSON database payload into an executive summary
       const summaryCompletion = await groq.chat.completions.create({
         model: "llama-3.1-8b-instant",
-        temperature: 0.3,
+        temperature: 0.2, // Lowered temperature for stricter formatting
         messages: [
           { 
             role: "system", 
-            content: "You are an AI Executive Assistant for a jewelry brand owner. Formulate a direct, professional, and insightful 1 to 2 sentence conversational summary of the raw database results provided below. Include key numbers like counts, weights, or valuations directly in your sentence. Do not use asterisks or markdown bolding." 
+            content: `You are an AI Executive Assistant for a jewelry brand owner. Formulate a professional, insightful summary of the raw database results provided below.
+            
+            CRITICAL FORMATTING RULES:
+            1. NEVER omit any data from 'collection_by_mode', 'store_ranking', 'assignment_statuses', or 'call_outcomes'. If data exists in the payload, list all items clearly.
+            2. Use Markdown bullet points to clearly present lists and rankings.
+            3. Do not round numbers or change currencies. Use the exact pre-formatted strings provided in the payload (e.g., '₹6,68,018').
+            4. Keep your opening summary sentence concise, then immediately provide the bulleted breakdowns.` 
           },
           { 
             role: "user", 

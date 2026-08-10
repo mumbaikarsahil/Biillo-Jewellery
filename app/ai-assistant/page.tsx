@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useRef, useEffect } from "react"
-import { Send, Loader2, Bot, User, Database, ChevronDown, ChevronUp, Sparkles, ShieldAlert, Zap } from "lucide-react"
+import { Send, Loader2, User, Database, ChevronDown, ChevronUp, Plus, Mic, Square } from "lucide-react"
 import { useAuth } from "@/hooks/useAuth"
 
 interface ChatMessage {
@@ -11,27 +11,130 @@ interface ChatMessage {
   data?: any;
 }
 
+// Authentic Gemini 4-point star SVG
+const GeminiStar = ({ className = "w-8 h-8" }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="gemini-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stopColor="#4285F4" />
+        <stop offset="33%" stopColor="#9b72cb" />
+        <stop offset="66%" stopColor="#d96570" />
+        <stop offset="100%" stopColor="#f9ab00" />
+      </linearGradient>
+    </defs>
+    <path
+      d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z"
+      fill="url(#gemini-gradient)"
+    />
+  </svg>
+)
+
 export default function AiAssistantPage() {
   const { appUser } = useAuth()
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const [isListening, setIsListening] = useState(false)
+  
+  // ✨ FIX: Strict container scrolling to prevent UI layout jumps
+  const chatContainerRef = useRef<HTMLDivElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const recognitionRef = useRef<any>(null)
 
+  // Scroll to bottom without shifting the global page layout
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: 'smooth'
+      })
+    }
+  }, [messages, isLoading])
+
+  // Auto-resize textarea when speech recognition changes the input
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+      textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`
+    }
+  }, [input])
+
+  // Initialize Speech Recognition
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      if (SpeechRecognition) {
+        const recognition = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'en-IN'; 
+
+        recognition.onresult = (event: any) => {
+          let currentTranscript = '';
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            currentTranscript += event.results[i][0].transcript;
+          }
+          setInput(currentTranscript);
+        };
+
+        recognition.onerror = (event: any) => {
+          console.error("Speech recognition error", event.error);
+          setIsListening(false);
+        };
+
+        recognition.onend = () => {
+          setIsListening(false);
+        };
+
+        recognitionRef.current = recognition;
+      }
+    }
+  }, []);
+
+  const toggleListening = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+    } else {
+      setInput(""); 
+      recognitionRef.current?.start();
+      setIsListening(true);
+    }
+  };
 
   const cleanMessageText = (text: string) => {
     return text.replace(/\*\*/g, "").replace(/\*/g, "")
   }
 
-  const sendMessage = async (e: React.FormEvent, customText?: string) => {
+  // ✨ FIX: Smart Textarea input handler
+  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Submit on Enter (but allow Shift+Enter for new line)
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault()
+      sendMessage()
+    }
+  }
+
+  const sendMessage = async (e?: React.FormEvent, customText?: string) => {
     if (e) e.preventDefault()
     const textToSend = customText || input
     if (!textToSend.trim() || isLoading) return
 
+    if (isListening) {
+      recognitionRef.current?.stop();
+      setIsListening(false);
+    }
+
     setInput("")
+    // Reset textarea height instantly
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
+    
     const newMessageId = Date.now().toString()
     
     const updatedMessages: ChatMessage[] = [...messages, { id: newMessageId, role: 'user', text: textToSend }]
@@ -68,159 +171,158 @@ export default function AiAssistantPage() {
       setMessages(prev => [...prev, { 
         id: (Date.now() + 1).toString(), 
         role: 'assistant', 
-        text: "Sorry, I encountered an error communicating with the database." 
+        text: "Sorry, I encountered an error communicating with the system database." 
       }])
     } finally {
       setIsLoading(false)
     }
   }
 
-  // Extracted input field for perfect code reuse
-  const renderInputForm = (isCentered: boolean) => (
-    <div className={`w-full ${isCentered ? 'max-w-2xl mt-8 mx-auto' : 'max-w-4xl mx-auto'} flex flex-col gap-1.5 sm:gap-2`}>
-      <form onSubmit={(e) => sendMessage(e)} className="relative flex items-center w-full">
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Ask about inventory, revenue, job bags, or customer points..."
-          className="w-full bg-slate-100/80 border border-slate-200 text-slate-800 text-sm rounded-full pl-4 sm:pl-5 pr-12 sm:pr-14 py-3.5 sm:py-4 focus:outline-hidden focus:ring-2 focus:ring-purple-500/40 focus:bg-white focus:border-purple-400 transition-all shadow-inner font-normal placeholder:text-slate-400"
-          disabled={isLoading}
-        />
-        <button
-          type="submit"
-          disabled={!input.trim() || isLoading}
-          className="absolute right-1.5 h-9 sm:h-10 w-9 sm:w-10 bg-slate-900 hover:bg-slate-800 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-full flex items-center justify-center transition-all shadow-xs active:scale-95 cursor-pointer disabled:cursor-not-allowed"
-        >
-          <Send className="h-4 w-4 ml-0.5" />
-        </button>
-      </form>
-      
-      <p className="text-[10px] sm:text-[11px] text-slate-400 text-center flex items-center justify-center gap-1 sm:gap-1.5 pt-0.5 font-medium px-2 leading-tight">
-        <span>Biillo AI can make mistakes. Verify critical financial records against core ledger reports.</span>
-      </p>
-    </div>
-  )
-
   return (
-    <div className="flex flex-col h-full min-h-full max-h-[100dvh] bg-slate-50/50 font-sans text-slate-800 overflow-hidden overscroll-none">
+    <div className="flex flex-col h-[calc(100dvh-60px)] w-full bg-[#131314] font-sans text-slate-200 overflow-hidden relative">
       
-      {/* Secondary App Header */}
-      <header className="bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-4 sm:px-6 py-3 flex items-center justify-between shrink-0 shadow-2xs z-10">
-        <div className="flex items-center gap-3">
-          <div className="bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 p-2 rounded-xl text-white shadow-xs shadow-purple-500/20">
-            <Sparkles className="h-4 w-4" />
-          </div>
-          <div className="flex items-center gap-2">
-            <h1 className="font-bold text-slate-900 text-sm sm:text-base leading-tight tracking-tight">Biillo AI Intelligence</h1>
-            <span className="inline-flex items-center gap-1 bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-200 text-purple-700 text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">
-              <Zap className="h-2.5 w-2.5 fill-purple-500 text-purple-500" /> Early Access
-            </span>
-          </div>
+      {/* ---------------- Top Header ---------------- */}
+      <header className="h-14 px-4 md:px-6 flex items-center justify-between shrink-0 z-20 sticky top-0">
+        <button className="flex items-center gap-1.5 hover:bg-white/5 px-2 py-1 rounded-lg transition-colors">
+          <span className="text-[17px] font-medium text-slate-200">Biillo <span className="text-slate-400">Pro</span></span>
+          <ChevronDown className="w-4 h-4 text-slate-400 mt-0.5" />
+        </button>
+        <div className="w-8 h-8 rounded-full border border-white/10 flex items-center justify-center bg-white/5">
+           <User className="w-4 h-4 text-slate-400" />
         </div>
       </header>
 
-      {/* Main Content Area */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 w-full mx-auto flex flex-col overscroll-contain">
+      {/* ---------------- Main Content Body ---------------- */}
+      {/* ✨ FIX: Assigned ref here for strict internal scrolling */}
+      <div ref={chatContainerRef} className="flex-1 overflow-y-auto w-full mx-auto flex flex-col custom-scrollbar">
         
         {messages.length === 0 ? (
-          /* STATE 1: Centered Gemini Landing Layout */
-          <div className="flex-1 flex flex-col items-center justify-center text-center px-2 max-w-4xl mx-auto w-full py-4">
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100/80 border border-slate-200 text-slate-600 text-xs font-semibold mb-4 sm:mb-6 shadow-2xs">
-              <Sparkles className="h-3.5 w-3.5 text-purple-600 animate-pulse" />
-              <span>HEADQUARTERS TERMINAL</span>
+          /* STATE 1: Centered Landing Hero */
+          <div className="flex-1 flex flex-col items-center justify-center text-center my-auto px-6 animate-in fade-in duration-700 max-w-3xl mx-auto w-full pb-10">
+            
+            <div className="mb-6">
+              <GeminiStar className="w-12 h-12 md:w-14 md:h-14" />
             </div>
 
-            <h2 className="text-2xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight mb-2 sm:mb-3">
-              <span className="bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">
-                Good morning, {appUser?.full_name || "System Manager"}.
-              </span>
-            </h2>
-            <p className="text-xl sm:text-3xl lg:text-4xl font-bold text-slate-800 tracking-tight mb-8 sm:mb-10">
-              How can I help you today?
-            </p>
-
-            {/* Quick Action Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full max-w-2xl text-left">
-              {[
-                { title: "Inventory Check", desc: "How many tops are at Andheri West?", query: "How many tops are at Andheri West?" },
-                { title: "Revenue Analysis", desc: "What is our total sales revenue today?", query: "What is our total sales revenue today?" },
-                { title: "Job Bag Tracking", desc: "Check the status of job bag JB-1002", query: "Check the status of job bag JB-1002" }
-              ].map((card, idx) => (
-                <button
-                  key={idx}
-                  type="button"
-                  onClick={(e) => sendMessage(e, card.query)}
-                  className="p-3.5 sm:p-4 rounded-2xl bg-white border border-slate-200/80 hover:border-purple-300 hover:shadow-md active:scale-[0.98] transition-all text-left flex flex-col justify-between group cursor-pointer shadow-2xs"
-                >
-                  <span className="text-xs font-bold text-slate-900 group-hover:text-purple-600 transition-colors mb-1.5 sm:mb-2">{card.title}</span>
-                  <span className="text-xs text-slate-500 leading-relaxed">{card.desc}</span>
-                </button>
-              ))}
+            <div className="w-full flex flex-col items-center">
+              <h2 className="text-[32px] sm:text-[40px] md:text-[44px] leading-tight font-medium tracking-tight mb-1">
+                <span className="bg-gradient-to-r from-[#4285F4] via-[#9b72cb] to-[#d96570] bg-clip-text text-transparent">
+                  Hello, {appUser?.full_name?.split(' ')[0] || "Sahil"}
+                </span>
+              </h2>
+              <p className="text-[32px] sm:text-[40px] md:text-[44px] leading-tight font-medium text-[#5f6368] tracking-tight">
+                How can I help you today?
+              </p>
             </div>
-
-            {/* ✨ INPUT BAR PLACED SECURELY IN CENTER UNDER CARDS */}
-            {renderInputForm(true)}
+            
           </div>
         ) : (
           
-          /* STATE 2: Active Dynamic Conversation Stream Layout */
-          <div className="space-y-6 pt-2 max-w-4xl mx-auto w-full pb-24">
+          /* STATE 2: Conversation Stream */
+          <div className="space-y-8 pt-4 pb-6 px-4 md:px-6 w-full max-w-4xl mx-auto animate-in fade-in duration-300">
             {messages.map((msg) => (
               <div key={msg.id} className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`flex gap-3 max-w-[90%] sm:max-w-[75%] ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
+                <div className={`flex gap-4 max-w-[95%] sm:max-w-[85%] ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
                   
-                  <div className={`shrink-0 h-8 w-8 rounded-full flex items-center justify-center shadow-xs text-xs font-bold ${
-                    msg.role === 'user' 
-                      ? 'bg-slate-800 text-white' 
-                      : 'bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 text-white'
+                  {/* Avatar */}
+                  <div className={`shrink-0 h-8 w-8 rounded-full flex items-center justify-center mt-1 ${
+                    msg.role === 'user' ? 'bg-slate-700 text-slate-200' : 'bg-transparent'
                   }`}>
-                    {msg.role === 'user' ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                    {msg.role === 'user' ? <User className="h-4 w-4" /> : <GeminiStar className="w-7 h-7" />}
                   </div>
 
-                  <div className="flex flex-col gap-2 min-w-0">
-                    <div className={`p-3.5 sm:p-4 rounded-2xl shadow-2xs text-sm leading-relaxed ${
+                  {/* Message Content */}
+                  <div className="flex flex-col gap-3 min-w-0">
+                    <div className={`text-[15px] leading-relaxed ${
                       msg.role === 'user' 
-                        ? 'bg-slate-800 text-white rounded-tr-none font-medium' 
-                        : 'bg-white border border-slate-200/80 text-slate-800 rounded-tl-none font-normal'
+                        ? 'bg-[#1e1f20] px-5 py-3 rounded-3xl text-slate-200 font-normal' 
+                        : 'text-slate-200 py-1 font-normal'
                     }`}>
-                      {msg.text}
+                      <div className="whitespace-pre-wrap">{msg.text}</div>
                     </div>
 
+                    {/* Expandable JSON Data */}
                     {msg.data && !msg.data.error && (
                       <DataPayloadViewer data={msg.data} />
                     )}
                   </div>
-
                 </div>
               </div>
             ))}
             
+            {/* Loading State */}
             {isLoading && (
-              <div className="flex w-full justify-start">
-                <div className="flex gap-3 max-w-[85%] flex-row items-end">
-                  <div className="shrink-0 h-8 w-8 rounded-full bg-gradient-to-br from-indigo-500 via-purple-500 to-pink-500 text-white flex items-center justify-center shadow-xs">
-                    <Bot className="h-4 w-4" />
-                  </div>
-                  <div className="px-4 py-3 bg-white border border-slate-200/80 rounded-2xl rounded-tl-none shadow-2xs flex items-center gap-2.5">
-                    <Loader2 className="h-4 w-4 animate-spin text-purple-600" />
-                    <span className="text-xs text-slate-500 font-medium tracking-wide">Analyzing database records...</span>
+              <div className="flex w-full justify-start animate-in fade-in">
+                <div className="flex gap-4 max-w-[85%] flex-row items-center">
+                  <div className="shrink-0 h-8 w-8 rounded-full flex items-center justify-center">
+                    <GeminiStar className="w-7 h-7 animate-pulse" />
                   </div>
                 </div>
               </div>
             )}
-            <div ref={messagesEndRef} />
           </div>
         )}
-
       </div>
 
-      {/* STATE 2 FOOTER: Fixed bottom position, ONLY renders when conversation is active */}
-      {messages.length > 0 && (
-        <div className="bg-white/90 backdrop-blur-md border-t border-slate-200/80 p-3 sm:p-4 shrink-0 shadow-lg shadow-slate-100 z-10 transition-all">
-          {renderInputForm(false)}
+      {/* ---------------- Bottom Floating Input Area ---------------- */}
+      <footer className="w-full bg-[#131314] px-4 pt-2 pb-[80px] md:pb-6 shrink-0 z-20 border-t border-transparent">
+        <div className="max-w-3xl mx-auto w-full relative">
+          
+          {/* ✨ FIX: Used items-end so buttons stay at bottom as textarea expands */}
+          <form onSubmit={sendMessage} className="relative flex items-end w-full bg-[#1e1f20] rounded-[28px] min-h-[56px] px-2 shadow-sm py-2">
+            
+            <button type="button" className="h-10 w-10 shrink-0 flex items-center justify-center rounded-full hover:bg-white/5 text-[#c4c7c5] transition-colors mb-0.5">
+              <Plus className="w-6 h-6" />
+            </button>
+
+            {/* ✨ FIX: Dynamic Auto-resizing Textarea */}
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={handleInput}
+              onKeyDown={handleKeyDown}
+              rows={1}
+              placeholder={isListening ? "Listening..." : "Enter a prompt here"}
+              className="flex-1 bg-transparent border-none text-slate-200 text-base pl-3 pr-4 focus:outline-none focus:ring-0 placeholder:text-[#c4c7c5] font-normal resize-none py-2.5 max-h-32 custom-scrollbar"
+              disabled={isLoading}
+              style={{ overflowY: 'auto' }}
+            />
+            
+            <div className="flex items-center gap-1 pr-1 mb-0.5">
+              {!input.trim() && !isListening ? (
+                 <button 
+                   type="button" 
+                   onClick={toggleListening}
+                   className="h-10 w-10 shrink-0 flex items-center justify-center rounded-full hover:bg-white/5 text-[#c4c7c5] transition-colors"
+                 >
+                   <Mic className="w-[22px] h-[22px]" />
+                 </button>
+              ) : isListening ? (
+                 <button 
+                   type="button" 
+                   onClick={toggleListening}
+                   className="h-10 w-10 shrink-0 flex items-center justify-center rounded-full bg-red-500/20 text-red-500 hover:bg-red-500/30 transition-colors animate-pulse"
+                 >
+                   <Square className="w-4 h-4 fill-current" />
+                 </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={isLoading}
+                  className="h-10 w-10 shrink-0 flex items-center justify-center rounded-full transition-all duration-300 bg-white/10 hover:bg-white/20 text-white active:scale-95"
+                >
+                  {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-4 w-4 ml-0.5" />}
+                </button>
+              )}
+            </div>
+
+          </form>
+
+          <p className="text-[11px] text-[#5f6368] text-center pt-3 font-normal px-2">
+            Biillo AI processes real-time database records. Verify critical financial entries against ledger logs.
+          </p>
         </div>
-      )}
+      </footer>
     </div>
   )
 }
@@ -229,22 +331,22 @@ function DataPayloadViewer({ data }: { data: any }) {
   const [isOpen, setIsOpen] = useState(false)
 
   return (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden mt-1 w-full max-w-md shadow-md transition-all">
+    <div className="bg-[#1e1f20] border border-white/5 rounded-2xl overflow-hidden mt-2 w-full max-w-lg transition-all">
       <button 
         type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between px-3.5 py-2.5 bg-slate-800/90 hover:bg-slate-800 transition-colors text-left cursor-pointer"
+        className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors text-left cursor-pointer"
       >
-        <div className="flex items-center gap-2 text-[10px] font-bold text-slate-300 uppercase tracking-widest">
-          <Database className="h-3.5 w-3.5 text-purple-400 shrink-0" />
-          <span>Verified Database Payload</span>
+        <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
+          <Database className="h-4 w-4 text-[#9b72cb] shrink-0" />
+          <span>View ERP Payload Data</span>
         </div>
-        {isOpen ? <ChevronUp className="h-4 w-4 text-slate-400" /> : <ChevronDown className="h-4 w-4 text-slate-400" />}
+        {isOpen ? <ChevronUp className="h-4 w-4 text-slate-500" /> : <ChevronDown className="h-4 w-4 text-slate-500" />}
       </button>
       
       {isOpen && (
-        <div className="p-3 bg-slate-950 overflow-x-auto border-t border-slate-800/80 max-h-60 overscroll-contain">
-          <pre className="text-[10px] sm:text-[11px] text-emerald-400 font-mono leading-relaxed">
+        <div className="p-4 bg-[#131314] overflow-x-auto border-t border-white/5 max-h-60 custom-scrollbar">
+          <pre className="text-[11px] text-[#4285F4] font-mono leading-relaxed">
             {JSON.stringify(data, null, 2)}
           </pre>
         </div>
