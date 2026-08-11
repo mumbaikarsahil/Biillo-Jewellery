@@ -225,8 +225,18 @@ export default function InventoryPage() {
   const [packagingItems, setPackagingItems] = useState<any[]>([])
   const [isAddPackagingModalOpen, setIsAddPackagingModalOpen] = useState(false)
   const [isAddingPackaging, setIsAddingPackaging] = useState(false)
-  const [packagingForm, setPackagingForm] = useState({ item_name: '', item_category: 'Ring Box', warehouse_id: '', quantity: 1 })
-
+  const [isCustomCategoryInput, setIsCustomCategoryInput] = useState(false)
+  const [packagingForm, setPackagingForm] = useState({ item_name: '', item_category: 'Ring Box',custom_category: '', warehouse_id: '', quantity: 1 })
+  // --- Inventory Management Modals (Add / Deduct) ---
+  const [manageStockItem, setManageStockItem] = useState<any>(null)
+  const [isManageStockModalOpen, setIsManageStockModalOpen] = useState(false)
+  const [manageStockForm, setManageStockForm] = useState({ 
+    action: 'add', // 'add' or 'deduct'
+    quantity: 1, 
+    reason: '' 
+  })
+  const [isManagingStock, setIsManagingStock] = useState(false)
+  const [isCustomPackaging, setIsCustomPackaging] = useState(false)
   const [diamondRates, setDiamondRates] = useState<Record<string, number>>({})
 
   const [isCalcModalOpen, setCalcModalOpen] = useState(false)
@@ -678,7 +688,15 @@ export default function InventoryPage() {
   const handleAddPackagingStock = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canEdit || !appUser) return;
-    if (!packagingForm.item_name || !packagingForm.warehouse_id || packagingForm.quantity <= 0) return toast.error("Invalid form details");
+    
+    // Determine the final category string
+    const finalCategory = packagingForm.item_category === 'Other' 
+      ? packagingForm.custom_category.trim() 
+      : packagingForm.item_category;
+
+    if (!packagingForm.item_name || !packagingForm.warehouse_id || packagingForm.quantity <= 0 || !finalCategory) {
+      return toast.error("Please fill in all required details.");
+    }
 
     setIsAddingPackaging(true);
     try {
@@ -687,6 +705,7 @@ export default function InventoryPage() {
         .eq('company_id', appUser.company_id)
         .eq('warehouse_id', packagingForm.warehouse_id)
         .eq('item_name', packagingForm.item_name)
+        .eq('item_category', finalCategory) // ✨ Verify with final category
         .maybeSingle();
 
       if (existing) {
@@ -703,7 +722,7 @@ export default function InventoryPage() {
             company_id: appUser.company_id,
             warehouse_id: packagingForm.warehouse_id,
             item_name: packagingForm.item_name,
-            item_category: packagingForm.item_category,
+            item_category: finalCategory, // ✨ Save final category
             stock_count: packagingForm.quantity
           });
         if (error) throw error;
@@ -711,14 +730,71 @@ export default function InventoryPage() {
 
       toast.success(`Successfully added ${packagingForm.quantity} x ${packagingForm.item_name}`);
       setIsAddPackagingModalOpen(false);
-      setPackagingForm({ item_name: '', item_category: 'Ring Box', warehouse_id: '', quantity: 1 });
-      fetchPage(0); // Refresh Packaging Tab
       
+      // Reset form properly
+      setPackagingForm({ item_name: '', item_category: 'Ring Box', custom_category: '', warehouse_id: '', quantity: 1 });
+      setIsCustomCategoryInput(false);
+      
+      fetchPage(0); // Refresh Packaging Tab
       setCounts(prev => ({ ...prev, packaging: prev.packaging + (existing ? 0 : 1) }));
     } catch (err: any) {
       toast.error("Failed to add packaging stock: " + err.message);
     } finally {
       setIsAddingPackaging(false);
+    }
+  };
+
+  const handleManageStock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canEdit || !appUser || !manageStockItem) return;
+    if (manageStockForm.quantity <= 0) return toast.error("Quantity must be greater than 0");
+    if (!manageStockForm.reason.trim()) return toast.error("Audit reason is required.");
+
+    setIsManagingStock(true);
+    try {
+      const table = activeTab === 'gifting' ? 'gifting_inventory' : 'packaging_inventory';
+      
+      const multiplier = manageStockForm.action === 'add' ? 1 : -1;
+      const changeAmount = manageStockForm.quantity * multiplier;
+      const newTotal = manageStockItem.stock_count + changeAmount;
+
+      if (newTotal < 0) return toast.error("Cannot deduct more than current stock!");
+
+      const { error } = await supabase.from(table)
+        .update({ 
+          stock_count: newTotal, 
+          last_updated: new Date().toISOString() 
+        })
+        .eq('id', manageStockItem.id);
+      
+      if (error) throw error;
+
+      // Create Audit Log Entry
+      const auditLog = {
+        company_id: appUser.company_id,
+        warehouse_id: manageStockItem.warehouse_id,
+        item_id: manageStockItem.id,
+        item_type: activeTab,
+        action: manageStockForm.action.toUpperCase(),
+        quantity_changed: manageStockForm.quantity,
+        previous_stock: manageStockItem.stock_count,
+        new_stock: newTotal,
+        reason: manageStockForm.reason.trim(),
+        user_name: appUser.full_name || 'System User'
+      };
+
+      // Ensure the audit table exists in your DB: `inventory_audit_logs`
+      // If it doesn't, this will fail gracefully but still update the stock
+      const { error: auditError } = await supabase.from('inventory_audit_logs').insert(auditLog);
+      if (auditError) console.warn("Audit Log Warning:", auditError);
+
+      toast.success(`Successfully ${manageStockForm.action === 'add' ? 'added' : 'deducted'} ${manageStockForm.quantity} items.`);
+      setIsManageStockModalOpen(false);
+      fetchPage(0); // Refresh the view
+    } catch (err: any) {
+      toast.error("Failed to update stock: " + err.message);
+    } finally {
+      setIsManagingStock(false);
     }
   };
 
@@ -1558,6 +1634,22 @@ export default function InventoryPage() {
                         <div className="text-[10px] text-slate-400 mt-1">
                           Last Updated: {formatDateShort(gift.last_updated)}
                         </div>
+                        {canEdit && (
+                          <div className="pt-3 mt-2 border-t border-slate-100 flex justify-end">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="h-7 text-[10px] font-bold text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                              onClick={() => {
+                                setManageStockItem(gift); // Or `pack` if in the packaging tab
+                                setManageStockForm({ action: 'deduct', quantity: 1, reason: '' });
+                                setIsManageStockModalOpen(true);
+                              }}
+                            >
+                              Manage Stock
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1617,6 +1709,22 @@ export default function InventoryPage() {
                         <div className="text-[10px] text-slate-400 mt-1">
                           Last Updated: {formatDateShort(pack.last_updated)}
                         </div>
+                        {canEdit && (
+                          <div className="pt-3 mt-2 border-t border-slate-100 flex justify-end">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="h-7 text-[10px] font-bold text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                              onClick={() => {
+                                setManageStockItem(pack); // Or `pack` if in the packaging tab
+                                setManageStockForm({ action: 'deduct', quantity: 1, reason: '' });
+                                setIsManageStockModalOpen(true);
+                              }}
+                            >
+                              Manage Stock
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1681,7 +1789,63 @@ export default function InventoryPage() {
               </Button>
             </div>
           </div>
-        )}
+)}
+          
+
+          
+          {/* MANAGE STOCK MODAL (Add / Deduct) */}
+          <Dialog open={isManageStockModalOpen} onOpenChange={setIsManageStockModalOpen}>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ArrowRightLeft className="w-5 h-5 text-indigo-600" />
+            Manage Stock: {manageStockItem?.item_name}
+          </DialogTitle>
+          <DialogDescription>
+            Current Stock: <strong className="text-slate-900">{manageStockItem?.stock_count} units</strong>
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={handleManageStock} className="space-y-4 py-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Action</Label>
+              <Select value={manageStockForm.action} onValueChange={(v) => setManageStockForm({...manageStockForm, action: v})}>
+                <SelectTrigger className="font-bold">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="add" className="text-emerald-600 font-bold">Add (+)</SelectItem>
+                  <SelectItem value="deduct" className="text-rose-600 font-bold">Deduct (-)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Quantity</Label>
+              <Input required type="number" min="1" value={manageStockForm.quantity} onChange={e => setManageStockForm({...manageStockForm, quantity: Number(e.target.value)})} />
+            </div>
+          </div>
+          
+          <div className="space-y-2">
+            <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Audit Reason *</Label>
+            <Input 
+              required 
+              placeholder={manageStockForm.action === 'add' ? "e.g. Received new shipment from vendor" : "e.g. Given to customer with order ORD-123"} 
+              value={manageStockForm.reason} 
+              onChange={e => setManageStockForm({...manageStockForm, reason: e.target.value})} 
+            />
+          </div>
+
+          <DialogFooter className="mt-4">
+            <Button type="button" variant="ghost" onClick={() => setIsManageStockModalOpen(false)}>Cancel</Button>
+            <Button type="submit" disabled={isManagingStock} className={manageStockForm.action === 'add' ? "bg-emerald-600 hover:bg-emerald-700 text-white" : "bg-rose-600 hover:bg-rose-700 text-white"}>
+              {isManagingStock ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Check className="w-4 h-4 mr-2" />} 
+              {manageStockForm.action === 'add' ? 'Confirm Addition' : 'Confirm Deduction'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+
       </main>
 
       {/* ADD GIFTING STOCK MODAL */}
@@ -1721,49 +1885,84 @@ export default function InventoryPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ✨ NEW ADD PACKAGING STOCK MODAL */}
+      {/* ✨ UPDATED ADD PACKAGING STOCK MODAL */}
       <Dialog open={isAddPackagingModalOpen} onOpenChange={setIsAddPackagingModalOpen}>
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
             <DialogTitle>Add Packaging Stock</DialogTitle>
             <DialogDescription>Increase the inventory for boxes, frames, and bags.</DialogDescription>
           </DialogHeader>
           <form onSubmit={handleAddPackagingStock} className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Category</Label>
-              <Select required value={packagingForm.item_category} onValueChange={v => setPackagingForm({...packagingForm, item_category: v})}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select Category" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Ring Box">Ring Box</SelectItem>
-                  <SelectItem value="Necklace Box">Necklace Box</SelectItem>
-                  <SelectItem value="Bangle Box">Bangle Box</SelectItem>
-                  <SelectItem value="Carry Bag">Carry Bag</SelectItem>
-                  <SelectItem value="Frame">Frame</SelectItem>
-                  <SelectItem value="Other">Other</SelectItem>
-                </SelectContent>
-              </Select>
+            
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2 col-span-2">
+                <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Category</Label>
+                <Select required value={packagingForm.item_category} onValueChange={v => {
+                  setPackagingForm({...packagingForm, item_category: v})
+                  if (v === 'Other') {
+                    setIsCustomCategoryInput(true)
+                  } else {
+                    setIsCustomCategoryInput(false)
+                  }
+                }}>
+                  <SelectTrigger className="font-semibold">
+                    <SelectValue placeholder="Select Category" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Ring Box">Ring Box</SelectItem>
+                    <SelectItem value="Necklace Box">Necklace Box</SelectItem>
+                    <SelectItem value="Bangle Box">Bangle Box</SelectItem>
+                    <SelectItem value="Carry Bag">Carry Bag</SelectItem>
+                    <SelectItem value="Frame">Frame</SelectItem>
+                    <SelectItem value="Other" className="font-bold text-indigo-600">Custom / Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* ✨ NEW: Conditionally rendered Custom Category Input */}
+              {isCustomCategoryInput && (
+                <div className="space-y-2 col-span-2 animate-in fade-in slide-in-from-top-2">
+                  <Label className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">Custom Category Name *</Label>
+                  <Input 
+                    required 
+                    autoFocus
+                    value={packagingForm.custom_category} 
+                    onChange={e => setPackagingForm({...packagingForm, custom_category: e.target.value})} 
+                    placeholder="e.g. Velvet Pouch" 
+                    className="border-indigo-200 bg-indigo-50/30 focus-visible:ring-indigo-500"
+                  />
+                </div>
+              )}
             </div>
+            
             <div className="space-y-2">
               <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Item Description</Label>
-              <Input required value={packagingForm.item_name} onChange={e => setPackagingForm({...packagingForm, item_name: e.target.value})} placeholder="e.g. Red Velvet Ring Box" />
+              <Input 
+                required 
+                value={packagingForm.item_name} 
+                onChange={e => setPackagingForm({...packagingForm, item_name: e.target.value})} 
+                placeholder="e.g. Red Velvet Premium Ring Box" 
+              />
             </div>
-            <div className="space-y-2">
-              <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Target Location / Warehouse</Label>
-              <Select required value={packagingForm.warehouse_id} onValueChange={v => setPackagingForm({...packagingForm, warehouse_id: v})}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select Warehouse" />
-                </SelectTrigger>
-                <SelectContent>
-                  {warehouses.map(w => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Warehouse</Label>
+                <Select required value={packagingForm.warehouse_id} onValueChange={v => setPackagingForm({...packagingForm, warehouse_id: v})}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {warehouses.map(w => <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Quantity</Label>
+                <Input required type="number" min="1" value={packagingForm.quantity} onChange={e => setPackagingForm({...packagingForm, quantity: Number(e.target.value)})} />
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Quantity to Add</Label>
-              <Input required type="number" min="1" value={packagingForm.quantity} onChange={e => setPackagingForm({...packagingForm, quantity: Number(e.target.value)})} />
-            </div>
+
             <DialogFooter className="mt-4">
               <Button type="button" variant="ghost" onClick={() => setIsAddPackagingModalOpen(false)}>Cancel</Button>
               <Button type="submit" disabled={isAddingPackaging} className="bg-slate-900 text-white hover:bg-slate-800">
