@@ -26,6 +26,13 @@ import { RepairIntakeForm } from '@/components/pos/RepairIntakeForm'
 
 export type BillingMode = 'normal' | 'custom' | 'challan' | 'repair' | 'return'
 
+export interface SelectedPackaging {
+  id: string;
+  item_name: string;
+  quantity: number;
+  stock_count: number;
+}
+
 export default function POSPage() {
   const { appUser, loading } = useAuth()
   const { callRpc } = useRpc()
@@ -44,11 +51,11 @@ export default function POSPage() {
   const [lastInvoiceData, setLastInvoiceData] = useState<any>(null)
   const [isEstimateCheckout, setIsEstimateCheckout] = useState(false)
 
-  // NEW: Backdate Invoice State
+  // Backdate Invoice State
   const [billingDate, setBillingDate] = useState(new Date().toISOString().split('T')[0])
   const isAdmin = appUser?.role === 'owner' || appUser?.role === 'manager' || appUser?.role === 'operations_manager';
   
-  // ✨ NEW: Billed By State
+  // Billed By State
   const [billedBy, setBilledBy] = useState<string>('')
 
   const [allBranches, setAllBranches] = useState<any[]>([])
@@ -78,6 +85,58 @@ export default function POSPage() {
   const [returnDetails, setReturnDetails] = useState({
     invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0
   })
+
+  // ✨ NEW: Packaging State
+  const [availablePackaging, setAvailablePackaging] = useState<any[]>([])
+  const [selectedPackaging, setSelectedPackaging] = useState<SelectedPackaging[]>([])
+
+  // ✨ NEW: Fetch Packaging Materials for the active location
+  useEffect(() => {
+    const fetchPackaging = async () => {
+      if (!appUser?.company_id || !selectedLocation) return;
+      
+      const { data, error } = await supabase
+        .from('packaging_inventory')
+        .select('id, item_name, stock_count')
+        .eq('company_id', appUser.company_id)
+        .eq('warehouse_id', selectedLocation)
+        .gt('stock_count', 0); // Only fetch items that are actually in stock
+
+      if (data) {
+        setAvailablePackaging(data);
+      }
+    };
+
+    fetchPackaging();
+  }, [appUser, selectedLocation]);
+
+  // ✨ NEW: Packaging Handlers
+  const handleAddPackaging = (packId: string) => {
+    const pack = availablePackaging.find(p => p.id === packId);
+    if (!pack) return;
+    
+    setSelectedPackaging(prev => {
+      const existing = prev.find(p => p.id === packId);
+      if (existing) {
+        // Prevent adding more than what's in stock
+        if (existing.quantity >= pack.stock_count) {
+          toast.error(`Only ${pack.stock_count} units available in stock.`);
+          return prev;
+        }
+        return prev.map(p => p.id === packId ? { ...p, quantity: p.quantity + 1 } : p);
+      }
+      return [...prev, { id: pack.id, item_name: pack.item_name, quantity: 1, stock_count: pack.stock_count }];
+    });
+  };
+
+  const handleRemovePackaging = (packId: string) => {
+    setSelectedPackaging(prev => prev.filter(p => p.id !== packId));
+  };
+
+  const handleUpdatePackagingQty = (packId: string, qty: number) => {
+    if (qty <= 0) return handleRemovePackaging(packId);
+    setSelectedPackaging(prev => prev.map(p => p.id === packId ? { ...p, quantity: qty } : p));
+  };
 
   useEffect(() => {
     const initData = async () => {
@@ -159,7 +218,6 @@ export default function POSPage() {
     allBranches,
     
     customBillingDate: isAdmin ? billingDate : undefined,
-    // ✨ NEW: Pass billedBy to the checkout hook
     billedBy: billedBy
   })
 
@@ -167,7 +225,8 @@ export default function POSPage() {
     clearCart()
     checkoutHook.resetCheckoutState()
     setSelectedCustomer(null)
-    setBilledBy('') // Reset billed by on wipe
+    setBilledBy('') 
+    setSelectedPackaging([]) // ✨ NEW: Clear packaging on wipe
     setCustomOrderDetails({ design_reference: '', item_category: '', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '' })
     setReturnDetails({ invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0 })
     setRepairDetails({ itemDescription: '', grossWeight: '', purity: '22K', defectNotes: '', estimatedCost: '', advancePaid: '', expectedDelivery: '', conditionPhotoUrl: null })
@@ -189,7 +248,7 @@ export default function POSPage() {
   return (
     <div className="min-h-[100dvh] lg:h-[100dvh] flex flex-col bg-[#E6E6E6] print:bg-white text-slate-900 font-sans overflow-hidden">
       
-      {/* ✨ 2. THE MASTER PRINT TRAP: Everything inside this div vanishes when Android prints! */}
+      {/* THE MASTER PRINT TRAP: Everything inside this div vanishes when Android prints! */}
       <div className="print:hidden flex flex-col flex-1 overflow-hidden">
         
         <POSHeader 
@@ -287,6 +346,13 @@ export default function POSPage() {
                  processScannedItem={processScannedItem}
                  removeFromCart={removeFromCart}
                  onOpenScanner={() => setShowScanner(true)} 
+                 
+                 // ✨ NEW: Passed Packaging Props
+                 availablePackaging={availablePackaging}
+                 selectedPackaging={selectedPackaging}
+                 onAddPackaging={handleAddPackaging}
+                 onRemovePackaging={handleRemovePackaging}
+                 onUpdatePackagingQty={handleUpdatePackagingQty}
                />
             )}
           </div>
