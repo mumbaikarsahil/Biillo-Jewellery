@@ -314,7 +314,9 @@ export function useCheckout({
       repair: mode === 'repair' ? repairDetails : null, 
       returnDetails: mode === 'return' ? returnDetails : null, 
       
-      subtotal, 
+      // ✨ FIX: Map to `effectiveSubtotal` so custom orders aren't treated as ₹0
+      subtotal: effectiveSubtotal, 
+      
       discountAmount: standardDiscount, 
       voucherAmount: appliedVoucherAmount, 
       handlingFee: finalHandlingFee, 
@@ -333,7 +335,8 @@ export function useCheckout({
       estimateHandlingPct: estimateHandlingPercent,
       estimateHandlingAmt: printEstimateHandlingAmt,
       
-      finalTotal: mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
+      // ✨ FIX: Correctly map custom order total to `finalPayableGross` (36614), NOT `advance_paid` (20000)!
+      finalTotal: mode === 'custom' ? finalPayableGross 
                 : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                 : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
                 : isEstimate && mode === 'normal' ? printFinalTotal 
@@ -341,7 +344,7 @@ export function useCheckout({
       paymentMode: formattedPaymentMode
     }
   }
-
+  
   const executeCheckout = async (isEstimate = false, customTransactionContext?: any) => {
     setIsProcessing(true)
     let finalNo = ''
