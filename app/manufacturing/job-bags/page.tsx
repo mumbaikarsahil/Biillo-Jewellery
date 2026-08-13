@@ -53,6 +53,7 @@ export default function JobBagPage() {
   const [pendingRepairs, setPendingRepairs] = useState<any[]>([]);
   const [pendingRestocks, setPendingRestocks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [pendingLink, setPendingLink] = useState<{type: 'order' | 'repair' | 'restock', id: string} | null>(null);
   
   // Sheet/Modal states
   const [isCreating, setIsCreating] = useState(false);
@@ -193,6 +194,7 @@ export default function JobBagPage() {
   const handleOpenSheet = (open: boolean) => {
     setIsOpen(open);
     if (open && !form.job_bag_number) generateJobRef();
+    if (!open) setPendingLink(null); // ✨ Clear if aborted
   };
 
   async function handleCreate() {
@@ -218,7 +220,17 @@ export default function JobBagPage() {
 
       if (error) throw error;
       toast.success("Job Bag Created Successfully");
-      router.push(`/manufacturing/job-bags/${data}`);
+      
+      // ✨ NEW: Append the pending routing link to the URL!
+      let url = `/manufacturing/job-bags/${data}`;
+      if (pendingLink) {
+        if (pendingLink.type === 'order') url += `?custom_order=${pendingLink.id}`;
+        if (pendingLink.type === 'repair') url += `?repair_ticket=${pendingLink.id}`;
+        if (pendingLink.type === 'restock') url += `?store_restock=${pendingLink.id}`;
+        setPendingLink(null);
+      }
+      
+      router.push(url);
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -235,44 +247,44 @@ export default function JobBagPage() {
       let targetBagId = routingBagId;
       
       if (targetBagId === 'new') {
-        let newBagNumber = '';
+        // ✨ FIX: Instead of silently failing to insert a bag without a Karigar, 
+        // we route the user to the Job Bag creation sheet with pre-filled data!
         let category = '';
         let designCode = '';
-        let goldExpected = 0;
+        let goldExpected = '';
 
         if (type === 'order') {
-          newBagNumber = `JB-CUST-${Date.now().toString().slice(-6)}`;
-          category = item.item_category;
-          designCode = item.design_reference;
-          goldExpected = item.expected_gold_g;
+          category = item.item_category || '';
+          designCode = item.design_reference || '';
+          goldExpected = item.expected_gold_g?.toString() || '';
+          setIsOrdersModalOpen(false);
         } else if (type === 'repair') {
-          newBagNumber = `JB-REP-${Date.now().toString().slice(-6)}`;
           category = 'Repair Job';
-          designCode = item.ticket_number;
-          goldExpected = 0;
+          designCode = item.ticket_number || '';
+          setIsRepairsModalOpen(false);
         } else if (type === 'restock') {
-          newBagNumber = `JB-STK-${Date.now().toString().slice(-6)}`;
           category = 'Branch Restock';
-          designCode = item.sku_reference;
-          goldExpected = 0;
+          designCode = item.sku_reference || '';
+          setIsRestocksModalOpen(false);
         }
 
-        const { data: newBag, error } = await supabase
-          .from('job_bags')
-          .insert({
-            company_id: appUser?.company_id,
-            job_bag_number: newBagNumber,
-            product_category: category,
-            design_code: designCode,
-            gold_expected_weight_g: goldExpected,
-            status: 'open'
-          })
-          .select().single();
-          
-        if (error) throw error;
-        targetBagId = newBag.id;
+        // Open custom inputs if they don't match standard lists
+        if (category && !STANDARD_CATEGORIES.includes(category)) setShowCustomCategory(true);
+        if (designCode && !STANDARD_DESIGNS.includes(designCode)) setShowCustomDesign(true);
+
+        setForm(prev => ({
+          ...prev,
+          product_category: category,
+          design_code: designCode,
+          gold_expected_weight_g: goldExpected
+        }));
+
+        setPendingLink({ type, id: item.id });
+        handleOpenSheet(true);
+        return; // Stop execution here, let the user finish via the UI Sheet
       }
 
+      // If attaching to an EXISTING bag, continue routing directly
       if (type === 'order') {
         setIsOrdersModalOpen(false);
         router.push(`/manufacturing/job-bags/${targetBagId}?custom_order=${item.id}`);
