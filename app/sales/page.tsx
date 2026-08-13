@@ -148,7 +148,8 @@ export default function AccountsMasterPage() {
   useEffect(() => {
     const fetchWarehouses = async () => {
       if (!appUser?.company_id) return
-      const { data } = await supabase.from('warehouses').select('id, name').eq('company_id', appUser.company_id).eq('is_active', true)
+      // ✨ FIX 1: Fetch ALL warehouse columns instead of just id, name
+      const { data } = await supabase.from('warehouses').select('*').eq('company_id', appUser.company_id).eq('is_active', true)
       
       if (data) {
         setWarehouses(data)
@@ -413,6 +414,9 @@ export default function AccountsMasterPage() {
     setIsFetchingPreview(true)
     try {
       let mappedData: any = {};
+      
+      // ✨ FIX 2: Find the full warehouse object from the state
+      const branchObj = warehouses.find(w => w.id === (item.warehouse_id || item.origin_warehouse_id)) || null;
 
       if (type === 'invoice') {
         const { data: invData, error } = await supabase.from('invoices').select(`*, customers (*), invoice_items (rate, inventory_items (*))`).eq('id', item.id).single()
@@ -427,6 +431,7 @@ export default function AccountsMasterPage() {
           invoice_number: invData.invoice_number, 
           date: invData.created_at, 
           customer: invData.customers, 
+          branch: branchObj, // ✨ Added branch
           subtotal: invData.subtotal, 
           discountAmount: invData.discount_amount, 
           taxableValue: invData.taxable_value, 
@@ -453,6 +458,7 @@ export default function AccountsMasterPage() {
         }) || []
         mappedData = {
           mode: 'estimate', invoice_number: estData.estimate_number, date: estData.created_at, customer: estData.customers,
+          branch: branchObj, // ✨ Added branch
           subtotal: estData.subtotal, discountAmount: estData.discount_amount, handlingFee: estData.handling_charge, cgstAmount: estData.cgst, sgstAmount: estData.sgst, roundOffAmount: estData.round_off, finalTotal: estData.total_amount,
           items: safeItems
         }
@@ -465,6 +471,7 @@ export default function AccountsMasterPage() {
           invoice_number: item.order_number, 
           date: item.created_at, 
           customer: item.customers,
+          branch: branchObj, // ✨ Added branch
           customOrder: { 
             designCode: item.design_reference, 
             category: item.item_category, 
@@ -473,7 +480,6 @@ export default function AccountsMasterPage() {
             estimatedValue: finalTotal, 
             advancePayment: advancePaid 
           },
-          // Standard financial breakdown mapped explicitly
           subtotal: Number(item.base_estimated_value) || Number(item.subtotal) || 0,
           discountAmount: Number(item.discount_amount) || 0,
           voucherCode: item.voucher_code,
@@ -483,7 +489,7 @@ export default function AccountsMasterPage() {
           sgstAmount: Number(item.sgst_amount) || Number(item.sgst) || 0,
           finalTotal: finalTotal,
           advancePayment: advancePaid,
-          balanceDue: Math.max(0, finalTotal - advancePaid), // explicitly passed
+          balanceDue: Math.max(0, finalTotal - advancePaid), 
           paymentMode: item.payment_mode,
           splitPayments: item.split_payments,
           paymentRemarks: item.payment_remarks
@@ -492,6 +498,7 @@ export default function AccountsMasterPage() {
       else if (type === 'repair') {
         mappedData = {
           mode: 'repair', invoice_number: item.ticket_number, date: item.created_at, customer: item.customers,
+          branch: branchObj, // ✨ Added branch
           repair: { purity: item.purity, itemDescription: item.item_description, grossWeight: item.gross_weight_g, estimatedCost: item.estimated_cost },
           finalTotal: item.advance_paid
         }
@@ -499,6 +506,7 @@ export default function AccountsMasterPage() {
       else if (type === 'return') {
         mappedData = {
           mode: 'return', invoice_number: `RTN-${item.id.substring(0,6).toUpperCase()}`, date: item.created_at, customer: item.customers,
+          branch: branchObj, // ✨ Added branch
           returnDetails: { purity: item.purity_karat, itemDescription: item.item_category, grossWeight: item.gross_weight_g, articleCost: item.gross_value, discountApplied: item.deduction_amount, calculatedRefund: item.net_refund },
           finalTotal: item.net_refund
         }
@@ -1729,16 +1737,7 @@ export default function AccountsMasterPage() {
                 </div>
               </div>
               
-              <div className="flex items-center gap-1">
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className="h-8 w-8 text-zinc-500 hover:bg-red-500 hover:text-white rounded-md transition-all" 
-                  onClick={() => setShowPreviewModal(false)}
-                >
-                  <X className="w-4 h-4" />
-                </Button>
-              </div>
+              
             </DialogHeader>
             
             <div className="flex-1 overflow-auto bg-zinc-100/80 p-4 sm:p-8 custom-scrollbar shadow-inner relative flex items-start justify-center">
