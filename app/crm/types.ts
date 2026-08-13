@@ -32,7 +32,9 @@ export interface CRMCustomer {
   // Array Relations
   kitty_plans?: KittyPlan[] 
   vouchers?: any[]
-  caller_profile_id?: string
+  activity_timeline?: any[] | null;
+  kitty_next_due_date?: string | null;
+  gift_given?: string | null
   
   // Strongly Typed Sequences & Webhooks
   voucher_message_sequences?: Array<{

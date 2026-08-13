@@ -16,9 +16,9 @@ import {
 import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
 import { 
-  Users, Search, Store, Gem, FilterX, RefreshCw,
+  Users, Search, Store, Gem, RefreshCw,
   UserPlus, UploadCloud, Settings, ChevronLeft, ChevronRight, MessageSquare, PhoneOff,
-  TicketPercent, ArrowUpDown, Filter, X, PhoneCall
+  TicketPercent, ArrowUpDown, Filter, X, PhoneCall, Gift, Zap
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Separator } from '@radix-ui/react-separator'
@@ -76,15 +76,16 @@ export default function CRMPage() {
 
   const [activeAiFilter, setActiveAiFilter] = useState<'none' | 'scheme' | 'cold' | 'dnd' | 'birthday' | 'anniversary'>('none')
   const [voucherFilter, setVoucherFilter] = useState<'all' | 'registered' | 'redeemed' | 'none'>('all')
+  const [giftFilter, setGiftFilter] = useState<'all' | 'given' | 'pending'>('all')
   
   const [sortOrder, setSortOrder] = useState<'followup_asc' | 'followup_desc' | 'newest' | 'name_asc'>('followup_asc')
 
   // Server-Side Pagination States
-  const [activeTab, setActiveTab] = useState<string>("followups")
+  const [activeTab, setActiveTab] = useState<string>("all")
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState<number>(50) 
   
-  const [globalCounts, setGlobalCounts] = useState({ followups: 0, purchased: 0, kitty: 0, vouchers: 0, dnd: 0, assignedCalls: 0 })
+  const [globalCounts, setGlobalCounts] = useState({ all: 0, walkin: 0, followups: 0, purchased: 0, kitty: 0, vouchers: 0, dnd: 0, assignedCalls: 0 })
   const [metrics, setMetrics] = useState({ 
     total: 0, 
     dueToday: 0, 
@@ -160,11 +161,16 @@ export default function CRMPage() {
   const [followupReason, setFollowupReason] = useState('') 
   const [interactionNotes, setInteractionNotes] = useState('')
 
-  // Search Debouncer
+  // Search Debouncer & Auto-Switch to ALL tab
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(searchTerm), 500)
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm)
+      if (searchTerm.trim().length > 0 && activeTab !== 'all' && activeTab !== 'assigned_calls') {
+        setActiveTab('all')
+      }
+    }, 500)
     return () => clearTimeout(timer)
-  }, [searchTerm])
+  }, [searchTerm, activeTab])
 
   useEffect(() => {
     const fetchCoreData = async () => {
@@ -196,7 +202,7 @@ export default function CRMPage() {
   const buildServerQuery = (queryObj: any, tab: string) => {
     let q = queryObj.eq('company_id', appUser?.company_id);
     
-    // 🚨 FIX 1: Explicitly bypass the warehouse lock for the Assigned Calls tab 🚨
+    // Explicitly bypass the warehouse lock for the Assigned Calls tab
     if (selectedLocation !== 'ALL' && tab !== 'assigned_calls') {
        q = q.eq('warehouse_id', selectedLocation);
     }
@@ -223,10 +229,22 @@ export default function CRMPage() {
             q = q.eq('customer_status', 'Purchased');
           } else if (tab === 'kitty') {
             q = q.eq('customer_status', 'Kitty Member');
+          } else if (tab === 'walkin') {
+            // ✨ FIX: Smart scanning to capture both Official Status AND Legacy dumped notes!
+            q = q.or('customer_status.eq.Walk-in,last_interaction.ilike.%walk-in%,last_interaction.ilike.%checkin%,last_interaction.ilike.%discovery%,last_interaction.ilike.%visited%');
+          } else if (tab === 'all') {
+            // Unrestricted (except DND which is handled above)
           }
-          // Note: 'assigned_calls' skips these extra filters seamlessly
        }
     }
+
+    // ✨ FIX: Explicitly target the `gift_given` column instead of scanning text notes!
+    if (giftFilter === 'given') {
+      q = q.not('gift_given', 'is', null);
+    } else if (giftFilter === 'pending') {
+      q = q.is('gift_given', null);
+    }
+
     return q;
   };
 
@@ -251,7 +269,6 @@ export default function CRMPage() {
         
         let voucherQ = supabase.from('customers').select('id, vouchers!inner(id)', {count: 'exact', head: true}).eq('company_id', appUser.company_id).neq('customer_status', 'DND');
         
-        // 🚨 FIX 2: Universal user ID fallback
         const currentUserId = appUser.user_id || appUser.id;
 
         // Count assigned calls for this user
@@ -277,15 +294,16 @@ export default function CRMPage() {
            coldQ = coldQ.eq('warehouse_id', selectedLocation);
            dndQ = dndQ.eq('warehouse_id', selectedLocation);
            voucherQ = voucherQ.eq('warehouse_id', selectedLocation);
-           // explicitly bypassing assignedCallsQ here so the count is always accurate
         }
 
-        const [f, p, k, vC, due, over, scheme, cold, dnd, seqTotal, seqToday, assignedCallsRes] = await Promise.all([
-          getQ('followups'), getQ('purchased'), getQ('kitty'), voucherQ, dueQ, overQ, schemeQ, coldQ, dndQ,
+        const [a, w, f, p, k, vC, due, over, scheme, cold, dnd, seqTotal, seqToday, assignedCallsRes] = await Promise.all([
+          getQ('all'), getQ('walkin'), getQ('followups'), getQ('purchased'), getQ('kitty'), voucherQ, dueQ, overQ, schemeQ, coldQ, dndQ,
           seqTotalQ, seqTodayQ, assignedCallsQ
         ]);
         
         setGlobalCounts({
+          all: a.count || 0,
+          walkin: w.count || 0,
           followups: f.count || 0,
           purchased: p.count || 0,
           kitty: k.count || 0,
@@ -309,7 +327,7 @@ export default function CRMPage() {
       } catch (e) { console.warn("Count Fetch Error:", e); }
     }
     fetchCounts()
-  }, [appUser, selectedLocation, debouncedSearch, activeAiFilter])
+  }, [appUser, selectedLocation, debouncedSearch, activeAiFilter, giftFilter])
 
   const fetchPage = async (pageToLoad: number) => {
     if (!appUser || !selectedLocation) return;
@@ -322,13 +340,12 @@ export default function CRMPage() {
         *, 
         kitty_plans(*),
         vouchers${requireVoucherJoin ? '!inner' : ''}(id, code, status, expiry_date, distributor_id, voucher_distributors(distributor_name)),
-        voucher_message_sequences(id, status),
+        voucher_message_sequences(id, status, current_step, next_send_at),
         voucher_call_assignments${requireAssignmentJoin ? '!inner' : ''}(id, status, assigned_to)
       `);
       
       q = buildServerQuery(q, activeTab);
 
-      // 🚨 FIX 3: Apply the exact same user ID constraint to the data query
       if (activeTab === 'assigned_calls') {
         const currentUserId = appUser.user_id || appUser.id;
         q = q.eq('voucher_call_assignments.assigned_to', currentUserId).eq('voucher_call_assignments.status', 'pending');
@@ -365,7 +382,7 @@ export default function CRMPage() {
   useEffect(() => {
     setPage(0);
     fetchPage(0);
-  }, [appUser, selectedLocation, debouncedSearch, activeAiFilter, voucherFilter, activeTab, pageSize, sortOrder])
+  }, [appUser, selectedLocation, debouncedSearch, activeAiFilter, voucherFilter, giftFilter, activeTab, pageSize, sortOrder])
 
   const handleViewHistory = async (customer: CRMCustomer) => {
     setSelectedCustomer(customer);
@@ -409,7 +426,7 @@ export default function CRMPage() {
   const toggleAiFilter = (filter: 'scheme' | 'cold' | 'dnd' | 'birthday' | 'anniversary') => {
     if (activeAiFilter === filter) {
        setActiveAiFilter('none');
-       if (activeTab === 'dnd') setActiveTab('followups');
+       if (activeTab === 'dnd') setActiveTab('all');
     } else {
        setActiveAiFilter(filter);
        if (filter === 'scheme') setActiveTab('purchased');
@@ -426,7 +443,6 @@ export default function CRMPage() {
     try {
       const isDND = callForm.outcome === 'Not Interested (Do Not Disturb)';
       
-      // 1. Remove interest_level from the generic call log entry
       const baseCallLogEntry = {
         outcome: callForm.outcome,
         notes: callForm.notes,
@@ -434,7 +450,6 @@ export default function CRMPage() {
         next_call_time: callForm.next_call_time || null,
       };
 
-      // 2. Log to generic call_records table (using baseCallLogEntry)
       if (activeCallRecordId) {
         const { error: logErr } = await supabase.from('call_records').update(baseCallLogEntry).eq('id', activeCallRecordId);
         if (logErr) throw logErr;
@@ -442,13 +457,12 @@ export default function CRMPage() {
         const { error: logErr } = await supabase.from('call_records').insert([{
           company_id: appUser?.company_id,
           customer_id: selectedCustomer.id,
-          user_id: appUser?.id || appUser?.user_id,
+          user_id: callForm.caller_profile_id || appUser?.id || appUser?.user_id, // Safely use selected caller
           ...baseCallLogEntry
         }]);
         if (logErr) throw logErr;
       }
 
-      // 3. Update the specific Voucher Assignment record (THIS gets the interest_level)
       if (activeTab === 'assigned_calls') {
           await supabase.from('voucher_call_assignments')
              .update({ 
@@ -463,9 +477,26 @@ export default function CRMPage() {
              .eq('status', 'pending');
       }
 
-      // 4. Update the main Customer profile
+      // ✨ 1. Fetch existing timeline to prevent wiping past events
+      const { data: existing } = await supabase
+        .from('customers')
+        .select('id, activity_timeline')
+        .eq('id', selectedCustomer.id)
+        .single();
+
+      // ✨ 2. Create the new Call Log event for the endless array
+      const newSystemEvent = {
+        timestamp: new Date().toISOString(),
+        type: 'CALL',
+        description: `[${callForm.outcome}] ${callForm.notes}`
+      };
+
+      const existingTimeline = existing?.activity_timeline || [];
+      const updatedTimeline = [newSystemEvent, ...existingTimeline];
+
+      // ✨ 3. Build payload writing to the new timeline column
       let updatePayload: any = {
-        last_interaction: `[CALL: ${callForm.outcome}] ${callForm.notes}`
+        activity_timeline: updatedTimeline // Strictly stacking, not wiping!
       };
 
       if (isDND) {
@@ -473,6 +504,7 @@ export default function CRMPage() {
         updatePayload.next_followup_date = null; 
         updatePayload.followup_reason = 'Customer requested Do Not Disturb';
       } else {
+        // If a call requires a followup, we CAN safely update the manual followup columns
         if (callForm.next_call_date) {
            updatePayload.next_followup_date = callForm.next_call_date;
            updatePayload.followup_reason = `Follow up required after: ${callForm.outcome}`;
@@ -484,19 +516,12 @@ export default function CRMPage() {
 
       toast.success(isDND ? 'Customer moved to DND List' : 'Call Logged & Timer Set!');
       
-      // 5. Reset states and refresh
       setIsCallModalOpen(false);
       setActiveCallRecordId(null);
       setCallForm({ 
-        caller_profile_id: '',
-        outcome: 'Connected / Spoke to Customer', 
-        interest_level: undefined, 
-        notes: '', 
-        next_call_date: '', 
-        next_call_time: '' 
+        caller_profile_id: '', outcome: 'Connected / Spoke to Customer', interest_level: undefined, notes: '', next_call_date: '', next_call_time: '' 
       });
       
-      // Refresh count to update badge
       setGlobalCounts(prev => ({...prev, assignedCalls: Math.max(0, prev.assignedCalls - 1)}));
       fetchPage(page);
 
@@ -506,6 +531,7 @@ export default function CRMPage() {
       setIsSubmitting(false);
     }
   }
+
   // --- CSV Import Handlers ---
   const handleDownloadSample = () => {
     const csvContent = "full_name,phone,city,customer_status,birth_date,anniversary_date,store_credit_balance\nJohn Doe,9876543210,Mumbai,Lead,01-01-1990,15-05-2015,0\nJane Smith,9123456789,Delhi,Purchased,20-08-1985,,1200\nRahul Sharma,9988776655,Pune,Kitty Member,10-12-1992,20-11-2020,0";
@@ -662,6 +688,26 @@ export default function CRMPage() {
       nextInstallment.setMonth(nextInstallment.getMonth() + 1);
       const cleanPhone = newKittyForm.phone.trim();
 
+      // 1. Check if customer exists FIRST, so we can grab their existing timeline
+      const { data: existing } = await supabase
+        .from('customers')
+        .select('id, activity_timeline')
+        .eq('company_id', appUser?.company_id)
+        .eq('phone', cleanPhone)
+        .limit(1)
+        .maybeSingle();
+
+      // 2. Create the System Event for the timeline
+      const newSystemEvent = {
+        timestamp: new Date().toISOString(),
+        type: 'KITTY ENROLLMENT',
+        description: `Joined Diamond Kitty Scheme (₹${selectedConfig.monthly_amount})`
+      };
+
+      const existingTimeline = existing?.activity_timeline || [];
+      const updatedTimeline = [newSystemEvent, ...existingTimeline];
+
+      // 3. Build the Payload WITHOUT touching manual CRM columns
       const customerPayload = {
         company_id: appUser?.company_id,
         warehouse_id: selectedLocation, 
@@ -670,13 +716,13 @@ export default function CRMPage() {
         email: newKittyForm.email?.trim() || null, 
         city: newKittyForm.city?.trim() || null,
         customer_status: 'Kitty Member',
-        next_followup_date: nextInstallment.toISOString().split('T')[0],
-        followup_reason: `Installment due (₹${selectedConfig.monthly_amount})`,
-        last_interaction: `Joined Diamond Kitty Scheme on ${sd.toLocaleDateString()}`
+        
+        // ✨ NEW: Dedicated System Columns
+        kitty_next_due_date: nextInstallment.toISOString().split('T')[0],
+        activity_timeline: updatedTimeline
       };
 
-      const { data: existing } = await supabase.from('customers').select('id').eq('company_id', appUser?.company_id).eq('phone', cleanPhone).limit(1).maybeSingle();
-
+      // 4. Update or Insert Customer
       let customerId;
       if (existing) {
         await supabase.from('customers').update(customerPayload).eq('id', existing.id);
@@ -687,6 +733,7 @@ export default function CRMPage() {
         customerId = newCust.id;
       }
 
+      // 5. Create the Plan Record
       const planPayload = {
         company_id: appUser?.company_id,
         customer_id: customerId,
@@ -828,9 +875,7 @@ export default function CRMPage() {
     setMessageRecipients([{ phone: phone, name: customer.full_name }]);
     setIsSenderModalOpen(true);
   }
-
   
-
   const handleBulkBroadcast = () => {
     if (customers.length === 0) return toast.error("No customers found in the current filtered list.");
     
@@ -882,7 +927,7 @@ export default function CRMPage() {
 
   const openWaActivityModal = async (customer: CRMCustomer) => {
     setSelectedCustomer(customer);
-    setIsWaActivityModalOpen(true); // ONLY open the WhatsApp Modal
+    setIsWaActivityModalOpen(true);
     setIsHistoryLoading(true);
 
     try {
@@ -915,43 +960,10 @@ export default function CRMPage() {
     setIsProfileModalOpen(true);
   }
 
-  if (loading || !appUser) return null
+  // --- FLASHING HELPER ---
+  const isTabFlashing = (tabCount: number) => debouncedSearch.length > 0 && tabCount > 0;
 
-  const PaginationFooter = () => {
-    const totalCurrentCount = globalCounts[activeTab as keyof typeof globalCounts] || 0;
-    return (
-      <div className="bg-slate-50 border-t border-slate-200 p-4 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-b-xl">
-        <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
-          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Rows per page:</span>
-          <Select value={pageSize.toString()} onValueChange={(val) => setPageSize(Number(val))}>
-            <SelectTrigger className="h-8 w-[80px] text-xs bg-white font-bold shadow-sm rounded-lg border-slate-200">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="rounded-lg border-slate-200">
-              <SelectItem value="50">50</SelectItem>
-              <SelectItem value="100">100</SelectItem>
-              <SelectItem value="200">200</SelectItem>
-              <SelectItem value="500">500</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        
-        <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
-          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
-            Showing <span className="text-indigo-600">{customers.length > 0 ? page * pageSize + 1 : 0}</span> to <span className="text-indigo-600">{Math.min((page + 1) * pageSize, totalCurrentCount)}</span> of <span className="text-indigo-600">{totalCurrentCount}</span>
-          </span>
-          <div className="flex items-center gap-1.5 w-full sm:w-auto">
-            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0 || isLoading} className="flex-1 sm:flex-none h-8 px-3 text-xs font-bold bg-white text-slate-600 shadow-sm rounded-lg border-slate-200 hover:bg-slate-50">
-              <ChevronLeft className="w-4 h-4 mr-1"/> Prev
-            </Button>
-            <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={(page + 1) * pageSize >= totalCurrentCount || isLoading} className="flex-1 sm:flex-none h-8 px-3 text-xs font-bold bg-white text-slate-600 shadow-sm rounded-lg border-slate-200 hover:bg-slate-50">
-              Next <ChevronRight className="w-4 h-4 ml-1"/>
-            </Button>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  if (loading || !appUser) return null
 
   return (
     <div className="flex flex-col min-h-screen bg-[#fafafa] font-sans selection:bg-indigo-100 pb-20">
@@ -990,56 +1002,46 @@ export default function CRMPage() {
         </div>
       </header>
 
-      <main className="p-4 md:p-6 max-w-7xl w-full mx-auto space-y-6 animate-in fade-in duration-300">
+      <main className="p-4 md:p-6 max-w-7xl w-full mx-auto space-y-4 md:space-y-6 animate-in fade-in duration-300">
         
-        {/* 2. ACTION BAR */}
-        <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex flex-col md:flex-row gap-3 items-start md:items-center justify-between">
-          <div className="flex items-center gap-2 w-full md:w-auto flex-1 max-w-xl">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <Input 
-                placeholder="Search by name or phone..." 
-                className="pl-9 h-10 text-sm font-medium bg-slate-50 border-slate-200 focus-visible:bg-white focus-visible:border-slate-400 focus-visible:ring-1 focus-visible:ring-slate-400 rounded-lg transition-all"
-                value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-
-            {/* Voucher Filter Dropdown */}
-            <Select value={voucherFilter} onValueChange={(v: any) => setVoucherFilter(v)}>
-              <SelectTrigger className="h-10 w-[180px] bg-white border-slate-200 text-xs font-bold rounded-lg shrink-0">
-                <SelectValue placeholder="Voucher Filter" />
-              </SelectTrigger>
-              <SelectContent className="rounded-lg border-slate-200">
-                <SelectItem value="all">All Vouchers</SelectItem>
-                <SelectItem value="none">Normal (No Voucher)</SelectItem>
-                <SelectItem value="registered">Voucher Registered</SelectItem>
-                <SelectItem value="redeemed">Voucher Redeemed</SelectItem>
-              </SelectContent>
-            </Select>
+        {/* 2. TOP ACTION BAR (Search + High-Level Actions) */}
+        <div className="bg-white border border-slate-200 rounded-xl p-2 sm:p-3 shadow-sm flex flex-col md:flex-row gap-2 sm:gap-3 items-start md:items-center justify-between">
+          
+          {/* Smart Search */}
+          <div className="relative flex-1 w-full max-w-2xl group">
+             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-indigo-500 transition-colors" />
+             <Input 
+               placeholder="Smart Search (Name, Phone)..." 
+               className="pl-9 h-10 sm:h-11 text-sm font-medium bg-slate-50 border-slate-200 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-indigo-100 focus-visible:border-indigo-400 rounded-lg transition-all w-full"
+               value={searchTerm} 
+               onChange={(e) => setSearchTerm(e.target.value)}
+             />
+             {searchTerm && (
+               <Button variant="ghost" size="icon" className="absolute right-1 top-1/2 -translate-y-1/2 h-8 w-8 text-slate-400 hover:text-slate-600 rounded-full" onClick={() => { setSearchTerm(''); setDebouncedSearch(''); }}>
+                 <X className="w-3.5 h-3.5" />
+               </Button>
+             )}
           </div>
 
-          <div className="flex gap-2 w-full md:w-auto">
-            <Button onClick={() => setIsImportModalOpen(true)} className="flex-1 md:flex-none bg-emerald-600 hover:bg-emerald-700 text-white h-10 px-4 text-xs font-bold shadow-sm rounded-lg border border-emerald-500 transition-none">
-              <UploadCloud className="w-3.5 h-3.5 mr-1.5" /> Import
+          {/* Core Action Buttons */}
+          <div className="flex flex-wrap md:flex-nowrap gap-2 w-full md:w-auto">
+            <Button onClick={handleBulkBroadcast} className="flex-1 md:flex-none bg-emerald-600 hover:bg-emerald-700 text-white h-10 sm:h-11 px-4 text-xs font-bold rounded-lg shadow-sm transition-none">
+              <MessageSquare className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Broadcast</span>
             </Button>
-
+            <Button onClick={() => setIsImportModalOpen(true)} className="flex-1 md:flex-none bg-blue-600 hover:bg-blue-700 text-white h-10 sm:h-11 px-4 text-xs font-bold rounded-lg shadow-sm transition-none">
+              <UploadCloud className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Import</span>
+            </Button>
             <Button onClick={() => {
-              setNewKittyForm(prev => ({ 
-                ...prev, 
-                full_name: '', phone: '', email: '', city: '', 
-                start_date: new Date().toISOString().split('T')[0], 
-                referred_by_id: 'none', referral_bonus: '500' 
-              }))
+              setNewKittyForm(prev => ({ ...prev, full_name: '', phone: '', email: '', city: '', start_date: new Date().toISOString().split('T')[0], referred_by_id: 'none', referral_bonus: '500' }))
               setIsAddKittyModalOpen(true)
-            }} className="flex-1 md:flex-none bg-purple-600 hover:bg-purple-700 text-white h-10 px-4 text-xs font-bold shadow-sm rounded-lg border border-purple-500 transition-none">
-              <Gem className="w-3.5 h-3.5 md:mr-1.5" /> <span className="hidden md:inline">Start Kitty Plan</span>
+            }} className="flex-1 md:flex-none bg-purple-600 hover:bg-purple-700 text-white h-10 sm:h-11 px-4 text-xs font-bold rounded-lg shadow-sm transition-none">
+              <Gem className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Kitty Plan</span>
             </Button>
-            
             <Button onClick={() => {
               setNewCustForm({ full_name: '', phone: '', email: '', city: '', customer_status: 'Lead', birth_date: '', anniversary_date: '', next_followup_date: '', followup_reason: '' }) 
               setIsAddModalOpen(true)
-            }} className="flex-1 md:flex-none bg-slate-900 hover:bg-slate-800 text-white h-10 px-4 text-xs font-bold shadow-sm rounded-lg transition-none">
-              <UserPlus className="w-3.5 h-3.5 mr-1.5" /> Add Lead
+            }} className="flex-1 md:flex-none bg-slate-900 hover:bg-slate-800 text-white h-10 sm:h-11 px-4 text-xs font-bold shadow-sm rounded-lg transition-none">
+              <UserPlus className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Add Lead</span>
             </Button>
           </div>
         </div>
@@ -1052,88 +1054,134 @@ export default function CRMPage() {
           sequences={metrics.sequences} 
         />
 
-        {/* 4. COMMAND BAR */}
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col">
-          <div className="bg-slate-50/80 border-b border-slate-100 p-3 sm:px-4 flex items-center justify-between gap-3">
+        {/* 4. UNIFIED COMMAND BAR (Filters & Sorting) */}
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden flex flex-col mb-4">
+          
+          <div className="bg-slate-50 border-b border-slate-100 p-2 sm:px-4 flex items-center justify-between gap-3">
              <div className="flex items-center gap-2">
-               <div className="bg-indigo-100 p-1.5 rounded text-indigo-600"><Filter className="w-4 h-4" /></div>
-               <span className="text-[11px] font-bold text-slate-700 uppercase tracking-widest hidden sm:block">Command Bar</span>
-               <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest sm:hidden">Filters</span>
+               <div className="bg-indigo-100 p-1 rounded text-indigo-600"><Filter className="w-3.5 h-3.5" /></div>
+               <span className="text-[11px] font-bold text-slate-700 uppercase tracking-widest">Command Filters</span>
              </div>
              
-             <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                <Select value={sortOrder} onValueChange={(val: any) => setSortOrder(val)}>
-                  <SelectTrigger className="h-8 w-[140px] sm:w-[160px] text-[11px] sm:text-xs font-bold bg-white border-slate-200 text-slate-700 shadow-sm rounded-lg">
-                     <div className="flex items-center gap-1.5"><ArrowUpDown className="w-3.5 h-3.5 text-slate-400 shrink-0" /> <span className="truncate"><SelectValue placeholder="Sort By" /></span></div>
-                  </SelectTrigger>
-                  <SelectContent className="border-slate-200 rounded-lg">
-                    <SelectItem value="followup_asc" className="text-xs font-medium">Follow-up: Soonest</SelectItem>
-                    <SelectItem value="followup_desc" className="text-xs font-medium">Follow-up: Latest</SelectItem>
-                    <SelectItem value="newest" className="text-xs font-medium">Recently Added</SelectItem>
-                    <SelectItem value="name_asc" className="text-xs font-medium">Name (A-Z)</SelectItem>
-                  </SelectContent>
-                </Select>
-
-                <Separator orientation="vertical" className="h-5 mx-1 bg-slate-200 hidden sm:block" />
-
-                <Button onClick={handleBulkBroadcast} className="bg-emerald-600 hover:bg-emerald-700 text-white h-8 px-3 text-[11px] sm:text-xs font-bold rounded-lg shadow-sm border-transparent transition-none">
-                  <MessageSquare className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Broadcast</span>
-                </Button>
-             </div>
+             {/* Clear Filters Button */}
+             {(activeAiFilter !== 'none' || voucherFilter !== 'all' || giftFilter !== 'all') && (
+               <Button variant="ghost" size="sm" onClick={() => { setActiveAiFilter('none'); setVoucherFilter('all'); setGiftFilter('all'); }} className="h-7 px-3 rounded-full text-[10px] font-bold text-slate-500 hover:text-red-600 hover:bg-red-50 transition-colors">
+                 <X className="w-3.5 h-3.5 mr-1" /> Clear All
+               </Button>
+             )}
           </div>
 
-          <div className="p-3 sm:px-4 flex overflow-x-auto custom-scrollbar gap-2 items-center">
+          <div className="p-2 flex overflow-x-auto custom-scrollbar gap-2 items-center">
+            
+            {/* Sorting */}
+            <Select value={sortOrder} onValueChange={(val: any) => setSortOrder(val)}>
+              <SelectTrigger className="h-9 min-w-[150px] text-xs font-bold bg-white border-slate-200 text-slate-700 shadow-sm rounded-lg shrink-0">
+                 <div className="flex items-center gap-1.5"><ArrowUpDown className="w-3.5 h-3.5 text-slate-400 shrink-0" /> <span className="truncate"><SelectValue placeholder="Sort By" /></span></div>
+              </SelectTrigger>
+              <SelectContent className="border-slate-200 rounded-lg">
+                <SelectItem value="followup_asc" className="text-xs font-medium">Follow-up: Soonest</SelectItem>
+                <SelectItem value="followup_desc" className="text-xs font-medium">Follow-up: Latest</SelectItem>
+                <SelectItem value="newest" className="text-xs font-medium">Recently Added</SelectItem>
+                <SelectItem value="name_asc" className="text-xs font-medium">Name (A-Z)</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {/* Voucher Filter */}
+            <Select value={voucherFilter} onValueChange={(v: any) => setVoucherFilter(v)}>
+              <SelectTrigger className={cn("h-9 min-w-[150px] text-xs font-bold rounded-lg shrink-0 shadow-sm transition-colors", voucherFilter !== 'all' ? "bg-teal-50 border-teal-200 text-teal-700" : "bg-white border-slate-200 text-slate-700")}>
+                <div className="flex items-center gap-1.5"><TicketPercent className="w-3.5 h-3.5 shrink-0" /> <SelectValue placeholder="Voucher Filter" /></div>
+              </SelectTrigger>
+              <SelectContent className="rounded-lg border-slate-200">
+                <SelectItem value="all">All Vouchers</SelectItem>
+                <SelectItem value="none">Normal (No Voucher)</SelectItem>
+                <SelectItem value="registered">Voucher Registered</SelectItem>
+                <SelectItem value="redeemed">Voucher Redeemed</SelectItem>
+              </SelectContent>
+            </Select>
+
+            {/* Gifting Filter */}
+            <Select value={giftFilter} onValueChange={(v: any) => setGiftFilter(v)}>
+              <SelectTrigger className={cn("h-9 min-w-[150px] text-xs font-bold rounded-lg shrink-0 shadow-sm transition-colors", giftFilter !== 'all' ? "bg-rose-50 border-rose-200 text-rose-700" : "bg-white border-slate-200 text-slate-700")}>
+                <div className="flex items-center gap-1.5"><Gift className="w-3.5 h-3.5 shrink-0" /> <SelectValue placeholder="Gifting Status" /></div>
+              </SelectTrigger>
+              <SelectContent className="rounded-lg border-slate-200">
+                <SelectItem value="all">All Gifting Status</SelectItem>
+                <SelectItem value="given">Gift Given</SelectItem>
+                <SelectItem value="pending">Gift Pending</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <div className="w-px h-6 bg-slate-200 mx-1 shrink-0" />
+
+            {/* AI Toggle Filters */}
             <Button 
               variant={activeAiFilter === 'scheme' ? 'default' : 'outline'} size="sm" 
               onClick={() => toggleAiFilter('scheme')}
-              className={cn("shrink-0 h-8 px-4 rounded-full text-[11px] font-bold transition-none border shadow-sm", activeAiFilter === 'scheme' ? "bg-indigo-600 text-white border-indigo-600" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}
+              className={cn("shrink-0 h-9 px-4 rounded-lg text-xs font-bold transition-none border shadow-sm", activeAiFilter === 'scheme' ? "bg-indigo-600 text-white border-indigo-600" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}
             >
-              Can Pitch Kitty ({metrics.schemeCount})
+              Can Pitch Kitty <Badge variant="secondary" className={cn("ml-1.5 px-1 py-0 h-4 text-[9px]", activeAiFilter === 'scheme' ? "bg-indigo-500 text-white" : "bg-slate-100 text-slate-600")}>{metrics.schemeCount}</Badge>
             </Button>
+
             <Button 
               variant={activeAiFilter === 'cold' ? 'default' : 'outline'} size="sm" 
               onClick={() => toggleAiFilter('cold')}
-              className={cn("shrink-0 h-8 px-4 rounded-full text-[11px] font-bold transition-none border shadow-sm", activeAiFilter === 'cold' ? "bg-indigo-600 text-white border-indigo-600" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}
+              className={cn("shrink-0 h-9 px-4 rounded-lg text-xs font-bold transition-none border shadow-sm", activeAiFilter === 'cold' ? "bg-indigo-600 text-white border-indigo-600" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50")}
             >
-              Cold Leads ({metrics.coldCount})
+              Cold Leads <Badge variant="secondary" className={cn("ml-1.5 px-1 py-0 h-4 text-[9px]", activeAiFilter === 'cold' ? "bg-indigo-500 text-white" : "bg-slate-100 text-slate-600")}>{metrics.coldCount}</Badge>
             </Button>
+
             <Button 
               variant={activeAiFilter === 'dnd' ? 'default' : 'outline'} size="sm" 
               onClick={() => toggleAiFilter('dnd')}
-              className={cn("shrink-0 h-8 px-4 rounded-full text-[11px] font-bold transition-none border shadow-sm", activeAiFilter === 'dnd' ? "bg-red-600 text-white border-red-600" : "bg-white border-red-200 text-red-600 hover:bg-red-50")}
+              className={cn("shrink-0 h-9 px-4 rounded-lg text-xs font-bold transition-none border shadow-sm", activeAiFilter === 'dnd' ? "bg-red-600 text-white border-red-600" : "bg-white border-red-200 text-red-600 hover:bg-red-50")}
             >
-              <PhoneOff className="w-3 h-3 mr-1.5" /> Do Not Disturb ({metrics.dndCount})
+              <PhoneOff className="w-3.5 h-3.5 mr-1.5" /> DND <Badge variant="secondary" className={cn("ml-1.5 px-1 py-0 h-4 text-[9px]", activeAiFilter === 'dnd' ? "bg-red-500 text-white" : "bg-red-50 text-red-600")}>{metrics.dndCount}</Badge>
             </Button>
 
-            {activeAiFilter !== 'none' && (
-              <Button variant="ghost" size="sm" onClick={() => setActiveAiFilter('none')} className="shrink-0 h-8 px-3 rounded-full text-[10px] font-bold text-slate-400 hover:text-slate-600 hover:bg-slate-100 flex items-center ml-auto">
-                <X className="w-3.5 h-3.5 mr-1" /> Clear
-              </Button>
-            )}
           </div>
         </div>
 
         {/* 5. MAIN LIST AREA */}
         <Card className="flex-1 flex flex-col border-slate-200 shadow-sm overflow-hidden bg-white rounded-xl">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col overflow-hidden">
-            <CardHeader className="py-2 px-3 border-b border-slate-100 bg-slate-50/50 shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 overflow-x-auto custom-scrollbar">
-              <TabsList className="bg-slate-100/50 h-9 p-1 rounded-lg border border-slate-200/60 self-start shrink-0 flex-nowrap">
-                <TabsTrigger value="followups" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm rounded-md whitespace-nowrap">
+            
+            <CardHeader className="py-2 px-3 border-b border-slate-100 bg-slate-50/50 shrink-0 flex flex-col sm:flex-row sm:items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+              <TabsList className="bg-slate-100/50 h-10 p-1 rounded-lg border border-slate-200/60 self-start shrink-0 flex-nowrap gap-1">
+                
+                {/* Master ALL Tab */}
+                <TabsTrigger value="all" className={cn("text-[11px] font-bold rounded-md whitespace-nowrap px-3 h-full data-[state=active]:bg-white data-[state=active]:shadow-sm data-[state=active]:text-indigo-700 transition-all", isTabFlashing(globalCounts.all) && "ring-2 ring-indigo-400 bg-indigo-50/50 text-indigo-700")}>
+                  Master List <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-slate-100">{globalCounts.all}</Badge>
+                  {isTabFlashing(globalCounts.all) && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />}
+                </TabsTrigger>
+
+                <TabsTrigger value="walkin" className={cn("text-[11px] font-bold rounded-md whitespace-nowrap px-3 h-full data-[state=active]:bg-white data-[state=active]:shadow-sm transition-all", isTabFlashing(globalCounts.walkin) && "ring-2 ring-indigo-400 bg-indigo-50/50 text-indigo-700")}>
+                  Walk-ins <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-slate-100">{globalCounts.walkin}</Badge>
+                  {isTabFlashing(globalCounts.walkin) && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />}
+                </TabsTrigger>
+
+                <TabsTrigger value="followups" className={cn("text-[11px] font-bold rounded-md whitespace-nowrap px-3 h-full data-[state=active]:bg-white data-[state=active]:shadow-sm transition-all", isTabFlashing(globalCounts.followups) && "ring-2 ring-indigo-400 bg-indigo-50/50 text-indigo-700")}>
                   Inquiries / Leads <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-slate-100">{globalCounts.followups}</Badge>
-                </TabsTrigger>
-                <TabsTrigger value="purchased" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm rounded-md whitespace-nowrap">
-                  Past Buyers <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-emerald-50 text-emerald-600 border-emerald-100">{globalCounts.purchased}</Badge>
-                </TabsTrigger>
-                <TabsTrigger value="kitty" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm text-purple-700 rounded-md whitespace-nowrap">
-                  Kitty Plan Members <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-purple-50 text-purple-600 border-purple-100">{globalCounts.kitty}</Badge>
-                </TabsTrigger>
-                <TabsTrigger value="vouchers" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm text-teal-700 rounded-md whitespace-nowrap">
-                  <TicketPercent className="w-3 h-3 mr-1.5 hidden sm:block" /> Voucher Customers <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-teal-50 text-teal-600 border-teal-100">{globalCounts.vouchers}</Badge>
+                  {isTabFlashing(globalCounts.followups) && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />}
                 </TabsTrigger>
                 
-                {/* NEW TAB: Assigned Calling */}
-                <TabsTrigger value="assigned_calls" className="text-[11px] font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm text-amber-700 rounded-md whitespace-nowrap">
-                  <PhoneCall className="w-3 h-3 mr-1.5 hidden sm:block" /> Assigned Calling <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-amber-50 text-amber-600 border-amber-100">{globalCounts.assignedCalls}</Badge>
+                <TabsTrigger value="purchased" className={cn("text-[11px] font-bold rounded-md whitespace-nowrap px-3 h-full data-[state=active]:bg-white data-[state=active]:shadow-sm transition-all", isTabFlashing(globalCounts.purchased) && "ring-2 ring-emerald-400 bg-emerald-50/50 text-emerald-700")}>
+                  Past Buyers <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-emerald-50 text-emerald-600 border-emerald-100">{globalCounts.purchased}</Badge>
+                  {isTabFlashing(globalCounts.purchased) && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
+                </TabsTrigger>
+
+                <TabsTrigger value="kitty" className={cn("text-[11px] font-bold rounded-md whitespace-nowrap px-3 h-full data-[state=active]:bg-white data-[state=active]:shadow-sm text-purple-700 transition-all", isTabFlashing(globalCounts.kitty) && "ring-2 ring-purple-400 bg-purple-50/50")}>
+                  Kitty Members <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-purple-50 text-purple-600 border-purple-100">{globalCounts.kitty}</Badge>
+                  {isTabFlashing(globalCounts.kitty) && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />}
+                </TabsTrigger>
+
+                <TabsTrigger value="vouchers" className={cn("text-[11px] font-bold rounded-md whitespace-nowrap px-3 h-full data-[state=active]:bg-white data-[state=active]:shadow-sm text-teal-700 transition-all", isTabFlashing(globalCounts.vouchers) && "ring-2 ring-teal-400 bg-teal-50/50")}>
+                  <TicketPercent className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" /> Vouchers <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-teal-50 text-teal-600 border-teal-100">{globalCounts.vouchers}</Badge>
+                  {isTabFlashing(globalCounts.vouchers) && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-teal-500 animate-pulse" />}
+                </TabsTrigger>
+                
+                <TabsTrigger value="assigned_calls" className={cn("text-[11px] font-bold rounded-md whitespace-nowrap px-3 h-full data-[state=active]:bg-white data-[state=active]:shadow-sm text-amber-700 transition-all", isTabFlashing(globalCounts.assignedCalls) && "ring-2 ring-amber-400 bg-amber-50/50")}>
+                  <PhoneCall className="w-3.5 h-3.5 mr-1.5 hidden sm:inline" /> Assigned Calls <Badge variant="secondary" className="ml-1.5 text-[9px] h-4 px-1 bg-amber-50 text-amber-600 border-amber-100">{globalCounts.assignedCalls}</Badge>
+                  {isTabFlashing(globalCounts.assignedCalls) && <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />}
                 </TabsTrigger>
 
                 <TabsTrigger value="dnd" className="hidden">DND</TabsTrigger>
@@ -1141,98 +1189,66 @@ export default function CRMPage() {
             </CardHeader>
             
             <CardContent className="p-0 flex-1 overflow-hidden">
-              <TabsContent value="followups" className="h-full m-0 data-[state=active]:flex flex-col">
-                 <CustomerList 
-                    data={customers} 
-                    loading={isLoading} 
-                    emptyMessage={activeAiFilter !== 'none' ? "No leads match this filter." : "No active leads found."}
-                    onMessage={openWhatsAppModal}
-                    onSchedule={openScheduleModal}
-                    onViewProfile={openProfileModal}
-                    onLogCall={openCallLoggerModal} 
-                    onViewHistory={handleViewHistory}
-                    onViewWaActivity={openWaActivityModal}
-                 />
-                 <PaginationFooter />
-              </TabsContent>
+              
+              {/* TAB LISTINGS (Reused CustomerList with specific empty messages) */}
+              {['all', 'walkin', 'followups', 'purchased', 'kitty', 'vouchers', 'assigned_calls', 'dnd'].map(tab => (
+                <TabsContent key={tab} value={tab} className="h-full m-0 data-[state=active]:flex flex-col">
+                   <CustomerList 
+                      data={customers} 
+                      loading={isLoading} 
+                      emptyMessage={
+                        debouncedSearch ? `No results found for "${debouncedSearch}" in this tab.` :
+                        tab === 'all' ? "No customers found." :
+                        tab === 'walkin' ? "No Walk-in customers found." :
+                        tab === 'followups' ? "No active leads found." :
+                        tab === 'purchased' ? "No purchased customers found." :
+                        tab === 'kitty' ? "No Kitty Members found." :
+                        tab === 'vouchers' ? "No Voucher Customers found." :
+                        tab === 'assigned_calls' ? "You have no pending assigned calls." :
+                        "No Do Not Disturb customers found."
+                      }
+                      onMessage={openWhatsAppModal}
+                      onSchedule={openScheduleModal}
+                      onViewProfile={openProfileModal}
+                      onLogCall={openCallLoggerModal} 
+                      onViewHistory={handleViewHistory}
+                      onViewWaActivity={openWaActivityModal}
+                      isKitty={tab === 'kitty'}
+                   />
+                   {/* Pagination Footer */}
+                   <div className="bg-slate-50 border-t border-slate-200 p-3 sm:p-4 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-b-xl shrink-0">
+                     <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-start">
+                       <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">Rows per page:</span>
+                       <Select value={pageSize.toString()} onValueChange={(val) => setPageSize(Number(val))}>
+                         <SelectTrigger className="h-8 w-[80px] text-xs bg-white font-bold shadow-sm rounded-lg border-slate-200">
+                           <SelectValue />
+                         </SelectTrigger>
+                         <SelectContent className="rounded-lg border-slate-200">
+                           <SelectItem value="50">50</SelectItem>
+                           <SelectItem value="100">100</SelectItem>
+                           <SelectItem value="200">200</SelectItem>
+                           <SelectItem value="500">500</SelectItem>
+                         </SelectContent>
+                       </Select>
+                     </div>
+                     
+                     <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+                       <span className="text-[11px] font-bold text-slate-500 uppercase tracking-widest">
+                         Showing <span className="text-indigo-600">{customers.length > 0 ? page * pageSize + 1 : 0}</span> to <span className="text-indigo-600">{Math.min((page + 1) * pageSize, globalCounts[tab as keyof typeof globalCounts] || 0)}</span> of <span className="text-indigo-600">{globalCounts[tab as keyof typeof globalCounts] || 0}</span>
+                       </span>
+                       <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                         <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0 || isLoading} className="flex-1 sm:flex-none h-8 px-3 text-xs font-bold bg-white text-slate-600 shadow-sm rounded-lg border-slate-200 hover:bg-slate-50">
+                           <ChevronLeft className="w-4 h-4 mr-1"/> Prev
+                         </Button>
+                         <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={(page + 1) * pageSize >= (globalCounts[tab as keyof typeof globalCounts] || 0) || isLoading} className="flex-1 sm:flex-none h-8 px-3 text-xs font-bold bg-white text-slate-600 shadow-sm rounded-lg border-slate-200 hover:bg-slate-50">
+                           Next <ChevronRight className="w-4 h-4 ml-1"/>
+                         </Button>
+                       </div>
+                     </div>
+                   </div>
+                </TabsContent>
+              ))}
 
-              <TabsContent value="purchased" className="h-full m-0 data-[state=active]:flex flex-col">
-                 <CustomerList 
-                    data={customers} 
-                    loading={isLoading} 
-                    emptyMessage={activeAiFilter !== 'none' ? "No buyers match this filter." : "No purchased customers found."}
-                    onMessage={openWhatsAppModal}
-                    onSchedule={openScheduleModal}
-                    onViewProfile={openProfileModal}
-                    onLogCall={openCallLoggerModal}
-                    onViewHistory={handleViewHistory}
-                    onViewWaActivity={openWaActivityModal}
-                 />
-                 <PaginationFooter />
-              </TabsContent>
-
-              <TabsContent value="kitty" className="h-full m-0 data-[state=active]:flex flex-col">
-                 <CustomerList 
-                    data={customers} 
-                    loading={isLoading} 
-                    emptyMessage="No active Kitty Members found for this branch."
-                    onMessage={openWhatsAppModal}
-                    onSchedule={openScheduleModal}
-                    onViewProfile={openProfileModal}
-                    onLogCall={openCallLoggerModal}
-                    onViewHistory={handleViewHistory}
-                    isKitty={true}
-                    onViewWaActivity={openWaActivityModal}
-                 />
-                 <PaginationFooter />
-              </TabsContent>
-
-              <TabsContent value="vouchers" className="h-full m-0 data-[state=active]:flex flex-col">
-                 <CustomerList 
-                    data={customers} 
-                    loading={isLoading} 
-                    emptyMessage="No Voucher Customers found for this branch."
-                    onMessage={openWhatsAppModal}
-                    onSchedule={openScheduleModal}
-                    onViewProfile={openProfileModal}
-                    onLogCall={openCallLoggerModal}
-                    onViewHistory={handleViewHistory}
-                    onViewWaActivity={openWaActivityModal}
-
-                 />
-                 <PaginationFooter />
-              </TabsContent>
-
-              {/* NEW TAB CONTENT: Assigned Calls */}
-              <TabsContent value="assigned_calls" className="h-full m-0 data-[state=active]:flex flex-col">
-                 <CustomerList 
-                    data={customers} 
-                    loading={isLoading} 
-                    emptyMessage="You have no pending assigned calls."
-                    onMessage={openWhatsAppModal}
-                    onSchedule={openScheduleModal}
-                    onViewProfile={openProfileModal}
-                    onLogCall={openCallLoggerModal}
-                    onViewHistory={handleViewHistory}
-                    onViewWaActivity={openWaActivityModal}
-                 />
-                 <PaginationFooter />
-              </TabsContent>
-
-              <TabsContent value="dnd" className="h-full m-0 data-[state=active]:flex flex-col">
-                 <CustomerList 
-                    data={customers} 
-                    loading={isLoading} 
-                    emptyMessage="No Do Not Disturb customers found."
-                    onMessage={openWhatsAppModal}
-                    onSchedule={openScheduleModal}
-                    onViewProfile={openProfileModal}
-                    onLogCall={openCallLoggerModal}
-                    onViewHistory={handleViewHistory}
-                    onViewWaActivity={openWaActivityModal}
-                 />
-                 <PaginationFooter />
-              </TabsContent>
             </CardContent>
           </Tabs>
         </Card>

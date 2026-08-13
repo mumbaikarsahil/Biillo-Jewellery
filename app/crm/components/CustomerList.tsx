@@ -1,6 +1,6 @@
 import React from 'react'
 import { format } from "date-fns"
-import { Phone, User, MessageCircle, Calendar, IndianRupee, Star, AlertCircle, Users, PhoneCall, Ticket, Store, History, MessageSquare } from 'lucide-react'
+import { Phone, User, MessageCircle, Calendar, IndianRupee, Star, AlertCircle, Users, PhoneCall, Ticket, Store, History, MessageSquare, Gift, MapPin, FileText, Zap, Clock, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -19,9 +19,8 @@ interface Props {
   onLogCall: (c: CRMCustomer) => void 
   isKitty?: boolean
   onViewHistory: (c: CRMCustomer) => void
-  onViewWaActivity: (c: CRMCustomer) => void // ✨ NEW PROP
+  onViewWaActivity: (c: CRMCustomer) => void 
 }
-
 
 export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedule, onViewProfile, onLogCall, onViewHistory, onViewWaActivity, isKitty = false }: Props) {
   if (loading) {
@@ -65,7 +64,7 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
         <div className={cn("flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-md border w-max", statusColor)}>
           {icon} {format(fDate, 'dd-MM-yyyy')}
         </div>
-        {reason && <p className="text-[10px] font-medium text-slate-600 truncate max-w-[200px] mt-0.5">Goal/Status: {reason}</p>}
+        {reason && <p className="text-[10px] font-medium text-slate-600 truncate max-w-[200px] mt-0.5">Goal: {reason}</p>}
       </div>
     )
   }
@@ -75,6 +74,18 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
     const distData = voucher.voucher_distributors;
     if (Array.isArray(distData)) return distData[0]?.distributor_name || "Direct Event / Campaign";
     return distData?.distributor_name || "Direct Event / Campaign";
+  }
+
+  const getInteractionDetails = (text: string | null) => {
+    if (!text) return { type: 'NONE' };
+    const lower = text.toLowerCase();
+    if (lower.includes('walk-in') || lower.includes('checkin') || lower.includes('check-in') || lower.includes('discovery') || lower.includes('visited')) {
+      return { type: 'WALKIN' };
+    }
+    if (lower.includes('[call')) {
+      return { type: 'CALL' };
+    }
+    return { type: 'MANUAL' };
   }
 
   return (
@@ -96,6 +107,9 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                                  || row.vouchers?.find((v: any) => v.status === 'redeemed') 
                                  || row.vouchers?.[0];
 
+              // ✨ Grab the Sequence Data
+              const activeSequence = row.voucher_message_sequences?.find((s: any) => s.status === 'active') || row.voucher_message_sequences?.[0];
+
               let voucherText = "";
               let voucherColor = "";
 
@@ -113,7 +127,11 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
               }
 
               const distributorName = getDistributorName(activeVoucher);
+              const formattedExpiry = activeVoucher?.expiry_date ? format(new Date(activeVoucher.expiry_date), 'dd MMM yyyy') : null;
               
+              const interaction = getInteractionDetails(row.last_interaction);
+              const isWalkinActivity = interaction.type === 'WALKIN' || row.customer_status === 'Walk-in';
+
               return (
               <TableRow key={row.id} className={cn("transition-colors border-b border-slate-100 hover:bg-slate-50/50", isKitty && "hover:bg-purple-50/50")}>
                 <TableCell className="px-6 py-3">
@@ -133,9 +151,20 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                           <Star className="w-2.5 h-2.5" /> Points
                         </Badge>
                       )}
+                      
+                      {isWalkinActivity && (
+                        <Badge className="bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">
+                          <MapPin className="w-2.5 h-2.5" /> Store Visit
+                        </Badge>
+                      )}
+                      {row.gift_given && (
+                        <Badge className="bg-rose-50 text-rose-600 border-rose-200 text-[8px] h-4 px-1.5 uppercase tracking-widest flex items-center gap-1 shadow-sm">
+                          <Gift className="w-2.5 h-2.5" /> Gift: {row.gift_given}
+                        </Badge>
+                      )}
                     </div>
 
-                    <span className="text-[10px] text-slate-500 font-mono mt-0.5 flex items-center gap-1"><Phone className="w-2.5 h-2.5"/> {row.phone}</span>
+                    <span className="text-[10px] text-slate-500 font-mono mt-1 flex items-center gap-1"><Phone className="w-2.5 h-2.5"/> {row.phone}</span>
 
                     {activeVoucher && voucherText && (
                       <div className="mt-1.5 flex flex-col gap-1">
@@ -147,32 +176,75 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                             {activeVoucher.code}
                           </span>
                         </div>
-                        <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1 mt-0.5">
-                          <Store className="w-2.5 h-2.5" /> Via: {distributorName}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                          <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                            <Store className="w-2.5 h-2.5" /> Via: {distributorName}
+                          </span>
+                          {formattedExpiry && (
+                            <span className="text-[9px] text-rose-500 font-bold uppercase tracking-wider flex items-center gap-1 border-l border-slate-200 pl-1.5">
+                              <Clock className="w-2.5 h-2.5" /> Voucher Exp: {formattedExpiry}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* ✨ NEW: Drip Campaign Sequence Information */}
+                        {activeSequence && (
+                          <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                            <span className="text-[9px] text-indigo-500 font-bold uppercase tracking-wider flex items-center gap-1">
+                              <Send className="w-2.5 h-2.5" /> Auto msg Step: {activeSequence.current_step}
+                            </span>
+                            <span className="text-[9px] text-indigo-500 font-bold uppercase tracking-wider flex items-center gap-1 border-l border-indigo-100 pl-1.5">
+                              <Clock className="w-2.5 h-2.5" /> Next msg at: {activeSequence.next_send_at ? format(new Date(activeSequence.next_send_at), 'dd MMM, HH:mm') : '--'}
+                            </span>
+                            <Badge className={cn("border-none text-[8px] h-4 px-1.5 uppercase tracking-widest ml-1", activeSequence.status === 'active' ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-500")}>
+                              {activeSequence.status}
+                            </Badge>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
                 </TableCell>
+                
                 <TableCell className="py-3">
                   {renderFollowup(row.next_followup_date, row.followup_reason)}
                 </TableCell>
                 
-                {/* ✨ CLICKABLE WHATSAPP NOTE OR FALLBACK NOTE */}
                 <TableCell className="py-3">
-                  {(row as any).crm_webhook_events && (row as any).crm_webhook_events.length > 0 ? (
-                    <button 
-                      onClick={() => onViewWaActivity(row)} 
-                      className="inline-flex items-center gap-1.5 text-[#1DA851] bg-[#25D366]/10 hover:bg-[#25D366]/20 transition-colors font-medium px-2 py-1.5 rounded-md max-w-[220px] overflow-hidden text-left border border-[#25D366]/20 shadow-sm"
-                    >
-                      <MessageCircle className="w-3.5 h-3.5 shrink-0" /> 
-                      <span className="truncate text-[11px]">
-                        {(row as any).crm_webhook_events.sort((a: any, b: any) => new Date(b.event_time).getTime() - new Date(a.event_time).getTime())[0].message}
+                  <div className="flex flex-col gap-2">
+                    <div className="text-[10px] p-1.5 rounded-md border bg-blue-50 border-blue-100 text-blue-700 flex items-start gap-1.5 max-w-[220px]">
+                      <User className="w-3 h-3 shrink-0 mt-0.5" />
+                      <span className="leading-tight line-clamp-2" title={row.last_interaction || 'No manual notes'}>
+                        {row.last_interaction || 'No manual notes logged.'}
                       </span>
-                    </button>
-                  ) : (
-                    <span className="text-[11px] font-medium text-slate-500 truncate max-w-[200px] block" title={row.last_interaction || ''}>{row.last_interaction || '--'}</span>
-                  )}
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                      {(row as any).crm_webhook_events && (row as any).crm_webhook_events.length > 0 && (
+                        <button 
+                          onClick={() => onViewWaActivity(row)} 
+                          className="inline-flex items-center gap-1.5 text-[#1DA851] bg-[#25D366]/10 hover:bg-[#25D366]/20 transition-colors font-medium px-2 py-1 rounded-md max-w-[220px] overflow-hidden text-left border border-[#25D366]/20 shadow-sm"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5 shrink-0" /> 
+                          <span className="truncate text-[10px]">
+                            {(row as any).crm_webhook_events.sort((a: any, b: any) => new Date(b.event_time).getTime() - new Date(a.event_time).getTime())[0].message}
+                          </span>
+                        </button>
+                      )}
+
+                      {row.activity_timeline && Array.isArray(row.activity_timeline) && row.activity_timeline.length > 0 && (
+                        <div className="flex flex-col gap-1">
+                          {row.activity_timeline.slice(0, 2).map((event: any, idx: number) => (
+                            <span key={idx} className="text-[9px] text-slate-500 bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded-md flex items-center gap-1.5 w-max max-w-[220px] truncate">
+                              {event.type === 'WALKIN' || event.type === 'WALK-IN' ? <Store className="w-2.5 h-2.5 text-fuchsia-500" /> : <Zap className="w-2.5 h-2.5 text-amber-500" />}
+                              <span className="truncate">{event.type}: {event.description}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
                 </TableCell>
                 
                 <TableCell className="text-right px-6 py-3">
@@ -215,6 +287,9 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                              || row.vouchers?.find((v: any) => v.status === 'redeemed') 
                              || row.vouchers?.[0];
 
+          // ✨ Grab the Sequence Data
+          const activeSequence = row.voucher_message_sequences?.find((s: any) => s.status === 'active') || row.voucher_message_sequences?.[0];
+
           let voucherText = "";
           let voucherColor = "";
 
@@ -232,6 +307,9 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
           }
 
           const distributorName = getDistributorName(activeVoucher);
+          const formattedExpiry = activeVoucher?.expiry_date ? format(new Date(activeVoucher.expiry_date), 'dd MMM yyyy') : null;
+          const interaction = getInteractionDetails(row.last_interaction);
+          const isWalkinActivity = interaction.type === 'WALKIN' || row.customer_status === 'Walk-in';
 
           return (
           <div key={row.id} className={cn("bg-white border rounded-xl p-4 shadow-sm flex flex-col gap-3", isKitty ? "border-purple-100" : "border-slate-200")}>
@@ -251,6 +329,17 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                       <Star className="w-2.5 h-2.5" /> Points
                     </Badge>
                   )}
+                  
+                  {isWalkinActivity && (
+                    <Badge className="bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">
+                      <MapPin className="w-2.5 h-2.5" /> Store Visit
+                    </Badge>
+                  )}
+                  {row.gift_given && (
+                    <Badge className="bg-rose-50 text-rose-600 border-rose-200 text-[8px] h-4 px-1.5 uppercase tracking-widest flex items-center gap-1 shadow-sm">
+                      <Gift className="w-2.5 h-2.5" /> Gift: {row.gift_given}
+                    </Badge>
+                  )}
                 </div>
                 <p className="text-[11px] font-mono text-slate-500 mt-1.5 flex items-center gap-1"><Phone className="w-3 h-3"/> {row.phone}</p>
 
@@ -264,9 +353,31 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                         {activeVoucher.code}
                       </span>
                     </div>
-                    <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                      <Store className="w-2.5 h-2.5" /> Via: {distributorName}
-                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                      <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1">
+                        <Store className="w-2.5 h-2.5" /> Via: {distributorName}
+                      </span>
+                      {formattedExpiry && (
+                        <span className="text-[9px] text-rose-500 font-bold uppercase tracking-wider flex items-center gap-1 border-l border-slate-200 pl-1.5">
+                          <Clock className="w-2.5 h-2.5" /> Voucher Exp: {formattedExpiry}
+                        </span>
+                      )}
+                    </div>
+                    
+                    {/* ✨ NEW: Mobile Drip Campaign Sequence Information */}
+                    {activeSequence && (
+                      <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                        <span className="text-[9px] text-indigo-500 font-bold uppercase tracking-wider flex items-center gap-1">
+                          <Send className="w-2.5 h-2.5" /> Seq Step: {activeSequence.current_step}
+                        </span>
+                        <span className="text-[9px] text-indigo-500 font-bold uppercase tracking-wider flex items-center gap-1 border-l border-indigo-100 pl-1.5">
+                          <Clock className="w-2.5 h-2.5" /> Next: {activeSequence.next_send_at ? format(new Date(activeSequence.next_send_at), 'dd MMM, HH:mm') : '--'}
+                        </span>
+                        <Badge className={cn("border-none text-[8px] h-4 px-1.5 uppercase tracking-widest ml-1", activeSequence.status === 'active' ? "bg-emerald-50 text-emerald-600" : "bg-slate-100 text-slate-500")}>
+                          {activeSequence.status}
+                        </Badge>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -291,18 +402,30 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
             <div className="bg-slate-50 rounded-lg p-3 border border-slate-100 mt-1 flex flex-col gap-2">
               {renderFollowup(row.next_followup_date, row.followup_reason)}
               
-              {/* ✨ MOBILE WHATSAPP NOTE */}
-              {(row as any).crm_webhook_events && (row as any).crm_webhook_events.length > 0 && (
-                <button 
-                  onClick={() => onViewWaActivity(row)} 
-                  className="mt-1 w-full inline-flex items-center gap-1.5 text-[#1DA851] bg-[#25D366]/10 border border-[#25D366]/20 font-medium px-2 py-1.5 rounded-md overflow-hidden text-left"
-                >
-                  <MessageCircle className="w-3.5 h-3.5 shrink-0" /> 
-                  <span className="truncate text-[11px]">
-                    {(row as any).crm_webhook_events.sort((a: any, b: any) => new Date(b.event_time).getTime() - new Date(a.event_time).getTime())[0].message}
-                  </span>
-                </button>
-              )}
+              <div className="flex flex-col gap-1.5 mt-1 border-t border-slate-200 pt-2">
+                {(row as any).crm_webhook_events && (row as any).crm_webhook_events.length > 0 && (
+                  <button 
+                    onClick={() => onViewWaActivity(row)} 
+                    className="w-full inline-flex items-center gap-1.5 text-[#1DA851] bg-[#25D366]/10 border border-[#25D366]/20 font-medium px-2 py-1.5 rounded-md overflow-hidden text-left"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5 shrink-0" /> 
+                    <span className="truncate text-[11px]">
+                      {(row as any).crm_webhook_events.sort((a: any, b: any) => new Date(b.event_time).getTime() - new Date(a.event_time).getTime())[0].message}
+                    </span>
+                  </button>
+                )}
+
+                {row.activity_timeline && Array.isArray(row.activity_timeline) && row.activity_timeline.length > 0 && (
+                  <div className="flex flex-col gap-1">
+                    {row.activity_timeline.slice(0, 2).map((event: any, idx: number) => (
+                      <span key={idx} className="text-[9px] text-slate-500 bg-white border border-slate-200 px-1.5 py-1 rounded-md flex items-center gap-1.5 w-full truncate">
+                        {event.type === 'WALKIN' || event.type === 'WALK-IN' ? <Store className="w-3 h-3 text-fuchsia-500 shrink-0" /> : <Zap className="w-3 h-3 text-amber-500 shrink-0" />}
+                        <span className="truncate">{event.type}: {event.description}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-2 mt-1">
