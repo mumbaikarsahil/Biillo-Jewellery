@@ -80,8 +80,8 @@ export async function GET(req: Request) {
           task.payload.template_name = "erp_utliltiy1";
         }
 
-        // ---------------------------------------------------------
-      // SCENARIO B: Global Inventory Asset Registry Report
+       // ---------------------------------------------------------
+      // SCENARIO B: Global Inventory Asset Registry Report (Lean Format)
       // ---------------------------------------------------------
       else if (task.task_name === 'daily_inventory_report') {
         let allItems: any[] = [];
@@ -110,16 +110,24 @@ export async function GET(req: Request) {
         const totalItems = allItems.length;
         const totalValue = allItems.reduce((acc, curr) => acc + (Number(curr.mrp) || 0), 0);
 
-        const locationSummary: Record<string, { count: number, value: number, categories: Record<string, { count: number, value: number }> }> = {};
+        const locationSummary: Record<string, { count: number, value: number, categories: Record<string, number> }> = {};
 
         allItems.forEach(item => {
            const locName = item.warehouses?.name || 'HQ';
-           // Shorten category names to save precious characters
-           let cat = item.item_category ? item.item_category.trim() : 'Other';
-           if (cat.toLowerCase().includes('ladies ring')) cat = 'L.Ring';
-           else if (cat.toLowerCase().includes('gents ring')) cat = 'G.Ring';
-           else if (cat.toLowerCase().includes('pendant')) cat = 'Pend';
            
+           // Ultra-short shorthand nomenclature
+           let cat = item.item_category ? item.item_category.trim().toLowerCase() : 'oth';
+           if (cat.includes('ladies ring')) cat = 'LR';
+           else if (cat.includes('gents ring')) cat = 'GR';
+           else if (cat.includes('pendant')) cat = 'Pend';
+           else if (cat.includes('tops')) cat = 'Top';
+           else if (cat.includes('tanmania')) cat = 'Tan';
+           else if (cat.includes('bracelet')) cat = 'Brc';
+           else if (cat.includes('necklace')) cat = 'Ncl';
+           else if (cat.includes('nosepin') || cat.includes('nose pin')) cat = 'Nsp';
+           else if (cat.includes('ring')) cat = 'Rng';
+           else cat = cat.substring(0, 3).toUpperCase(); // Fallback short code
+
            const mrp = Number(item.mrp) || 0;
 
            if (!locationSummary[locName]) {
@@ -129,29 +137,28 @@ export async function GET(req: Request) {
            locationSummary[locName].value += mrp;
 
            if (!locationSummary[locName].categories[cat]) {
-               locationSummary[locName].categories[cat] = { count: 0, value: 0 };
+               locationSummary[locName].categories[cat] = 0;
            }
-           locationSummary[locName].categories[cat].count += 1;
-           locationSummary[locName].categories[cat].value += mrp;
+           locationSummary[locName].categories[cat] += 1;
         });
 
         let breakdownArr: string[] = [];
         const sortedLocs = Object.entries(locationSummary).sort((a, b) => b[1].value - a[1].value);
 
         sortedLocs.forEach(([loc, locStats]) => {
-           const sortedCats = Object.entries(locStats.categories).sort((a, b) => b[1].value - a[1].value);
-           const catDetails = sortedCats.map(([cat, catStats]) => {
-             return `${cat}:${catStats.count}(₹${(catStats.value / 100000).toFixed(1)}L)`;
-           });
+           // Sort categories by highest quantity first
+           const sortedCats = Object.entries(locStats.categories).sort((a, b) => b[1] - a[1]);
+           const catDetails = sortedCats.map(([cat, qty]) => `${cat}:${qty}`);
            
+           // Format: *Andheri*(191p,₹118.9L): LR:43, Pend:56, Top:35
            breakdownArr.push(`*${loc}*(${locStats.count}p,₹${(locStats.value / 100000).toFixed(1)}L): ${catDetails.join(', ')}`);
         });
 
         let breakdownStr = breakdownArr.join(' | ');
 
-        // 🛡️ STRICT SAFETY CAP: Keep total variable length under 750 chars to prevent Meta length crash
-        if (breakdownStr.length > 700) {
-            breakdownStr = breakdownStr.substring(0, 680) + '... [View Dashboard for Full Data]';
+        // Safety fallback if it somehow exceeds limits with massive branch counts
+        if (breakdownStr.length > 950) {
+            breakdownStr = breakdownStr.substring(0, 930) + '... [Check Dashboard]';
         }
         if (sortedLocs.length === 0) breakdownStr = "No active inventory found.";
         
