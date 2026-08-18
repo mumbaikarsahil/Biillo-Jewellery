@@ -130,31 +130,40 @@ export async function GET(req: Request) {
              locationSummary[locName].categories[cat].value += mrp;
           });
 
-          let breakdownStr = '';
-          const sortedLocs = Object.entries(locationSummary).sort((a, b) => b[1].value - a[1].value);
+          // Build the Multi-Branch String (No Newlines allowed by Meta)
+        let breakdownArr: string[] = [];
+        const sortedLocs = Object.entries(locationSummary).sort((a, b) => b[1].value - a[1].value);
 
-          sortedLocs.forEach(([loc, locStats]) => {
-             breakdownStr += `📍 *${loc}*: ${locStats.count} items (₹${(locStats.value / 100000).toFixed(2)}L)\n`;
-             const sortedCats = Object.entries(locStats.categories).sort((a, b) => b[1].value - a[1].value);
-             const catDetails = sortedCats.map(([cat, catStats]) => {
-               return `${cat}: ${catStats.count} (₹${(catStats.value / 100000).toFixed(1)}L)`;
-             });
-             breakdownStr += `  ↳ ${catDetails.join(', ')}\n\n`;
-          });
+        sortedLocs.forEach(([loc, locStats]) => {
+           const sortedCats = Object.entries(locStats.categories).sort((a, b) => b[1].value - a[1].value);
+           const catDetails = sortedCats.map(([cat, catStats]) => {
+             return `${cat}: ${catStats.count} (₹${(catStats.value / 100000).toFixed(1)}L)`;
+           });
+           
+           breakdownArr.push(`📍 *${loc}*: ${locStats.count} items (₹${(locStats.value / 100000).toFixed(2)}L) ↳ ${catDetails.join(', ')}`);
+        });
 
-          if (breakdownStr.length > 1000) breakdownStr = breakdownStr.substring(0, 980) + '...\n[Truncated]';
-          if (sortedLocs.length === 0) breakdownStr = "No active inventory found.";
+        let breakdownStr = breakdownArr.join(' | ');
 
-          const dateStr = new Date().toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+        // Absolute fail-safe: Enforce Meta limits and strip any double spaces
+        if (breakdownStr.length > 950) {
+            breakdownStr = breakdownStr.substring(0, 950) + '...[Truncated]';
+        }
+        if (sortedLocs.length === 0) breakdownStr = "No active inventory found.";
+        
+        // Strip out any accidental consecutive spaces Meta might reject
+        breakdownStr = breakdownStr.replace(/\s{2,}/g, ' ');
 
-          sendVariables = [
-            dateStr,                                       
-            `${totalItems} items`,                         
-            `₹${totalValue.toLocaleString('en-IN')}`,      
-            breakdownStr.trim()                            
-          ];
+        const dateStr = new Date().toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
 
-          task.payload.template_name = "erp_utility2";
+        sendVariables = [
+          dateStr,                                       
+          `${totalItems} items`,                         
+          `₹${totalValue.toLocaleString('en-IN')}`,      
+          breakdownStr.trim()                            
+        ];
+
+        task.payload.template_name = "erp_utility2";
         }
 
         // ---------------------------------------------------------
@@ -216,26 +225,31 @@ export async function GET(req: Request) {
               branchStats[name].refunds += refund;
           });
 
-          let breakdownStr = '';
-          const sortedBranches = Object.entries(branchStats).sort((a, b) => (b[1].sales + b[1].adv) - (a[1].sales + a[1].adv));
+          let breakdownArr: string[] = [];
+        const sortedBranches = Object.entries(branchStats).sort((a, b) => (b[1].sales + b[1].adv) - (a[1].sales + a[1].adv));
 
-          sortedBranches.forEach(([loc, stats]) => {
-              breakdownStr += `📍 *${loc}*\n  • Sales & Orders: ₹${stats.sales.toLocaleString('en-IN')}\n  • Advances: ₹${stats.adv.toLocaleString('en-IN')}\n  • Refunds/Buybacks: ₹${stats.refunds.toLocaleString('en-IN')}\n\n`;
-          });
+        sortedBranches.forEach(([loc, stats]) => {
+            breakdownArr.push(`📍 *${loc}* ➼ Sales: ₹${stats.sales.toLocaleString('en-IN')} • Adv: ₹${stats.adv.toLocaleString('en-IN')} • Refunds: ₹${stats.refunds.toLocaleString('en-IN')}`);
+        });
 
-          if (!breakdownStr) breakdownStr = "No financial transactions recorded today.";
-          else if (breakdownStr.length > 950) breakdownStr = breakdownStr.substring(0, 950) + '...\n[Truncated. View dashboard for full report]';
+        let breakdownStr = breakdownArr.join(' | ');
 
-          const dateStr = new Date().toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+        if (!breakdownStr) breakdownStr = "No financial transactions recorded today.";
+        else if (breakdownStr.length > 950) breakdownStr = breakdownStr.substring(0, 950) + '...[Truncated]';
+        
+        // Strip out any accidental consecutive spaces
+        breakdownStr = breakdownStr.replace(/\s{2,}/g, ' ');
 
-          sendVariables = [
-            dateStr,                                       
-            `₹${globalSales.toLocaleString('en-IN')}`,     
-            `₹${globalAdvances.toLocaleString('en-IN')}`,  
-            breakdownStr.trim()                            
-          ];
+        const dateStr = new Date().toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
 
-          task.payload.template_name = "erp_utility3";
+        sendVariables = [
+          dateStr,                                       
+          `₹${globalSales.toLocaleString('en-IN')}`,     
+          `₹${globalAdvances.toLocaleString('en-IN')}`,  
+          breakdownStr.trim()                            
+        ];
+
+        task.payload.template_name = "erp_utility3";
         }
 
         // ---------------------------------------------------------
