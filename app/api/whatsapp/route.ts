@@ -85,7 +85,12 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       namespace: namespace, 
     };
 
-    // ✨ STRICT META FORMAT: Correctly nests the 'document' object!
+    // ✨ 1. THE BODY: Always build the text variables for Omnibot's custom parser
+    if (parameters.length > 0) {
+        content.params = buildParamsObject(parameters);
+    }
+
+    // ✨ 2. THE HEADER: Inject the strict Meta Document object
     if (document_link) {
         content.components = [
             {
@@ -93,24 +98,14 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
                 parameters: [
                     {
                         type: "document",
-                        // ✨ This nested object is what Meta was looking for!
                         document: {
                             link: document_link,
                             filename: document_name || "Asset_Registry.pdf"
                         }
                     }
                 ]
-            },
-            {
-                type: "body",
-                parameters: parameters.map((p: any) => ({ 
-                    type: "text", 
-                    text: p ? String(p) : "-" 
-                }))
             }
         ];
-    } else if (parameters.length > 0) {
-        content.params = buildParamsObject(parameters);
     }
 
     return {
