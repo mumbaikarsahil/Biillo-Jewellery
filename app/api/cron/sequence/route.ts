@@ -110,7 +110,7 @@ export async function GET(req: Request) {
           const locationSummary: Record<string, { count: number, value: number, categories: Record<string, { count: number, value: number }> }> = {};
 
           allItems.forEach(item => {
-             // We can use full warehouse names and categories now since space is unlimited!
+             // Use full warehouse names and categories since space is unlimited in the PDF
              let locName = 'HQ';
              if (item.warehouses) {
                const wh = Array.isArray(item.warehouses) ? item.warehouses[0] : item.warehouses;
@@ -183,18 +183,40 @@ export async function GET(req: Request) {
           if (uploadError) throw new Error(`PDF Upload Failed: ${uploadError.message}`);
           const { data: { publicUrl } } = supabaseAdmin.storage.from('daily_reports').getPublicUrl(fileName);
 
-          // ✨ SET UP DOCUMENT VARIABLES
+          // ✨ Generate dynamic executive summary for the 4th template parameter
+          let shortBreakdownArr: string[] = [];
+          
+          // Grab the top 4 locations by value to fit beautifully in the WhatsApp text bubble
+          const topLocs = Object.entries(locationSummary).sort((a, b) => b[1].value - a[1].value);
+          
+          topLocs.slice(0, 4).forEach(([loc, stats]) => {
+             let formattedVal = stats.value >= 10000000 
+               ? `₹${(stats.value / 10000000).toFixed(2)}Cr` 
+               : `₹${(stats.value / 100000).toFixed(2)}L`;
+             shortBreakdownArr.push(`*${loc}*: ${stats.count}p (${formattedVal})`);
+          });
+
+          let actualDataString = shortBreakdownArr.join(' | ');
+          
+          // Add a helpful tag if there are more than 4 branches
+          if (topLocs.length > 4) {
+             actualDataString += ` +${topLocs.length - 4} more stores (See PDF)`;
+          }
+
+          if (topLocs.length === 0) actualDataString = "No active inventory found.";
+
+          // ✨ SET UP DOCUMENT VARIABLES (Strictly 4 variables with ACTUAL data)
           sendVariables = [
             dateStr,                                       
             `${totalItems} pcs`,                         
-            `₹${totalValue.toLocaleString('en-IN')}`
+            `₹${totalValue.toLocaleString('en-IN')}`,
+            actualDataString // This acts as variable {{4}} in the WhatsApp message body
           ];
 
-          task.payload.template_name = "erp_utility2"; // Ensure this Meta Template is created and approved!
+          task.payload.template_name = "erp_utility2"; 
           task.payload.document_link = publicUrl;
           task.payload.document_name = `Biillo_Inventory_${dateStr.replace(/,/g,'').replace(/ /g,'_')}.pdf`;
         }
-        
         // ---------------------------------------------------------
         // SCENARIO C: Daily Revenue & Accounts Summary
         // ---------------------------------------------------------
