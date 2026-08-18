@@ -85,12 +85,7 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       namespace: namespace, 
     };
 
-    // ✨ 1. ALWAYS build the body parameters for Omnibot
-    if (parameters.length > 0) {
-        content.params = buildParamsObject(parameters);
-    }
-
-    // ✨ 2. ONLY inject the Document Header into components
+    // ✨ STRICT META FORMAT: Correctly nests the 'document' object!
     if (document_link) {
         content.components = [
             {
@@ -98,21 +93,24 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
                 parameters: [
                     {
                         type: "document",
-                        link: document_link,
-                        url: document_link, 
-                        filename: document_name,
+                        // ✨ This nested object is what Meta was looking for!
                         document: {
                             link: document_link,
-                            filename: document_name
-                        },
-                        media: {
-                            link: document_link,
-                            filename: document_name
+                            filename: document_name || "Asset_Registry.pdf"
                         }
                     }
                 ]
+            },
+            {
+                type: "body",
+                parameters: parameters.map((p: any) => ({ 
+                    type: "text", 
+                    text: p ? String(p) : "-" 
+                }))
             }
         ];
+    } else if (parameters.length > 0) {
+        content.params = buildParamsObject(parameters);
     }
 
     return {
@@ -120,7 +118,7 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       content,
     };
   }
-  
+
   if (action === 'broadcast.bulk') {
     const { user_id_list, template_name, lang, namespace, parameters = [] } = payload;
 
