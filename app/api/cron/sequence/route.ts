@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { jsPDF } from 'jspdf'; // ✨ New PDF Generator
+import autoTable from 'jspdf-autotable'; // ✨ New Table Formatter
 
-// ✨ Initialize the Admin Client to bypass all RLS policies safely
+// Initialize the Admin Client to bypass all RLS policies safely
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_ROLE_KEY! 
@@ -19,7 +21,6 @@ const SEQUENCE_TEMPLATES: Record<number, string> = {
 };
 
 export async function GET(req: Request) {
-  // 1. Security Check
   const authHeader = req.headers.get('authorization');
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
@@ -44,7 +45,6 @@ export async function GET(req: Request) {
     let tasksProcessed = 0;
     for (const task of scheduledTasks || []) {
       
-      // ✨ NEW: Wrap each task in its own try/catch so one failure doesn't stop the queue!
       try {
         const payload = task.payload || {};
         const ownerPhone = payload.owner_phone;
@@ -80,98 +80,121 @@ export async function GET(req: Request) {
           task.payload.template_name = "erp_utliltiy1";
         }
 
-      // ---------------------------------------------------------
-      // SCENARIO B: Global Inventory Asset Registry Report (Using warehouse_code)
-      // ---------------------------------------------------------
-      else if (task.task_name === 'daily_inventory_report') {
-        let allItems: any[] = [];
-        let isFetching = true;
-        let step = 0;
-        const limit = 1000;
+        // ---------------------------------------------------------
+        // SCENARIO B: Global Inventory PDF Generator 
+        // ---------------------------------------------------------
+        else if (task.task_name === 'daily_inventory_report') {
+          let allItems: any[] = [];
+          let isFetching = true;
+          let step = 0;
+          const limit = 1000;
 
-        while (isFetching && step < 20) {
-          // ✨ Fetch warehouse_code instead of name to save massive character space
-          const { data, error } = await supabaseAdmin.from('inventory_items')
-            .select('item_category, mrp, status, warehouse_id, warehouses(warehouse_code)')
-            .eq('status', 'in_stock') 
-            .range(step * limit, (step + 1) * limit - 1);
+          while (isFetching && step < 20) {
+            const { data, error } = await supabaseAdmin.from('inventory_items')
+              .select('item_category, mrp, status, warehouse_id, warehouses(name)')
+              .eq('status', 'in_stock') 
+              .range(step * limit, (step + 1) * limit - 1);
 
-          if (error) throw error;
-          if (data && data.length > 0) {
-            allItems.push(...data);
-            if (data.length < limit) isFetching = false;
-            else step++;
-          } else {
-            isFetching = false;
+            if (error) throw error;
+            if (data && data.length > 0) {
+              allItems.push(...data);
+              if (data.length < limit) isFetching = false;
+              else step++;
+            } else {
+              isFetching = false;
+            }
           }
+
+          const totalItems = allItems.length;
+          const totalValue = allItems.reduce((acc, curr) => acc + (Number(curr.mrp) || 0), 0);
+          const locationSummary: Record<string, { count: number, value: number, categories: Record<string, { count: number, value: number }> }> = {};
+
+          allItems.forEach(item => {
+             // We can use full warehouse names and categories now since space is unlimited!
+             let locName = 'HQ';
+             if (item.warehouses) {
+               const wh = Array.isArray(item.warehouses) ? item.warehouses[0] : item.warehouses;
+               locName = wh?.name || 'HQ';
+             }
+             
+             let cat = item.item_category ? item.item_category.trim() : 'Uncategorized';
+             const mrp = Number(item.mrp) || 0;
+
+             if (!locationSummary[locName]) locationSummary[locName] = { count: 0, value: 0, categories: {} };
+             locationSummary[locName].count += 1;
+             locationSummary[locName].value += mrp;
+
+             if (!locationSummary[locName].categories[cat]) locationSummary[locName].categories[cat] = { count: 0, value: 0 };
+             locationSummary[locName].categories[cat].count += 1;
+             locationSummary[locName].categories[cat].value += mrp;
+          });
+
+          // ✨ BUILD THE PDF DOCUMENT
+          const doc = new jsPDF();
+          const dateStr = new Date().toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+
+          doc.setFontSize(18);
+          doc.text(`Biillo ERP - Asset Registry Report`, 14, 15);
+          doc.setFontSize(11);
+          doc.text(`Date: ${dateStr}`, 14, 23);
+          doc.text(`Total Active Assets: ${totalItems} pcs`, 14, 29);
+          doc.text(`Global Valuation: Rs. ${totalValue.toLocaleString('en-IN')}`, 14, 35);
+
+          const tableBody: any[] = [];
+          
+          const sortedLocs = Object.entries(locationSummary).sort((a, b) => b[1].value - a[1].value);
+          sortedLocs.forEach(([loc, stats]) => {
+             // Dark Branch Header Row
+             tableBody.push([{ content: `Branch: ${loc}`, colSpan: 4, styles: { fillColor: [230, 230, 230], fontStyle: 'bold', textColor: [0,0,0] } }]);
+
+             // Category Rows
+             const sortedCats = Object.entries(stats.categories).sort((a, b) => b[1].value - a[1].value);
+             sortedCats.forEach(([cat, catStats]) => {
+                 tableBody.push(['', cat, `${catStats.count} pcs`, `Rs. ${catStats.value.toLocaleString('en-IN')}`]);
+             });
+
+             // Subtotal Row
+             tableBody.push([
+                 '', 
+                 { content: 'Subtotal', styles: { fontStyle: 'bold' } }, 
+                 { content: `${stats.count} pcs`, styles: { fontStyle: 'bold' } }, 
+                 { content: `Rs. ${stats.value.toLocaleString('en-IN')}`, styles: { fontStyle: 'bold' } }
+             ]);
+          });
+
+          autoTable(doc, {
+              startY: 40,
+              head: [['', 'Category', 'Quantity', 'Valuation']],
+              body: tableBody,
+              theme: 'grid',
+              headStyles: { fillColor: [41, 128, 185] },
+              styles: { fontSize: 9 }
+          });
+
+          // Output PDF to buffer
+          const pdfBuffer = Buffer.from(doc.output('arraybuffer'));
+          const fileName = `Asset_Registry_${Date.now()}.pdf`;
+
+          // ✨ UPLOAD PDF TO SUPABASE
+          const { error: uploadError } = await supabaseAdmin.storage
+              .from('daily_reports')
+              .upload(fileName, pdfBuffer, { contentType: 'application/pdf', upsert: true });
+
+          if (uploadError) throw new Error(`PDF Upload Failed: ${uploadError.message}`);
+          const { data: { publicUrl } } = supabaseAdmin.storage.from('daily_reports').getPublicUrl(fileName);
+
+          // ✨ SET UP DOCUMENT VARIABLES
+          sendVariables = [
+            dateStr,                                       
+            `${totalItems} pcs`,                         
+            `₹${totalValue.toLocaleString('en-IN')}`
+          ];
+
+          task.payload.template_name = "erp_utility2"; // Ensure this Meta Template is created and approved!
+          task.payload.document_link = publicUrl;
+          task.payload.document_name = `Biillo_Inventory_${dateStr.replace(/,/g,'').replace(/ /g,'_')}.pdf`;
         }
-
-        const totalItems = allItems.length;
-        const totalValue = allItems.reduce((acc, curr) => acc + (Number(curr.mrp) || 0), 0);
-
-        const locationSummary: Record<string, { count: number, value: number, categories: Record<string, number> }> = {};
-
-        allItems.forEach(item => {
-           let locCode = 'HQ';
-           if (item.warehouses) {
-             const wh = Array.isArray(item.warehouses) ? item.warehouses[0] : item.warehouses;
-             locCode = wh?.warehouse_code || 'HQ';
-           }
-           
-           let cat = item.item_category ? item.item_category.trim().toLowerCase() : 'oth';
-           if (cat.includes('ladies ring')) cat = 'LR';
-           else if (cat.includes('gents ring')) cat = 'GR';
-           else if (cat.includes('earring') || cat.includes('earing')) cat = 'Ear';
-           else if (cat.includes('necklace set')) cat = 'N.Set';
-           else if (cat.includes('necklace')) cat = 'Ncl';
-           else if (cat.includes('pendant')) cat = 'Pend';
-           else if (cat.includes('tops')) cat = 'Top';
-           else if (cat.includes('tanmania')) cat = 'Tan';
-           else if (cat.includes('bracelet')) cat = 'Brc';
-           else if (cat.includes('bangle')) cat = 'Bgl';
-           else if (cat.includes('nosepin') || cat.includes('nose pin')) cat = 'Nsp';
-           else if (cat.includes('old gold')) cat = 'OG';
-           else if (cat.includes('ring')) cat = 'Rng';
-           else cat = cat.substring(0, 3).toUpperCase();
-
-           if (!locationSummary[locCode]) locationSummary[locCode] = { count: 0, value: 0, categories: {} };
-           locationSummary[locCode].count += 1;
-           locationSummary[locCode].value += (Number(item.mrp) || 0);
-
-           if (!locationSummary[locCode].categories[cat]) locationSummary[locCode].categories[cat] = 0;
-           locationSummary[locCode].categories[cat] += 1;
-        });
-
-        let breakdownArr: string[] = [];
-        // Since codes are short, we can now safely show ALL locations without slicing!
-        const sortedLocs = Object.entries(locationSummary).sort((a, b) => b[1].value - a[1].value);
-
-        sortedLocs.forEach(([loc, locStats]) => {
-           const sortedCats = Object.entries(locStats.categories).sort((a, b) => b[1] - a[1]);
-           const catDetails = sortedCats.map(([cat, qty]) => `${cat}:${qty}`);
-           // Format: AND(191,118.9L):LR:43,Pend:56
-           breakdownArr.push(`${loc}(${locStats.count},${(locStats.value/100000).toFixed(1)}L):${catDetails.join(',')}`);
-        });
-
-        let breakdownStr = breakdownArr.join('|');
-
-        // 🔥 Strict Math: 1024 (Limit) - 250 (Template Text) = 774 max safe characters!
-        if (breakdownStr.length > 750) {
-            breakdownStr = breakdownStr.substring(0, 740) + '..[Max]';
-        }
-        if (sortedLocs.length === 0) breakdownStr = "No active inventory found.";
-
-        const dateStr = new Date().toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
-
-        sendVariables = [
-          dateStr,                                       
-          `${totalItems} pcs`,                         
-          `₹${totalValue.toLocaleString('en-IN')}`,      
-          breakdownStr                            
-        ];
-
-        task.payload.template_name = "erp_utility2";
-      }
+        
         // ---------------------------------------------------------
         // SCENARIO C: Daily Revenue & Accounts Summary
         // ---------------------------------------------------------
@@ -261,12 +284,8 @@ export async function GET(req: Request) {
         // ---------------------------------------------------------
         // SEND THE MESSAGE & ADVANCE THE CRON TIMER
         // ---------------------------------------------------------
-        // ---------------------------------------------------------
-        // SEND THE MESSAGE & ADVANCE THE CRON TIMER
-        // ---------------------------------------------------------
         if (sendVariables.length > 0) {
           
-          // 1. Check/Create the subscriber
           const resolveRes = await fetch('https://www.biillojewel.co.in/api/whatsapp', {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -275,18 +294,55 @@ export async function GET(req: Request) {
           const resolveJson = await resolveRes.json();
           const userId = resolveJson.user_id || resolveJson.data?.user_id || resolveJson.id || ownerPhone;
 
-          // ✨ THE FIX: Add a 1.5-second pause between API calls to prevent Convo360 from tripping
           await new Promise(resolve => setTimeout(resolve, 1500));
 
-          // 2. Dispatch the actual message
-          const sendRes = await fetch('https://www.biillojewel.co.in/api/whatsapp', {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              action: "message.sendDirect",
-              payload: { user_id: userId, template_name: task.payload.template_name, lang: "en", namespace: "bfbb14c4_778e_453b_97c2_92f60bb9e978", parameters: sendVariables },
-            }),
-          });
+          let sendRes;
+
+          // ✨ SMART DISPATCH: If it's a PDF, bypass the local wrapper and hit Convo360 directly with media headers
+          if (task.payload.document_link) {
+            sendRes = await fetch(`${process.env.CONVO360_BASE_URL || 'https://api.convo360.com/v1'}/messages/send-template`, {
+                method: "POST",
+                headers: { 
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${process.env.CONVO360_API_KEY}`
+                },
+                body: JSON.stringify({
+                    recipient_id: userId,
+                    template_name: task.payload.template_name,
+                    language_code: "en",
+                    template_namespace: "bfbb14c4_778e_453b_97c2_92f60bb9e978",
+                    components: [
+                        {
+                            type: "header",
+                            parameters: [
+                                {
+                                    type: "document",
+                                    document: {
+                                        link: task.payload.document_link,
+                                        filename: task.payload.document_name
+                                    }
+                                }
+                            ]
+                        },
+                        {
+                            type: "body",
+                            parameters: sendVariables.map((val: string) => ({ type: "text", text: val }))
+                        }
+                    ]
+                })
+            });
+          } 
+          // If it's a normal text report (Scenario A or C), use your standard wrapper
+          else {
+            sendRes = await fetch('https://www.biillojewel.co.in/api/whatsapp', {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "message.sendDirect",
+                payload: { user_id: userId, template_name: task.payload.template_name, lang: "en", namespace: "bfbb14c4_778e_453b_97c2_92f60bb9e978", parameters: sendVariables },
+              }),
+            });
+          }
 
           if (sendRes.ok) {
             const nextRunDate = new Date(task.next_run_at);
@@ -308,7 +364,6 @@ export async function GET(req: Request) {
           }
         }
       } catch (taskErr: any) {
-        // ✨ NEW: Logs the specific task failure but lets the loop continue!
         console.error(`Task ${task.task_name} failed:`, taskErr);
         logs.push(`Task ${task.task_name} failed: ${taskErr.message}`);
       }
@@ -316,8 +371,9 @@ export async function GET(req: Request) {
     logs.push(`Processed ${tasksProcessed} generic system tasks.`);
 
     // =========================================================================
-    // TASK 2: MESSAGE SEQUENCES (Rate-Limited & Batched)
+    // TASK 2: MESSAGE SEQUENCES (Keep existing Rate-Limited & Batched block)
     // =========================================================================
+    // ...
     
     // ✨ 1. Limit to 60 sequences per run. This ensures the loop finishes in ~1 minute, 
     // keeping you safely under Vercel's maximum execution timeout!
