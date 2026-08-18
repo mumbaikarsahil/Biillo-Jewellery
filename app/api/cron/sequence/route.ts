@@ -307,21 +307,28 @@ export async function GET(req: Request) {
     logs.push(`Processed ${tasksProcessed} generic system tasks.`);
 
     // =========================================================================
-    // TASK 2: MESSAGE SEQUENCES
+    // TASK 2: MESSAGE SEQUENCES (Rate-Limited & Batched)
     // =========================================================================
+    
+    // ✨ 1. Limit to 60 sequences per run. This ensures the loop finishes in ~1 minute, 
+    // keeping you safely under Vercel's maximum execution timeout!
     const { data: sequences, error: seqError } = await supabaseAdmin
       .from('voucher_message_sequences')
       .select('*')
       .eq('status', 'active')
-      .lte('next_send_at', nowISO);
+      .lte('next_send_at', nowISO)
+      .limit(60);
 
     if (seqError) throw seqError;
 
     let seqProcessed = 0;
 
     for (const seq of sequences || []) {
-      // ✨ NEW: Wrapped each sequence dispatch in try/catch for resilience
       try {
+        // ✨ 2. The Golden Rule: Pause for 1 second before EVERY message.
+        // This completely eliminates the "429 Too Many Attempts" Convo360 bombardment error.
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
         const { data: voucher } = await supabaseAdmin.from('vouchers').select('status, expiry_date').eq('code', seq.voucher_code).single();
 
         const isExpired = voucher?.expiry_date && new Date(voucher.expiry_date).getTime() <= new Date().getTime();
