@@ -81,16 +81,17 @@ export async function GET(req: Request) {
         }
 
        // ---------------------------------------------------------
-      // SCENARIO B: Global Inventory Asset Registry Report (Lean Format)
+      // SCENARIO B: Global Inventory Asset Registry Report (Optimized & Safe)
       // ---------------------------------------------------------
       else if (task.task_name === 'daily_inventory_report') {
         let allItems: any[] = [];
         let isFetching = true;
         let step = 0;
         const limit = 1000;
+        const maxSafetyLoops = 25; // Protects against infinite loops & serverless timeouts (up to 25,000 items)
 
-        // Fetch ALL active inventory across ALL branches
-        while (isFetching) {
+        // Fetch ALL active inventory across ALL branches safely
+        while (isFetching && step < maxSafetyLoops) {
           const { data, error } = await supabaseAdmin.from('inventory_items')
             .select('item_category, mrp, status, warehouse_id, warehouses(name)')
             .eq('status', 'in_stock') 
@@ -113,20 +114,33 @@ export async function GET(req: Request) {
         const locationSummary: Record<string, { count: number, value: number, categories: Record<string, number> }> = {};
 
         allItems.forEach(item => {
-           const locName = item.warehouses?.name || 'HQ';
+           // ✨ Safe warehouse resolution (Handles both Object and Array return formats from Supabase)
+           let locName = 'HQ';
+           if (item.warehouses) {
+             if (Array.isArray(item.warehouses)) {
+               locName = item.warehouses[0]?.name || 'HQ';
+             } else {
+               locName = item.warehouses.name || 'HQ';
+             }
+           }
            
-           // Ultra-short shorthand nomenclature
+           // Clean shorthand nomenclature with all your grouped categories
            let cat = item.item_category ? item.item_category.trim().toLowerCase() : 'oth';
+
            if (cat.includes('ladies ring')) cat = 'LR';
            else if (cat.includes('gents ring')) cat = 'GR';
+           else if (cat.includes('earring') || cat.includes('earing')) cat = 'Ear';
+           else if (cat.includes('necklace set')) cat = 'N.Set';
+           else if (cat.includes('necklace')) cat = 'Ncl';
            else if (cat.includes('pendant')) cat = 'Pend';
            else if (cat.includes('tops')) cat = 'Top';
            else if (cat.includes('tanmania')) cat = 'Tan';
            else if (cat.includes('bracelet')) cat = 'Brc';
-           else if (cat.includes('necklace')) cat = 'Ncl';
+           else if (cat.includes('bangle')) cat = 'Bgl';
            else if (cat.includes('nosepin') || cat.includes('nose pin')) cat = 'Nsp';
+           else if (cat.includes('old gold')) cat = 'OG';
            else if (cat.includes('ring')) cat = 'Rng';
-           else cat = cat.substring(0, 3).toUpperCase(); // Fallback short code
+           else cat = cat.substring(0, 3).toUpperCase();
 
            const mrp = Number(item.mrp) || 0;
 
@@ -146,17 +160,13 @@ export async function GET(req: Request) {
         const sortedLocs = Object.entries(locationSummary).sort((a, b) => b[1].value - a[1].value);
 
         sortedLocs.forEach(([loc, locStats]) => {
-           // Sort categories by highest quantity first
            const sortedCats = Object.entries(locStats.categories).sort((a, b) => b[1] - a[1]);
            const catDetails = sortedCats.map(([cat, qty]) => `${cat}:${qty}`);
-           
-           // Format: *Andheri*(191p,₹118.9L): LR:43, Pend:56, Top:35
            breakdownArr.push(`*${loc}*(${locStats.count}p,₹${(locStats.value / 100000).toFixed(1)}L): ${catDetails.join(', ')}`);
         });
 
         let breakdownStr = breakdownArr.join(' | ');
 
-        // Safety fallback if it somehow exceeds limits with massive branch counts
         if (breakdownStr.length > 950) {
             breakdownStr = breakdownStr.substring(0, 930) + '... [Check Dashboard]';
         }
