@@ -155,8 +155,9 @@ export async function GET(req: Request) {
 
         let breakdownStr = breakdownArr.join('|');
 
-        if (breakdownStr.length > 950) {
-            breakdownStr = breakdownStr.substring(0, 930) + '...';
+        // 🔥 Strict Math: 1024 (Limit) - 250 (Template Text) = 774 max safe characters!
+        if (breakdownStr.length > 750) {
+            breakdownStr = breakdownStr.substring(0, 740) + '..[Max]';
         }
         if (sortedLocs.length === 0) breakdownStr = "No active inventory found.";
 
@@ -293,8 +294,9 @@ export async function GET(req: Request) {
 
             tasksProcessed++;
           } else {
-             throw new Error("Failed to send WhatsApp message.");
-          }
+            const errorBody = await sendRes.json().catch(() => ({}));
+            throw new Error(`Meta/Convo360 Error: ${JSON.stringify(errorBody)}`);
+         }
         }
       } catch (taskErr: any) {
         // ✨ NEW: Logs the specific task failure but lets the loop continue!
