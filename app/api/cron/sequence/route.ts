@@ -80,25 +80,23 @@ export async function GET(req: Request) {
           task.payload.template_name = "erp_utliltiy1";
         }
 
-       // ---------------------------------------------------------
-      // SCENARIO B: Global Inventory Asset Registry Report (Optimized & Safe)
+      // ---------------------------------------------------------
+      // SCENARIO B: Global Inventory Asset Registry Report (Using warehouse_code)
       // ---------------------------------------------------------
       else if (task.task_name === 'daily_inventory_report') {
         let allItems: any[] = [];
         let isFetching = true;
         let step = 0;
         const limit = 1000;
-        const maxSafetyLoops = 25; // Protects against infinite loops & serverless timeouts (up to 25,000 items)
 
-        // Fetch ALL active inventory across ALL branches safely
-        while (isFetching && step < maxSafetyLoops) {
+        while (isFetching && step < 20) {
+          // ✨ Fetch warehouse_code instead of name to save massive character space
           const { data, error } = await supabaseAdmin.from('inventory_items')
-            .select('item_category, mrp, status, warehouse_id, warehouses(name)')
+            .select('item_category, mrp, status, warehouse_id, warehouses(warehouse_code)')
             .eq('status', 'in_stock') 
             .range(step * limit, (step + 1) * limit - 1);
 
           if (error) throw error;
-
           if (data && data.length > 0) {
             allItems.push(...data);
             if (data.length < limit) isFetching = false;
@@ -114,19 +112,13 @@ export async function GET(req: Request) {
         const locationSummary: Record<string, { count: number, value: number, categories: Record<string, number> }> = {};
 
         allItems.forEach(item => {
-           // ✨ Safe warehouse resolution (Handles both Object and Array return formats from Supabase)
-           let locName = 'HQ';
+           let locCode = 'HQ';
            if (item.warehouses) {
-             if (Array.isArray(item.warehouses)) {
-               locName = item.warehouses[0]?.name || 'HQ';
-             } else {
-               locName = item.warehouses.name || 'HQ';
-             }
+             const wh = Array.isArray(item.warehouses) ? item.warehouses[0] : item.warehouses;
+             locCode = wh?.warehouse_code || 'HQ';
            }
            
-           // Clean shorthand nomenclature with all your grouped categories
            let cat = item.item_category ? item.item_category.trim().toLowerCase() : 'oth';
-
            if (cat.includes('ladies ring')) cat = 'LR';
            else if (cat.includes('gents ring')) cat = 'GR';
            else if (cat.includes('earring') || cat.includes('earing')) cat = 'Ear';
@@ -142,37 +134,31 @@ export async function GET(req: Request) {
            else if (cat.includes('ring')) cat = 'Rng';
            else cat = cat.substring(0, 3).toUpperCase();
 
-           const mrp = Number(item.mrp) || 0;
+           if (!locationSummary[locCode]) locationSummary[locCode] = { count: 0, value: 0, categories: {} };
+           locationSummary[locCode].count += 1;
+           locationSummary[locCode].value += (Number(item.mrp) || 0);
 
-           if (!locationSummary[locName]) {
-               locationSummary[locName] = { count: 0, value: 0, categories: {} };
-           }
-           locationSummary[locName].count += 1;
-           locationSummary[locName].value += mrp;
-
-           if (!locationSummary[locName].categories[cat]) {
-               locationSummary[locName].categories[cat] = 0;
-           }
-           locationSummary[locName].categories[cat] += 1;
+           if (!locationSummary[locCode].categories[cat]) locationSummary[locCode].categories[cat] = 0;
+           locationSummary[locCode].categories[cat] += 1;
         });
 
         let breakdownArr: string[] = [];
+        // Since codes are short, we can now safely show ALL locations without slicing!
         const sortedLocs = Object.entries(locationSummary).sort((a, b) => b[1].value - a[1].value);
 
         sortedLocs.forEach(([loc, locStats]) => {
            const sortedCats = Object.entries(locStats.categories).sort((a, b) => b[1] - a[1]);
            const catDetails = sortedCats.map(([cat, qty]) => `${cat}:${qty}`);
-           breakdownArr.push(`*${loc}*(${locStats.count}p,₹${(locStats.value / 100000).toFixed(1)}L): ${catDetails.join(', ')}`);
+           // Format: AND(191,118.9L):LR:43,Pend:56
+           breakdownArr.push(`${loc}(${locStats.count},${(locStats.value/100000).toFixed(1)}L):${catDetails.join(',')}`);
         });
 
-        let breakdownStr = breakdownArr.join(' | ');
+        let breakdownStr = breakdownArr.join('|');
 
         if (breakdownStr.length > 950) {
-            breakdownStr = breakdownStr.substring(0, 930) + '... [Check Dashboard]';
+            breakdownStr = breakdownStr.substring(0, 930) + '...';
         }
         if (sortedLocs.length === 0) breakdownStr = "No active inventory found.";
-        
-        breakdownStr = breakdownStr.replace(/\s{2,}/g, ' ').trim();
 
         const dateStr = new Date().toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
 
