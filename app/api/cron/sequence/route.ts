@@ -284,6 +284,9 @@ export async function GET(req: Request) {
         // ---------------------------------------------------------
         // SEND THE MESSAGE & ADVANCE THE CRON TIMER
         // ---------------------------------------------------------
+        // ---------------------------------------------------------
+        // SEND THE MESSAGE & ADVANCE THE CRON TIMER
+        // ---------------------------------------------------------
         if (sendVariables.length > 0) {
           
           const resolveRes = await fetch('https://www.biillojewel.co.in/api/whatsapp', {
@@ -296,53 +299,23 @@ export async function GET(req: Request) {
 
           await new Promise(resolve => setTimeout(resolve, 1500));
 
-          let sendRes;
-
-          // ✨ SMART DISPATCH: If it's a PDF, bypass the local wrapper and hit Convo360 directly with media headers
-          if (task.payload.document_link) {
-            sendRes = await fetch(`${process.env.CONVO360_BASE_URL || 'https://api.convo360.com/v1'}/messages/send-template`, {
-                method: "POST",
-                headers: { 
-                    "Content-Type": "application/json",
-                    "Authorization": `Bearer ${process.env.CONVO360_API_KEY}`
-                },
-                body: JSON.stringify({
-                    recipient_id: userId,
-                    template_name: task.payload.template_name,
-                    language_code: "en",
-                    template_namespace: "bfbb14c4_778e_453b_97c2_92f60bb9e978",
-                    components: [
-                        {
-                            type: "header",
-                            parameters: [
-                                {
-                                    type: "document",
-                                    document: {
-                                        link: task.payload.document_link,
-                                        filename: task.payload.document_name
-                                    }
-                                }
-                            ]
-                        },
-                        {
-                            type: "body",
-                            parameters: sendVariables.map((val: string) => ({ type: "text", text: val }))
-                        }
-                    ]
-                })
-            });
-          } 
-          // If it's a normal text report (Scenario A or C), use your standard wrapper
-          else {
-            sendRes = await fetch('https://www.biillojewel.co.in/api/whatsapp', {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                action: "message.sendDirect",
-                payload: { user_id: userId, template_name: task.payload.template_name, lang: "en", namespace: "bfbb14c4_778e_453b_97c2_92f60bb9e978", parameters: sendVariables },
-              }),
-            });
-          }
+          // ✨ Route EVERYTHING safely through your internal wrapper, passing the document details in the payload!
+          const sendRes = await fetch('https://www.biillojewel.co.in/api/whatsapp', {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "message.sendDirect",
+              payload: { 
+                user_id: userId, 
+                template_name: task.payload.template_name, 
+                lang: "en", 
+                namespace: "bfbb14c4_778e_453b_97c2_92f60bb9e978", 
+                parameters: sendVariables,
+                document_link: task.payload.document_link, // ✨ Tells wrapper to attach PDF
+                document_name: task.payload.document_name  
+              },
+            }),
+          });
 
           if (sendRes.ok) {
             const nextRunDate = new Date(task.next_run_at);

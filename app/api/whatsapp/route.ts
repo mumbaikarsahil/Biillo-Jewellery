@@ -73,7 +73,7 @@ function buildParamsObject(parameters: string[]): Record<string, string> {
  */
 function buildFinalPayload(action: string, payload: Record<string, any>): Record<string, any> {
   if (action === 'message.sendDirect') {
-    const { user_id, template_name, lang, namespace, parameters = [] } = payload;
+    const { user_id, template_name, lang, namespace, parameters = [], document_link, document_name } = payload;
 
     if (!namespace) {
       console.error(`[buildFinalPayload] namespace is empty for template "${template_name}". Check your template list response.`);
@@ -82,13 +82,42 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
     const content: any = {
       name: template_name,
       lang: lang || 'en',
-      namespace: namespace, // must be non-empty — Convo360 requires this field
+      namespace: namespace, 
     };
 
-    // ✨ CRITICAL FIX: Only attach the 'params' object if there are actual parameters.
-    // Sending an empty 'params: {}' causes Meta to fail delivery for templates without variables.
-    if (parameters.length > 0) {
-      content.params = buildParamsObject(parameters);
+    // ✨ CRITICAL FIX: If a PDF is attached, build a Hybrid Components Array.
+    // This provides flat properties for Omnibot AND nested properties for Meta, guaranteeing it passes through!
+    if (document_link) {
+        content.components = [
+            {
+                type: "header",
+                parameters: [
+                    {
+                        type: "document",
+                        // 1. Flat properties (For Omnibot / 360Dialog parsers)
+                        link: document_link,
+                        url: document_link, 
+                        filename: document_name,
+                        // 2. Nested properties (Strict Meta Standard)
+                        document: {
+                            link: document_link,
+                            filename: document_name
+                        },
+                        media: {
+                            link: document_link,
+                            filename: document_name
+                        }
+                    }
+                ]
+            },
+            {
+                type: "body",
+                parameters: parameters.map((p: string) => ({ type: "text", text: String(p) }))
+            }
+        ];
+    } else if (parameters.length > 0) {
+        // Fallback to normal params object for your text-only templates
+        content.params = buildParamsObject(parameters);
     }
 
     return {
