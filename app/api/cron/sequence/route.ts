@@ -261,7 +261,12 @@ export async function GET(req: Request) {
         // ---------------------------------------------------------
         // SEND THE MESSAGE & ADVANCE THE CRON TIMER
         // ---------------------------------------------------------
+        // ---------------------------------------------------------
+        // SEND THE MESSAGE & ADVANCE THE CRON TIMER
+        // ---------------------------------------------------------
         if (sendVariables.length > 0) {
+          
+          // 1. Check/Create the subscriber
           const resolveRes = await fetch('https://www.biillojewel.co.in/api/whatsapp', {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -270,6 +275,10 @@ export async function GET(req: Request) {
           const resolveJson = await resolveRes.json();
           const userId = resolveJson.user_id || resolveJson.data?.user_id || resolveJson.id || ownerPhone;
 
+          // ✨ THE FIX: Add a 1.5-second pause between API calls to prevent Convo360 from tripping
+          await new Promise(resolve => setTimeout(resolve, 1500));
+
+          // 2. Dispatch the actual message
           const sendRes = await fetch('https://www.biillojewel.co.in/api/whatsapp', {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -294,9 +303,9 @@ export async function GET(req: Request) {
 
             tasksProcessed++;
           } else {
-            const errorBody = await sendRes.json().catch(() => ({}));
-            throw new Error(`Meta/Convo360 Error: ${JSON.stringify(errorBody)}`);
-         }
+             const errorBody = await sendRes.json().catch(() => ({}));
+             throw new Error(`Meta/Convo360 Error: ${JSON.stringify(errorBody)}`);
+          }
         }
       } catch (taskErr: any) {
         // ✨ NEW: Logs the specific task failure but lets the loop continue!
