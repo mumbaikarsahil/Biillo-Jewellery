@@ -81,91 +81,93 @@ export async function GET(req: Request) {
         }
 
         // ---------------------------------------------------------
-        // SCENARIO B: Global Inventory Asset Registry Report
-        // ---------------------------------------------------------
-        else if (task.task_name === 'daily_inventory_report') {
-          let allItems: any[] = [];
-          let isFetching = true;
-          let step = 0;
-          const limit = 1000;
+      // SCENARIO B: Global Inventory Asset Registry Report
+      // ---------------------------------------------------------
+      else if (task.task_name === 'daily_inventory_report') {
+        let allItems: any[] = [];
+        let isFetching = true;
+        let step = 0;
+        const limit = 1000;
 
-          // Fetch ALL active inventory across ALL branches
-          while (isFetching) {
-            const { data, error } = await supabaseAdmin.from('inventory_items')
-              .select('item_category, mrp, status, warehouse_id, warehouses(name)')
-              .eq('status', 'in_stock') // ✨ FIXED: Replaced ENUM array with safe string
-              .range(step * limit, (step + 1) * limit - 1);
+        // Fetch ALL active inventory across ALL branches
+        while (isFetching) {
+          const { data, error } = await supabaseAdmin.from('inventory_items')
+            .select('item_category, mrp, status, warehouse_id, warehouses(name)')
+            .eq('status', 'in_stock') 
+            .range(step * limit, (step + 1) * limit - 1);
 
-            if (error) throw error;
+          if (error) throw error;
 
-            if (data && data.length > 0) {
-              allItems.push(...data);
-              if (data.length < limit) isFetching = false;
-              else step++;
-            } else {
-              isFetching = false;
-            }
+          if (data && data.length > 0) {
+            allItems.push(...data);
+            if (data.length < limit) isFetching = false;
+            else step++;
+          } else {
+            isFetching = false;
           }
+        }
 
-          const totalItems = allItems.length;
-          const totalValue = allItems.reduce((acc, curr) => acc + (Number(curr.mrp) || 0), 0);
+        const totalItems = allItems.length;
+        const totalValue = allItems.reduce((acc, curr) => acc + (Number(curr.mrp) || 0), 0);
 
-          const locationSummary: Record<string, { count: number, value: number, categories: Record<string, { count: number, value: number }> }> = {};
+        const locationSummary: Record<string, { count: number, value: number, categories: Record<string, { count: number, value: number }> }> = {};
 
-          allItems.forEach(item => {
-             const locName = item.warehouses?.name || 'Unassigned Node';
-             const cat = item.item_category ? item.item_category.trim().split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ') : 'Uncategorized';
-             const mrp = Number(item.mrp) || 0;
+        allItems.forEach(item => {
+           const locName = item.warehouses?.name || 'HQ';
+           // Shorten category names to save precious characters
+           let cat = item.item_category ? item.item_category.trim() : 'Other';
+           if (cat.toLowerCase().includes('ladies ring')) cat = 'L.Ring';
+           else if (cat.toLowerCase().includes('gents ring')) cat = 'G.Ring';
+           else if (cat.toLowerCase().includes('pendant')) cat = 'Pend';
+           
+           const mrp = Number(item.mrp) || 0;
 
-             if (!locationSummary[locName]) {
-                 locationSummary[locName] = { count: 0, value: 0, categories: {} };
-             }
-             locationSummary[locName].count += 1;
-             locationSummary[locName].value += mrp;
+           if (!locationSummary[locName]) {
+               locationSummary[locName] = { count: 0, value: 0, categories: {} };
+           }
+           locationSummary[locName].count += 1;
+           locationSummary[locName].value += mrp;
 
-             if (!locationSummary[locName].categories[cat]) {
-                 locationSummary[locName].categories[cat] = { count: 0, value: 0 };
-             }
-             locationSummary[locName].categories[cat].count += 1;
-             locationSummary[locName].categories[cat].value += mrp;
-          });
+           if (!locationSummary[locName].categories[cat]) {
+               locationSummary[locName].categories[cat] = { count: 0, value: 0 };
+           }
+           locationSummary[locName].categories[cat].count += 1;
+           locationSummary[locName].categories[cat].value += mrp;
+        });
 
-          // Build the Multi-Branch String (No Newlines allowed by Meta)
         let breakdownArr: string[] = [];
         const sortedLocs = Object.entries(locationSummary).sort((a, b) => b[1].value - a[1].value);
 
         sortedLocs.forEach(([loc, locStats]) => {
            const sortedCats = Object.entries(locStats.categories).sort((a, b) => b[1].value - a[1].value);
            const catDetails = sortedCats.map(([cat, catStats]) => {
-             return `${cat}: ${catStats.count} (₹${(catStats.value / 100000).toFixed(1)}L)`;
+             return `${cat}:${catStats.count}(₹${(catStats.value / 100000).toFixed(1)}L)`;
            });
            
-           breakdownArr.push(`📍 *${loc}*: ${locStats.count} items (₹${(locStats.value / 100000).toFixed(2)}L) ↳ ${catDetails.join(', ')}`);
+           breakdownArr.push(`*${loc}*(${locStats.count}p,₹${(locStats.value / 100000).toFixed(1)}L): ${catDetails.join(', ')}`);
         });
 
         let breakdownStr = breakdownArr.join(' | ');
 
-        // Absolute fail-safe: Enforce Meta limits and strip any double spaces
-        if (breakdownStr.length > 950) {
-            breakdownStr = breakdownStr.substring(0, 950) + '...[Truncated]';
+        // 🛡️ STRICT SAFETY CAP: Keep total variable length under 750 chars to prevent Meta length crash
+        if (breakdownStr.length > 700) {
+            breakdownStr = breakdownStr.substring(0, 680) + '... [View Dashboard for Full Data]';
         }
         if (sortedLocs.length === 0) breakdownStr = "No active inventory found.";
         
-        // Strip out any accidental consecutive spaces Meta might reject
-        breakdownStr = breakdownStr.replace(/\s{2,}/g, ' ');
+        breakdownStr = breakdownStr.replace(/\s{2,}/g, ' ').trim();
 
         const dateStr = new Date().toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
 
         sendVariables = [
           dateStr,                                       
-          `${totalItems} items`,                         
+          `${totalItems} pcs`,                         
           `₹${totalValue.toLocaleString('en-IN')}`,      
-          breakdownStr.trim()                            
+          breakdownStr                            
         ];
 
         task.payload.template_name = "erp_utility2";
-        }
-
+      }
         // ---------------------------------------------------------
         // SCENARIO C: Daily Revenue & Accounts Summary
         // ---------------------------------------------------------
