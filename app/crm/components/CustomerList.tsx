@@ -131,8 +131,16 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
               
               const interaction = getInteractionDetails(row.last_interaction);
               const isWalkinActivity = interaction.type === 'WALKIN' || row.customer_status === 'Walk-in';
+// ✨ NEW: Audit Trail Gifting Logic
+const auditGifts = (row as any).customer_gifts_history || [];
+const latestGift = auditGifts.length > 0 
+  ? auditGifts.sort((a: any, b: any) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0] 
+  : null;
 
-              return (
+const displayGiftName = latestGift?.gift_name || row.gift_given;
+const displayGiftDate = latestGift?.created_at;
+
+return (
               <TableRow key={row.id} className={cn("transition-colors border-b border-slate-100 hover:bg-slate-50/50", isKitty && "hover:bg-purple-50/50")}>
                 <TableCell className="px-6 py-3">
                   <div className="flex flex-col">
@@ -157,9 +165,12 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
                           <MapPin className="w-2.5 h-2.5" /> Store Visit
                         </Badge>
                       )}
-                      {row.gift_given && (
-                        <Badge className="bg-rose-50 text-rose-600 border-rose-200 text-[8px] h-4 px-1.5 uppercase tracking-widest flex items-center gap-1 shadow-sm">
-                          <Gift className="w-2.5 h-2.5" /> Gift: {row.gift_given}
+                      {displayGiftName && (
+                        <Badge 
+                          className="bg-rose-50 text-rose-600 border-rose-200 text-[8px] h-4 px-1.5 uppercase tracking-widest flex items-center gap-1 shadow-sm"
+                          title={displayGiftDate ? `Given on: ${format(new Date(displayGiftDate), 'dd MMM yyyy, hh:mm a')}` : 'Gift Given'}
+                        >
+                          <Gift className="w-2.5 h-2.5" /> Gift: {displayGiftName}
                         </Badge>
                       )}
                     </div>

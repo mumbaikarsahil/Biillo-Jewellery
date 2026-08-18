@@ -12,12 +12,6 @@ const STORE_LOCATIONS = [
     working_hours: null
   },
   {
-    name: "Pimpri - Chinchwad",
-    address: "Shop No. 3, Sant Krupa Plaza, Krishna Chowk, New Sangavi, Pune, Maharashtra 411061",
-    phone: null,
-    working_hours: null
-  },
-  {
     name: "Parbhani",
     address: "Near Gandhi Park Main Gate, Gandhi Park, Parbhani 431401, Maharashtra",
     phone: null,
@@ -29,12 +23,7 @@ const STORE_LOCATIONS = [
     phone: null,
     working_hours: null
   },
-  {
-    name: "Uran (Navi Mumbai)",
-    address: "Opp. Purnima Matching Centre, Bazaar Peth, Uran, Navi Mumbai - 400702, Maharashtra",
-    phone: null,
-    working_hours: null
-  },
+
   {
     name: "Dombivli",
     address: "Inside M/s ShreeShri Devi Jewels India Pvt. Ltd., Shop No. 1, Ground Floor, Rakhi Apartment, Near Sarvesh H. Tilak Road, Dombivli, Thane - 421201",

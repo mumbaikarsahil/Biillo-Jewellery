@@ -1058,8 +1058,8 @@ useEffect(() => {
               </Select>
             </div>
 
-            {/* CONDITIONAL INTEREST LEVEL DROPDOWN */}
-            {callForm.outcome === 'Connected / Spoke to Customer' && (
+            {/* ✨ UPDATED: CONDITIONAL INTEREST LEVEL DROPDOWN */}
+            {['Connected / Spoke to Customer', 'Not Interested (Do Not Disturb)', 'Wrong Number'].includes(callForm.outcome) && (
               <div className="space-y-1.5 animate-in fade-in slide-in-from-top-1">
                 <label className="text-sm font-medium text-zinc-700">Customer Interest Level <span className="text-red-500">*</span></label>
                 <Select value={callForm.interest_level || ''} onValueChange={(val) => setCallForm({ ...callForm, interest_level: val })}>
@@ -1109,7 +1109,8 @@ useEffect(() => {
                 !callForm.caller_profile_id || 
                 !callForm.outcome || 
                 !callForm.notes.trim() || 
-                (callForm.outcome === 'Connected / Spoke to Customer' && !callForm.interest_level)
+                // ✨ UPDATED: Validates interest level only if those 3 outcomes are selected
+                (['Connected / Spoke to Customer', 'Not Interested (Do Not Disturb)', 'Wrong Number'].includes(callForm.outcome) && !callForm.interest_level)
               } 
               className="w-full sm:flex-[2] h-9 rounded-md text-sm font-medium bg-zinc-900 hover:bg-zinc-800 text-white shadow-sm" 
               onClick={handleLogCall}

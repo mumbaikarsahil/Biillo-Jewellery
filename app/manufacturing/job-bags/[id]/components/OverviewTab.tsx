@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { supabase } from '@/lib/supabaseClient'
 import { useToast } from '@/components/ui/use-toast'
+import { format } from 'date-fns'
 import {
   Table,
   TableBody,
@@ -30,7 +31,10 @@ import {
 import { ItemTagPreview } from '@/components/ItemTagPreview'
 
 interface Props {
-  job: JobBag
+  job: JobBag & { 
+    karigars?: { full_name: string }; 
+    created_at?: string;
+  }
 }
 
 type DraftItem = {
@@ -784,65 +788,135 @@ export default function OverviewTab({ job }: Props) {
 
       {/* ✨ ADDED: HIDDEN PRINT CONTAINER (FULL LEDGER DOCUMENT) */}
       <div className="hidden">
-        <div ref={documentPrintRef} className="print:block p-8 bg-white text-black font-sans w-[210mm] min-h-[297mm]">
+        <div ref={documentPrintRef} className="print:block p-6 bg-white font-sans w-[210mm] min-h-[297mm]">
+           
            {/* Document Header */}
-           <div className="text-center mb-8 border-b-2 border-black pb-6">
-              <h1 className="text-3xl font-black uppercase tracking-[0.2em]">Job Bag Ledger</h1>
-              <p className="text-lg font-bold text-gray-600 mt-2">Ref: {job.job_bag_number}</p>
-              <p className="text-xs font-medium text-gray-500 mt-1">Generated: {new Date().toLocaleString()}</p>
+           <div className="text-center mb-2">
+              <h1 className="text-4xl font-black uppercase tracking-widest text-[#b91c1c]">OSSAM JEWELS</h1>
+              <p className="text-[13px] font-bold text-[#b91c1c] tracking-wide">Diamonds-n-Jewellery</p>
+              <p className="text-[11px] font-bold text-[#b91c1c] mt-1">Issue to Karigar and Jewellery Receipt Mfg. Memo.</p>
            </div>
 
            {/* Metadata Details */}
-           <div className="flex justify-between items-center mb-8 p-4 bg-gray-50 border border-gray-200 rounded-lg text-sm">
-              <div><strong className="uppercase text-[10px] text-gray-500 block mb-1">Category</strong> <span className="font-bold">{job.product_category || 'Unspecified'}</span></div>
-              <div><strong className="uppercase text-[10px] text-gray-500 block mb-1">Design Code</strong> <span className="font-bold">{job.design_code || 'N/A'}</span></div>
-              <div><strong className="uppercase text-[10px] text-gray-500 block mb-1">Est. Total Gold</strong> <span className="font-bold">{job.gold_expected_weight_g || 0}g</span></div>
-              <div><strong className="uppercase text-[10px] text-gray-500 block mb-1">Est. Total Dia</strong> <span className="font-bold">{job.diamond_expected_weight_cts || 0}ct</span></div>
+           <div className="flex justify-between items-end mb-3">
+              <div className="flex flex-col gap-2">
+                 <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
+                    <span className="w-20">MEMO No.:</span>
+                    <span className="border-b border-[#b91c1c] min-w-[150px] inline-block text-black px-2 pb-0.5">{job.job_bag_number}</span>
+                 </div>
+                 <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
+                    <span className="w-20">Name :</span>
+                    <span className="border-b border-[#b91c1c] min-w-[250px] inline-block text-black px-2 pb-0.5">{job.karigars?.full_name || ''}</span>
+                 </div>
+              </div>
+              <div className="flex flex-col gap-2 items-end">
+                 <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
+                    <span>Date :</span>
+                    <span className="border-b border-[#b91c1c] min-w-[120px] inline-block text-black px-2 text-center pb-0.5">{format(new Date(job.created_at || new Date()), 'dd/MM/yyyy')}</span>
+                 </div>
+                 <div className="text-xs font-bold mt-1 text-[#b91c1c]">
+                    GST NO: <span className="text-black ml-1">27AAOPM1004A1ZB</span> {/* Replace with actual warehouse GST if dynamic */}
+                 </div>
+              </div>
            </div>
 
-           {/* Items Table */}
-           <table className="w-full border-collapse border border-gray-300 text-sm mb-8">
+           {/* Banner */}
+           <div className="w-full text-center border-y-2 border-[#b91c1c] py-1 mb-0 bg-red-50/10">
+              <p className="text-[10px] font-bold text-[#b91c1c]">Please receive the following Diamonds and Metal on approval and for setting in jewellery or to show.</p>
+           </div>
+
+           {/* Items Table Grid */}
+           <table className="w-full border-collapse border-2 border-t-0 border-[#b91c1c] text-[10px] text-center table-fixed">
               <thead>
-                 <tr className="bg-gray-100">
-                   <th className="border border-gray-300 p-3 text-left font-bold uppercase tracking-widest text-[10px]">#</th>
-                   <th className="border border-gray-300 p-3 text-left font-bold uppercase tracking-widest text-[10px]">SKU Ref</th>
-                   <th className="border border-gray-300 p-3 text-left font-bold uppercase tracking-widest text-[10px]">Type</th>
-                   <th className="border border-gray-300 p-3 text-right font-bold uppercase tracking-widest text-[10px]">Exp. Gold (g)</th>
-                   <th className="border border-gray-300 p-3 text-right font-bold uppercase tracking-widest text-[10px]">Exp. Dia (ct)</th>
-                   <th className="border border-gray-300 p-3 text-left font-bold uppercase tracking-widest text-[10px]">Context</th>
+                 <tr className="text-[#b91c1c]">
+                   <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-8" rowSpan={2}>Qty</th>
+                   <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-10" rowSpan={2}>Sr.no</th>
+                   <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-[90px]" rowSpan={2}>Jewellery<br/>Design</th>
+                   <th className="border-b border-r border-[#b91c1c] p-1 font-bold" colSpan={6}>Studding Details</th>
+                   <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-14 leading-tight" rowSpan={2}>Jewellery<br/>Recieved<br/>Date</th>
+                   <th className="border-b border-r border-[#b91c1c] p-1 font-bold" colSpan={2}>Remark</th>
+                   <th className="border-b-2 p-1 font-bold w-12 text-center" rowSpan={2}>Remark<br/><span className="font-normal text-[9px]">size</span></th>
+                 </tr>
+                 <tr className="border-b-2 border-[#b91c1c] text-[#b91c1c]">
+                   <th className="border-r border-[#b91c1c] p-1 font-bold w-10 leading-tight">Type of<br/>Dia.</th>
+                   <th className="border-r border-[#b91c1c] p-1 font-bold w-8 leading-tight">Dia.<br/>Pcs.</th>
+                   <th className="border-r border-[#b91c1c] p-1 font-bold w-12 leading-tight">Dia.<br/>Carats</th>
+                   <th className="border-r border-[#b91c1c] p-1 font-bold w-8 leading-tight">G.<br/>KT</th>
+                   <th className="border-r border-[#b91c1c] p-1 font-bold w-10">14K</th>
+                   <th className="border-r border-[#b91c1c] p-1 font-bold w-10">18K</th>
+                   <th className="border-r border-[#b91c1c] p-1 font-normal w-14">Party name</th>
+                   <th className="border-r border-[#b91c1c] p-1 font-normal w-14">Party Place</th>
                  </tr>
               </thead>
-              <tbody>
-                 {items.length === 0 ? (
-                    <tr><td colSpan={6} className="text-center p-4 text-gray-500">No items committed to this job bag.</td></tr>
-                 ) : (
-                   items.map((item, idx) => {
-                     const tags = [
-                       item.custom_order_id && 'Custom', 
-                       item.is_repair && 'Repair', 
-                       item.store_restock_id && 'Restock'
-                     ].filter(Boolean).join(', ')
+              <tbody className="text-black font-semibold">
+                 {/* Render Actual Items */}
+                 {items.map((item, idx) => {
+                   const tags = [
+                     item.custom_order_id && 'Custom', 
+                     item.is_repair && 'Repair', 
+                     item.store_restock_id && 'Restock'
+                   ].filter(Boolean).join(', ');
 
-                     return (
-                       <tr key={item.id}>
-                         <td className="border border-gray-300 p-3 text-center text-gray-500">{idx + 1}</td>
-                         <td className="border border-gray-300 p-3 font-mono font-bold">{item.sku_reference}</td>
-                         <td className="border border-gray-300 p-3">{item.ornament_type || '-'}</td>
-                         <td className="border border-gray-300 p-3 text-right">{item.expected_gold_weight_g || '-'}</td>
-                         <td className="border border-gray-300 p-3 text-right">{item.expected_diamond_weight_cts || '-'}</td>
-                         <td className="border border-gray-300 p-3 text-xs text-gray-600">{tags || '-'}</td>
-                       </tr>
-                     )
-                   })
-                 )}
+                   return (
+                     <tr key={item.id} className="border-b border-[#b91c1c] h-8">
+                       <td className="border-r border-[#b91c1c] p-1">1</td>
+                       <td className="border-r border-[#b91c1c] p-1">{idx + 1}</td>
+                       <td className="border-r border-[#b91c1c] p-1 text-[9px] leading-tight break-words">{item.sku_reference} <br/><span className="font-medium text-[8px]">{item.ornament_type}</span></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1">{item.expected_diamond_weight_cts || ''}</td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1">{item.expected_gold_weight_g || ''}</td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1 text-[8px] leading-tight break-words">{tags}</td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="p-1"></td>
+                     </tr>
+                   )
+                 })}
+                 
+                 {/* Empty grid rows for manual writing to replicate the physical book design */}
+                 {Array.from({ length: Math.max(0, 10 - items.length) }).map((_, idx) => (
+                    <tr key={`empty-${idx}`} className="border-b border-[#b91c1c] h-[34px]">
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="border-r border-[#b91c1c] p-1"></td>
+                       <td className="p-1"></td>
+                     </tr>
+                 ))}
               </tbody>
            </table>
 
-           {/* Footer Signatures */}
-           <div className="flex justify-between items-end mt-24 px-8">
-              <div className="text-center w-48 border-t border-black pt-2 font-bold uppercase tracking-widest text-[10px]">Issuer Signature</div>
-              <div className="text-center w-48 border-t border-black pt-2 font-bold uppercase tracking-widest text-[10px]">Karigar Signature</div>
+           {/* Footer Signatures Area */}
+           <div className="w-full border-2 border-t-0 border-[#b91c1c] flex flex-col text-[#b91c1c]">
+              <div className="flex border-b-2 border-[#b91c1c] bg-red-50/10">
+                 <div className="flex-1 py-1.5 px-2 text-center text-[10px] font-bold border-r-2 border-[#b91c1c] leading-tight">
+                    Acknowledgement of entrustment<br/>as per the conditions on reverse
+                 </div>
+                 <div className="flex-1 py-1.5 px-2 text-center text-[10px] font-bold flex items-center justify-center">
+                    Subject to Mumbai Jurisdiction
+                 </div>
+              </div>
+              <div className="flex h-20">
+                 <div className="flex-1 p-2 text-center text-[10px] font-bold border-r-2 border-[#b91c1c] flex items-end justify-center">
+                    Receiver's Signature
+                 </div>
+                 <div className="flex-1 p-2 text-center text-[10px] font-bold flex items-end justify-center">
+                    For BIILLO JEWELS
+                 </div>
+              </div>
            </div>
+
         </div>
       </div>
 

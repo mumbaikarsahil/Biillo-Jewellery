@@ -196,6 +196,11 @@ export default function DiscoveryPage() {
           gift_name: selectedGift
         });
 
+        // ✨ FIX 1: Update the actual customer profile so it shows on the CRM!
+        await supabase.from('customers').update({ 
+          gift_given: selectedGift 
+        }).eq('id', customerId);
+
         toast.success(`${selectedGift} successfully issued and logged!`);
         
         // Update local available gifts to prevent lag
@@ -221,13 +226,30 @@ export default function DiscoveryPage() {
     try {
       let activeCustomerId = existingCustomer?.id;
 
+      // ✨ FIX 2: Create the automated event for our new timeline array!
+      const newSystemEvent = {
+        timestamp: new Date().toISOString(),
+        type: 'WALK-IN',
+        description: 'Store Visit / Discovery Check-in'
+      };
+
       if (existingCustomer) {
-        // Update interaction for existing
+        // ✨ Fetch existing timeline to prevent wiping past events
+        const { data: existingData } = await supabase
+          .from('customers')
+          .select('activity_timeline')
+          .eq('id', existingCustomer.id)
+          .single();
+
+        const existingTimeline = existingData?.activity_timeline || [];
+        const updatedTimeline = [newSystemEvent, ...existingTimeline];
+
+        // Update interaction for existing using the timeline, NOT last_interaction
         await supabase
           .from('customers')
           .update({ 
-            customer_status: 'Store Visit', 
-            last_interaction: 'Walk-in Discovery Check-in' 
+            customer_status: 'Walk-in', // Maps perfectly to your CRM Tabs
+            activity_timeline: updatedTimeline 
           })
           .eq('id', existingCustomer.id);
         
@@ -242,8 +264,8 @@ export default function DiscoveryPage() {
           full_name: newCustForm.full_name.trim(),
           phone: phoneInput,
           city: newCustForm.city.trim() || null,
-          customer_status: 'Store Visit', 
-          last_interaction: 'Walk-in Discovery Check-in',
+          customer_status: 'Walk-in', 
+          activity_timeline: [newSystemEvent], // Insert directly into timeline!
         };
 
         const { data, error } = await supabase

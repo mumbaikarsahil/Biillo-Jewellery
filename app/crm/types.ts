@@ -34,7 +34,8 @@ export interface CRMCustomer {
   vouchers?: any[]
   activity_timeline?: any[] | null;
   kitty_next_due_date?: string | null;
-  gift_given?: string | null
+  gift_given?: string | null;
+  customer_gifts_history?: any[];
   
   // Strongly Typed Sequences & Webhooks
   voucher_message_sequences?: Array<{
