@@ -73,44 +73,33 @@ function buildParamsObject(parameters: string[]): Record<string, string> {
  */
 function buildFinalPayload(action: string, payload: Record<string, any>): Record<string, any> {
   if (action === 'message.sendDirect') {
-    const { user_id, template_name, lang, namespace, parameters = [], document_link, document_name } = payload;
+    const { user_id, template_name, lang, namespace, parameters = [], document_link } = payload;
 
     if (!namespace) {
       console.error(`[buildFinalPayload] namespace is empty for template "${template_name}".`);
     }
     
-    const content: any = {
-      name: template_name,
-      lang: lang || 'en',
-      namespace: namespace, 
-    };
+    const params: Record<string, string> = {};
 
-    // ✨ 1. THE BODY: Always build the text variables for Omnibot's custom parser
-    if (parameters.length > 0) {
-        content.params = buildParamsObject(parameters);
-    }
-
-    // ✨ 2. THE HEADER: Inject the strict Meta Document object
+    // ✨ OMNIBOT DOCUMENT HEADER SPEC: Attached as a flat key in params
     if (document_link) {
-        content.components = [
-            {
-                type: "header",
-                parameters: [
-                    {
-                        type: "document",
-                        document: {
-                            link: document_link,
-                            filename: document_name || "Asset_Registry.pdf"
-                        }
-                    }
-                ]
-            }
-        ];
+        params['HEADER_DOCUMENT'] = document_link;
+        params['HEADER_FILE'] = document_link; // Safe alias for document templates
     }
+
+    // ✨ OMNIBOT BODY VARIABLES SPEC: Mapped to BODY_{{1}}, BODY_{{2}}, etc. in the same flat params object
+    parameters.forEach((val: any, idx: number) => {
+        params[`BODY_{{${idx + 1}}}`] = val ? String(val) : '-';
+    });
 
     return {
       user_id,
-      content,
+      content: {
+        name: template_name,
+        lang: lang || 'en',
+        namespace: namespace,
+        params: params, // Fully flattened as per official Omnibot schema
+      },
     };
   }
 
@@ -124,7 +113,6 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       use_default_values: 'yes',
     };
 
-    // ✨ CRITICAL FIX: Strip params if empty for bulk broadcasts too
     if (parameters.length > 0) {
       wa_template.params = buildParamsObject(parameters);
     }
@@ -136,8 +124,6 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
   }
 
   if (action === 'subscriber.createByPhone') {
-    // Convo360 requires top-level `phone` (not `user_id`) on creation.
-    // The `user_id` is returned in their response after the subscriber is created.
     const { phone, name } = payload;
     const nameParts = (name || '').trim().split(' ');
     return {
@@ -151,16 +137,9 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
   }
 
   if (action === 'template.list') {
-    // ✨ CRITICAL FIX: Force maximum pagination limits in the JSON body
-    return {
-      limit: 100,
-      page_size: 100,
-      pageSize: 100,
-      ...(payload ?? {})
-    };
+    return { limit: 100, page_size: 100, pageSize: 100, ...(payload ?? {}) };
   }
 
-  // All other actions pass through as-is (template CRUD, subscriber ops, etc.)
   return payload ?? {};
 }
 
