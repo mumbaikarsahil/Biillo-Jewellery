@@ -76,7 +76,7 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
     const { user_id, template_name, lang, namespace, parameters = [], document_link, document_name } = payload;
 
     if (!namespace) {
-      console.error(`[buildFinalPayload] namespace is empty for template "${template_name}". Check your template list response.`);
+      console.error(`[buildFinalPayload] namespace is empty for template "${template_name}".`);
     }
     
     const content: any = {
@@ -85,8 +85,12 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       namespace: namespace, 
     };
 
-    // ✨ CRITICAL FIX: If a PDF is attached, build a Hybrid Components Array.
-    // This provides flat properties for Omnibot AND nested properties for Meta, guaranteeing it passes through!
+    // ✨ 1. ALWAYS build the body parameters for Omnibot
+    if (parameters.length > 0) {
+        content.params = buildParamsObject(parameters);
+    }
+
+    // ✨ 2. ONLY inject the Document Header into components
     if (document_link) {
         content.components = [
             {
@@ -94,11 +98,9 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
                 parameters: [
                     {
                         type: "document",
-                        // 1. Flat properties (For Omnibot / 360Dialog parsers)
                         link: document_link,
                         url: document_link, 
                         filename: document_name,
-                        // 2. Nested properties (Strict Meta Standard)
                         document: {
                             link: document_link,
                             filename: document_name
@@ -109,15 +111,8 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
                         }
                     }
                 ]
-            },
-            {
-                type: "body",
-                parameters: parameters.map((p: string) => ({ type: "text", text: String(p) }))
             }
         ];
-    } else if (parameters.length > 0) {
-        // Fallback to normal params object for your text-only templates
-        content.params = buildParamsObject(parameters);
     }
 
     return {
@@ -125,7 +120,7 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       content,
     };
   }
-
+  
   if (action === 'broadcast.bulk') {
     const { user_id_list, template_name, lang, namespace, parameters = [] } = payload;
 
