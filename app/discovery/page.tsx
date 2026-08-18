@@ -85,7 +85,13 @@ export default function DiscoveryPage() {
   const [phoneInput, setPhoneInput] = useState('')
   const [isSearchingCust, setIsSearchingCust] = useState(false)
   const [existingCustomer, setExistingCustomer] = useState<Customer | null>(null)
-  const [newCustForm, setNewCustForm] = useState({ full_name: '', city: '' })
+  const [newCustForm, setNewCustForm] = useState({ 
+    full_name: '', 
+    city: '', 
+    address: '', 
+    birth_date: '', 
+    anniversary_date: '' 
+  })
   const [isProcessing, setIsProcessing] = useState(false)
   const [isCheckedIn, setIsCheckedIn] = useState(false)
   
@@ -257,6 +263,7 @@ export default function DiscoveryPage() {
       } else {
         // Register new customer
         if (!newCustForm.full_name) return toast.error("Name is required for new customers.");
+        if (!newCustForm.birth_date) return toast.error("Date of Birth is required to register a new customer profile.");
         
         const payload = {
           company_id: appUser?.company_id,
@@ -264,6 +271,9 @@ export default function DiscoveryPage() {
           full_name: newCustForm.full_name.trim(),
           phone: phoneInput,
           city: newCustForm.city.trim() || null,
+          address: newCustForm.address.trim() || null,
+          birth_date: newCustForm.birth_date || null,
+          anniversary_date: newCustForm.anniversary_date || null,
           customer_status: 'Walk-in', 
           activity_timeline: [newSystemEvent], // Insert directly into timeline!
         };
@@ -459,21 +469,31 @@ export default function DiscoveryPage() {
                     )}
                   </div>
                 </div>
-
-                {/* Dynamic Fields based on Search Result */}
-                {phoneInput.length === 10 && !isSearchingCust && !existingCustomer && (
-                  <>
-                    <div className="space-y-1.5 w-full sm:flex-1 animate-in fade-in slide-in-from-left-2">
+{/* Dynamic Fields based on Search Result */}
+{phoneInput.length === 10 && !isSearchingCust && !existingCustomer && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full animate-in fade-in slide-in-from-left-2 mt-2">
+                    <div className="space-y-1.5">
                       <Label className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">New Customer Name *</Label>
                       <Input required placeholder="Full Name" className="h-10 text-sm bg-white border-indigo-200 focus-visible:ring-indigo-500" value={newCustForm.full_name} onChange={e => setNewCustForm({...newCustForm, full_name: e.target.value})} />
                     </div>
-                    <div className="space-y-1.5 w-full sm:flex-[0.5] animate-in fade-in slide-in-from-left-2">
-                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">City</Label>
+                    <div className="space-y-1.5">
+                      <Label className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Date of Birth *</Label>
+                      <Input required type="date" className="h-10 text-sm bg-white border-indigo-200 focus-visible:ring-indigo-500 text-slate-700" value={newCustForm.birth_date} onChange={e => setNewCustForm({...newCustForm, birth_date: e.target.value})} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Anniversary (Optional)</Label>
+                      <Input type="date" className="h-10 text-sm bg-slate-50 text-slate-700" value={newCustForm.anniversary_date} onChange={e => setNewCustForm({...newCustForm, anniversary_date: e.target.value})} />
+                    </div>
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Address (Optional)</Label>
+                      <Input placeholder="Full Address..." className="h-10 text-sm bg-slate-50" value={newCustForm.address} onChange={e => setNewCustForm({...newCustForm, address: e.target.value})} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">City (Optional)</Label>
                       <Input placeholder="City" className="h-10 text-sm bg-slate-50" value={newCustForm.city} onChange={e => setNewCustForm({...newCustForm, city: e.target.value})} />
                     </div>
-                  </>
+                  </div>
                 )}
-
                 {/* Existing Customer Display */}
                 {phoneInput.length === 10 && !isSearchingCust && existingCustomer && (
                   <div className="w-full sm:flex-1 h-10 flex items-center px-4 bg-slate-50 border border-slate-200 rounded-lg animate-in fade-in">

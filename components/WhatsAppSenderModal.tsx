@@ -28,11 +28,14 @@ interface Recipient {
   expiry_date?: string;
 }
 
-interface WhatsAppSenderModalProps {
+export interface WhatsAppSenderModalProps {
   isOpen: boolean;
   onClose: () => void;
   recipients: Recipient[];
   defaultTemplateName?: string;
+  // ✨ NEW: Accepting the explicit variables from the parent
+  prefilledMessage?: string;
+  templateVariables?: string[];
 }
 
 type ModalStep = "compose" | "resolving" | "ready" | "sending";
@@ -42,6 +45,8 @@ export function WhatsAppSenderModal({
   onClose,
   recipients,
   defaultTemplateName,
+  prefilledMessage,
+  templateVariables
 }: WhatsAppSenderModalProps) {
   const { toast } = useToast();
 
@@ -86,7 +91,6 @@ export function WhatsAppSenderModal({
       const res = await fetch("/api/whatsapp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // 👇 ADDED: payload: { limit: 100 } to fetch all templates
         body: JSON.stringify({ 
           action: "template.list", 
           payload: { limit: 100 } 
@@ -152,6 +156,11 @@ export function WhatsAppSenderModal({
 
   // Resolves the exact array needed for the current template
   const resolveDynamicVariables = (recipient: Recipient) => {
+    // ✨ NEW: If explicit template variables were passed, bypass mapping and use them directly
+    if (templateVariables && templateVariables.length > 0) {
+      return templateVariables;
+    }
+
     const vars: string[] = [];
     for (let i = 1; i <= expectedVarCount; i++) {
       const mappedField = paramMapping[i];
@@ -165,6 +174,9 @@ export function WhatsAppSenderModal({
   };
 
   const getPreviewText = () => {
+    // ✨ NEW: Use the beautifully formatted prefilled message if provided
+    if (prefilledMessage) return prefilledMessage;
+
     if (!activeTemplate) return "No template selected.";
     const body = activeTemplate.components?.find((c: any) => c.type === "BODY");
     let text = body?.text || activeTemplate.name;
@@ -272,7 +284,7 @@ export function WhatsAppSenderModal({
 
       await Promise.all(
         chunk.map(async (recipient) => {
-          const variables = resolveDynamicVariables(recipient); // Resolves exact count
+          const variables = resolveDynamicVariables(recipient); // Resolves exact count automatically!
           try {
             const res = await fetch("/api/whatsapp", {
               method: "POST",
@@ -284,7 +296,7 @@ export function WhatsAppSenderModal({
                   template_name: activeTemplate.name,
                   lang: activeTemplate.language || "en",
                   namespace: activeTemplate.namespace || "",
-                  parameters: variables, // If count is 0, this sends []
+                  parameters: variables, 
                 },
               }),
             });
@@ -418,44 +430,51 @@ export function WhatsAppSenderModal({
                 </div>
               </div>
 
-              {/* 3. Variable Mapping (Only shown if template has parameters) */}
+              {/* 3. Variable Mapping (Only shown if template has parameters AND no auto-variables are passed) */}
               {expectedVarCount > 0 ? (
-                <div className="space-y-3 pt-4 border-t border-slate-100">
-                  <div className="flex justify-between items-center">
-                    <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-                      <LinkIcon className="w-3.5 h-3.5 text-indigo-500" /> 3. Map Variables
-                    </Label>
-                    <Badge variant="outline" className="text-[9px] bg-slate-50">{expectedVarCount} Required</Badge>
+                templateVariables && templateVariables.length > 0 ? (
+                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-lg flex items-center gap-2 mt-4 animate-in fade-in">
+                     <CheckCircle2 className="w-4 h-4 text-indigo-500 shrink-0" />
+                     <p className="text-[10px] text-indigo-700 font-medium">System data variables auto-mapped successfully.</p>
                   </div>
-                  
-                  <div className="space-y-2.5 bg-slate-50/50 p-3 rounded-xl border border-slate-200 border-dashed">
-                    {Array.from({ length: expectedVarCount }).map((_, idx) => {
-                      const varIndex = idx + 1;
-                      return (
-                        <div key={varIndex} className="flex items-center gap-3">
-                          <Badge variant="secondary" className="bg-slate-200/50 text-slate-600 font-mono shrink-0 shadow-none border border-slate-200">
-                            {`{{${varIndex}}}`}
-                          </Badge>
-                          <Select
-                            value={paramMapping[varIndex] || ""}
-                            onValueChange={(val) => setParamMapping(prev => ({ ...prev, [varIndex]: val }))}
-                            disabled={isBusy}
-                          >
-                            <SelectTrigger className="h-8 text-xs bg-white border-slate-200 shadow-sm">
-                              <SelectValue placeholder="Select data field" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="name">Customer Name</SelectItem>
-                              <SelectItem value="voucher_code">Voucher Code</SelectItem>
-                              <SelectItem value="expiry_date">Expiry Date</SelectItem>
-                              <SelectItem value="phone">Phone Number</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      );
-                    })}
+                ) : (
+                  <div className="space-y-3 pt-4 border-t border-slate-100">
+                    <div className="flex justify-between items-center">
+                      <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                        <LinkIcon className="w-3.5 h-3.5 text-indigo-500" /> 3. Map Variables
+                      </Label>
+                      <Badge variant="outline" className="text-[9px] bg-slate-50">{expectedVarCount} Required</Badge>
+                    </div>
+                    
+                    <div className="space-y-2.5 bg-slate-50/50 p-3 rounded-xl border border-slate-200 border-dashed">
+                      {Array.from({ length: expectedVarCount }).map((_, idx) => {
+                        const varIndex = idx + 1;
+                        return (
+                          <div key={varIndex} className="flex items-center gap-3">
+                            <Badge variant="secondary" className="bg-slate-200/50 text-slate-600 font-mono shrink-0 shadow-none border border-slate-200">
+                              {`{{${varIndex}}}`}
+                            </Badge>
+                            <Select
+                              value={paramMapping[varIndex] || ""}
+                              onValueChange={(val) => setParamMapping(prev => ({ ...prev, [varIndex]: val }))}
+                              disabled={isBusy}
+                            >
+                              <SelectTrigger className="h-8 text-xs bg-white border-slate-200 shadow-sm">
+                                <SelectValue placeholder="Select data field" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="name">Customer Name</SelectItem>
+                                <SelectItem value="voucher_code">Voucher Code</SelectItem>
+                                <SelectItem value="expiry_date">Expiry Date</SelectItem>
+                                <SelectItem value="phone">Phone Number</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
+                )
               ) : (
                 <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-lg flex items-center gap-2 mt-4">
                    <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />

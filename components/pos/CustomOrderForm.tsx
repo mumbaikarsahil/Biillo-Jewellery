@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState } from 'react'
-import { Hammer, X, Search, AlertCircle, CheckCircle2, Loader2, IndianRupee, Store } from 'lucide-react'
+import { Hammer, X, Search, AlertCircle, CheckCircle2, Loader2, IndianRupee, Store, Box, Plus, Minus, Trash2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -14,6 +14,14 @@ const ORNAMENT_TYPES = [
   'Ring', 'Necklace', 'Earring', 'Bracelet', 'Bangle', 
   'Chain', 'Pendant', 'Mangalsutra', 'Nose Pin', 'Set'
 ]
+
+// ✨ NEW: Exact same interface from the cart
+export interface SelectedPackaging {
+  id: string;
+  item_name: string;
+  quantity: number;
+  stock_count: number;
+}
 
 interface CustomOrderFormProps {
   details: {
@@ -28,9 +36,27 @@ interface CustomOrderFormProps {
   currentLocationId?: string 
   onAddToBill?: (finalItemData: any) => void 
   voucherAmount?: number 
+
+  // ✨ NEW: Packaging Props passed from the parent page
+  availablePackaging?: any[]
+  selectedPackaging?: SelectedPackaging[]
+  onAddPackaging?: (packId: string) => void
+  onRemovePackaging?: (packId: string) => void
+  onUpdatePackagingQty?: (packId: string, qty: number) => void
 }
 
-export function CustomOrderForm({ details, setDetails, currentLocationId, onAddToBill, voucherAmount = 0 }: CustomOrderFormProps) {
+export function CustomOrderForm({ 
+  details, 
+  setDetails, 
+  currentLocationId, 
+  onAddToBill, 
+  voucherAmount = 0,
+  availablePackaging = [],
+  selectedPackaging = [],
+  onAddPackaging,
+  onRemovePackaging,
+  onUpdatePackagingQty 
+}: CustomOrderFormProps) {
   const [activeTab, setActiveTab] = useState<'new' | 'pickup'>('new')
   const [isCustomCategory, setIsCustomCategory] = useState(false)
 
@@ -228,6 +254,64 @@ export function CustomOrderForm({ details, setDetails, currentLocationId, onAddT
                   />
                 </div>
               </div>
+            </div>
+
+            {/* ✨ NEW: Packaging Selection for Custom Orders */}
+            <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                  <Box className="w-3.5 h-3.5" /> Packaging Attached
+                </h3>
+                <Select onValueChange={onAddPackaging} value="">
+                  <SelectTrigger className="h-7 w-[160px] text-[10px] bg-white font-semibold">
+                    <SelectValue placeholder="Add Material..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(!availablePackaging || availablePackaging.length === 0) ? (
+                      <SelectItem value="empty" disabled className="text-xs italic text-slate-400">No packaging available</SelectItem>
+                    ) : (
+                      availablePackaging.map(p => (
+                        <SelectItem key={p.id} value={p.id} disabled={p.stock_count <= 0}>
+                          {p.item_name} <span className="text-slate-400 ml-1">({p.stock_count})</span>
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {selectedPackaging && selectedPackaging.length > 0 && (
+                <div className="flex flex-col gap-2 mt-2">
+                  {selectedPackaging.map(sp => (
+                    <div key={sp.id} className="flex items-center justify-between bg-white border border-slate-200 p-2 rounded-md shadow-sm">
+                      <span className="text-xs font-semibold text-slate-700 pl-1">{sp.item_name}</span>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center border border-slate-200 rounded-sm bg-slate-50">
+                          <button 
+                            type="button"
+                            onClick={() => onUpdatePackagingQty?.(sp.id, sp.quantity - 1)} 
+                            className="px-2 py-1 text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors"
+                          >
+                            <Minus className="w-3 h-3" />
+                          </button>
+                          <span className="text-xs font-mono font-bold w-6 text-center">{sp.quantity}</span>
+                          <button 
+                            type="button"
+                            onClick={() => onUpdatePackagingQty?.(sp.id, sp.quantity + 1)} 
+                            disabled={sp.quantity >= sp.stock_count} 
+                            className="px-2 py-1 text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+                          >
+                            <Plus className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <button type="button" onClick={() => onRemovePackaging?.(sp.id)} className="text-slate-400 hover:text-red-500 p-1">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
           </div>
