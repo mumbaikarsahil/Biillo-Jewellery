@@ -73,7 +73,15 @@ function buildParamsObject(parameters: string[]): Record<string, string> {
  */
 function buildFinalPayload(action: string, payload: Record<string, any>): Record<string, any> {
   if (action === 'message.sendDirect') {
-    const { user_id, template_name, lang, namespace, parameters = [], document_link } = payload;
+    const { 
+      user_id, 
+      template_name, 
+      lang, 
+      namespace, 
+      parameters = [], 
+      document_link,
+      document_name 
+    } = payload;
 
     if (!namespace) {
       console.error(`[buildFinalPayload] namespace is empty for template "${template_name}".`);
@@ -81,15 +89,17 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
     
     const params: Record<string, string> = {};
 
-    // ✨ OMNIBOT DOCUMENT HEADER SPEC: Attached as a flat key in params
+    // Document header with URL and required display filename
     if (document_link) {
-        params['HEADER_DOCUMENT'] = document_link;
-        params['HEADER_FILE'] = document_link; // Safe alias for document templates
+      const fileName = document_name || 'Biillo_Report.pdf';
+      params['HEADER_DOCUMENT'] = document_link;
+      params['HEADER_DOCUMENT_FILENAME'] = fileName;
+      params['HEADER_FILENAME'] = fileName;
     }
 
-    // ✨ OMNIBOT BODY VARIABLES SPEC: Mapped to BODY_{{1}}, BODY_{{2}}, etc. in the same flat params object
+    // Body variables mapped to BODY_{{1}}, BODY_{{2}}, etc.
     parameters.forEach((val: any, idx: number) => {
-        params[`BODY_{{${idx + 1}}}`] = val ? String(val) : '-';
+      params[`BODY_{{${idx + 1}}}`] = val ? String(val) : '-';
     });
 
     return {
@@ -98,7 +108,7 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
         name: template_name,
         lang: lang || 'en',
         namespace: namespace,
-        params: params, // Fully flattened as per official Omnibot schema
+        params: params,
       },
     };
   }
@@ -214,9 +224,6 @@ export async function POST(req: Request) {
         break;
 
       case 'subscriber.create':
-        endpoint = '/subscriber/create';
-        method = 'POST';
-        break;
       case 'subscriber.createByPhone':
         endpoint = '/subscriber/create';
         method = 'POST';
@@ -268,7 +275,6 @@ export async function POST(req: Request) {
       console.log(`[${requestId}] Outgoing body:`, short(finalPayload, 2000));
 
       if (action === 'template.list') {
-        // ✨ CRITICAL FIX: Also force max limit in the URL query string just in case Convo360 looks there instead of the body
         appendQueryParams(url, { limit: 100, page_size: 100, ...(payload && typeof payload === 'object' ? payload : {}) });
         console.log(
           `[${requestId}] template.list query params appended:`,
