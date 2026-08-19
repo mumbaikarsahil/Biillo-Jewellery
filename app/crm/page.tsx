@@ -461,31 +461,41 @@ export default function CRMPage() {
       const isDND = callForm.outcome === 'Not Interested (Do Not Disturb)';
       const isCompletedOutcome = ['Connected / Spoke to Customer', 'Not Interested (Do Not Disturb)', 'Wrong Number'].includes(callForm.outcome);
       
+      // ✨ FIX 1: Capture the exact user selected from the dropdown (fallback to logged-in user)
+      const actualCallerId = callForm.caller_profile_id || appUser?.id || appUser?.user_id;
+
+      // ✨ FIX 2: Add the user/caller IDs directly to the base entry so it works for BOTH inserts and updates!
       const baseCallLogEntry = {
         outcome: callForm.outcome,
         notes: callForm.notes,
         next_call_date: callForm.next_call_date || null,
         next_call_time: callForm.next_call_time || null,
+        user_id: actualCallerId,            // Updates the main user_id column
+        caller_profile_id: actualCallerId,  // Updates the FK profile column
       };
 
+      // 1. UPDATE OR INSERT CALL RECORD
       if (activeCallRecordId) {
+        // Because actualCallerId is now in baseCallLogEntry, it will successfully overwrite the column here!
         const { error: logErr } = await supabase.from('call_records').update(baseCallLogEntry).eq('id', activeCallRecordId);
         if (logErr) throw logErr;
       } else {
         const { error: logErr } = await supabase.from('call_records').insert([{
           company_id: appUser?.company_id,
           customer_id: selectedCustomer.id,
-          user_id: callForm.caller_profile_id || appUser?.id || appUser?.user_id,
           ...baseCallLogEntry
         }]);
         if (logErr) throw logErr;
       }
 
+      // 2. UPDATE VOUCHER ASSIGNMENT
       if (activeTab === 'assigned_calls') {
           let assignmentUpdate: any = { 
               call_outcome: callForm.outcome,
               interest_level: callForm.interest_level || null,
-              call_notes: callForm.notes
+              call_notes: callForm.notes,
+              // ✨ FIX 3: Explicitly push the caller profile ID to the assignments table update payload!
+              caller_profile_id: actualCallerId 
           };
 
           if (isCompletedOutcome) {

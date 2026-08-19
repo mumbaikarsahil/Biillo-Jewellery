@@ -213,7 +213,7 @@ export async function GET(req: Request) {
             actualDataString // This acts as variable {{4}} in the WhatsApp message body
           ];
 
-          task.payload.template_name = "erp_utility2"; 
+          task.payload.template_name = "erp_utility4"; 
           task.payload.document_link = publicUrl;
           task.payload.document_name = `Biillo_Inventory_${dateStr.replace(/,/g,'').replace(/ /g,'_')}.pdf`;
         }
