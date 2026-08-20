@@ -17,10 +17,13 @@ interface CheckoutConfig {
   callRpc: Function;
   customBillingDate?: string; 
   billedBy?: string; 
+  // ✨ 1. Add selectedPackaging to the interface
+  selectedPackaging?: any[]; 
 }
 
 export function useCheckout({ 
-  appUser, selectedLocation, cart, subtotal, mode, selectedCustomer, customOrderDetails, repairDetails, returnDetails, allBranches, callRpc, customBillingDate, billedBy
+  appUser, selectedLocation, cart, subtotal, mode, selectedCustomer, customOrderDetails, repairDetails, returnDetails, allBranches, callRpc, customBillingDate, billedBy, 
+  selectedPackaging = [] // ✨ 2. Destructure it here
 }: CheckoutConfig) {
   
   // Payment States
@@ -213,7 +216,8 @@ export function useCheckout({
         .from('vouchers')
         .update({ 
            last_scanned_at: new Date().toISOString(),
-           scan_count: (voucher.scan_count || 0) + 1 
+           scan_count: (voucher.scan_count || 0) + 1 ,
+           last_scanned_warehouse_id: selectedLocation,
         })
         .eq('id', voucher.id);
 
@@ -314,7 +318,6 @@ export function useCheckout({
       repair: mode === 'repair' ? repairDetails : null, 
       returnDetails: mode === 'return' ? returnDetails : null, 
       
-      // ✨ FIX: Map to `effectiveSubtotal` so custom orders aren't treated as ₹0
       subtotal: effectiveSubtotal, 
       
       discountAmount: standardDiscount, 
@@ -335,7 +338,6 @@ export function useCheckout({
       estimateHandlingPct: estimateHandlingPercent,
       estimateHandlingAmt: printEstimateHandlingAmt,
       
-      // ✨ FIX: Correctly map custom order total to `finalPayableGross` (36614), NOT `advance_paid` (20000)!
       finalTotal: mode === 'custom' ? finalPayableGross 
                 : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                 : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
@@ -374,6 +376,7 @@ export function useCheckout({
       const finalDraftData = generateDraftData(isEstimate);
 
       if (isEstimate) {
+        // [Existing Estimate Logic]
         finalNo = `EST-${Date.now().toString().slice(-6)}`
         finalDraftData.invoice_number = finalNo; 
 
@@ -408,7 +411,7 @@ export function useCheckout({
         toast.success("Estimate generated and securely logged.");
       } 
       else if (mode === 'normal') {
-        
+        // [Existing Normal Mode Logic]
         let dbPaymentMode = paymentMode;
         let dbSplitPayments: any = paymentMode === 'split' ? { ...splitPayments } : null;
 
@@ -518,6 +521,7 @@ export function useCheckout({
         toast.success("Tax Invoice Generated!")
       }
       else if (mode === 'repair') { 
+        // [Existing Repair Logic]
         finalNo = `REP-${Date.now().toString().slice(-6)}`
         const { error } = await supabase.from('repair_tickets').insert({
           created_at: effectiveDateISO,
@@ -541,6 +545,7 @@ export function useCheckout({
         toast.success("Repair Ticket Generated!")
       }
       else if (mode === 'return') { 
+        // [Existing Return Logic]
         finalNo = `RET-${Date.now().toString().slice(-6)}`
         const isExternal = returnDetails.physicalDetails?.is_external_item || false;
         
@@ -633,11 +638,13 @@ export function useCheckout({
         toast.success("Return processed & Items sent to Vault!")
       }
       else if (mode === 'challan') {
+        // [Existing Challan Logic]
         finalNo = `CHL-${Date.now().toString().slice(-6)}`
         await supabase.from('inventory_items').update({ status: 'sold_unbilled' }).in('id', cart.map(c => c.id))
         toast.success("Delivery Challan issued.")
       } 
       else if (mode === 'custom') {
+        // [Existing Custom Order Logic]
         if (!selectedCustomer) throw new Error("Please select a customer for this Custom Order.")
         finalNo = `ORD-${Date.now().toString().slice(-6)}`
 
@@ -656,7 +663,6 @@ export function useCheckout({
           expected_gold_g: Number(customOrderDetails.expected_gold_g) || null,
           expected_diamond_cts: Number(customOrderDetails.expected_diamond_cts) || null,
           
-          // ✨ NEW DETAILED BREAKDOWN FIELDS
           base_estimated_value: baseEstimate,
           discount_amount: standardDiscount,
           taxable_value: finalTaxableValue,
@@ -691,6 +697,20 @@ export function useCheckout({
       if (customTransactionContext) {
           finalDraftData.appliedKitty = effectiveKittyAmt;
           finalDraftData.appliedCredit = effectiveCreditAmt;
+      }
+
+      // ✨ 3. THE MAGIC FIX: Automatically deduct packaging right before returning success!
+      // This applies dynamically if we aren't doing an estimate and the array has items.
+      if (!isEstimate && selectedPackaging?.length > 0 && (mode === 'normal' || mode === 'custom')) {
+        for (const pkg of selectedPackaging) {
+          const { error: packErr } = await supabase.rpc('decrement_packaging_stock', {
+            p_id: pkg.id,
+            p_qty: pkg.quantity
+          });
+          if (packErr) {
+            console.warn("Failed to decrement packaging for:", pkg.item_name, packErr);
+          }
+        }
       }
 
       return { success: true, invoiceNo: finalNo, draftData: finalDraftData }

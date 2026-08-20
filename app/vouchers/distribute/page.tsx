@@ -21,7 +21,7 @@ import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { 
   Loader2, FileText, CheckCircle2, CalendarDays, IndianRupee, Send, X,
-  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer, QrCode as QrCodeIcon, Download, PlusCircle, Search, Calendar
+  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer, QrCode as QrCodeIcon, Download, PlusCircle, Search, Calendar, Users
 } from 'lucide-react'
 import { addMonths, format, isWithinInterval, parseISO, startOfDay, endOfDay } from 'date-fns'
 
@@ -38,11 +38,13 @@ export default function DistributeVouchersPage() {
   const [batches, setBatches] = useState<any[]>([])
   const [challans, setChallans] = useState<any[]>([])
   const [agents, setAgents] = useState<any[]>([]) 
+  const [referencePersons, setReferencePersons] = useState<any[]>([]) // ✨ NEW: Reference Persons
   const [companyData, setCompanyData] = useState<any>(null)
   
   // Form States
   const [allocationType, setAllocationType] = useState<'vendor' | 'event'>('vendor')
   const [distributorId, setDistributorId] = useState('')
+  const [referencePersonId, setReferencePersonId] = useState('none') // ✨ NEW: Reference Person Selection
   const [selectedBatch, setSelectedBatch] = useState('')
   const [quantity, setQuantity] = useState('')
   const [validityMonths, setValidityMonths] = useState('1')
@@ -88,7 +90,6 @@ export default function DistributeVouchersPage() {
     documentTitle: viewChallan ? `Delivery_Challan_${viewChallan.id.slice(0,8)}` : 'Delivery_Challan'
   })
 
-  // --- UPGRADED PDF REPORT LOGIC ---
   const tablePrintRef = useRef<HTMLDivElement>(null)
   const [isPreparingPrint, setIsPreparingPrint] = useState(false)
   const [reportSequences, setReportSequences] = useState<Record<string, {start: string, end: string}>>({})
@@ -98,6 +99,18 @@ export default function DistributeVouchersPage() {
     documentTitle: `Distribution_Report_${activeTab}_${format(new Date(), 'dd-MM-yyyy')}`
   })
 
+  // ✨ NEW: Auto-select reference person when distributor changes
+  useEffect(() => {
+    if (allocationType === 'vendor' && distributorId && distributorId !== 'ADD_NEW') {
+      const linkedRef = referencePersons.find(rp => rp.linked_distributor_id === distributorId);
+      if (linkedRef) {
+        setReferencePersonId(linkedRef.id);
+      } else {
+        setReferencePersonId('none');
+      }
+    }
+  }, [distributorId, allocationType, referencePersons]);
+
   const handlePrepareAndPrint = async () => {
     if (filteredChallans.length === 0) return toast.error("No data to print.");
     
@@ -105,7 +118,6 @@ export default function DistributeVouchersPage() {
     const loadingToast = toast.loading("Preparing PDF Report...");
 
     try {
-      // Fetch sequences in bulk
       const challanIds = filteredChallans.map(c => c.id);
       const { data: voucherData, error } = await supabase
         .from('vouchers')
@@ -131,7 +143,6 @@ export default function DistributeVouchersPage() {
       setReportSequences(sequenceMap);
       toast.dismiss(loadingToast);
       
-      // Allow a brief moment for the hidden template DOM to update before triggering the print
       setTimeout(() => {
           executePrint();
           setIsPreparingPrint(false);
@@ -157,6 +168,10 @@ export default function DistributeVouchersPage() {
 
       const { data: agentData } = await supabase.from('delivery_agents').select('*').eq('company_id', appUser.company_id).order('name')
       if (agentData) setAgents(agentData)
+
+      // ✨ Fetch Reference Persons
+      const { data: refData } = await supabase.from('voucher_reference_persons').select('*').eq('company_id', appUser.company_id).order('name')
+      if (refData) setReferencePersons(refData)
 
       const { data: batchData } = await supabase
         .from("voucher_batches")
@@ -206,7 +221,6 @@ export default function DistributeVouchersPage() {
     fetchData()
   }, [appUser])
 
-  // Paginated Sequence Auto-Fetcher
   useEffect(() => {
     if (!selectedBatch) {
       setAvailableVouchers([]);
@@ -258,7 +272,6 @@ export default function DistributeVouchersPage() {
     fetchVoucherSequence();
   }, [selectedBatch]);
 
-  // Auto-Calculate Custom Sequence based on Quantity Changes
   useEffect(() => {
     if (sequenceMode === 'custom' && customStart && parseInt(quantity) > 0) {
       const idx = availableVouchers.findIndex(v => v.code.toLowerCase() === customStart.toLowerCase());
@@ -270,7 +283,6 @@ export default function DistributeVouchersPage() {
     }
   }, [quantity, sequenceMode, customStart, availableVouchers]);
 
-  // Filter Logic
   const filteredChallans = useMemo(() => {
     let result = challans.filter(c => c.payment_status === activeTab);
 
@@ -293,7 +305,6 @@ export default function DistributeVouchersPage() {
     const loadingToast = toast.loading("Fetching sequences and preparing export...");
 
     try {
-      // 1. Fetch the sequence codes for all filtered challans in one bulk request
       const challanIds = filteredChallans.map(c => c.id);
       const { data: voucherData, error } = await supabase
         .from('vouchers')
@@ -303,7 +314,6 @@ export default function DistributeVouchersPage() {
 
       if (error) throw error;
 
-      // 2. Map the start and end sequences to their respective challan IDs
       const sequenceMap: Record<string, { start: string, end: string }> = {};
       filteredChallans.forEach(c => {
         const challanVouchers = (voucherData || []).filter(v => v.distribution_id === c.id);
@@ -317,7 +327,6 @@ export default function DistributeVouchersPage() {
         }
       });
 
-      // 3. Define the comprehensive headers
       const headers = [
         'Date', 
         'Distributor', 
@@ -330,7 +339,6 @@ export default function DistributeVouchersPage() {
         'Sequence End'
       ];
 
-      // 4. Map the data including the newly fetched sequences
       const csvData = filteredChallans.map(c => [
         format(new Date(c.created_at), 'dd-MM-yyyy'),
         `"${c.voucher_distributors?.distributor_name || 'N/A'}"`, 
@@ -343,12 +351,10 @@ export default function DistributeVouchersPage() {
         sequenceMap[c.id]?.end || 'N/A'
       ]);
 
-      // 5. Append the branding to the bottom of the CSV
       csvData.push([]); 
       csvData.push([]); 
       csvData.push(['Powered By Biillo ERP']);
 
-      // 6. Generate and Download
       const csvContent = [headers.join(','), ...csvData.map(row => row.join(','))].join('\n');
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement("a");
@@ -450,6 +456,7 @@ export default function DistributeVouchersPage() {
     setIsSubmitting(true)
     try {
       const voucherIds = vouchersToUpdate.map(v => v.id);
+      const selectedRefPerson = referencePersonId !== 'none' ? referencePersonId : null; // ✨ Resolve Reference Person
 
       if (allocationType === 'vendor') {
         const { data: challan, error: challanErr } = await supabase
@@ -457,6 +464,7 @@ export default function DistributeVouchersPage() {
           .insert({
             company_id: appUser?.company_id,
             distributor_id: distributorId,
+            reference_person_id: selectedRefPerson, // ✨ ADDED
             quantity: numQuantity,
             total_amount: parseFloat(totalFee),
             payment_status: 'pending',
@@ -475,6 +483,8 @@ export default function DistributeVouchersPage() {
             status: 'distributed',
             distributor_id: distributorId, 
             distribution_id: challan.id, 
+            reference_person_id: selectedRefPerson, // ✨ ADDED
+            is_event_voucher: false, // ✨ ADDED
             expiry_date: finalExpiryDate,
             distributed_at: new Date().toISOString(),
             is_birthday_redemption: isBirthdayRedemption
@@ -495,6 +505,8 @@ export default function DistributeVouchersPage() {
           .from('vouchers')
           .update({
             status: 'unclaimed', 
+            reference_person_id: selectedRefPerson, // ✨ ADDED
+            is_event_voucher: true, // ✨ ADDED
             expiry_date: finalExpiryDate,
             is_birthday_redemption: isBirthdayRedemption
           })
@@ -519,6 +531,7 @@ export default function DistributeVouchersPage() {
       setQuantity('')
       setTotalFee('')
       setDistributorId('')
+      setReferencePersonId('none') // Reset Reference Person
       setSelectedBatch('')
       setDeliveryAgent('')
       setCustomStart('')
@@ -727,7 +740,27 @@ export default function DistributeVouchersPage() {
                 </div>
               )}
 
-              <div className="space-y-1.5 pt-1">
+              {/* ✨ NEW: Reference Person Dropdown (Available in both modes) */}
+              <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2 pt-1 border-t border-zinc-100 mt-3">
+                <Label className="text-[11px] font-semibold text-emerald-600 uppercase tracking-wider flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5"/> Intro Agent / Reference (Optional)
+                </Label>
+                <Select value={referencePersonId} onValueChange={setReferencePersonId}>
+                  <SelectTrigger className="h-10 text-sm bg-white border-emerald-200 focus:ring-emerald-500">
+                    <SelectValue placeholder="Select reference person..." />
+                  </SelectTrigger>
+                  <SelectContent className="border-emerald-200">
+                    <SelectItem value="none" className="text-zinc-500 italic">No Reference Agent</SelectItem>
+                    {referencePersons.map(rp => (
+                      <SelectItem key={rp.id} value={rp.id}>
+                        {rp.name} {rp.linked_distributor_id ? `(${rp.linked_distributor?.distributor_name})` : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5 pt-3 border-t border-zinc-100">
                 <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Source Batch</Label>
                 <Select value={selectedBatch} onValueChange={setSelectedBatch}>
                   <SelectTrigger className="h-10 text-sm bg-zinc-50 border-zinc-200"><SelectValue placeholder="Choose batch from stock..." /></SelectTrigger>
@@ -944,8 +977,6 @@ export default function DistributeVouchersPage() {
                     </TabsTrigger>
                   </TabsList>
                   
-                  {/* ✨ DATE FILTERS & EXPORT ROW */}
-                  {/* ✨ DATE FILTERS & EXPORT ROW */}
                   <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pb-3 mt-3 sm:mt-0 w-full sm:w-auto">
                     
                     {/* Unified Date Range Picker */}
@@ -972,7 +1003,7 @@ export default function DistributeVouchersPage() {
                         />
                       </div>
 
-                      {/* Clear Button - Only shows when a date is selected */}
+                      {/* Clear Button */}
                       {(dateFrom || dateTo) && (
                         <button 
                           onClick={() => { setDateFrom(''); setDateTo(''); }}
@@ -990,12 +1021,12 @@ export default function DistributeVouchersPage() {
                         <Download className="w-3.5 h-3.5 mr-1.5" /> CSV
                       </Button>
                       <Button disabled={isPreparingPrint} variant="outline" size="sm" onClick={handlePrepareAndPrint} className="flex-1 sm:flex-none h-9 px-3 text-xs font-medium shadow-sm border-zinc-200 text-zinc-600 hover:text-zinc-900 bg-white hover:bg-zinc-50">
-    {isPreparingPrint ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Printer className="w-3.5 h-3.5 mr-1.5" />}
-    PDF / Print
-  </Button>
+                        {isPreparingPrint ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Printer className="w-3.5 h-3.5 mr-1.5" />}
+                        PDF / Print
+                      </Button>
                     </div>
                   </div>
-                  </div>
+                </div>
               </CardHeader>
 
               <CardContent className="p-0 flex-1 overflow-hidden relative">
@@ -1003,7 +1034,7 @@ export default function DistributeVouchersPage() {
                 {/* PENDING TAB */}
                 <TabsContent value="pending" className="m-0 h-full absolute inset-0 overflow-y-auto custom-scrollbar">
                   <div ref={activeTab === 'pending' ? tablePrintRef : null} className="w-full">
-                    {/* Print Header (Visible only when printing) */}
+                    {/* Print Header */}
                     <div className="hidden print:block p-8 pb-4">
                       <h2 className="text-xl font-bold text-zinc-900">Pending Distribution Challans</h2>
                       <p className="text-sm text-zinc-500">Printed on {format(new Date(), 'dd MMM yyyy')}</p>
@@ -1051,7 +1082,7 @@ export default function DistributeVouchersPage() {
                 {/* PAID TAB */}
                 <TabsContent value="paid" className="m-0 h-full absolute inset-0 overflow-y-auto custom-scrollbar">
                   <div ref={activeTab === 'paid' ? tablePrintRef : null} className="w-full">
-                    {/* Print Header (Visible only when printing) */}
+                    {/* Print Header */}
                     <div className="hidden print:block p-8 pb-4">
                       <h2 className="text-xl font-bold text-zinc-900">Completed Distribution Challans</h2>
                       <p className="text-sm text-zinc-500">Printed on {format(new Date(), 'dd MMM yyyy')}</p>

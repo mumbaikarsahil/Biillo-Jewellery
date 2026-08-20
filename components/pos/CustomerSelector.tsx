@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react'
-import { Search, Plus, X, IndianRupee, Gem, Info, Loader2 } from 'lucide-react'
+"use client"
+
+import React, { useState, useEffect, useMemo } from 'react'
+import { Search, Plus, X, IndianRupee, Gem, Info, Loader2, AlertCircle, Edit2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -10,7 +12,7 @@ import { supabase } from '@/lib/supabaseClient'
 
 interface CustomerSelectorProps {
   mode: string
-  customers: any[] // We keep this for backward compatibility, but we won't rely on it for searching anymore
+  customers: any[] 
   setCustomers: React.Dispatch<React.SetStateAction<any[]>>
   selectedCustomer: any
   setSelectedCustomer: (customer: any) => void
@@ -33,6 +35,15 @@ const formatToDBDate = (dateStr?: string) => {
   return null; 
 };
 
+const formatToDisplayDate = (dbDateStr?: string) => {
+  if (!dbDateStr) return '';
+  const parts = dbDateStr.split('-');
+  if (parts.length === 3) {
+    return `${parts[2]}-${parts[1]}-${parts[0]}`; // Convert YYYY-MM-DD to DD-MM-YYYY
+  }
+  return dbDateStr;
+};
+
 export function CustomerSelector({ 
   mode, setCustomers, selectedCustomer, setSelectedCustomer, appUser, selectedLocation, subtotal = 0, onApplyWallet 
 }: CustomerSelectorProps) {
@@ -42,13 +53,14 @@ export function CustomerSelector({
   const [isSearching, setIsSearching] = useState(false)
   
   const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false)
+  const [isEditMode, setIsEditMode] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  
   const [newCustForm, setNewCustForm] = useState({ 
-    full_name: '', phone: '', city: '', address: '', pan_no: '', birth_date: '' 
+    full_name: '', phone: '', email: '', city: '', address: '', pan_no: '', birth_date: '', anniversary_date: '' 
   })
 
-  // ✨ FIX: LIVE SERVER-SIDE SEARCH
-  // This pings the DB directly as you type, so it finds ANY customer, even if they aren't loaded in the parent component.
+  // ✨ LIVE SERVER-SIDE SEARCH
   useEffect(() => {
     const searchDatabase = async () => {
       const term = searchCustomer.trim();
@@ -65,7 +77,7 @@ export function CustomerSelector({
           .select('*, kitty_plans(*)')
           .eq('company_id', appUser.company_id)
           .or(`full_name.ilike.%${term}%,phone.ilike.%${term}%`)
-          .limit(15); // Limit to 15 so the dropdown doesn't get massive
+          .limit(15); 
 
         if (error) throw error;
         setSearchResults(data || []);
@@ -76,14 +88,37 @@ export function CustomerSelector({
       }
     };
 
-    // Debounce: Wait 300ms after the user stops typing before hitting the database
     const timer = setTimeout(() => searchDatabase(), 300);
     return () => clearTimeout(timer);
   }, [searchCustomer, appUser]);
 
-  const handleDateInput = (value: string) => {
-    if (newCustForm.birth_date.length > value.length) {
-      setNewCustForm(prev => ({ ...prev, birth_date: value }));
+  // ✨ PROFILE COMPLETION ENGINE
+  const completionStats = useMemo(() => {
+    if (!selectedCustomer) return { percentage: 0, missing: [] };
+    
+    const fields = [
+      { key: 'full_name', label: 'Name' },
+      { key: 'phone', label: 'Phone' },
+      { key: 'email', label: 'Email' },
+      { key: 'birth_date', label: 'Birthday' },
+      { key: 'anniversary_date', label: 'Anniversary' },
+      { key: 'city', label: 'City' },
+      { key: 'address', label: 'Address' },
+      { key: 'pan_no', label: 'PAN Number' }
+    ];
+
+    const filled = fields.filter(f => !!selectedCustomer[f.key]);
+    const missing = fields.filter(f => !selectedCustomer[f.key]);
+    
+    return {
+      percentage: Math.round((filled.length / fields.length) * 100),
+      missing: missing.map(m => m.label)
+    };
+  }, [selectedCustomer]);
+
+  const handleDateInput = (field: 'birth_date' | 'anniversary_date', value: string) => {
+    if (newCustForm[field].length > value.length) {
+      setNewCustForm(prev => ({ ...prev, [field]: value }));
       return;
     }
     const digits = value.replace(/\D/g, ''); 
@@ -93,10 +128,32 @@ export function CustomerSelector({
     } else if (digits.length > 4) {
       formatted = `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4, 8)}`;
     }
-    setNewCustForm(prev => ({ ...prev, birth_date: formatted }));
+    setNewCustForm(prev => ({ ...prev, [field]: formatted }));
   }
 
-  const handleAddCustomer = async () => {
+  const openNewCustomerModal = () => {
+    setIsEditMode(false);
+    setNewCustForm({ full_name: '', phone: '', email: '', city: '', address: '', pan_no: '', birth_date: '', anniversary_date: '' });
+    setIsAddCustomerOpen(true);
+  }
+
+  const openEditCustomerModal = () => {
+    if (!selectedCustomer) return;
+    setIsEditMode(true);
+    setNewCustForm({
+      full_name: selectedCustomer.full_name || '',
+      phone: selectedCustomer.phone || '',
+      email: selectedCustomer.email || '',
+      city: selectedCustomer.city || '',
+      address: selectedCustomer.address || '',
+      pan_no: selectedCustomer.pan_no || '',
+      birth_date: formatToDisplayDate(selectedCustomer.birth_date),
+      anniversary_date: formatToDisplayDate(selectedCustomer.anniversary_date)
+    });
+    setIsAddCustomerOpen(true);
+  }
+
+  const handleSaveCustomer = async () => {
     if (!newCustForm.full_name || !newCustForm.phone) {
       return toast.error('Name and Phone are required.')
     }
@@ -104,32 +161,56 @@ export function CustomerSelector({
       return toast.error('Please select a specific branch terminal first.')
     }
 
-    const finalDbDate = formatToDBDate(newCustForm.birth_date);
-    if (newCustForm.birth_date && !finalDbDate) {
-      return toast.error('Invalid Date. Please use DD-MM-YYYY format.');
-    }
+    const finalBirthDate = formatToDBDate(newCustForm.birth_date);
+    if (newCustForm.birth_date && !finalBirthDate) return toast.error('Invalid Birth Date. Please use DD-MM-YYYY format.');
+
+    const finalAnnivDate = formatToDBDate(newCustForm.anniversary_date);
+    if (newCustForm.anniversary_date && !finalAnnivDate) return toast.error('Invalid Anniversary Date. Please use DD-MM-YYYY format.');
 
     setIsSaving(true)
     try {
-      const { data, error } = await supabase.from('customers').insert([{
-        company_id: appUser?.company_id,
-        warehouse_id: selectedLocation,
+      const payload: any = {
         full_name: newCustForm.full_name,
         phone: newCustForm.phone,
+        email: newCustForm.email || null,
         city: newCustForm.city || null,
         address: newCustForm.address || null,
         pan_no: newCustForm.pan_no?.toUpperCase() || null,
-        birth_date: finalDbDate 
-      }]).select().single()
+        birth_date: finalBirthDate,
+        anniversary_date: finalAnnivDate
+      };
 
-      if (error) throw error
+      if (isEditMode && selectedCustomer?.id) {
+        // ✨ UPDATE EXISTING CUSTOMER
+        const { data, error } = await supabase
+          .from('customers')
+          .update(payload)
+          .eq('id', selectedCustomer.id)
+          .select('*, kitty_plans(*)')
+          .single();
 
-      setCustomers(prev => [...prev, data])
-      setSelectedCustomer(data)
+        if (error) throw error;
+        setSelectedCustomer(data);
+        toast.success('Customer profile updated successfully.');
+      } else {
+        // ✨ INSERT NEW CUSTOMER
+        payload.company_id = appUser?.company_id;
+        payload.warehouse_id = selectedLocation;
+        
+        const { data, error } = await supabase
+          .from('customers')
+          .insert([payload])
+          .select('*, kitty_plans(*)')
+          .single();
+
+        if (error) throw error;
+        setCustomers(prev => [...prev, data]);
+        setSelectedCustomer(data);
+        setSearchCustomer('');
+        toast.success('New client registered successfully.');
+      }
+      
       setIsAddCustomerOpen(false)
-      setSearchCustomer('')
-      setNewCustForm({ full_name: '', phone: '', city: '', address: '', pan_no: '', birth_date: '' })
-      toast.success('New client registered successfully.')
     } catch (err: any) {
       toast.error(err.message || 'Failed to save customer.')
     } finally {
@@ -197,12 +278,12 @@ export function CustomerSelector({
         <div className="flex flex-col bg-white border border-[#0078D7] p-2.5 rounded-sm shadow-sm transition-all relative overflow-hidden">
           <div className="flex items-start justify-between">
             <div className="flex items-start gap-3">
-              <div className="h-9 w-9 mt-0.5 rounded-sm bg-[#0078D7] text-white flex items-center justify-center font-bold text-sm uppercase shadow-inner shrink-0">
-                {(selectedCustomer.full_name || 'U').charAt(0)}
+              <div className="h-9 w-9 mt-0.5 rounded-sm bg-[#0078D7] text-white flex items-center justify-center font-bold text-sm uppercase shadow-inner shrink-0 cursor-pointer hover:bg-[#005A9E] transition-colors" onClick={openEditCustomerModal} title="Edit Customer">
+                <Edit2 className="w-4 h-4" />
               </div>
               <div className="flex flex-col">
                 <p className="text-sm font-bold text-slate-900 leading-none">{selectedCustomer.full_name || 'Unknown Name'}</p>
-                <p className="text-[10px] font-mono text-slate-500 mt-1">{selectedCustomer.phone}</p>
+                <p className="text-[10px] font-mono text-slate-500 mt-1">{selectedCustomer.phone} {selectedCustomer.email ? `• ${selectedCustomer.email}` : ''}</p>
                 
                 {(selectedCustomer.customer_status === 'Kitty Member' || hasActivePlan) && (
                   <Badge className="bg-purple-50 text-purple-700 border-purple-200 text-[9px] px-1.5 py-0 h-4 rounded-sm flex items-center gap-1 font-bold mt-1.5 w-max">
@@ -217,9 +298,31 @@ export function CustomerSelector({
               className="h-6 w-6 rounded-sm text-slate-400 hover:text-red-500 hover:bg-red-50 shrink-0" 
               onClick={() => setSelectedCustomer(null)}
             >
-              <X className="h-4 w-4" />
+              <X className="w-4 h-4" />
             </Button>
           </div>
+
+          {/* ✨ PROFILE COMPLETION WIDGET */}
+          {completionStats.percentage < 100 && (
+            <div className="mt-3 pt-2.5 border-t border-orange-100 flex items-center justify-between bg-orange-50/50 -mx-2.5 -mb-2.5 px-3 py-2">
+               <div className="flex flex-col gap-0.5">
+                  <span className="text-[10px] font-bold text-orange-700 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" /> Profile {completionStats.percentage}% Complete
+                  </span>
+                  <span className="text-[9px] font-medium text-orange-600 truncate max-w-[200px]">
+                    Missing: {completionStats.missing.slice(0,3).join(', ')}{completionStats.missing.length > 3 ? '...' : ''}
+                  </span>
+               </div>
+               <Button 
+                 size="sm" 
+                 variant="outline" 
+                 className="h-6 text-[10px] font-bold border-orange-200 text-orange-700 bg-white hover:bg-orange-100 shadow-sm" 
+                 onClick={openEditCustomerModal}
+               >
+                 Complete Profile
+               </Button>
+            </div>
+          )}
 
           {(Number(selectedCustomer.store_credit_balance) > 0 || hasActivePlan) && (
             <div className="flex flex-col gap-1.5 mt-3 pt-3 border-t border-slate-100 w-full">
@@ -301,7 +404,6 @@ export function CustomerSelector({
               onChange={(e) => setSearchCustomer(e.target.value)} 
               className="h-9 pl-8 text-xs rounded-sm border-slate-300 bg-white focus-visible:ring-[#0078D7]" 
             />
-            {/* Show a mini spinner when querying Supabase */}
             {isSearching && (
                <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-[#0078D7] animate-spin" />
             )}
@@ -309,7 +411,7 @@ export function CustomerSelector({
           <Button 
             variant="outline" 
             className="h-9 px-3 rounded-sm border-slate-300 bg-white hover:bg-slate-50 hover:text-[#0078D7]" 
-            onClick={() => setIsAddCustomerOpen(true)}
+            onClick={openNewCustomerModal}
           >
             <Plus className="h-4 w-4" />
           </Button>
@@ -344,7 +446,7 @@ export function CustomerSelector({
           )}
           <div 
             className="p-2.5 text-center text-xs font-bold text-[#0078D7] cursor-pointer hover:bg-blue-50 bg-slate-50 border-t border-slate-100 transition-colors" 
-            onClick={() => setIsAddCustomerOpen(true)}
+            onClick={openNewCustomerModal}
           >
             + Create New Customer Profile
           </div>
@@ -354,16 +456,25 @@ export function CustomerSelector({
       <Dialog open={isAddCustomerOpen} onOpenChange={setIsAddCustomerOpen}>
         <DialogContent className="sm:max-w-[450px] border border-slate-300 shadow-xl p-0 rounded-sm overflow-hidden bg-white w-[95vw] sm:w-full">
           <DialogHeader className="bg-slate-100 p-4 border-b border-slate-200">
-            <DialogTitle className="text-base font-semibold text-slate-800">Add New Customer</DialogTitle>
+            <DialogTitle className="text-base font-semibold text-slate-800">
+              {isEditMode ? 'Update Customer Profile' : 'Add New Customer'}
+            </DialogTitle>
           </DialogHeader>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 sm:p-5 max-h-[60vh] overflow-y-auto custom-scrollbar">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 sm:p-5 max-h-[65vh] overflow-y-auto custom-scrollbar">
+            
             <div className="space-y-1.5 sm:col-span-2">
               <Label className="text-xs font-semibold text-slate-700">Full Name *</Label>
               <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.full_name} onChange={(e) => setNewCustForm({...newCustForm, full_name: e.target.value})} />
             </div>
+            
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-slate-700">Phone *</Label>
               <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.phone} onChange={(e) => setNewCustForm({...newCustForm, phone: e.target.value})} />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-slate-700">Email (Optional)</Label>
+              <Input type="email" className="h-9 rounded-sm border-slate-300" value={newCustForm.email} onChange={(e) => setNewCustForm({...newCustForm, email: e.target.value})} />
             </div>
             
             <div className="space-y-1.5">
@@ -374,18 +485,32 @@ export function CustomerSelector({
                 placeholder="15-08-1990"
                 className="h-9 rounded-sm border-slate-300 font-mono tracking-widest text-sm" 
                 value={newCustForm.birth_date} 
-                onChange={(e) => handleDateInput(e.target.value)} 
+                onChange={(e) => handleDateInput('birth_date', e.target.value)} 
               />
             </div>
 
-            <div className="space-y-1.5 sm:col-span-2">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-slate-700">Anniversary (DD-MM-YYYY)</Label>
+              <Input 
+                type="text" 
+                inputMode="numeric"
+                placeholder="25-12-2015"
+                className="h-9 rounded-sm border-slate-300 font-mono tracking-widest text-sm" 
+                value={newCustForm.anniversary_date} 
+                onChange={(e) => handleDateInput('anniversary_date', e.target.value)} 
+              />
+            </div>
+
+            <div className="space-y-1.5 sm:col-span-2 border-t border-slate-100 pt-3">
               <Label className="text-xs font-semibold text-slate-700">Address</Label>
               <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.address} onChange={(e) => setNewCustForm({...newCustForm, address: e.target.value})} />
             </div>
+            
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-slate-700">City</Label>
               <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.city} onChange={(e) => setNewCustForm({...newCustForm, city: e.target.value})} />
             </div>
+            
             <div className="space-y-1.5">
               <Label className="text-xs font-semibold text-slate-700">PAN Number</Label>
               <Input className="h-9 rounded-sm border-slate-300 uppercase" value={newCustForm.pan_no} onChange={(e) => setNewCustForm({...newCustForm, pan_no: e.target.value})} />
@@ -394,11 +519,11 @@ export function CustomerSelector({
           <DialogFooter className="p-4 bg-slate-50 border-t border-slate-200">
             <Button variant="ghost" className="rounded-sm text-sm w-full sm:w-auto" onClick={() => setIsAddCustomerOpen(false)}>Cancel</Button>
             <Button 
-              onClick={handleAddCustomer} 
+              onClick={handleSaveCustomer} 
               disabled={isSaving}
-              className="rounded-sm text-sm bg-[#0078D7] hover:bg-[#005A9E] text-white px-6 w-full sm:w-auto mt-2 sm:mt-0"
+              className="rounded-sm text-sm bg-[#0078D7] hover:bg-[#005A9E] text-white px-6 w-full sm:w-auto mt-2 sm:mt-0 shadow-sm"
             >
-              {isSaving ? 'Saving...' : 'Save Customer'}
+              {isSaving ? 'Saving...' : (isEditMode ? 'Update Profile' : 'Save Customer')}
             </Button>
           </DialogFooter>
         </DialogContent>

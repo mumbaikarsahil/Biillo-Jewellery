@@ -181,6 +181,7 @@ export default function InventoryPage() {
   
   const [userRole, setUserRole] = useState<string>('sales_person') 
   const canEdit = ['owner', 'manager', 'operations_manager'].includes(userRole)
+  const canChangeStatus = ['owner', 'manager'].includes(userRole)
   
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [editingMrpId, setEditingId] = useState<string | null>(null)
@@ -227,16 +228,22 @@ export default function InventoryPage() {
   const [isAddingPackaging, setIsAddingPackaging] = useState(false)
   const [isCustomCategoryInput, setIsCustomCategoryInput] = useState(false)
   const [packagingForm, setPackagingForm] = useState({ item_name: '', item_category: 'Ring Box',custom_category: '', warehouse_id: '', quantity: 1 })
+  
+  // Consumable Partial Transfer State
+  const [isConsumableTransferOpen, setIsConsumableTransferOpen] = useState(false);
+  const [consumableToTransfer, setConsumableToTransfer] = useState<any>(null);
+  const [consumableTransferForm, setConsumableTransferForm] = useState({ quantity: 1, to_warehouse_id: '' });
+  const [isTransferringConsumable, setIsTransferringConsumable] = useState(false);
+
   // --- Inventory Management Modals (Add / Deduct) ---
   const [manageStockItem, setManageStockItem] = useState<any>(null)
   const [isManageStockModalOpen, setIsManageStockModalOpen] = useState(false)
   const [manageStockForm, setManageStockForm] = useState({ 
-    action: 'add', // 'add' or 'deduct'
+    action: 'add', 
     quantity: 1, 
     reason: '' 
   })
   const [isManagingStock, setIsManagingStock] = useState(false)
-  const [isCustomPackaging, setIsCustomPackaging] = useState(false)
   const [diamondRates, setDiamondRates] = useState<Record<string, number>>({})
 
   const [isCalcModalOpen, setCalcModalOpen] = useState(false)
@@ -262,6 +269,24 @@ export default function InventoryPage() {
   const itemsToPrint = useMemo(() => {
     return selectedIds.map(id => itemCache[id]).filter(Boolean) as InventoryItem[];
   }, [selectedIds, itemCache]);
+
+  const logInventoryAction = async (action: string, itemId: string | null, details: string, itemType: string = 'inventory') => {
+    if (!appUser) return;
+    try {
+      await supabase.from('inventory_audit_logs').insert({
+        company_id: appUser.company_id,
+        warehouse_id: selectedLocation !== 'ALL' ? selectedLocation : null,
+        user_name: appUser.full_name || 'System User',
+        action: action.toUpperCase(),
+        item_id: itemId,
+        item_type: itemType,
+        reason: details,
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.warn("Silent Audit Log Failure:", error);
+    }
+  };
 
   const executeSmartSearch = useCallback(() => {
     if (!searchTerm.trim()) {
@@ -541,7 +566,6 @@ export default function InventoryPage() {
     try {
       let combined: InventoryItem[] = [];
 
-      // ✨ UPDATED: Fetch Gifting Inventory & store in cache
       if (activeTab === 'gifting') {
         let giftQuery = supabase.from('gifting_inventory').select('*').eq('company_id', appUser.company_id);
         if (selectedLocation !== 'ALL') giftQuery = giftQuery.eq('warehouse_id', selectedLocation);
@@ -559,7 +583,6 @@ export default function InventoryPage() {
         return; 
       }
 
-      // ✨ UPDATED: Fetch Packaging Inventory & store in cache
       if (activeTab === 'packaging') {
         let packQuery = supabase.from('packaging_inventory').select('*').eq('company_id', appUser.company_id);
         if (selectedLocation !== 'ALL') packQuery = packQuery.eq('warehouse_id', selectedLocation);
@@ -705,7 +728,7 @@ export default function InventoryPage() {
         .eq('company_id', appUser.company_id)
         .eq('warehouse_id', packagingForm.warehouse_id)
         .eq('item_name', packagingForm.item_name)
-        .eq('item_category', finalCategory) // ✨ Verify with final category
+        .eq('item_category', finalCategory)
         .maybeSingle();
 
       if (existing) {
@@ -722,7 +745,7 @@ export default function InventoryPage() {
             company_id: appUser.company_id,
             warehouse_id: packagingForm.warehouse_id,
             item_name: packagingForm.item_name,
-            item_category: finalCategory, // ✨ Save final category
+            item_category: finalCategory,
             stock_count: packagingForm.quantity
           });
         if (error) throw error;
@@ -731,11 +754,10 @@ export default function InventoryPage() {
       toast.success(`Successfully added ${packagingForm.quantity} x ${packagingForm.item_name}`);
       setIsAddPackagingModalOpen(false);
       
-      // Reset form properly
       setPackagingForm({ item_name: '', item_category: 'Ring Box', custom_category: '', warehouse_id: '', quantity: 1 });
       setIsCustomCategoryInput(false);
       
-      fetchPage(0); // Refresh Packaging Tab
+      fetchPage(0); 
       setCounts(prev => ({ ...prev, packaging: prev.packaging + (existing ? 0 : 1) }));
     } catch (err: any) {
       toast.error("Failed to add packaging stock: " + err.message);
@@ -769,7 +791,6 @@ export default function InventoryPage() {
       
       if (error) throw error;
 
-      // Create Audit Log Entry
       const auditLog = {
         company_id: appUser.company_id,
         warehouse_id: manageStockItem.warehouse_id,
@@ -783,18 +804,85 @@ export default function InventoryPage() {
         user_name: appUser.full_name || 'System User'
       };
 
-      // Ensure the audit table exists in your DB: `inventory_audit_logs`
-      // If it doesn't, this will fail gracefully but still update the stock
       const { error: auditError } = await supabase.from('inventory_audit_logs').insert(auditLog);
       if (auditError) console.warn("Audit Log Warning:", auditError);
 
       toast.success(`Successfully ${manageStockForm.action === 'add' ? 'added' : 'deducted'} ${manageStockForm.quantity} items.`);
       setIsManageStockModalOpen(false);
-      fetchPage(0); // Refresh the view
+      fetchPage(0); 
     } catch (err: any) {
       toast.error("Failed to update stock: " + err.message);
     } finally {
       setIsManagingStock(false);
+    }
+  };
+
+  // ✨ FIXED: Added validation to prevent transferring into the void
+  const handleConsumableTransfer = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!appUser || !consumableToTransfer) return;
+
+    if (!consumableTransferForm.to_warehouse_id) {
+      return toast.error("Please select a destination branch.");
+    }
+
+    if (consumableTransferForm.quantity <= 0 || consumableTransferForm.quantity > consumableToTransfer.stock_count) {
+      return toast.error("Invalid quantity. Cannot transfer more than current stock.");
+    }
+    
+    if (consumableTransferForm.to_warehouse_id === consumableToTransfer.warehouse_id) {
+      return toast.error("Cannot transfer to the same location.");
+    }
+
+    setIsTransferringConsumable(true);
+    const tableName = consumableToTransfer._type === 'gifting' ? 'gifting_inventory' : 'packaging_inventory';
+
+    try {
+      // 1. Deduct from current warehouse
+      const newSourceStock = consumableToTransfer.stock_count - consumableTransferForm.quantity;
+      await supabase.from(tableName)
+        .update({ stock_count: newSourceStock, last_updated: new Date().toISOString() })
+        .eq('id', consumableToTransfer.id);
+
+      // 2. Check if destination warehouse already has this item
+      const { data: targetItem } = await supabase.from(tableName)
+        .select('id, stock_count')
+        .eq('warehouse_id', consumableTransferForm.to_warehouse_id)
+        .eq('company_id', appUser.company_id)
+        .eq('item_name', consumableToTransfer.item_name)
+        .maybeSingle();
+
+      if (targetItem) {
+        // Add to existing stack
+        await supabase.from(tableName)
+          .update({ stock_count: targetItem.stock_count + consumableTransferForm.quantity, last_updated: new Date().toISOString() })
+          .eq('id', targetItem.id);
+      } else {
+        // Create new stack at destination
+        const insertPayload = {
+          company_id: appUser.company_id,
+          warehouse_id: consumableTransferForm.to_warehouse_id,
+          item_name: consumableToTransfer.item_name,
+          stock_count: consumableTransferForm.quantity,
+          ...(tableName === 'packaging_inventory' && { item_category: consumableToTransfer.item_category })
+        };
+        await supabase.from(tableName).insert(insertPayload);
+      }
+
+      logInventoryAction(
+        'PARTIAL_TRANSFER', 
+        consumableToTransfer.id, 
+        `Transferred ${consumableTransferForm.quantity} units to ${getWarehouseName(consumableTransferForm.to_warehouse_id)}`, 
+        consumableToTransfer._type
+      );
+
+      toast.success(`Successfully transferred ${consumableTransferForm.quantity} units.`);
+      setIsConsumableTransferOpen(false);
+      fetchPage(0); // Refresh UI
+    } catch (err: any) {
+      toast.error("Transfer failed: " + err.message);
+    } finally {
+      setIsTransferringConsumable(false);
     }
   };
 
@@ -888,6 +976,8 @@ export default function InventoryPage() {
       if (error) return toast.error('Failed to update price');
     }
     
+    logInventoryAction('PRICE_EDIT', id, `Updated MRP to ₹${newMrp}`, item._type);
+
     setItemCache(prev => ({ ...prev, [id]: { ...prev[id], mrp: newMrp }}));
     setItems(items.map(i => i.id === id ? { ...i, mrp: newMrp } : i))
     setEditingId(null)
@@ -895,7 +985,7 @@ export default function InventoryPage() {
   }
 
   const handleStatusChange = async (item: InventoryItem, newStatus: string) => {
-    if (!canEdit) return toast.error("Unauthorized to change status");
+    if (!canChangeStatus) return toast.error("Unauthorized: Only Managers and Owners can change item status.");
     
     const { error } = await supabase
       .from('inventory_items')
@@ -906,6 +996,8 @@ export default function InventoryPage() {
       .eq('id', item.id);
   
     if (error) return toast.error('Failed to update status');
+
+    logInventoryAction('STATUS_CHANGE', item.id, `Changed status to ${newStatus.replace(/_/g, ' ')}`, item._type);
   
     setItemCache(prev => ({ 
       ...prev, 
@@ -1558,12 +1650,10 @@ export default function InventoryPage() {
                 Sold / Archive <Badge className="ml-1.5 bg-slate-100 text-slate-600 shadow-none px-1.5">{counts.sold}</Badge>
               </TabsTrigger>
               
-              {/* ✨ GIFTING TAB */}
               <TabsTrigger value="gifting" className="rounded-none border-b-2 border-transparent data-[state=active]:border-rose-500 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-rose-600 data-[state=active]:text-rose-600 transition-all">
                 Gifting Items <Badge className="ml-1.5 bg-rose-50 text-rose-600 shadow-none px-1.5">{counts.gifting}</Badge>
               </TabsTrigger>
               
-              {/* ✨ NEW PACKAGING TAB */}
               <TabsTrigger value="packaging" className="rounded-none border-b-2 border-transparent data-[state=active]:border-cyan-500 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-400 hover:text-cyan-600 data-[state=active]:text-cyan-600 transition-all">
                 Packaging <Badge className="ml-1.5 bg-cyan-50 text-cyan-600 shadow-none px-1.5">{counts.packaging}</Badge>
               </TabsTrigger>
@@ -1588,8 +1678,11 @@ export default function InventoryPage() {
                     handleStatusChange={handleStatusChange}
                     handleOpenFullEdit={handleOpenFullEdit} 
                     handleSingleTransfer={handleSingleTransfer} 
-                    setViewItem={setViewItem} 
-                    canEdit={canEdit} 
+                    setViewItem={(item: any) => {
+                      setViewItem(item);
+                    }} 
+                    canEdit={canEdit}
+                    canChangeStatus={canChangeStatus}
                   />
                   <PaginationFooter />
                </div>
@@ -1618,12 +1711,14 @@ export default function InventoryPage() {
                     {giftingItems.map(gift => (
                       <div key={gift.id} className={cn("border rounded-xl p-4 shadow-sm bg-white flex flex-col gap-2 transition-all", selectedIds.includes(gift.id) ? "border-indigo-500 ring-2 ring-indigo-500 bg-indigo-50/10" : "border-slate-200")}>
                         <div className="flex justify-between items-start">
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-start gap-2">
+                             {/* ✨ CHECKBOX RESTORED */}
                              <Checkbox 
                                checked={selectedIds.includes(gift.id)}
                                onCheckedChange={() => setSelectedIds(prev => prev.includes(gift.id) ? prev.filter(i => i !== gift.id) : [...prev, gift.id])}
+                               className="mt-0.5"
                              />
-                             <h3 className="font-bold text-slate-800">{gift.item_name}</h3>
+                             <h3 className="font-bold text-slate-800 text-sm leading-tight">{gift.item_name}</h3>
                           </div>
                           <Badge className="bg-emerald-50 text-emerald-700 shadow-none text-xs">{gift.stock_count} in stock</Badge>
                         </div>
@@ -1635,13 +1730,25 @@ export default function InventoryPage() {
                           Last Updated: {formatDateShort(gift.last_updated)}
                         </div>
                         {canEdit && (
-                          <div className="pt-3 mt-2 border-t border-slate-100 flex justify-end">
+                          <div className="pt-3 mt-2 border-t border-slate-100 flex justify-end gap-2">
+                            <Button 
+                              variant="outline" size="sm" 
+                              className="h-7 text-[10px] font-bold text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                              onClick={() => {
+                                setConsumableToTransfer(gift);
+                                setConsumableTransferForm({ quantity: 1, to_warehouse_id: '' });
+                                setIsConsumableTransferOpen(true);
+                              }}
+                            >
+                              <Truck className="w-3 h-3 mr-1" /> Transfer
+                            </Button>
+
                             <Button 
                               variant="outline" 
                               size="sm" 
                               className="h-7 text-[10px] font-bold text-indigo-600 border-indigo-200 hover:bg-indigo-50"
                               onClick={() => {
-                                setManageStockItem(gift); // Or `pack` if in the packaging tab
+                                setManageStockItem(gift);
                                 setManageStockForm({ action: 'deduct', quantity: 1, reason: '' });
                                 setIsManageStockModalOpen(true);
                               }}
@@ -1688,6 +1795,7 @@ export default function InventoryPage() {
                         )}
                         <div className="flex justify-between items-start pr-6">
                           <div className="flex items-start gap-2">
+                            {/* ✨ CHECKBOX RESTORED */}
                             <Checkbox 
                                checked={selectedIds.includes(pack.id)}
                                onCheckedChange={() => setSelectedIds(prev => prev.includes(pack.id) ? prev.filter(i => i !== pack.id) : [...prev, pack.id])}
@@ -1710,13 +1818,25 @@ export default function InventoryPage() {
                           Last Updated: {formatDateShort(pack.last_updated)}
                         </div>
                         {canEdit && (
-                          <div className="pt-3 mt-2 border-t border-slate-100 flex justify-end">
+                          <div className="pt-3 mt-2 border-t border-slate-100 flex justify-end gap-2">
+                            <Button 
+                              variant="outline" size="sm" 
+                              className="h-7 text-[10px] font-bold text-emerald-600 border-emerald-200 hover:bg-emerald-50"
+                              onClick={() => {
+                                setConsumableToTransfer(pack);
+                                setConsumableTransferForm({ quantity: 1, to_warehouse_id: '' });
+                                setIsConsumableTransferOpen(true);
+                              }}
+                            >
+                              <Truck className="w-3 h-3 mr-1" /> Transfer
+                            </Button>
+
                             <Button 
                               variant="outline" 
                               size="sm" 
                               className="h-7 text-[10px] font-bold text-indigo-600 border-indigo-200 hover:bg-indigo-50"
                               onClick={() => {
-                                setManageStockItem(pack); // Or `pack` if in the packaging tab
+                                setManageStockItem(pack); 
                                 setManageStockForm({ action: 'deduct', quantity: 1, reason: '' });
                                 setIsManageStockModalOpen(true);
                               }}
@@ -1735,6 +1855,7 @@ export default function InventoryPage() {
 
         </Tabs>
 
+        {/* ✨ FLOATING ACTION BAR RESTORED FOR ALL TABS */}
         {selectedIds.length > 0 && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white p-1.5 rounded-[1.25rem] shadow-2xl flex items-center gap-2 border border-slate-700/50 animate-in slide-in-from-bottom-8">
             <div className="flex items-center gap-2 pl-3 pr-4 border-r border-slate-700">
@@ -1789,12 +1910,10 @@ export default function InventoryPage() {
               </Button>
             </div>
           </div>
-)}
+        )}
           
-
-          
-          {/* MANAGE STOCK MODAL (Add / Deduct) */}
-          <Dialog open={isManageStockModalOpen} onOpenChange={setIsManageStockModalOpen}>
+      {/* MANAGE STOCK MODAL (Add / Deduct) */}
+      <Dialog open={isManageStockModalOpen} onOpenChange={setIsManageStockModalOpen}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -1846,6 +1965,55 @@ export default function InventoryPage() {
       </DialogContent>
     </Dialog>
 
+    {/* ✨ CONSUMABLE PARTIAL TRANSFER MODAL */}
+    <Dialog open={isConsumableTransferOpen} onOpenChange={setIsConsumableTransferOpen}>
+      <DialogContent className="sm:max-w-[425px]">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Truck className="w-5 h-5 text-emerald-600" />
+            Transfer Stock
+          </DialogTitle>
+          <DialogDescription>
+            Move <strong className="text-slate-900">{consumableToTransfer?.item_name}</strong> to another branch. 
+            Current Stock: {consumableToTransfer?.stock_count} units.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleConsumableTransfer} className="space-y-4 py-4">
+          <div className="space-y-2">
+            <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Quantity to Move</Label>
+            <Input 
+              required type="number" min="1" max={consumableToTransfer?.stock_count || 1} 
+              value={consumableTransferForm.quantity} 
+              onChange={e => setConsumableTransferForm({...consumableTransferForm, quantity: Number(e.target.value)})} 
+            />
+          </div>
+          
+          <div className="space-y-2">
+            <Label className="text-xs font-bold text-slate-500 uppercase tracking-widest">Destination Branch</Label>
+            <Select required value={consumableTransferForm.to_warehouse_id} onValueChange={v => setConsumableTransferForm({...consumableTransferForm, to_warehouse_id: v})}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select destination..." />
+              </SelectTrigger>
+              <SelectContent>
+                {warehouses.filter(w => w.id !== consumableToTransfer?.warehouse_id).map(w => (
+                  <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <DialogFooter className="mt-4">
+            <Button type="button" variant="ghost" onClick={() => setIsConsumableTransferOpen(false)}>Cancel</Button>
+            <Button type="submit" disabled={isTransferringConsumable} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+              {isTransferringConsumable ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Check className="w-4 h-4 mr-2" />} 
+              Confirm Transfer
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+
       </main>
 
       {/* ADD GIFTING STOCK MODAL */}
@@ -1885,7 +2053,7 @@ export default function InventoryPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ✨ UPDATED ADD PACKAGING STOCK MODAL */}
+      {/* UPDATED ADD PACKAGING STOCK MODAL */}
       <Dialog open={isAddPackagingModalOpen} onOpenChange={setIsAddPackagingModalOpen}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
@@ -1919,7 +2087,6 @@ export default function InventoryPage() {
                 </Select>
               </div>
 
-              {/* ✨ NEW: Conditionally rendered Custom Category Input */}
               {isCustomCategoryInput && (
                 <div className="space-y-2 col-span-2 animate-in fade-in slide-in-from-top-2">
                   <Label className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">Custom Category Name *</Label>
@@ -2597,7 +2764,7 @@ export default function InventoryPage() {
 }
 
 // --- HYBRID RENDER TABLE ---
-function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, handleStatusChange, handleOpenFullEdit, handleSingleTransfer, setViewItem, canEdit, observerRef }: any) {
+function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedIds, editingMrpId, setEditingId, editingMrpVal, setEditingMrpVal, handleSaveMrp, handleStatusChange, handleOpenFullEdit, handleSingleTransfer, setViewItem, canEdit, canChangeStatus, observerRef }: any) {
   const getWarehouseName = (wId: string) => warehouses.find((w: any) => w.id === wId)?.name || 'Unknown Vault'
 
   return (
@@ -2742,7 +2909,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                   
                   <TableCell className="text-right px-6 py-3">
                      <div className="flex justify-end gap-1.5">
-                     {canEdit && !item.is_repair_ticket && (
+                     {canChangeStatus && !item.is_repair_ticket && (
   <Select
     value={item.status}
     onValueChange={(val) => handleStatusChange(item, val)}
@@ -2777,7 +2944,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                         )}
                         
                         {!isSoldTab && (item.status === 'in_stock' || item.status === 'in_vault' || item.status === 'fixed_ready_for_dispatch') && (
-                           <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => handleSingleTransfer(item)} title="Transfer">
+                           <Button variant="ghost" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)} title="Transfer">
                           <Truck className="h-3.5 w-3.5" />
                         </Button>
                         )}
@@ -2901,7 +3068,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                    )}
                  </div>
                  <div className="flex gap-1.5">
-                 {canEdit && !item.is_repair_ticket && (
+                 {canChangeStatus && !item.is_repair_ticket && (
   <Select
     value={item.status}
     onValueChange={(val) => handleStatusChange(item, val)}

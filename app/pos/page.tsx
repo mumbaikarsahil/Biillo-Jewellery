@@ -276,6 +276,14 @@ export default function POSPage() {
                  setDetails={setCustomOrderDetails} 
                  currentLocationId={selectedLocation}
                  voucherAmount={checkoutHook.appliedVoucherAmount}
+                 
+                 // ✨ ADD THESE 5 PACKAGING PROPS HERE! ✨
+                 availablePackaging={availablePackaging}
+                 selectedPackaging={selectedPackaging}
+                 onAddPackaging={handleAddPackaging}
+                 onRemovePackaging={handleRemovePackaging}
+                 onUpdatePackagingQty={handleUpdatePackagingQty}
+
                  onAddToBill={(finalItemData: any) => {
                    setMode('normal');
                    clearCart();

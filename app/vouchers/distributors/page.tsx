@@ -20,7 +20,8 @@ import {
   IdCard,
   Search,
   Filter,
-  TrendingUp
+  TrendingUp,
+  Users
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -75,7 +76,7 @@ interface Distributor {
   contact_person: string;
   phone: string;
   address: string;
-  distributor_type: 'internal_branch' | 'external_shop' | 'corporate_partner' | 'voucher_printing_press' | 'business_introduction_agent' | 'sales_person';
+  distributor_type: 'internal_branch' | 'external_shop' | 'corporate_partner' | 'voucher_printing_press' | 'sales_person';
   created_at: string;
   metrics?: DistributorMetrics;
 }
@@ -88,21 +89,34 @@ interface DeliveryAgent {
   created_at: string;
 }
 
+// ✨ NEW: Reference Person Interface
+interface ReferencePerson {
+  id: string;
+  name: string;
+  phone: string;
+  details: string;
+  linked_distributor_id: string | null;
+  created_at: string;
+  linked_distributor?: {
+    distributor_name: string;
+  };
+}
+
 export default function DistributorsPage() {
   const { toast } = useToast();
   const { appUser } = useAuth();
 
   const [distributors, setDistributors] = useState<Distributor[]>([]);
   const [agents, setAgents] = useState<DeliveryAgent[]>([]);
+  const [referencePersons, setReferencePersons] = useState<ReferencePerson[]>([]); // ✨ NEW STATE
   const [isLoading, setIsLoading] = useState(true);
   
-  // ✨ Search and Filter States
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
 
-  // Modals & Submit States
   const [isPartnerDialogOpen, setIsPartnerDialogOpen] = useState(false);
   const [isAgentDialogOpen, setIsAgentDialogOpen] = useState(false);
+  const [isRefPersonDialogOpen, setIsRefPersonDialogOpen] = useState(false); // ✨ NEW MODAL STATE
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const [partnerFormData, setPartnerFormData] = useState({
@@ -119,33 +133,35 @@ export default function DistributorsPage() {
     agency_details: "",
   });
 
+  // ✨ NEW FORM STATE
+  const [refPersonFormData, setRefPersonFormData] = useState({
+    name: "",
+    phone: "",
+    details: "",
+    linked_distributor_id: "none",
+  });
+
   const fetchRegistries = async () => {
     setIsLoading(true);
     try {
-      // 1. Fetch Partners AND their associated vouchers in a single query
+      // 1. Fetch Partners AND their associated vouchers
       const { data: distData, error: distErr } = await supabase
         .from("voucher_distributors")
-        // We only pull the 'status' column from the related vouchers to keep the payload light
         .select("*, vouchers(status)")
         .eq("company_id", appUser?.company_id)
         .order("created_at", { ascending: false });
 
       if (distErr) throw distErr;
 
-      // 2. Calculate accurate metrics using the voucher statuses
       const enrichedDistributors = (distData || []).map((distributor) => {
         let registeredCount = 0;
         let redeemedCount = 0;
 
-        // Loop through all vouchers linked to this specific distributor ID
         if (distributor.vouchers && Array.isArray(distributor.vouchers)) {
           distributor.vouchers.forEach((v: any) => {
             if (v.status === 'registered') {
-              // The customer scanned it and registered it to their wallet
               registeredCount += 1;
             } else if (v.status === 'redeemed') {
-              // The customer used it in the store
-              // (If it's redeemed, it was also successfully registered first, so we count both)
               registeredCount += 1; 
               redeemedCount += 1;
             }
@@ -166,7 +182,7 @@ export default function DistributorsPage() {
 
       setDistributors(enrichedDistributors);
 
-      // 3. Fetch Delivery Agents
+      // 2. Fetch Delivery Agents
       const { data: agentData, error: agentErr } = await supabase
         .from("delivery_agents")
         .select("*")
@@ -175,6 +191,16 @@ export default function DistributorsPage() {
 
       if (agentErr) throw agentErr;
       setAgents(agentData || []);
+
+      // ✨ 3. Fetch Reference Persons (Business Intro Agents)
+      const { data: refData, error: refErr } = await supabase
+        .from("voucher_reference_persons")
+        .select("*, linked_distributor:linked_distributor_id(distributor_name)")
+        .eq("company_id", appUser?.company_id)
+        .order("created_at", { ascending: false });
+
+      if (refErr) throw refErr;
+      setReferencePersons(refData || []);
 
     } catch (error: any) {
       console.error("Error fetching registries:", error);
@@ -236,6 +262,33 @@ export default function DistributorsPage() {
     }
   };
 
+  // ✨ NEW: Handle Reference Person Submit
+  const handleRefPersonSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        company_id: appUser?.company_id,
+        name: refPersonFormData.name,
+        phone: refPersonFormData.phone,
+        details: refPersonFormData.details,
+        linked_distributor_id: refPersonFormData.linked_distributor_id === "none" ? null : refPersonFormData.linked_distributor_id,
+      };
+
+      const { error } = await supabase.from("voucher_reference_persons").insert(payload);
+
+      if (error) throw error;
+      toast({ title: "Agent Registered", description: `${refPersonFormData.name} added as an Introduction Agent.` });
+      setRefPersonFormData({ name: "", phone: "", details: "", linked_distributor_id: "none" });
+      setIsRefPersonDialogOpen(false);
+      fetchRegistries();
+    } catch (error: any) {
+      toast({ title: "Registration Failed", description: error.message, variant: "destructive" });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const getTypeBadge = (type: string) => {
     switch (type) {
       case 'internal_branch':
@@ -246,8 +299,6 @@ export default function DistributorsPage() {
         return <Badge variant="outline" className="bg-purple-50 text-purple-600 border-purple-200 text-[10px] font-bold h-5 uppercase">Corporate</Badge>;
       case 'voucher_printing_press':
         return <Badge variant="outline" className="bg-orange-50 text-orange-600 border-orange-200 text-[10px] font-bold h-5 uppercase">Printing Press</Badge>;
-      case 'business_introduction_agent':
-        return <Badge variant="outline" className="bg-emerald-50 text-emerald-600 border-emerald-200 text-[10px] font-bold h-5 uppercase">Intro Agent</Badge>;
       case 'sales_person':
         return <Badge variant="outline" className="bg-indigo-50 text-indigo-600 border-indigo-200 text-[10px] font-bold h-5 uppercase">Sales Person</Badge>;
       default:
@@ -255,7 +306,6 @@ export default function DistributorsPage() {
     }
   };
 
-  // ✨ Filtering Logic for Partners
   const filteredDistributors = distributors.filter((d) => {
     const matchesSearch = d.distributor_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           d.contact_person?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -311,7 +361,64 @@ export default function DistributorsPage() {
               <p className="text-xs text-gray-400 mt-1">Authorized entities for voucher circulation and secure delivery</p>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              {/* ✨ Add Reference Person Dialog */}
+              <Dialog open={isRefPersonDialogOpen} onOpenChange={setIsRefPersonDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm" className="h-9 px-4 font-bold text-xs uppercase tracking-tight shadow-sm border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800">
+                    <Users className="w-3.5 h-3.5 mr-2" />
+                    New Intro Agent
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-[425px] p-0 overflow-hidden border-none shadow-2xl">
+                  <DialogHeader className="bg-emerald-50 p-6 border-b border-emerald-100">
+                    <DialogTitle className="text-lg font-bold text-emerald-900">Add Business Intro Agent</DialogTitle>
+                    <DialogDescription className="text-xs font-medium text-emerald-700">Register a person who brings in new business.</DialogDescription>
+                  </DialogHeader>
+                  <form className="p-6 space-y-4">
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] font-bold text-gray-400 uppercase">Agent Name</Label>
+                      <div className="relative">
+                        <User className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                        <Input placeholder="e.g. John Doe" className="pl-9 h-9 text-sm border-gray-200" value={refPersonFormData.name} onChange={(e) => setRefPersonFormData({...refPersonFormData, name: e.target.value})} required />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] font-bold text-gray-400 uppercase">Phone</Label>
+                      <div className="relative">
+                        <Phone className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                        <Input placeholder="+91..." className="pl-9 h-9 text-sm border-gray-200 font-mono" value={refPersonFormData.phone} onChange={(e) => setRefPersonFormData({...refPersonFormData, phone: e.target.value})} required />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] font-bold text-gray-400 uppercase">Link to Distributor (Optional)</Label>
+                      <Select value={refPersonFormData.linked_distributor_id} onValueChange={(v) => setRefPersonFormData({...refPersonFormData, linked_distributor_id: v})}>
+                        <SelectTrigger className="h-9 text-sm border-gray-200"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none" className="text-gray-400 italic">No direct affiliation</SelectItem>
+                          {distributors.map(d => (
+                            <SelectItem key={d.id} value={d.id}>{d.distributor_name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-[11px] font-bold text-gray-400 uppercase">Notes / Details</Label>
+                      <div className="relative">
+                        <IdCard className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                        <Input placeholder="Any specific terms..." className="pl-9 h-9 text-sm border-gray-200" value={refPersonFormData.details} onChange={(e) => setRefPersonFormData({...refPersonFormData, details: e.target.value})} />
+                      </div>
+                    </div>
+                  </form>
+                  <DialogFooter className="bg-gray-50 p-4 border-t gap-2">
+                    <Button type="button" variant="ghost" size="sm" className="text-xs font-bold uppercase" onClick={() => setIsRefPersonDialogOpen(false)} disabled={isSubmitting}>Cancel</Button>
+                    <Button type="button" size="sm" className="text-xs font-bold uppercase px-6 bg-emerald-600 hover:bg-emerald-700 text-white" disabled={isSubmitting} onClick={handleRefPersonSubmit}>
+                      {isSubmitting ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : null} Save Agent
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
               {/* Add Partner Dialog */}
               <Dialog open={isPartnerDialogOpen} onOpenChange={setIsPartnerDialogOpen}>
                 <DialogTrigger asChild>
@@ -342,7 +449,6 @@ export default function DistributorsPage() {
                           <SelectItem value="internal_branch">Internal Branch</SelectItem>
                           <SelectItem value="corporate_partner">Corporate Account</SelectItem>
                           <SelectItem value="voucher_printing_press">Voucher Printing Press</SelectItem>
-                          <SelectItem value="business_introduction_agent">Business Introduction Agent</SelectItem>
                           <SelectItem value="sales_person">Sales Person</SelectItem>
                         </SelectContent>
                       </Select>
@@ -367,7 +473,7 @@ export default function DistributorsPage() {
                   </form>
                   <DialogFooter className="bg-gray-50 p-4 border-t gap-2">
                     <Button type="button" variant="ghost" size="sm" className="text-xs font-bold uppercase" onClick={() => setIsPartnerDialogOpen(false)} disabled={isSubmitting}>Cancel</Button>
-                    <Button type="button" size="sm" className="text-xs font-bold uppercase px-6 bg-gray-900" disabled={isSubmitting} onClick={handlePartnerSubmit}>
+                    <Button type="button" size="sm" className="text-xs font-bold uppercase px-6 bg-gray-900 text-white" disabled={isSubmitting} onClick={handlePartnerSubmit}>
                       {isSubmitting ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : null} Commit Partner
                     </Button>
                   </DialogFooter>
@@ -377,7 +483,7 @@ export default function DistributorsPage() {
               {/* Add Agent Dialog */}
               <Dialog open={isAgentDialogOpen} onOpenChange={setIsAgentDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button size="sm" className="h-9 px-4 font-bold text-xs uppercase tracking-tight shadow-md bg-black hover:bg-indigo-600">
+                  <Button size="sm" className="h-9 px-4 font-bold text-xs uppercase tracking-tight shadow-md bg-black text-white hover:bg-indigo-600">
                     <Truck className="w-3.5 h-3.5 mr-2" />
                     New Agent
                   </Button>
@@ -412,7 +518,7 @@ export default function DistributorsPage() {
                   </form>
                   <DialogFooter className="bg-gray-50 p-4 border-t gap-2">
                     <Button type="button" variant="ghost" size="sm" className="text-xs font-bold uppercase" onClick={() => setIsAgentDialogOpen(false)} disabled={isSubmitting}>Cancel</Button>
-                    <Button type="button" size="sm" className="text-xs font-bold uppercase px-6 bg-indigo-600 hover:bg-indigo-700" disabled={isSubmitting} onClick={handleAgentSubmit}>
+                    <Button type="button" size="sm" className="text-xs font-bold uppercase px-6 bg-indigo-600 text-white hover:bg-indigo-700" disabled={isSubmitting} onClick={handleAgentSubmit}>
                       {isSubmitting ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : null} Commit Agent
                     </Button>
                   </DialogFooter>
@@ -422,11 +528,15 @@ export default function DistributorsPage() {
           </div>
 
           <Card className="shadow-sm border-gray-200/60 overflow-hidden bg-white">
-            <TabsList className="bg-gray-50/80 border-b border-gray-100 rounded-none w-full justify-start h-12 px-4 gap-6">
-              <TabsTrigger value="partners" className="data-[state=active]:border-b-2 data-[state=active]:border-gray-900 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-gray-900 shadow-none transition-all bg-transparent">
+            <TabsList className="bg-gray-50/80 border-b border-gray-100 rounded-none w-full justify-start h-12 px-4 gap-6 overflow-x-auto custom-scrollbar">
+              <TabsTrigger value="partners" className="data-[state=active]:border-b-2 data-[state=active]:border-gray-900 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-gray-900 shadow-none transition-all bg-transparent whitespace-nowrap">
                 B2B Partners ({filteredDistributors.length})
               </TabsTrigger>
-              <TabsTrigger value="agents" className="data-[state=active]:border-b-2 data-[state=active]:border-indigo-600 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-indigo-700 shadow-none transition-all bg-transparent">
+              {/* ✨ NEW TAB FOR REFERENCE AGENTS */}
+              <TabsTrigger value="reference_persons" className="data-[state=active]:border-b-2 data-[state=active]:border-emerald-600 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-emerald-700 shadow-none transition-all bg-transparent whitespace-nowrap">
+                Intro Agents ({referencePersons.length})
+              </TabsTrigger>
+              <TabsTrigger value="agents" className="data-[state=active]:border-b-2 data-[state=active]:border-indigo-600 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-indigo-700 shadow-none transition-all bg-transparent whitespace-nowrap">
                 Delivery Agents ({agents.length})
               </TabsTrigger>
             </TabsList>
@@ -435,7 +545,6 @@ export default function DistributorsPage() {
               
               {/* PARTNERS TABLE */}
               <TabsContent value="partners" className="m-0">
-                {/* ✨ Search & Filters Bar */}
                 <div className="flex flex-col sm:flex-row gap-3 p-4 bg-white border-b border-gray-100">
                   <div className="relative flex-1 max-w-sm">
                     <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
@@ -458,7 +567,6 @@ export default function DistributorsPage() {
                         <SelectItem value="internal_branch">Internal Branch</SelectItem>
                         <SelectItem value="corporate_partner">Corporate Account</SelectItem>
                         <SelectItem value="voucher_printing_press">Voucher Printing Press</SelectItem>
-                        <SelectItem value="business_introduction_agent">Business Introduction Agent</SelectItem>
                         <SelectItem value="sales_person">Sales Person</SelectItem>
                       </SelectContent>
                     </Select>
@@ -504,7 +612,6 @@ export default function DistributorsPage() {
                             </TableCell>
                             <TableCell className="px-4">{getTypeBadge(distributor.distributor_type)}</TableCell>
                             
-                            {/* ✨ Metrics Columns */}
                             <TableCell className="px-4 text-center">
                               <Badge variant="secondary" className="bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold border-blue-200">
                                 {distributor.metrics?.registered || 0}
@@ -527,6 +634,74 @@ export default function DistributorsPage() {
                             </TableCell>
                             <TableCell className="px-4 text-right">
                               <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-gray-900">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </TabsContent>
+
+              {/* ✨ NEW: REFERENCE PERSONS TABLE */}
+              <TabsContent value="reference_persons" className="m-0">
+                {isLoading ? (
+                  <div className="flex justify-center items-center py-20"><Loader2 className="h-8 w-8 animate-spin text-gray-200" /></div>
+                ) : referencePersons.length === 0 ? (
+                  <div className="text-center py-20 bg-gray-50/30">
+                    <Users className="w-12 h-12 mx-auto mb-4 text-emerald-200" />
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter italic font-sans">No introduction agents found</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader className="bg-gray-50/50 border-b">
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-6 h-10">Agent Name</TableHead>
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10">Contact Info</TableHead>
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10">Linked Partner</TableHead>
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10">Notes</TableHead>
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10">Registered On</TableHead>
+                          <TableHead className="w-[50px]"></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {referencePersons.map((person) => (
+                          <TableRow key={person.id} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100">
+                            <TableCell className="px-6 py-3">
+                              <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-500">
+                                  <Users className="h-4 w-4" />
+                                </div>
+                                <span className="font-bold text-sm text-gray-900">{person.name}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-4">
+                              <div className="flex items-center gap-2">
+                                <Phone className="h-3.5 w-3.5 text-gray-400" />
+                                <span className="text-xs font-mono font-bold text-gray-600">{person.phone}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-4">
+                              {person.linked_distributor_id ? (
+                                <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-200">
+                                  <Building2 className="w-3 h-3 mr-1.5"/>
+                                  {person.linked_distributor?.distributor_name}
+                                </Badge>
+                              ) : (
+                                <span className="text-xs text-gray-400 italic">Independent</span>
+                              )}
+                            </TableCell>
+                            <TableCell className="px-4">
+                              <span className="text-xs font-medium text-gray-700">{person.details || "---"}</span>
+                            </TableCell>
+                            <TableCell className="px-4">
+                              <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">{format(new Date(person.created_at), "dd MMM yy")}</span>
+                            </TableCell>
+                            <TableCell className="px-4 text-right">
+                              <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors">
                                 <MoreHorizontal className="h-4 w-4" />
                               </Button>
                             </TableCell>
