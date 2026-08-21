@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/hooks/useAuth'
 import { useStoreLocation } from '@/hooks/useStoreLocation'
@@ -11,17 +11,21 @@ import {
   SelectTrigger, SelectValue 
 } from '@/components/ui/select'
 import { Card, CardContent } from '@/components/ui/card'
+import { 
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter 
+} from '@/components/ui/dialog'
 import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
 import { 
   Search, ArrowRight, Loader2, QrCode, Store, Camera, X, Gem, Image as ImageIcon,
-  UserPlus, User, MessageCircle, Phone, MapPin, CheckCircle2, Gift, History
+  UserPlus, User, MessageCircle, Phone, MapPin, CheckCircle2, Gift, History, AlertCircle, Edit2, Receipt, Ticket
 } from 'lucide-react'
 import { Scanner } from '@yudiel/react-qr-scanner'
 import { cn } from '@/lib/utils'
 
 import { WhatsAppSenderModal } from '@/components/WhatsAppSenderModal'
 import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
 
 interface ProductDiscovery {
   id: string
@@ -60,14 +64,46 @@ interface Customer {
   id: string;
   full_name: string;
   phone: string;
-  city?: string;
+  email?: string | null;
+  city?: string | null;
+  address?: string | null;
+  pan_no?: string | null;
+  birth_date?: string | null;
+  anniversary_date?: string | null;
   customer_status?: string;
+  invoices?: any[];
+  vouchers?: any[];
+  activity_timeline?: any[];
+  [key: string]: any;
 }
 
 interface AvailableGift {
   item_name: string;
   stock_count: number;
 }
+
+// --- Date Helpers ---
+const formatToDBDate = (dateStr?: string) => {
+  if (!dateStr) return null;
+  const parts = dateStr.split('-');
+  if (parts.length === 3) {
+     const d = parts[0].padStart(2, '0');
+     const m = parts[1].padStart(2, '0');
+     let y = parts[2];
+     if (y.length === 2) y = parseInt(y) > 30 ? `19${y}` : `20${y}`;
+     if (y.length === 4) return `${y}-${m}-${d}`;
+  }
+  return null; 
+};
+
+const formatToDisplayDate = (dbDateStr?: string | null) => {
+  if (!dbDateStr) return '';
+  const parts = dbDateStr.split('-');
+  if (parts.length === 3) {
+    return `${parts[2]}-${parts[1]}-${parts[0]}`; // Convert YYYY-MM-DD to DD-MM-YYYY
+  }
+  return dbDateStr;
+};
 
 export default function DiscoveryPage() {
   const { appUser, loading: authLoading } = useAuth()
@@ -85,16 +121,16 @@ export default function DiscoveryPage() {
   const [phoneInput, setPhoneInput] = useState('')
   const [isSearchingCust, setIsSearchingCust] = useState(false)
   const [existingCustomer, setExistingCustomer] = useState<Customer | null>(null)
-  const [newCustForm, setNewCustForm] = useState({ 
-    full_name: '', 
-    city: '', 
-    address: '', 
-    birth_date: '', 
-    anniversary_date: '' 
-  })
   const [isProcessing, setIsProcessing] = useState(false)
   const [isCheckedIn, setIsCheckedIn] = useState(false)
   
+  // Forms
+  const [newCustForm, setNewCustForm] = useState({ 
+    full_name: '', phone: '', email: '', city: '', address: '', pan_no: '', birth_date: '', anniversary_date: '' 
+  })
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false)
+  const [isSavingProfile, setIsSavingProfile] = useState(false)
+
   // Gifting State
   const [availableGifts, setAvailableGifts] = useState<AvailableGift[]>([])
   const [selectedGift, setSelectedGift] = useState<string>('none')
@@ -122,7 +158,6 @@ export default function DiscoveryPage() {
     init()
   }, [appUser])
 
-  // Fetch available gifts dynamically based on location
   useEffect(() => {
     const fetchGifts = async () => {
       if (!appUser || !selectedLocation || selectedLocation === 'ALL') {
@@ -142,7 +177,6 @@ export default function DiscoveryPage() {
 
         if (error) throw error;
         setAvailableGifts(data || []);
-        // Reset selection if previously selected gift is no longer available
         if (data && !data.find(g => g.item_name === selectedGift)) {
           setSelectedGift('none');
         }
@@ -159,19 +193,33 @@ export default function DiscoveryPage() {
   const handlePhoneChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const cleanPhone = e.target.value.replace(/\D/g, '');
     setPhoneInput(cleanPhone);
-    setIsCheckedIn(false); // Reset check-in state if number changes
+    setNewCustForm(prev => ({ ...prev, phone: cleanPhone }));
+    setIsCheckedIn(false); 
 
     if (cleanPhone.length === 10) {
       setIsSearchingCust(true);
       try {
-        const { data } = await supabase
+        // 1. Fetch Core Profile
+        const { data: custData } = await supabase
           .from('customers')
-          .select('id, full_name, phone, city, customer_status')
+          .select('*')
           .eq('company_id', appUser?.company_id)
           .eq('phone', cleanPhone)
           .maybeSingle();
         
-        setExistingCustomer(data || null);
+        if (custData) {
+          // 2. Fetch Insights (Invoices & Vouchers) in parallel
+          const [invRes, vouchRes] = await Promise.all([
+            supabase.from('invoices').select('final_total, invoice_number').eq('customer_id', custData.id),
+            supabase.from('vouchers').select('status, code').eq('customer_id', custData.id)
+          ]);
+
+          custData.invoices = invRes.data || [];
+          custData.vouchers = vouchRes.data || [];
+          setExistingCustomer(custData);
+        } else {
+          setExistingCustomer(null);
+        }
       } catch (error) {
         console.error("Failed to search customer", error);
       } finally {
@@ -182,10 +230,104 @@ export default function DiscoveryPage() {
     }
   };
 
+  const handleDateInput = (field: 'birth_date' | 'anniversary_date', value: string) => {
+    if (newCustForm[field].length > value.length) {
+      setNewCustForm(prev => ({ ...prev, [field]: value }));
+      return;
+    }
+    const digits = value.replace(/\D/g, ''); 
+    let formatted = digits;
+    if (digits.length > 2 && digits.length <= 4) {
+      formatted = `${digits.slice(0, 2)}-${digits.slice(2)}`;
+    } else if (digits.length > 4) {
+      formatted = `${digits.slice(0, 2)}-${digits.slice(2, 4)}-${digits.slice(4, 8)}`;
+    }
+    setNewCustForm(prev => ({ ...prev, [field]: formatted }));
+  }
+
+  // ✨ PROFILE COMPLETION ENGINE
+  const completionStats = useMemo(() => {
+    if (!existingCustomer) return { percentage: 0, missing: [] };
+    
+    const fields = [
+      { key: 'full_name', label: 'Name' },
+      { key: 'phone', label: 'Phone' },
+      { key: 'email', label: 'Email' },
+      { key: 'birth_date', label: 'Birthday' },
+      { key: 'anniversary_date', label: 'Anniversary' },
+      { key: 'city', label: 'City' },
+      { key: 'address', label: 'Address' },
+      { key: 'pan_no', label: 'PAN Number' }
+    ];
+
+    const filled = fields.filter(f => !!existingCustomer[f.key]);
+    const missing = fields.filter(f => !existingCustomer[f.key]);
+    
+    return {
+      percentage: Math.round((filled.length / fields.length) * 100),
+      missing: missing.map(m => m.label)
+    };
+  }, [existingCustomer]);
+
+  const openEditModal = () => {
+    if (!existingCustomer) return;
+    setNewCustForm({
+      full_name: existingCustomer.full_name || '',
+      phone: existingCustomer.phone || '',
+      email: existingCustomer.email || '',
+      city: existingCustomer.city || '',
+      address: existingCustomer.address || '',
+      pan_no: existingCustomer.pan_no || '',
+      birth_date: formatToDisplayDate(existingCustomer.birth_date),
+      anniversary_date: formatToDisplayDate(existingCustomer.anniversary_date)
+    });
+    setIsEditModalOpen(true);
+  }
+
+  const handleUpdateProfile = async () => {
+    if (!existingCustomer) return;
+    const finalBirthDate = formatToDBDate(newCustForm.birth_date);
+    const finalAnnivDate = formatToDBDate(newCustForm.anniversary_date);
+
+    setIsSavingProfile(true);
+    try {
+      const payload = {
+        full_name: newCustForm.full_name,
+        phone: newCustForm.phone,
+        email: newCustForm.email || null,
+        city: newCustForm.city || null,
+        address: newCustForm.address || null,
+        pan_no: newCustForm.pan_no?.toUpperCase() || null,
+        birth_date: finalBirthDate,
+        anniversary_date: finalAnnivDate
+      };
+
+      const { data, error } = await supabase
+        .from('customers')
+        .update(payload)
+        .eq('id', existingCustomer.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+      
+      // Merge insights back in so UI doesn't drop them
+      data.invoices = existingCustomer.invoices;
+      data.vouchers = existingCustomer.vouchers;
+      
+      setExistingCustomer(data);
+      setIsEditModalOpen(false);
+      toast.success("Profile updated successfully!");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to update profile.");
+    } finally {
+      setIsSavingProfile(false);
+    }
+  }
+
   const processGiftIssue = async (customerId: string) => {
     if (selectedGift !== 'none' && selectedLocation && selectedLocation !== 'ALL') {
       try {
-        // 1. Deduct from inventory safely
         const { error: giftErr } = await supabase.rpc('issue_gifting_item', {
           p_company_id: appUser?.company_id,
           p_warehouse_id: selectedLocation,
@@ -194,7 +336,6 @@ export default function DiscoveryPage() {
 
         if (giftErr) throw giftErr;
 
-        // 2. Log in the lifecycle ledger
         await supabase.from('customer_gifts_history').insert({
           company_id: appUser?.company_id,
           customer_id: customerId,
@@ -202,14 +343,12 @@ export default function DiscoveryPage() {
           gift_name: selectedGift
         });
 
-        // ✨ FIX 1: Update the actual customer profile so it shows on the CRM!
         await supabase.from('customers').update({ 
           gift_given: selectedGift 
         }).eq('id', customerId);
 
         toast.success(`${selectedGift} successfully issued and logged!`);
         
-        // Update local available gifts to prevent lag
         setAvailableGifts(prev => prev.map(g => 
           g.item_name === selectedGift ? { ...g, stock_count: g.stock_count - 1 } : g
         ).filter(g => g.stock_count > 0));
@@ -232,7 +371,6 @@ export default function DiscoveryPage() {
     try {
       let activeCustomerId = existingCustomer?.id;
 
-      // ✨ FIX 2: Create the automated event for our new timeline array!
       const newSystemEvent = {
         timestamp: new Date().toISOString(),
         type: 'WALK-IN',
@@ -240,42 +378,34 @@ export default function DiscoveryPage() {
       };
 
       if (existingCustomer) {
-        // ✨ Fetch existing timeline to prevent wiping past events
-        const { data: existingData } = await supabase
-          .from('customers')
-          .select('activity_timeline')
-          .eq('id', existingCustomer.id)
-          .single();
-
-        const existingTimeline = existingData?.activity_timeline || [];
+        const existingTimeline = existingCustomer.activity_timeline || [];
         const updatedTimeline = [newSystemEvent, ...existingTimeline];
 
-        // Update interaction for existing using the timeline, NOT last_interaction
         await supabase
           .from('customers')
           .update({ 
-            customer_status: 'Walk-in', // Maps perfectly to your CRM Tabs
+            customer_status: 'Walk-in',
             activity_timeline: updatedTimeline 
           })
           .eq('id', existingCustomer.id);
         
         toast.success("Walk-in recorded successfully!");
       } else {
-        // Register new customer
         if (!newCustForm.full_name) return toast.error("Name is required for new customers.");
-        if (!newCustForm.birth_date) return toast.error("Date of Birth is required to register a new customer profile.");
         
         const payload = {
           company_id: appUser?.company_id,
           warehouse_id: selectedLocation === 'ALL' ? null : selectedLocation,
           full_name: newCustForm.full_name.trim(),
           phone: phoneInput,
+          email: newCustForm.email.trim() || null,
           city: newCustForm.city.trim() || null,
           address: newCustForm.address.trim() || null,
-          birth_date: newCustForm.birth_date || null,
-          anniversary_date: newCustForm.anniversary_date || null,
+          pan_no: newCustForm.pan_no.trim().toUpperCase() || null,
+          birth_date: formatToDBDate(newCustForm.birth_date),
+          anniversary_date: formatToDBDate(newCustForm.anniversary_date),
           customer_status: 'Walk-in', 
-          activity_timeline: [newSystemEvent], // Insert directly into timeline!
+          activity_timeline: [newSystemEvent], 
         };
 
         const { data, error } = await supabase
@@ -286,11 +416,13 @@ export default function DiscoveryPage() {
 
         if (error) throw error;
         activeCustomerId = data.id;
+        
+        data.invoices = [];
+        data.vouchers = [];
         setExistingCustomer(data);
         toast.success("Customer registered & checked in successfully!");
       }
 
-      // Process gift if selected
       if (activeCustomerId) {
         await processGiftIssue(activeCustomerId);
       }
@@ -343,7 +475,6 @@ export default function DiscoveryPage() {
     if (product) {
       const prodWhId = String(product.warehouse_id || '').toLowerCase().trim();
       const currWhId = String(selectedLocation || '').toLowerCase().trim();
-
       const custParam = existingCustomer ? `&customer_id=${existingCustomer.id}` : '';
 
       if (prodWhId && currWhId !== 'all' && currWhId !== prodWhId) {
@@ -360,7 +491,6 @@ export default function DiscoveryPage() {
         setTimeout(() => {
           router.push(`${targetRoute}?barcode=${product.barcode}&location=${product.warehouse_id || ''}${custParam}`)
         }, 250);
-        
         return; 
       }
 
@@ -469,20 +599,25 @@ export default function DiscoveryPage() {
                     )}
                   </div>
                 </div>
-{/* Dynamic Fields based on Search Result */}
-{phoneInput.length === 10 && !isSearchingCust && !existingCustomer && (
+
+                {/* NEW CUSTOMER REGISTRATION FIELDS */}
+                {phoneInput.length === 10 && !isSearchingCust && !existingCustomer && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 w-full animate-in fade-in slide-in-from-left-2 mt-2">
                     <div className="space-y-1.5">
                       <Label className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">New Customer Name *</Label>
                       <Input required placeholder="Full Name" className="h-10 text-sm bg-white border-indigo-200 focus-visible:ring-indigo-500" value={newCustForm.full_name} onChange={e => setNewCustForm({...newCustForm, full_name: e.target.value})} />
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-[10px] font-bold text-indigo-600 uppercase tracking-widest">Date of Birth *</Label>
-                      <Input required type="date" className="h-10 text-sm bg-white border-indigo-200 focus-visible:ring-indigo-500 text-slate-700" value={newCustForm.birth_date} onChange={e => setNewCustForm({...newCustForm, birth_date: e.target.value})} />
+                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Email (Optional)</Label>
+                      <Input type="email" placeholder="email@address.com" className="h-10 text-sm bg-slate-50" value={newCustForm.email} onChange={e => setNewCustForm({...newCustForm, email: e.target.value})} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Date of Birth (Optional)</Label>
+                      <Input type="text" placeholder="DD-MM-YYYY" className="h-10 text-sm bg-white border-slate-200 text-slate-700 font-mono" value={newCustForm.birth_date} onChange={e => handleDateInput('birth_date', e.target.value)} />
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Anniversary (Optional)</Label>
-                      <Input type="date" className="h-10 text-sm bg-slate-50 text-slate-700" value={newCustForm.anniversary_date} onChange={e => setNewCustForm({...newCustForm, anniversary_date: e.target.value})} />
+                      <Input type="text" placeholder="DD-MM-YYYY" className="h-10 text-sm bg-slate-50 text-slate-700 font-mono" value={newCustForm.anniversary_date} onChange={e => handleDateInput('anniversary_date', e.target.value)} />
                     </div>
                     <div className="space-y-1.5 sm:col-span-2">
                       <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Address (Optional)</Label>
@@ -492,24 +627,96 @@ export default function DiscoveryPage() {
                       <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">City (Optional)</Label>
                       <Input placeholder="City" className="h-10 text-sm bg-slate-50" value={newCustForm.city} onChange={e => setNewCustForm({...newCustForm, city: e.target.value})} />
                     </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">PAN Number (Optional)</Label>
+                      <Input placeholder="ABCDE1234F" className="h-10 text-sm bg-slate-50 uppercase" value={newCustForm.pan_no} onChange={e => setNewCustForm({...newCustForm, pan_no: e.target.value})} />
+                    </div>
                   </div>
                 )}
-                {/* Existing Customer Display */}
+
+                {/* EXISTING CUSTOMER DISPLAY */}
                 {phoneInput.length === 10 && !isSearchingCust && existingCustomer && (
-                  <div className="w-full sm:flex-1 h-10 flex items-center px-4 bg-slate-50 border border-slate-200 rounded-lg animate-in fade-in">
-                    <User className="w-4 h-4 text-slate-400 mr-2 shrink-0" />
-                    <span className="text-sm font-bold text-slate-800 truncate">{existingCustomer.full_name}</span>
-                    {existingCustomer.city && <span className="text-xs text-slate-500 ml-2 truncate">({existingCustomer.city})</span>}
+                  <div className="w-full flex flex-col gap-3 animate-in fade-in">
+                    
+                    <div className="w-full flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-full bg-[#0078D7] text-white flex items-center justify-center font-bold text-sm uppercase shadow-inner shrink-0">
+                          {(existingCustomer.full_name || 'U').charAt(0)}
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-bold text-slate-800 leading-tight">{existingCustomer.full_name}</span>
+                          <span className="text-xs text-slate-500">{existingCustomer.city || 'No City Logged'}</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 uppercase tracking-widest text-[9px]">Existing Client</Badge>
+                      </div>
+                    </div>
+
+                    {/* ✨ VISITOR INSIGHTS PANEL */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center items-center text-center">
+                        <Receipt className="w-4 h-4 text-indigo-500 mb-1" />
+                        <span className="text-sm font-black text-slate-900">
+                          ₹{existingCustomer.invoices?.reduce((sum, inv) => sum + (Number(inv.final_total) || 0), 0).toLocaleString() || 0}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Total Spent</span>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center items-center text-center">
+                        <History className="w-4 h-4 text-slate-400 mb-1" />
+                        <span className="text-sm font-black text-slate-900">
+                          {existingCustomer.invoices?.length || 0}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Purchases</span>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center items-center text-center">
+                        <Ticket className="w-4 h-4 text-amber-500 mb-1" />
+                        <span className="text-sm font-black text-slate-900">
+                          {existingCustomer.vouchers?.filter(v => v.status === 'registered').length || 0}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Active Vouchers</span>
+                      </div>
+                      <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center items-center text-center">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500 mb-1" />
+                        <span className="text-sm font-black text-slate-900">
+                          {existingCustomer.vouchers?.filter(v => v.status === 'redeemed').length || 0}
+                        </span>
+                        <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Redeemed</span>
+                      </div>
+                    </div>
+
+                    {/* ✨ PROFILE COMPLETION WIDGET */}
+                    {completionStats.percentage < 100 && (
+                      <div className="flex items-center justify-between bg-orange-50 border border-orange-200 px-3 py-2 rounded-lg">
+                         <div className="flex flex-col gap-0.5">
+                            <span className="text-[10px] font-bold text-orange-700 flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" /> Profile {completionStats.percentage}% Complete
+                            </span>
+                            <span className="text-[9px] font-medium text-orange-600 truncate max-w-[200px] sm:max-w-md">
+                              Missing: {completionStats.missing.join(', ')}
+                            </span>
+                         </div>
+                         <Button 
+                           type="button"
+                           size="sm" 
+                           variant="outline" 
+                           className="h-7 text-[10px] font-bold border-orange-200 text-orange-700 bg-white hover:bg-orange-100 shadow-sm shrink-0" 
+                           onClick={openEditModal}
+                         >
+                           Complete
+                         </Button>
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {/* Gifting Selector (Only shows if valid number & store selected) */}
                 {phoneInput.length === 10 && (!selectedLocation || selectedLocation === 'ALL' ? (
-                  <div className="w-full sm:w-auto h-10 px-4 flex items-center justify-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-400 shrink-0">
+                  <div className="w-full sm:w-auto h-10 px-4 flex items-center justify-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-400 shrink-0 mt-3 sm:mt-0">
                     Select branch to issue gifts
                   </div>
                 ) : (
-                  <div className="w-full sm:w-48 shrink-0">
+                  <div className="w-full sm:w-48 shrink-0 mt-3 sm:mt-0">
                     <Select value={selectedGift} onValueChange={setSelectedGift}>
                       <SelectTrigger className="h-10 border-slate-200 bg-white focus:ring-amber-500">
                         <Gift className={cn("w-4 h-4 mr-2", selectedGift !== 'none' ? "text-amber-500" : "text-slate-400")} />
@@ -538,7 +745,6 @@ export default function DiscoveryPage() {
               {phoneInput.length === 10 && !isSearchingCust && (
                 <div className="flex gap-2 w-full justify-end mt-2 pt-4 border-t border-slate-100 animate-in fade-in">
                   
-                  {/* Show WA and Check-in button ONLY if they are an existing customer or after they have registered in this session */}
                   {existingCustomer ? (
                     <>
                       <Button 
@@ -792,6 +998,81 @@ export default function DiscoveryPage() {
         )}
 
       </main>
+
+      {/* EDIT PROFILE MODAL */}
+      <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
+        <DialogContent className="sm:max-w-[450px] border border-slate-300 shadow-xl p-0 rounded-sm overflow-hidden bg-white w-[95vw] sm:w-full">
+          <DialogHeader className="bg-slate-100 p-4 border-b border-slate-200">
+            <DialogTitle className="text-base font-semibold text-slate-800">Complete Customer Profile</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 sm:p-5 max-h-[65vh] overflow-y-auto custom-scrollbar">
+            
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label className="text-xs font-semibold text-slate-700">Full Name *</Label>
+              <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.full_name} onChange={(e) => setNewCustForm({...newCustForm, full_name: e.target.value})} />
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-slate-700">Phone *</Label>
+              <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.phone} onChange={(e) => setNewCustForm({...newCustForm, phone: e.target.value})} disabled />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-slate-700">Email</Label>
+              <Input type="email" className="h-9 rounded-sm border-slate-300" value={newCustForm.email} onChange={(e) => setNewCustForm({...newCustForm, email: e.target.value})} />
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-slate-700">D.O.B (DD-MM-YYYY)</Label>
+              <Input 
+                type="text" 
+                inputMode="numeric"
+                placeholder="15-08-1990"
+                className="h-9 rounded-sm border-slate-300 font-mono tracking-widest text-sm" 
+                value={newCustForm.birth_date} 
+                onChange={(e) => handleDateInput('birth_date', e.target.value)} 
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-slate-700">Anniversary (DD-MM-YYYY)</Label>
+              <Input 
+                type="text" 
+                inputMode="numeric"
+                placeholder="25-12-2015"
+                className="h-9 rounded-sm border-slate-300 font-mono tracking-widest text-sm" 
+                value={newCustForm.anniversary_date} 
+                onChange={(e) => handleDateInput('anniversary_date', e.target.value)} 
+              />
+            </div>
+
+            <div className="space-y-1.5 sm:col-span-2 border-t border-slate-100 pt-3">
+              <Label className="text-xs font-semibold text-slate-700">Address</Label>
+              <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.address} onChange={(e) => setNewCustForm({...newCustForm, address: e.target.value})} />
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-slate-700">City</Label>
+              <Input className="h-9 rounded-sm border-slate-300" value={newCustForm.city} onChange={(e) => setNewCustForm({...newCustForm, city: e.target.value})} />
+            </div>
+            
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold text-slate-700">PAN Number</Label>
+              <Input className="h-9 rounded-sm border-slate-300 uppercase" value={newCustForm.pan_no} onChange={(e) => setNewCustForm({...newCustForm, pan_no: e.target.value})} />
+            </div>
+          </div>
+          <DialogFooter className="p-4 bg-slate-50 border-t border-slate-200">
+            <Button variant="ghost" className="rounded-sm text-sm w-full sm:w-auto" onClick={() => setIsEditModalOpen(false)}>Cancel</Button>
+            <Button 
+              onClick={handleUpdateProfile} 
+              disabled={isSavingProfile}
+              className="rounded-sm text-sm bg-[#0078D7] hover:bg-[#005A9E] text-white px-6 w-full sm:w-auto mt-2 sm:mt-0 shadow-sm"
+            >
+              {isSavingProfile ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />} Update Profile
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <WhatsAppSenderModal 
         isOpen={isWaModalOpen}

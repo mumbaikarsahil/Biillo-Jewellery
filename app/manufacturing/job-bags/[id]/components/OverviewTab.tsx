@@ -27,7 +27,6 @@ import {
   Printer, CheckSquare, Square
 } from 'lucide-react'
 
-// Adjust import path as needed based on your folder structure
 import { ItemTagPreview } from '@/components/ItemTagPreview'
 
 interface Props {
@@ -49,6 +48,16 @@ type DraftItem = {
   is_repair?: boolean
 }
 
+// ✨ HELPER COMPONENT FOR INLINE PAPER EDITING
+const InputCell = ({ value, onChange, className = "" }: { value: string, onChange: (val: string) => void, className?: string }) => (
+  <input 
+    type="text" 
+    value={value || ''} 
+    onChange={e => onChange(e.target.value)} 
+    className={`w-full h-full min-h-[28px] bg-transparent border-none outline-none text-center text-blue-700 font-bold print:text-black focus:bg-blue-50/50 transition-colors ${className}`}
+  />
+)
+
 export default function OverviewTab({ job }: Props) {
   const [items, setItems] = useState<any[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -66,35 +75,41 @@ export default function OverviewTab({ job }: Props) {
   const [draftItems, setDraftItems] = useState<DraftItem[]>([])
   const [isSaving, setIsSaving] = useState(false)
 
-  // Quick-Add Form State
   const [quantity, setQuantity] = useState('1')
   const [skuReference, setSkuReference] = useState('')
   const [ornamentType, setOrnamentType] = useState('')
   const [expectedGold, setExpectedGold] = useState('')
   const [expectedDiamond, setExpectedDiamond] = useState('')
 
-  // --- CATEGORY & SKU AUTOCOMPLETE STATE ---
   const [categories, setCategories] = useState<string[]>([
     'LADIES RING', 'NECKLACE', 'GENTS RING', 'TOPS','BRACELET', 'PENDANT', 'GENTS STUD', 'TANMANIA','BANGLE', 'NOSE PIN'
   ])
   const [showCustomType, setShowCustomType] = useState(false)
-  
   const [skuSuggestions, setSkuSuggestions] = useState<string[]>([])
   const [showSkuSuggestions, setShowSkuSuggestions] = useState(false)
 
-  // --- PRINTING STATE & REFS ---
   const [selectedPrintIds, setSelectedPrintIds] = useState<Set<string>>(new Set())
   const printRef = useRef<HTMLDivElement>(null)
-  
-  // ✨ ADDED: Ref and handler for the full document/ledger
   const documentPrintRef = useRef<HTMLDivElement>(null)
 
+  // ✨ STATE FOR ON-PAPER EDITING
+  const [showLedgerPaper, setShowLedgerPaper] = useState(false)
+  const [ledgerEdits, setLedgerEdits] = useState<Record<string, any>>({})
+  const [emptyEdits, setEmptyEdits] = useState<Record<number, any>>({})
+  const [signatureEdits, setSignatureEdits] = useState({ receiver: '', issuer: '' })
+  // ✨ UPDATED: Added memoDate, issuerName, and bannerText with defaults
+  const [ledgerMeta, setLedgerMeta] = useState({ 
+    memoDate: format(new Date(), 'dd/MM/yyyy'),
+    gstNo: '27AAOPM1004A1ZB', 
+    jurisdiction: 'Mumbai', 
+    issuerName: 'OSSAM JEWELS',
+    bannerText: 'Please receive the following Diamonds and Metal on approval and for setting in jewellery or to show.'
+  })
   const handlePrint = useReactToPrint({
     contentRef: printRef,
     documentTitle: `JobBag-Tags-${job.job_bag_number}`,
   })
 
-  // ✨ ADDED: Print handler for the ledger document
   const handlePrintDocument = useReactToPrint({
     contentRef: documentPrintRef,
     documentTitle: `JobBag-Ledger-${job.job_bag_number}`,
@@ -105,7 +120,6 @@ export default function OverviewTab({ job }: Props) {
     fetchExistingCategories()
   }, [job.id])
 
-  // --- FETCH CATEGORIES ON MOUNT ---
   const fetchExistingCategories = async () => {
     const { data } = await supabase
       .from('job_bag_items')
@@ -122,7 +136,6 @@ export default function OverviewTab({ job }: Props) {
     }
   }
 
-  // --- FETCH SKU SUGGESTIONS ---
   const handleSkuSearch = async (val: string) => {
     setSkuReference(val)
     if (val.length < 2) {
@@ -161,7 +174,6 @@ export default function OverviewTab({ job }: Props) {
           if (data.item_category && !categories.includes(data.item_category)) {
             setCategories(prev => [...prev, data.item_category])
           }
-
           toast({ title: "Store Request Loaded", description: "Custom order specifications have been populated in the grid." })
         }
       }
@@ -185,7 +197,6 @@ export default function OverviewTab({ job }: Props) {
           setActiveRepairTicketId(data.id)
           
           if (!categories.includes('Repair')) setCategories(prev => [...prev, 'Repair'])
-
           toast({ title: "Repair Ticket Loaded", description: "Repair specifications have been populated in the grid." })
         }
       }
@@ -213,7 +224,6 @@ export default function OverviewTab({ job }: Props) {
           if (cat && !categories.includes(cat)) {
             setCategories(prev => [...prev, cat])
           }
-
           toast({ title: "Store Restock Loaded", description: "Restock specifications have been populated in the grid." })
         }
       }
@@ -266,7 +276,6 @@ export default function OverviewTab({ job }: Props) {
     }
 
     setDraftItems([...draftItems, ...newDrafts])
-    
     setActiveCustomOrderId(null)
     setActiveRepairTicketId(null)
     setActiveStoreRestockId(null)
@@ -326,7 +335,6 @@ export default function OverviewTab({ job }: Props) {
       fetchExistingCategories() 
       
       window.history.replaceState(null, '', window.location.pathname)
-
     } catch (error: any) {
       toast({ title: "Database Error", description: error.message, variant: "destructive" })
     } finally {
@@ -351,7 +359,6 @@ export default function OverviewTab({ job }: Props) {
     }
   }
 
-  // --- PRINTING LOGIC ---
   const receivedItems = items.filter(i => i.status === 'received')
   const isAllReceivedSelected = receivedItems.length > 0 && receivedItems.every(i => selectedPrintIds.has(i.id))
   
@@ -370,13 +377,11 @@ export default function OverviewTab({ job }: Props) {
     setSelectedPrintIds(newSet)
   }
 
-  // Get the actual inventory records to print
   const itemsToPrint = items
     .filter(i => selectedPrintIds.has(i.id))
     .map(i => i.inventory_items?.[0]) 
     .filter(Boolean)
 
-  // UI Theme Logic based on active loaded items
   const isCustomLoaded = !!activeCustomOrderId;
   const isRepairLoaded = !!activeRepairTicketId;
   const isRestockLoaded = !!activeStoreRestockId;
@@ -385,541 +390,592 @@ export default function OverviewTab({ job }: Props) {
   const buttonClass = isCustomLoaded ? 'bg-purple-600 hover:bg-purple-700 text-white' : isRepairLoaded ? 'bg-amber-600 hover:bg-amber-700 text-white' : isRestockLoaded ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-900 hover:bg-gray-800 text-white';
 
   return (
-    <div className="space-y-6">
-      
-      {/* HEADER METADATA CARD */}
-      <Card className="shadow-sm border-gray-200/60 rounded-2xl overflow-hidden bg-white">
-        <CardContent className="p-5 sm:p-6">
-          <div className="flex justify-between items-center mb-5 border-b border-gray-100 pb-4">
-            <div>
-              <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">Job Bag Reference</p>
-              <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">{job.job_bag_number}</h2>
-            </div>
-            
-            {/* ✨ UPDATED: Grouped Badge and Print Ledger Button */}
-            <div className="flex items-center gap-3">
-              <Button 
-                onClick={handlePrintDocument} 
-                variant="outline" 
-                size="sm" 
-                className="h-8 px-4 text-xs font-bold uppercase shadow-sm bg-white hover:bg-gray-50 text-gray-700 transition-colors hidden sm:flex border-gray-300"
-              >
-                <Printer className="w-3.5 h-3.5 mr-1.5" /> Print Ledger
-              </Button>
-              <Badge variant="secondary" className="bg-gray-100 text-gray-600 uppercase tracking-widest text-[10px] font-bold px-2.5 py-1 rounded-lg">
-                {job.status}
-              </Badge>
-            </div>
-          </div>
+    <>
+      <div className="space-y-6">
+        {/* HEADER METADATA CARD */}
+        <Card className="shadow-sm border-gray-200/60 rounded-2xl overflow-hidden bg-white">
+          <CardContent className="p-5 sm:p-6">
+            <div className="flex justify-between items-center mb-5 border-b border-gray-100 pb-4">
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">Job Bag Reference</p>
+                <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">{job.job_bag_number}</h2>
+              </div>
+              
+              <div className="flex items-center gap-3">
+                {/* ✨ MODIFIED: Opens Full Screen Ledger Print View */}
+                <Button 
+                  onClick={() => {
+                    const initialEdits: Record<string, any> = {}
+                    items.forEach(item => {
+                      const tags = [
+                        item.custom_order_id && 'Custom', 
+                        item.is_repair && 'Repair', 
+                        item.store_restock_id && 'Restock'
+                      ].filter(Boolean).join(', ')
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Category</p>
-              <p className="text-sm font-semibold text-gray-800">{job.product_category || 'Unspecified'}</p>
+                      initialEdits[item.id] = {
+                        typeOfDia: '',
+                        diaPcs: '',
+                        gKt: '',
+                        receivedDate: item.status === 'received' ? 'YES' : '',
+                        partyName: tags, 
+                        partyPlace: '',
+                        remarkSize: ''
+                      }
+                    })
+                    setLedgerEdits(initialEdits)
+                    setEmptyEdits({})
+                    setShowLedgerPaper(true)
+                  }} 
+                  variant="outline" 
+                  size="sm" 
+                  className="h-8 px-4 text-xs font-bold uppercase shadow-sm bg-white hover:bg-gray-50 text-gray-700 transition-colors hidden sm:flex border-gray-300"
+                >
+                  <Printer className="w-3.5 h-3.5 mr-1.5" /> Print Ledger
+                </Button>
+                <Badge variant="secondary" className="bg-gray-100 text-gray-600 uppercase tracking-widest text-[10px] font-bold px-2.5 py-1 rounded-lg">
+                  {job.status}
+                </Badge>
+              </div>
             </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Design Code</p>
-              <p className="text-sm font-semibold text-gray-800">{job.design_code || 'N/A'}</p>
-            </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Est. Gold</p>
-              <p className="text-sm font-semibold text-gray-800">{job.gold_expected_weight_g || 0} <span className="text-gray-400 font-medium">g</span></p>
-            </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Est. Diamond</p>
-              <p className="text-sm font-semibold text-gray-800">{job.diamond_expected_weight_cts || 0} <span className="text-gray-400 font-medium">cts</span></p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
 
-      {/* FAST SKU ENTRY CARD */}
-      <Card className={`shadow-sm overflow-visible rounded-2xl bg-white transition-colors border ${cardBorderClass}`}>
-        <CardHeader className="py-4 px-5 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gray-50/50">
-          <CardTitle className="text-[13px] font-bold text-gray-700 flex items-center gap-2">
-            <LayoutGrid className="w-4 h-4 text-gray-400" strokeWidth={2} />
-            Fast SKU Entry Grid
-          </CardTitle>
-          <div className="flex flex-wrap gap-2">
-            {isCustomLoaded && (
-              <Badge variant="secondary" className="bg-purple-50 text-purple-700 border-purple-200/50 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg flex items-center gap-1.5">
-                <Hammer className="w-3 h-3" strokeWidth={2}/> Custom Order Linked
-              </Badge>
-            )}
-            {isRepairLoaded && (
-              <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-200/50 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg flex items-center gap-1.5">
-                <Wrench className="w-3 h-3" strokeWidth={2}/> Repair Ticket Linked
-              </Badge>
-            )}
-            {isRestockLoaded && (
-              <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200/50 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg flex items-center gap-1.5">
-                <Box className="w-3 h-3" strokeWidth={2}/> Restock Linked
-              </Badge>
-            )}
-          </div>
-        </CardHeader>
-        <CardContent className="p-0 overflow-visible">
-          
-          <form onSubmit={handleAddDrafts} className="flex flex-col md:flex-row md:items-end gap-3 p-5 border-b border-gray-100 overflow-visible">
-            
-            <div className="w-full md:w-20 space-y-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Qty</Label>
-              <Input 
-                type="number" min="1" required 
-                className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all" 
-                value={quantity} 
-                onChange={(e) => setQuantity(e.target.value)} 
-              />
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Category</p>
+                <p className="text-sm font-semibold text-gray-800">{job.product_category || 'Unspecified'}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Design Code</p>
+                <p className="text-sm font-semibold text-gray-800">{job.design_code || 'N/A'}</p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Est. Gold</p>
+                <p className="text-sm font-semibold text-gray-800">{job.gold_expected_weight_g || 0} <span className="text-gray-400 font-medium">g</span></p>
+              </div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Est. Diamond</p>
+                <p className="text-sm font-semibold text-gray-800">{job.diamond_expected_weight_cts || 0} <span className="text-gray-400 font-medium">cts</span></p>
+              </div>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* FAST SKU ENTRY CARD */}
+        <Card className={`shadow-sm overflow-visible rounded-2xl bg-white transition-colors border ${cardBorderClass}`}>
+          <CardHeader className="py-4 px-5 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gray-50/50">
+            <CardTitle className="text-[13px] font-bold text-gray-700 flex items-center gap-2">
+              <LayoutGrid className="w-4 h-4 text-gray-400" strokeWidth={2} />
+              Fast SKU Entry Grid
+            </CardTitle>
+            <div className="flex flex-wrap gap-2">
+              {isCustomLoaded && (
+                <Badge variant="secondary" className="bg-purple-50 text-purple-700 border-purple-200/50 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg flex items-center gap-1.5">
+                  <Hammer className="w-3 h-3" strokeWidth={2}/> Custom Order Linked
+                </Badge>
+              )}
+              {isRepairLoaded && (
+                <Badge variant="secondary" className="bg-amber-50 text-amber-700 border-amber-200/50 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg flex items-center gap-1.5">
+                  <Wrench className="w-3 h-3" strokeWidth={2}/> Repair Ticket Linked
+                </Badge>
+              )}
+              {isRestockLoaded && (
+                <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200/50 text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-lg flex items-center gap-1.5">
+                  <Box className="w-3 h-3" strokeWidth={2}/> Restock Linked
+                </Badge>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent className="p-0 overflow-visible">
             
-            <div className="w-full md:flex-1 space-y-1.5 relative">
-              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Base SKU / Style <span className="text-red-400">*</span></Label>
-              <Input 
-                required 
-                placeholder="e.g. RNG-101" 
-                className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all font-mono uppercase" 
-                value={skuReference} 
-                onChange={(e) => handleSkuSearch(e.target.value)} 
-                onFocus={() => setShowSkuSuggestions(true)}
-                onBlur={() => setTimeout(() => setShowSkuSuggestions(false), 200)}
-              />
-              {showSkuSuggestions && skuSuggestions.length > 0 && (
-                <div className="absolute top-full left-0 w-full mt-2 bg-white border border-gray-200 shadow-xl rounded-xl z-50 max-h-48 overflow-y-auto p-1">
-                  {skuSuggestions.map(sku => (
-                    <div 
-                      key={sku} 
-                      className="px-3 py-2.5 text-sm font-medium hover:bg-gray-50 hover:text-blue-600 cursor-pointer rounded-lg transition-colors"
+            <form onSubmit={handleAddDrafts} className="flex flex-col md:flex-row md:items-end gap-3 p-5 border-b border-gray-100 overflow-visible">
+              
+              <div className="w-full md:w-20 space-y-1.5">
+                <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Qty</Label>
+                <Input 
+                  type="number" min="1" required 
+                  className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all" 
+                  value={quantity} 
+                  onChange={(e) => setQuantity(e.target.value)} 
+                />
+              </div>
+              
+              <div className="w-full md:flex-1 space-y-1.5 relative">
+                <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Base SKU / Style <span className="text-red-400">*</span></Label>
+                <Input 
+                  required 
+                  placeholder="e.g. RNG-101" 
+                  className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all font-mono uppercase" 
+                  value={skuReference} 
+                  onChange={(e) => handleSkuSearch(e.target.value)} 
+                  onFocus={() => setShowSkuSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowSkuSuggestions(false), 200)}
+                />
+                {showSkuSuggestions && skuSuggestions.length > 0 && (
+                  <div className="absolute top-full left-0 w-full mt-2 bg-white border border-gray-200 shadow-xl rounded-xl z-50 max-h-48 overflow-y-auto p-1">
+                    {skuSuggestions.map(sku => (
+                      <div 
+                        key={sku} 
+                        className="px-3 py-2.5 text-sm font-medium hover:bg-gray-50 hover:text-blue-600 cursor-pointer rounded-lg transition-colors"
+                        onClick={() => {
+                          setSkuReference(sku)
+                          setSkuSuggestions([])
+                          setShowSkuSuggestions(false)
+                        }}
+                      >
+                        {sku}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="w-full md:flex-1 space-y-1.5">
+                <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Category Type</Label>
+                {!showCustomType ? (
+                  <Select value={ornamentType} onValueChange={(val) => {
+                    if (val === 'NEW') {
+                      setShowCustomType(true)
+                      setOrnamentType('')
+                    } else {
+                      setOrnamentType(val)
+                    }
+                  }}>
+                    <SelectTrigger className="h-10 rounded-xl text-sm font-medium bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all">
+                      <SelectValue placeholder="Select..." />
+                    </SelectTrigger>
+                    <SelectContent className="rounded-xl shadow-xl border-gray-100 p-1">
+                      {categories.map(c => <SelectItem key={c} value={c} className="text-sm font-medium rounded-lg py-2 cursor-pointer">{c}</SelectItem>)}
+                      <SelectItem value="NEW" className="text-sm font-bold text-blue-600 rounded-lg py-2 cursor-pointer">+ Add Custom Type</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <div className="flex gap-1.5 h-10">
+                    <Input 
+                      placeholder="Custom Type" 
+                      className="h-10 rounded-xl text-sm font-medium bg-white border-blue-300 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all" 
+                      value={ornamentType} 
+                      onChange={(e) => setOrnamentType(e.target.value)} 
+                    />
+                    <Button 
+                      type="button" 
+                      className="h-10 w-10 shrink-0 bg-blue-600 text-white hover:bg-blue-700 rounded-xl shadow-sm" 
+                      size="icon" 
                       onClick={() => {
-                        setSkuReference(sku)
-                        setSkuSuggestions([])
-                        setShowSkuSuggestions(false)
+                        setShowCustomType(false);
+                        if (ornamentType && !categories.includes(ornamentType)) {
+                          setCategories(prev => [...prev, ornamentType].sort());
+                        }
                       }}
                     >
-                      {sku}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="w-full md:flex-1 space-y-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Category Type</Label>
-              {!showCustomType ? (
-                <Select value={ornamentType} onValueChange={(val) => {
-                  if (val === 'NEW') {
-                    setShowCustomType(true)
-                    setOrnamentType('')
-                  } else {
-                    setOrnamentType(val)
-                  }
-                }}>
-                  <SelectTrigger className="h-10 rounded-xl text-sm font-medium bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all">
-                    <SelectValue placeholder="Select..." />
-                  </SelectTrigger>
-                  <SelectContent className="rounded-xl shadow-xl border-gray-100 p-1">
-                    {categories.map(c => <SelectItem key={c} value={c} className="text-sm font-medium rounded-lg py-2 cursor-pointer">{c}</SelectItem>)}
-                    <SelectItem value="NEW" className="text-sm font-bold text-blue-600 rounded-lg py-2 cursor-pointer">+ Add Custom Type</SelectItem>
-                  </SelectContent>
-                </Select>
-              ) : (
-                <div className="flex gap-1.5 h-10">
-                  <Input 
-                    placeholder="Custom Type" 
-                    className="h-10 rounded-xl text-sm font-medium bg-white border-blue-300 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all" 
-                    value={ornamentType} 
-                    onChange={(e) => setOrnamentType(e.target.value)} 
-                  />
-                  <Button 
-                    type="button" 
-                    className="h-10 w-10 shrink-0 bg-blue-600 text-white hover:bg-blue-700 rounded-xl shadow-sm" 
-                    size="icon" 
-                    onClick={() => {
-                      setShowCustomType(false);
-                      if (ornamentType && !categories.includes(ornamentType)) {
-                        setCategories(prev => [...prev, ornamentType].sort());
-                      }
-                    }}
-                  >
-                    <Check className="h-4 w-4" strokeWidth={2.5} />
-                  </Button>
-                  <Button 
-                    type="button" 
-                    variant="ghost"
-                    className="h-10 w-10 shrink-0 text-gray-400 rounded-xl hover:bg-gray-100" 
-                    size="icon" 
-                    onClick={() => {
-                      setShowCustomType(false);
-                      setOrnamentType('');
-                    }}
-                  >
-                    <ArrowLeft className="h-4 w-4" strokeWidth={2} />
-                  </Button>
-                </div>
-              )}
-            </div>
-
-            <div className="w-full md:w-32 space-y-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Exp. Gold</Label>
-              <div className="relative">
-                <Input type="number" step="0.001" placeholder="0.00" className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all pr-6" value={expectedGold} onChange={(e) => setExpectedGold(e.target.value)} />
-                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-gray-400">g</span>
+                      <Check className="h-4 w-4" strokeWidth={2.5} />
+                    </Button>
+                    <Button 
+                      type="button" 
+                      variant="ghost"
+                      className="h-10 w-10 shrink-0 text-gray-400 rounded-xl hover:bg-gray-100" 
+                      size="icon" 
+                      onClick={() => {
+                        setShowCustomType(false);
+                        setOrnamentType('');
+                      }}
+                    >
+                      <ArrowLeft className="h-4 w-4" strokeWidth={2} />
+                    </Button>
+                  </div>
+                )}
               </div>
-            </div>
-            <div className="w-full md:w-32 space-y-1.5">
-              <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Exp. Dia</Label>
-              <div className="relative">
-                <Input type="number" step="0.01" placeholder="0.00" className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all pr-6" value={expectedDiamond} onChange={(e) => setExpectedDiamond(e.target.value)} />
-                <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-gray-400">ct</span>
-              </div>
-            </div>
-            <Button type="submit" className={`w-full md:w-auto h-10 px-5 rounded-xl text-[13px] font-bold shadow-sm transition-all active:scale-95 ${buttonClass}`}>
-              <Plus className="w-4 h-4 mr-1.5" strokeWidth={2} /> Stage
-            </Button>
-          </form>
 
-          {/* DRAFT ITEMS GRID */}
-          {draftItems.length > 0 && (
-            <div className="p-0 animate-in fade-in duration-300">
-              <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+              <div className="w-full md:w-32 space-y-1.5">
+                <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Exp. Gold</Label>
+                <div className="relative">
+                  <Input type="number" step="0.001" placeholder="0.00" className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all pr-6" value={expectedGold} onChange={(e) => setExpectedGold(e.target.value)} />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-gray-400">g</span>
+                </div>
+              </div>
+              <div className="w-full md:w-32 space-y-1.5">
+                <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Exp. Dia</Label>
+                <div className="relative">
+                  <Input type="number" step="0.01" placeholder="0.00" className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all pr-6" value={expectedDiamond} onChange={(e) => setExpectedDiamond(e.target.value)} />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-gray-400">ct</span>
+                </div>
+              </div>
+              <Button type="submit" className={`w-full md:w-auto h-10 px-5 rounded-xl text-[13px] font-bold shadow-sm transition-all active:scale-95 ${buttonClass}`}>
+                <Plus className="w-4 h-4 mr-1.5" strokeWidth={2} /> Stage
+              </Button>
+            </form>
+
+            {/* DRAFT ITEMS GRID */}
+            {draftItems.length > 0 && (
+              <div className="p-0 animate-in fade-in duration-300">
+                <div className="max-h-[300px] overflow-y-auto custom-scrollbar">
+                  <Table>
+                    <TableHeader className="bg-gray-50/50 sticky top-0 z-10 backdrop-blur-md">
+                      <TableRow className="border-gray-200/60 hover:bg-transparent">
+                        <TableHead className="w-[50px]"></TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">SKU / Style Ref</TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Category</TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Gold (g)</TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Dia (ct)</TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Context Tags</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {draftItems.map((draft) => (
+                        <TableRow key={draft.id} className={draft.is_repair ? "bg-amber-50/30" : draft.custom_order_id ? "bg-purple-50/30" : draft.store_restock_id ? "bg-blue-50/30" : "bg-white hover:bg-gray-50/50 border-gray-100"}>
+                          <TableCell className="p-2 text-center">
+                            <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors" onClick={() => removeDraftItem(draft.id)}>
+                              <Trash2 className="w-4 h-4" strokeWidth={1.5} />
+                            </Button>
+                          </TableCell>
+                          <TableCell className="p-2">
+                            <Input className="h-9 rounded-lg text-xs font-bold bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.sku_reference} onChange={(e) => updateDraftItem(draft.id, 'sku_reference', e.target.value)} />
+                          </TableCell>
+                          <TableCell className="p-2">
+                            <Input className="h-9 rounded-lg text-xs font-medium bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.ornament_type} onChange={(e) => updateDraftItem(draft.id, 'ornament_type', e.target.value)} />
+                          </TableCell>
+                          <TableCell className="p-2">
+                            <Input type="number" step="0.001" className="h-9 rounded-lg text-xs font-medium bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.expected_gold_weight_g} onChange={(e) => updateDraftItem(draft.id, 'expected_gold_weight_g', e.target.value)} />
+                          </TableCell>
+                          <TableCell className="p-2">
+                            <Input type="number" step="0.001" className="h-9 rounded-lg text-xs font-medium bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.expected_diamond_weight_cts} onChange={(e) => updateDraftItem(draft.id, 'expected_diamond_weight_cts', e.target.value)} />
+                          </TableCell>
+                          <TableCell className="p-2">
+                            <div className="flex flex-wrap gap-1.5">
+                              {draft.custom_order_id && (
+                                <Badge variant="secondary" className="bg-purple-50 text-purple-700 text-[9px] uppercase tracking-widest font-bold border-purple-200/60 px-2 rounded-md">Custom</Badge>
+                              )}
+                              {draft.is_repair && (
+                                <Badge variant="secondary" className="bg-amber-50 text-amber-700 text-[9px] uppercase tracking-widest font-bold border-amber-200/60 px-2 rounded-md">Repair</Badge>
+                              )}
+                              {draft.store_restock_id && (
+                                <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-[9px] uppercase tracking-widest font-bold border-blue-200/60 px-2 rounded-md">Restock</Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <div className="p-4 bg-gray-50/50 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-4">
+                  <p className="text-xs font-semibold text-gray-500 flex items-center"><AlertCircle className="w-4 h-4 mr-1.5 text-gray-400" strokeWidth={1.5} /> {draftItems.length} uncommitted item(s) in staging grid.</p>
+                  <Button onClick={saveDraftsToDatabase} disabled={isSaving} className="h-10 px-6 rounded-xl text-[13px] font-bold shadow-sm bg-gray-900 text-white hover:bg-gray-800 transition-all w-full sm:w-auto">
+                    {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" strokeWidth={2} />} 
+                    Commit to Job Bag
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* COMMITTED SKUS LIST */}
+        <Card className="shadow-sm border-gray-200/60 rounded-2xl overflow-hidden bg-white">
+          <CardHeader className="py-4 px-5 border-b border-gray-100 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <CardTitle className="text-[13px] font-bold text-gray-800">Committed Job Bag SKUs</CardTitle>
+            
+            {/* PRINT CONTROLS */}
+            <div className="flex items-center gap-3">
+              <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">
+                 {selectedPrintIds.size} Tags Selected
+              </span>
+              <Button 
+                 onClick={handlePrint} 
+                 disabled={selectedPrintIds.size === 0} 
+                 size="sm" 
+                 className="h-8 px-4 text-xs font-bold uppercase shadow-sm bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+              >
+                 <Printer className="w-3.5 h-3.5 mr-1.5" /> Print Tags
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent className="p-0">
+            {isLoading ? (
+              <p className="text-sm font-medium text-gray-400 text-center py-8">Loading items...</p>
+            ) : items.length === 0 ? (
+              <div className="text-center py-12 bg-gray-50/30">
+                <div className="h-12 w-12 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-3">
+                   <ListPlus className="w-6 h-6 text-gray-300" strokeWidth={1.5} />
+                </div>
+                <p className="text-sm font-bold text-gray-600">No items committed yet.</p>
+                <p className="text-xs font-medium text-gray-400 mt-1">Use the fast entry grid above to stage and add SKUs.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto custom-scrollbar">
                 <Table>
-                  <TableHeader className="bg-gray-50/50 sticky top-0 z-10 backdrop-blur-md">
+                  <TableHeader className="bg-gray-50/80">
                     <TableRow className="border-gray-200/60 hover:bg-transparent">
-                      <TableHead className="w-[50px]"></TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">SKU / Style Ref</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Category</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Gold (g)</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Dia (ct)</TableHead>
-                      <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Context Tags</TableHead>
+                      {/* CHECKBOX HEADER */}
+                      <TableHead className="w-[50px] text-center px-2">
+                         <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={togglePrintSelectAll} 
+                            disabled={receivedItems.length === 0}
+                            className="h-8 w-8 p-0 text-gray-500 hover:text-blue-600"
+                         >
+                            {isAllReceivedSelected && receivedItems.length > 0 ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4" />}
+                         </Button>
+                      </TableHead>
+                      <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 px-2">SKU Reference</TableHead>
+                      <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Category</TableHead>
+                      <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Gold</TableHead>
+                      <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Dia</TableHead>
+                      <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Status / Tags</TableHead>
+                      <TableHead className="w-[60px] h-11"></TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {draftItems.map((draft) => (
-                      <TableRow key={draft.id} className={draft.is_repair ? "bg-amber-50/30" : draft.custom_order_id ? "bg-purple-50/30" : draft.store_restock_id ? "bg-blue-50/30" : "bg-white hover:bg-gray-50/50 border-gray-100"}>
-                        <TableCell className="p-2 text-center">
-                          <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors" onClick={() => removeDraftItem(draft.id)}>
-                            <Trash2 className="w-4 h-4" strokeWidth={1.5} />
-                          </Button>
-                        </TableCell>
-                        <TableCell className="p-2">
-                          <Input className="h-9 rounded-lg text-xs font-bold bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.sku_reference} onChange={(e) => updateDraftItem(draft.id, 'sku_reference', e.target.value)} />
-                        </TableCell>
-                        <TableCell className="p-2">
-                          <Input className="h-9 rounded-lg text-xs font-medium bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.ornament_type} onChange={(e) => updateDraftItem(draft.id, 'ornament_type', e.target.value)} />
-                        </TableCell>
-                        <TableCell className="p-2">
-                          <Input type="number" step="0.001" className="h-9 rounded-lg text-xs font-medium bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.expected_gold_weight_g} onChange={(e) => updateDraftItem(draft.id, 'expected_gold_weight_g', e.target.value)} />
-                        </TableCell>
-                        <TableCell className="p-2">
-                          <Input type="number" step="0.001" className="h-9 rounded-lg text-xs font-medium bg-white border-gray-200 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500" value={draft.expected_diamond_weight_cts} onChange={(e) => updateDraftItem(draft.id, 'expected_diamond_weight_cts', e.target.value)} />
-                        </TableCell>
-                        <TableCell className="p-2">
-                          <div className="flex flex-wrap gap-1.5">
-                            {draft.custom_order_id && (
-                              <Badge variant="secondary" className="bg-purple-50 text-purple-700 text-[9px] uppercase tracking-widest font-bold border-purple-200/60 px-2 rounded-md">Custom</Badge>
+                    {items.map((item: any) => {
+                      const isReceived = item.status === 'received';
+                      const isSelectedForPrint = selectedPrintIds.has(item.id);
+
+                      return (
+                        <TableRow key={item.id} className={`${isSelectedForPrint ? 'bg-blue-50/40' : 'hover:bg-gray-50/50'} border-gray-100 transition-colors`}>
+                          <TableCell className="p-2 text-center align-middle">
+                             {isReceived ? (
+                               <Button 
+                                  variant="ghost" 
+                                  size="sm" 
+                                  onClick={() => togglePrintSelect(item.id)} 
+                                  className="h-8 w-8 p-0 hover:bg-transparent"
+                               >
+                                  {isSelectedForPrint ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4 text-gray-300" />}
+                               </Button>
+                             ) : (
+                               <span title="Item not received yet" className="inline-block px-2 opacity-30"><Square className="w-4 h-4 text-gray-200" /></span>
+                             )}
+                          </TableCell>
+                          
+                          <TableCell className="px-2 py-3.5">
+                            <div className="font-mono font-bold text-[13px] text-gray-900">{item.sku_reference}</div>
+                          </TableCell>
+                          <TableCell className="py-3.5">
+                            <div className="text-[13px] font-medium text-gray-700">{item.ornament_type || '-'}</div>
+                          </TableCell>
+                          <TableCell className="text-[13px] text-right font-semibold text-gray-700 py-3.5">
+                            {item.expected_gold_weight_g ? `${item.expected_gold_weight_g} g` : '-'}
+                          </TableCell>
+                          <TableCell className="text-[13px] text-right font-semibold text-gray-700 py-3.5">
+                            {item.expected_diamond_weight_cts ? `${item.expected_diamond_weight_cts} cts` : '-'}
+                          </TableCell>
+                          <TableCell className="py-3.5">
+                            <div className="flex flex-wrap gap-1.5">
+                              <Badge variant={item.status === 'pending' ? 'outline' : 'secondary'} className={`text-[9px] font-bold uppercase tracking-widest px-2 rounded-md ${item.status === 'received' ? 'bg-emerald-50 text-emerald-700 border-none' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>
+                                {item.status}
+                              </Badge>
+                              {item.custom_order_id && (
+                                <Badge variant="secondary" className="bg-purple-50 text-purple-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
+                                  Custom
+                                </Badge>
+                              )}
+                              {item.is_repair && (
+                                <Badge variant="secondary" className="bg-amber-50 text-amber-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
+                                  Repair
+                                </Badge>
+                              )}
+                              {item.store_restock_id && (
+                                <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
+                                  Restock
+                                </Badge>
+                              )}
+                            </div>
+                          </TableCell>
+                          <TableCell className="py-3.5 text-right px-4">
+                            {item.status === 'pending' && (
+                              <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors" onClick={() => deleteSavedItem(item.id, item.status)}>
+                                <Trash2 className="w-4 h-4" strokeWidth={1.5} />
+                              </Button>
                             )}
-                            {draft.is_repair && (
-                              <Badge variant="secondary" className="bg-amber-50 text-amber-700 text-[9px] uppercase tracking-widest font-bold border-amber-200/60 px-2 rounded-md">Repair</Badge>
-                            )}
-                            {draft.store_restock_id && (
-                              <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-[9px] uppercase tracking-widest font-bold border-blue-200/60 px-2 rounded-md">Restock</Badge>
-                            )}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               </div>
-              <div className="p-4 bg-gray-50/50 border-t border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-4">
-                <p className="text-xs font-semibold text-gray-500 flex items-center"><AlertCircle className="w-4 h-4 mr-1.5 text-gray-400" strokeWidth={1.5} /> {draftItems.length} uncommitted item(s) in staging grid.</p>
-                <Button onClick={saveDraftsToDatabase} disabled={isSaving} className="h-10 px-6 rounded-xl text-[13px] font-bold shadow-sm bg-gray-900 text-white hover:bg-gray-800 transition-all w-full sm:w-auto">
-                  {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" strokeWidth={2} />} 
-                  Commit to Job Bag
-                </Button>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            )}
+          </CardContent>
+        </Card>
 
-      {/* COMMITTED SKUS LIST */}
-      <Card className="shadow-sm border-gray-200/60 rounded-2xl overflow-hidden bg-white">
-        <CardHeader className="py-4 px-5 border-b border-gray-100 bg-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <CardTitle className="text-[13px] font-bold text-gray-800">Committed Job Bag SKUs</CardTitle>
-          
-          {/* PRINT CONTROLS */}
-          <div className="flex items-center gap-3">
-            <span className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">
-               {selectedPrintIds.size} Tags Selected
-            </span>
-            <Button 
-               onClick={handlePrint} 
-               disabled={selectedPrintIds.size === 0} 
-               size="sm" 
-               className="h-8 px-4 text-xs font-bold uppercase shadow-sm bg-blue-600 hover:bg-blue-700 text-white transition-colors"
-            >
-               <Printer className="w-3.5 h-3.5 mr-1.5" /> Print Tags
-            </Button>
+        {/* HIDDEN PRINT CONTAINER (TAGS) */}
+        <div className="hidden">
+          <div ref={printRef} className="print:p-0 flex flex-col">
+             {itemsToPrint.map((invItem) => (
+               <ItemTagPreview 
+                 key={invItem.id} 
+                 item={invItem} 
+                 isPrintOnly={true} 
+                 onClose={() => {}} 
+               />
+             ))}
           </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          {isLoading ? (
-            <p className="text-sm font-medium text-gray-400 text-center py-8">Loading items...</p>
-          ) : items.length === 0 ? (
-            <div className="text-center py-12 bg-gray-50/30">
-              <div className="h-12 w-12 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-3">
-                 <ListPlus className="w-6 h-6 text-gray-300" strokeWidth={1.5} />
-              </div>
-              <p className="text-sm font-bold text-gray-600">No items committed yet.</p>
-              <p className="text-xs font-medium text-gray-400 mt-1">Use the fast entry grid above to stage and add SKUs.</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto custom-scrollbar">
-              <Table>
-                <TableHeader className="bg-gray-50/80">
-                  <TableRow className="border-gray-200/60 hover:bg-transparent">
-                    {/* CHECKBOX HEADER */}
-                    <TableHead className="w-[50px] text-center px-2">
-                       <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          onClick={togglePrintSelectAll} 
-                          disabled={receivedItems.length === 0}
-                          className="h-8 w-8 p-0 text-gray-500 hover:text-blue-600"
-                       >
-                          {isAllReceivedSelected && receivedItems.length > 0 ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4" />}
-                       </Button>
-                    </TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 px-2">SKU Reference</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Category</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Gold</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Dia</TableHead>
-                    <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Status / Tags</TableHead>
-                    <TableHead className="w-[60px] h-11"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {items.map((item: any) => {
-                    const isReceived = item.status === 'received';
-                    const isSelectedForPrint = selectedPrintIds.has(item.id);
-
-                    return (
-                      <TableRow key={item.id} className={`${isSelectedForPrint ? 'bg-blue-50/40' : 'hover:bg-gray-50/50'} border-gray-100 transition-colors`}>
-                        {/* CHECKBOX CELL */}
-                        <TableCell className="p-2 text-center align-middle">
-                           {isReceived ? (
-                             <Button 
-                                variant="ghost" 
-                                size="sm" 
-                                onClick={() => togglePrintSelect(item.id)} 
-                                className="h-8 w-8 p-0 hover:bg-transparent"
-                             >
-                                {isSelectedForPrint ? <CheckSquare className="w-4 h-4 text-blue-600" /> : <Square className="w-4 h-4 text-gray-300" />}
-                             </Button>
-                           ) : (
-                             <span title="Item not received yet" className="inline-block px-2 opacity-30"><Square className="w-4 h-4 text-gray-200" /></span>
-                           )}
-                        </TableCell>
-                        
-                        <TableCell className="px-2 py-3.5">
-                          <div className="font-mono font-bold text-[13px] text-gray-900">{item.sku_reference}</div>
-                        </TableCell>
-                        <TableCell className="py-3.5">
-                          <div className="text-[13px] font-medium text-gray-700">{item.ornament_type || '-'}</div>
-                        </TableCell>
-                        <TableCell className="text-[13px] text-right font-semibold text-gray-700 py-3.5">
-                          {item.expected_gold_weight_g ? `${item.expected_gold_weight_g} g` : '-'}
-                        </TableCell>
-                        <TableCell className="text-[13px] text-right font-semibold text-gray-700 py-3.5">
-                          {item.expected_diamond_weight_cts ? `${item.expected_diamond_weight_cts} cts` : '-'}
-                        </TableCell>
-                        <TableCell className="py-3.5">
-                          <div className="flex flex-wrap gap-1.5">
-                            <Badge variant={item.status === 'pending' ? 'outline' : 'secondary'} className={`text-[9px] font-bold uppercase tracking-widest px-2 rounded-md ${item.status === 'received' ? 'bg-emerald-50 text-emerald-700 border-none' : 'bg-gray-50 text-gray-600 border-gray-200'}`}>
-                              {item.status}
-                            </Badge>
-                            {item.custom_order_id && (
-                              <Badge variant="secondary" className="bg-purple-50 text-purple-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
-                                Custom
-                              </Badge>
-                            )}
-                            {item.is_repair && (
-                              <Badge variant="secondary" className="bg-amber-50 text-amber-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
-                                Repair
-                              </Badge>
-                            )}
-                            {item.store_restock_id && (
-                              <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-[9px] uppercase tracking-widest font-bold border-none px-2 rounded-md">
-                                Restock
-                              </Badge>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell className="py-3.5 text-right px-4">
-                          {item.status === 'pending' && (
-                            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors" onClick={() => deleteSavedItem(item.id, item.status)}>
-                              <Trash2 className="w-4 h-4" strokeWidth={1.5} />
-                            </Button>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* HIDDEN PRINT CONTAINER (TAGS) */}
-      <div className="hidden">
-        <div ref={printRef} className="print:p-0 flex flex-col">
-           {itemsToPrint.map((invItem) => (
-             <ItemTagPreview 
-               key={invItem.id} 
-               item={invItem} 
-               isPrintOnly={true} 
-               onClose={() => {}} 
-             />
-           ))}
         </div>
+
       </div>
 
-      {/* ✨ ADDED: HIDDEN PRINT CONTAINER (FULL LEDGER DOCUMENT) */}
-      <div className="hidden">
-        <div ref={documentPrintRef} className="print:block p-6 bg-white font-sans w-[210mm] min-h-[297mm]">
-           
-           {/* Document Header */}
-           <div className="text-center mb-2">
-              <h1 className="text-4xl font-black uppercase tracking-widest text-[#b91c1c]">OSSAM JEWELS</h1>
-              <p className="text-[13px] font-bold text-[#b91c1c] tracking-wide">Diamonds-n-Jewellery</p>
-              <p className="text-[11px] font-bold text-[#b91c1c] mt-1">Issue to Karigar and Jewellery Receipt Mfg. Memo.</p>
-           </div>
+      {/* ✨ ON-PAPER EDITING OVERLAY FOR LEDGER */}
+      {showLedgerPaper && (
+        <div className="fixed inset-0 z-[100] bg-zinc-900/95 backdrop-blur-sm overflow-y-auto flex flex-col items-center py-8">
+          
+          <div className="w-[210mm] flex justify-between mb-4 sticky top-4 z-[110] print:hidden">
+            <Button variant="outline" className="bg-white hover:bg-gray-100 text-gray-700" onClick={() => setShowLedgerPaper(false)}>
+              <ArrowLeft className="w-4 h-4 mr-2" /> Back
+            </Button>
+            <div className="flex gap-2">
+               <Button className="bg-blue-600 hover:bg-blue-700 text-white shadow-lg" onClick={handlePrintDocument}>
+                 <Printer className="w-4 h-4 mr-2" /> Print Ledger
+               </Button>
+            </div>
+          </div>
 
-           {/* Metadata Details */}
-           <div className="flex justify-between items-end mb-3">
-              <div className="flex flex-col gap-2">
-                 <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
-                    <span className="w-20">MEMO No.:</span>
-                    <span className="border-b border-[#b91c1c] min-w-[150px] inline-block text-black px-2 pb-0.5">{job.job_bag_number}</span>
-                 </div>
-                 <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
-                    <span className="w-20">Name :</span>
-                    <span className="border-b border-[#b91c1c] min-w-[250px] inline-block text-black px-2 pb-0.5">{job.karigars?.full_name || ''}</span>
-                 </div>
-              </div>
-              <div className="flex flex-col gap-2 items-end">
-                 <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
-                    <span>Date :</span>
-                    <span className="border-b border-[#b91c1c] min-w-[120px] inline-block text-black px-2 text-center pb-0.5">{format(new Date(job.created_at || new Date()), 'dd/MM/yyyy')}</span>
-                 </div>
-                 <div className="text-xs font-bold mt-1 text-[#b91c1c]">
-                    GST NO: <span className="text-black ml-1">27AAOPM1004A1ZB</span> {/* Replace with actual warehouse GST if dynamic */}
-                 </div>
-              </div>
-           </div>
+          <div ref={documentPrintRef} className="bg-white p-6 font-sans w-[210mm] min-h-[297mm] shadow-2xl shrink-0 print:shadow-none print:w-full print:h-full print:p-0 print:m-0 relative">
+             
+             {/* Document Header */}
+             <div className="text-center mb-2">
+                <input 
+                   type="text" 
+                   value={ledgerMeta.issuerName} 
+                   onChange={(e) => setLedgerMeta({...ledgerMeta, issuerName: e.target.value})} 
+                   className="text-4xl font-black uppercase tracking-widest text-[#b91c1c] text-center w-full bg-transparent border-none outline-none focus:bg-blue-50/50 print:text-[#b91c1c]" 
+                />
+                <p className="text-[13px] font-bold text-[#b91c1c] tracking-wide">Diamonds-n-Jewellery</p>
+                <p className="text-[11px] font-bold text-[#b91c1c] mt-1">Issue to Karigar and Jewellery Receipt Mfg. Memo.</p>
+             </div>
 
-           {/* Banner */}
-           <div className="w-full text-center border-y-2 border-[#b91c1c] py-1 mb-0 bg-red-50/10">
-              <p className="text-[10px] font-bold text-[#b91c1c]">Please receive the following Diamonds and Metal on approval and for setting in jewellery or to show.</p>
-           </div>
+             {/* Metadata Details */}
+             <div className="flex justify-between items-end mb-3">
+                <div className="flex flex-col gap-2">
+                   <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
+                      <span className="w-20">MEMO No.:</span>
+                      <span className="border-b border-[#b91c1c] min-w-[150px] inline-block text-black px-2 pb-0.5">{job.job_bag_number}</span>
+                   </div>
+                   <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
+                      <span className="w-20">Name :</span>
+                      <span className="border-b border-[#b91c1c] min-w-[250px] inline-block text-black px-2 pb-0.5">{job.karigars?.full_name || ''}</span>
+                   </div>
+                </div>
+                <div className="flex flex-col gap-2 items-end">
+                   <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
+                      <span>Date :</span>
+                      <span className="border-b border-[#b91c1c] min-w-[120px] inline-block px-2 text-center pb-0.5">
+                         <input type="text" value={ledgerMeta.memoDate} onChange={e => setLedgerMeta({...ledgerMeta, memoDate: e.target.value})} className="w-full text-center bg-transparent border-none outline-none text-black font-bold focus:bg-blue-50/50" />
+                      </span>
+                   </div>
+                   <div className="text-xs font-bold mt-1 text-[#b91c1c] flex items-center">
+                      GST NO: <input type="text" value={ledgerMeta.gstNo} onChange={e => setLedgerMeta({...ledgerMeta, gstNo: e.target.value})} className="text-black ml-1 w-32 border-none outline-none focus:bg-blue-50/50 uppercase" />
+                   </div>
+                </div>
+             </div>
 
-           {/* Items Table Grid */}
-           <table className="w-full border-collapse border-2 border-t-0 border-[#b91c1c] text-[10px] text-center table-fixed">
-              <thead>
-                 <tr className="text-[#b91c1c]">
-                   <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-8" rowSpan={2}>Qty</th>
-                   <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-10" rowSpan={2}>Sr.no</th>
-                   <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-[90px]" rowSpan={2}>Jewellery<br/>Design</th>
-                   <th className="border-b border-r border-[#b91c1c] p-1 font-bold" colSpan={6}>Studding Details</th>
-                   <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-14 leading-tight" rowSpan={2}>Jewellery<br/>Recieved<br/>Date</th>
-                   <th className="border-b border-r border-[#b91c1c] p-1 font-bold" colSpan={2}>Remark</th>
-                   <th className="border-b-2 p-1 font-bold w-12 text-center" rowSpan={2}>Remark<br/><span className="font-normal text-[9px]">size</span></th>
-                 </tr>
-                 <tr className="border-b-2 border-[#b91c1c] text-[#b91c1c]">
-                   <th className="border-r border-[#b91c1c] p-1 font-bold w-10 leading-tight">Type of<br/>Dia.</th>
-                   <th className="border-r border-[#b91c1c] p-1 font-bold w-8 leading-tight">Dia.<br/>Pcs.</th>
-                   <th className="border-r border-[#b91c1c] p-1 font-bold w-12 leading-tight">Dia.<br/>Carats</th>
-                   <th className="border-r border-[#b91c1c] p-1 font-bold w-8 leading-tight">G.<br/>KT</th>
-                   <th className="border-r border-[#b91c1c] p-1 font-bold w-10">14K</th>
-                   <th className="border-r border-[#b91c1c] p-1 font-bold w-10">18K</th>
-                   <th className="border-r border-[#b91c1c] p-1 font-normal w-14">Party name</th>
-                   <th className="border-r border-[#b91c1c] p-1 font-normal w-14">Party Place</th>
-                 </tr>
-              </thead>
-              <tbody className="text-black font-semibold">
-                 {/* Render Actual Items */}
-                 {items.map((item, idx) => {
-                   const tags = [
-                     item.custom_order_id && 'Custom', 
-                     item.is_repair && 'Repair', 
-                     item.store_restock_id && 'Restock'
-                   ].filter(Boolean).join(', ');
+             {/* Banner */}
+             <div className="w-full text-center border-y-2 border-[#b91c1c] py-1 mb-0 bg-red-50/10">
+                <input type="text" value={ledgerMeta.bannerText} onChange={e => setLedgerMeta({...ledgerMeta, bannerText: e.target.value})} className="w-full text-center text-[10px] font-bold text-[#b91c1c] bg-transparent border-none outline-none focus:bg-blue-50/50" />
+             </div>
 
-                   return (
-                     <tr key={item.id} className="border-b border-[#b91c1c] h-8">
-                       <td className="border-r border-[#b91c1c] p-1">1</td>
-                       <td className="border-r border-[#b91c1c] p-1">{idx + 1}</td>
-                       <td className="border-r border-[#b91c1c] p-1 text-[9px] leading-tight break-words">{item.sku_reference} <br/><span className="font-medium text-[8px]">{item.ornament_type}</span></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1">{item.expected_diamond_weight_cts || ''}</td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1">{item.expected_gold_weight_g || ''}</td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1 text-[8px] leading-tight break-words">{tags}</td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="p-1"></td>
-                     </tr>
-                   )
-                 })}
-                 
-                 {/* Empty grid rows for manual writing to replicate the physical book design */}
-                 {Array.from({ length: Math.max(0, 10 - items.length) }).map((_, idx) => (
-                    <tr key={`empty-${idx}`} className="border-b border-[#b91c1c] h-[34px]">
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="border-r border-[#b91c1c] p-1"></td>
-                       <td className="p-1"></td>
-                     </tr>
-                 ))}
-              </tbody>
-           </table>
+             {/* Items Table Grid */}
+             <table className="w-full border-collapse border-2 border-t-0 border-[#b91c1c] text-[10px] text-center table-fixed">
+                <thead>
+                   <tr className="text-[#b91c1c]">
+                     <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-8" rowSpan={2}>Qty</th>
+                     <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-10" rowSpan={2}>Sr.no</th>
+                     <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-[90px]" rowSpan={2}>Jewellery<br/>Design</th>
+                     <th className="border-b border-r border-[#b91c1c] p-1 font-bold" colSpan={6}>Studding Details</th>
+                     <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-14 leading-tight" rowSpan={2}>Jewellery<br/>Recieved<br/>Date</th>
+                     <th className="border-b border-r border-[#b91c1c] p-1 font-bold" colSpan={2}>Remark</th>
+                     <th className="border-b-2 p-1 font-bold w-12 text-center" rowSpan={2}>Remark<br/><span className="font-normal text-[9px]">size</span></th>
+                   </tr>
+                   <tr className="border-b-2 border-[#b91c1c] text-[#b91c1c]">
+                     <th className="border-r border-[#b91c1c] p-1 font-bold w-10 leading-tight">Type of<br/>Dia.</th>
+                     <th className="border-r border-[#b91c1c] p-1 font-bold w-8 leading-tight">Dia.<br/>Pcs.</th>
+                     <th className="border-r border-[#b91c1c] p-1 font-bold w-12 leading-tight">Dia.<br/>Carats</th>
+                     <th className="border-r border-[#b91c1c] p-1 font-bold w-8 leading-tight">G.<br/>KT</th>
+                     <th className="border-r border-[#b91c1c] p-1 font-bold w-10">14K</th>
+                     <th className="border-r border-[#b91c1c] p-1 font-bold w-10">18K</th>
+                     <th className="border-r border-[#b91c1c] p-1 font-normal w-14">Party name</th>
+                     <th className="border-r border-[#b91c1c] p-1 font-normal w-14">Party Place</th>
+                   </tr>
+                </thead>
+                <tbody className="text-black font-semibold">
+                   {/* Render Actual Items */}
+                   {items.map((item, idx) => {
+                     const editState = ledgerEdits[item.id] || {};
+                     const setEdit = (field: string, val: string) => setLedgerEdits(prev => ({...prev, [item.id]: { ...prev[item.id], [field]: val }}));
 
-           {/* Footer Signatures Area */}
-           <div className="w-full border-2 border-t-0 border-[#b91c1c] flex flex-col text-[#b91c1c]">
-              <div className="flex border-b-2 border-[#b91c1c] bg-red-50/10">
-                 <div className="flex-1 py-1.5 px-2 text-center text-[10px] font-bold border-r-2 border-[#b91c1c] leading-tight">
-                    Acknowledgement of entrustment<br/>as per the conditions on reverse
-                 </div>
-                 <div className="flex-1 py-1.5 px-2 text-center text-[10px] font-bold flex items-center justify-center">
-                    Subject to Mumbai Jurisdiction
-                 </div>
-              </div>
-              <div className="flex h-20">
-                 <div className="flex-1 p-2 text-center text-[10px] font-bold border-r-2 border-[#b91c1c] flex items-end justify-center">
-                    Receiver's Signature
-                 </div>
-                 <div className="flex-1 p-2 text-center text-[10px] font-bold flex items-end justify-center">
-                    For BIILLO JEWELS
-                 </div>
-              </div>
-           </div>
+                     return (
+                       <tr key={item.id} className="border-b border-[#b91c1c] h-8">
+                         <td className="border-r border-[#b91c1c] p-1">1</td>
+                         <td className="border-r border-[#b91c1c] p-1">{idx + 1}</td>
+                         <td className="border-r border-[#b91c1c] p-1 text-[9px] leading-tight break-words">{item.sku_reference} <br/><span className="font-medium text-[8px]">{item.ornament_type}</span></td>
+                         
+                         {/* ✨ EDITABLE BLUE MARK FIELDS */}
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.typeOfDia} onChange={(v) => setEdit('typeOfDia', v)} /></td>
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.diaPcs} onChange={(v) => setEdit('diaPcs', v)} /></td>
+                         <td className="border-r border-[#b91c1c] p-1">{item.expected_diamond_weight_cts || ''}</td>
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.gKt} onChange={(v) => setEdit('gKt', v)} /></td>
+                         <td className="border-r border-[#b91c1c] p-1"></td>
+                         <td className="border-r border-[#b91c1c] p-1">{item.expected_gold_weight_g || ''}</td>
+                         
+                         {/* Received Date & Remarks */}
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.receivedDate} onChange={(v) => setEdit('receivedDate', v)} /></td>
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.partyName} onChange={(v) => setEdit('partyName', v)} /></td>
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.partyPlace} onChange={(v) => setEdit('partyPlace', v)} /></td>
+                         <td className="p-0"><InputCell value={editState.remarkSize} onChange={(v) => setEdit('remarkSize', v)} /></td>
+                       </tr>
+                     )
+                   })}
+                   
+                   {/* Editable Empty grid rows */}
+                   {Array.from({ length: Math.max(0, 10 - items.length) }).map((_, idx) => {
+                      const editState = emptyEdits[idx] || {};
+                      const setEdit = (field: string, val: string) => setEmptyEdits(prev => ({...prev, [idx]: { ...prev[idx], [field]: val }}));
+                      return (
+                       <tr key={`empty-${idx}`} className="border-b border-[#b91c1c] h-[34px]">
+                         <td className="border-r border-[#b91c1c] p-1"></td>
+                         <td className="border-r border-[#b91c1c] p-1"></td>
+                         <td className="border-r border-[#b91c1c] p-1"></td>
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.typeOfDia} onChange={(v) => setEdit('typeOfDia', v)} /></td>
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.diaPcs} onChange={(v) => setEdit('diaPcs', v)} /></td>
+                         <td className="border-r border-[#b91c1c] p-1"></td>
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.gKt} onChange={(v) => setEdit('gKt', v)} /></td>
+                         <td className="border-r border-[#b91c1c] p-1"></td>
+                         <td className="border-r border-[#b91c1c] p-1"></td>
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.receivedDate} onChange={(v) => setEdit('receivedDate', v)} /></td>
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.partyName} onChange={(v) => setEdit('partyName', v)} /></td>
+                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.partyPlace} onChange={(v) => setEdit('partyPlace', v)} /></td>
+                         <td className="p-0"><InputCell value={editState.remarkSize} onChange={(v) => setEdit('remarkSize', v)} /></td>
+                       </tr>
+                      )
+                   })}
+                </tbody>
+             </table>
 
+             {/* Footer Signatures Area */}
+             <div className="w-full border-2 border-t-0 border-[#b91c1c] flex flex-col text-[#b91c1c]">
+                <div className="flex border-b-2 border-[#b91c1c] bg-red-50/10">
+                   <div className="flex-1 py-1.5 px-2 text-center text-[10px] font-bold border-r-2 border-[#b91c1c] leading-tight">
+                      Acknowledgement of entrustment<br/>as per the conditions on reverse
+                   </div>
+                   <div className="flex-1 py-1.5 px-2 text-center text-[10px] font-bold flex items-center justify-center">
+                      Subject to <input type="text" value={ledgerMeta.jurisdiction} onChange={e => setLedgerMeta({...ledgerMeta, jurisdiction: e.target.value})} className="w-20 mx-1 text-center bg-transparent border-none outline-none focus:bg-blue-50/50" /> Jurisdiction
+                   </div>
+                </div>
+                <div className="flex h-20">
+                   <div className="flex-1 p-2 pb-1 text-center text-[10px] font-bold border-r-2 border-[#b91c1c] flex flex-col justify-end items-center">
+                      <input type="text" className="w-[80%] border-none bg-transparent outline-none text-blue-700 font-bold text-center print:text-black focus:bg-blue-50/50 mb-1" value={signatureEdits.receiver} onChange={e => setSignatureEdits({...signatureEdits, receiver: e.target.value})} />
+                      Receiver's Signature
+                   </div>
+                   <div className="flex-1 p-2 pb-1 text-center text-[10px] font-bold flex flex-col justify-end items-center">
+                      <input type="text" className="w-[80%] border-none bg-transparent outline-none text-blue-700 font-bold text-center print:text-black focus:bg-blue-50/50 mb-1" value={signatureEdits.issuer} onChange={e => setSignatureEdits({...signatureEdits, issuer: e.target.value})} />
+                      For {ledgerMeta.issuerName}
+                   </div>
+                </div>
+             </div>
+
+          </div>
         </div>
-      </div>
+      )}
 
-    </div>
+    </>
   )
 }
