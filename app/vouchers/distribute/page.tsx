@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabaseClient'
 import { useAuth } from '@/hooks/useAuth'
 import { useReactToPrint } from 'react-to-print'
 import QRCode from 'react-qr-code' 
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -20,8 +20,8 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 import { 
-  Loader2, FileText, CheckCircle2, CalendarDays, IndianRupee, Send, X,
-  Store, Package, ListOrdered, Hash, Info, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer, QrCode as QrCodeIcon, Download, PlusCircle, Search, Calendar, Users
+  Loader2, FileText, CheckCircle2, CalendarDays, IndianRupee, X,
+  Store, Package, ListOrdered, Hash, ArrowLeft, ChevronRight, RefreshCw, Database, User, Eye, Truck, Gift, Printer, QrCode as QrCodeIcon, Download, PlusCircle, Search, Calendar, Users, BookmarkCheck, CircleDashed
 } from 'lucide-react'
 import { addMonths, format, isWithinInterval, parseISO, startOfDay, endOfDay } from 'date-fns'
 
@@ -33,18 +33,21 @@ interface VoucherCode {
 export default function DistributeVouchersPage() {
   const { appUser } = useAuth()
   
-  // Data States
   const [distributors, setDistributors] = useState<any[]>([])
   const [batches, setBatches] = useState<any[]>([])
   const [challans, setChallans] = useState<any[]>([])
   const [agents, setAgents] = useState<any[]>([]) 
-  const [referencePersons, setReferencePersons] = useState<any[]>([]) // ✨ NEW: Reference Persons
+  const [referencePersons, setReferencePersons] = useState<any[]>([]) 
+  const [bookings, setBookings] = useState<any[]>([]) 
   const [companyData, setCompanyData] = useState<any>(null)
   
-  // Form States
   const [allocationType, setAllocationType] = useState<'vendor' | 'event'>('vendor')
   const [distributorId, setDistributorId] = useState('')
-  const [referencePersonId, setReferencePersonId] = useState('none') // ✨ NEW: Reference Person Selection
+  const [referencePersonId, setReferencePersonId] = useState('none') 
+  const [selectedBooking, setSelectedBooking] = useState('none') 
+  // ✨ CHANGED: Default is now Pending
+  const [paymentMode, setPaymentMode] = useState<string>('Pending') 
+  const [eventName, setEventName] = useState('') 
   const [selectedBatch, setSelectedBatch] = useState('')
   const [quantity, setQuantity] = useState('')
   const [validityMonths, setValidityMonths] = useState('1')
@@ -53,35 +56,30 @@ export default function DistributeVouchersPage() {
   const [deliveryAgent, setDeliveryAgent] = useState('')
   const [isBirthdayRedemption, setIsBirthdayRedemption] = useState(false) 
   
-  // Filter States
   const [dateFrom, setDateFrom] = useState<string>('')
   const [dateTo, setDateTo] = useState<string>('')
+  // ✨ CHANGED: Default tab set to pending
   const [activeTab, setActiveTab] = useState('pending')
 
-  // Sequence Tracking States
   const [availableVouchers, setAvailableVouchers] = useState<VoucherCode[]>([]);
   const [isLoadingVouchers, setIsLoadingVouchers] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
 
-  // Custom Sequence States
   const [sequenceMode, setSequenceMode] = useState<'auto' | 'custom'>('auto')
   const [customStart, setCustomStart] = useState('')
   const [customEnd, setCustomEnd] = useState('')
 
-  // Add Distributor States
   const [isNewDistModalOpen, setIsNewDistModalOpen] = useState(false)
   const [isSubmittingDist, setIsSubmittingDist] = useState(false)
   const [newDistData, setNewDistData] = useState({
     distributor_name: '', contact_person: '', phone: '', address: '', distributor_type: 'external_shop'
   })
 
-  // View Details & Print Modal State
   const [viewChallan, setViewChallan] = useState<any>(null)
   const [viewSequence, setViewSequence] = useState<{start: string, end: string} | null>(null)
   const [isLoadingSequence, setIsLoadingSequence] = useState(false)
   
-  // Event QR Modal State
   const [eventQrData, setEventQrData] = useState<{ url: string, prefix: string, count: number } | null>(null)
 
   const printRef = useRef<HTMLDivElement>(null)
@@ -99,21 +97,26 @@ export default function DistributeVouchersPage() {
     documentTitle: `Distribution_Report_${activeTab}_${format(new Date(), 'dd-MM-yyyy')}`
   })
 
-  // ✨ NEW: Auto-select reference person when distributor changes
   useEffect(() => {
     if (allocationType === 'vendor' && distributorId && distributorId !== 'ADD_NEW') {
       const linkedRef = referencePersons.find(rp => rp.linked_distributor_id === distributorId);
-      if (linkedRef) {
-        setReferencePersonId(linkedRef.id);
-      } else {
-        setReferencePersonId('none');
-      }
+      setReferencePersonId(linkedRef ? linkedRef.id : 'none');
     }
   }, [distributorId, allocationType, referencePersons]);
 
+  useEffect(() => {
+    if (selectedBooking !== 'none') {
+      const booking = bookings.find(b => b.id === selectedBooking);
+      if (booking) {
+        setDistributorId(booking.distributor_id);
+        const remaining = booking.requested_quantity - booking.fulfilled_quantity;
+        setQuantity(remaining.toString());
+      }
+    }
+  }, [selectedBooking, bookings]);
+
   const handlePrepareAndPrint = async () => {
     if (filteredChallans.length === 0) return toast.error("No data to print.");
-    
     setIsPreparingPrint(true);
     const loadingToast = toast.loading("Preparing PDF Report...");
 
@@ -149,7 +152,6 @@ export default function DistributeVouchersPage() {
       }, 300);
 
     } catch (err) {
-      console.error(err);
       toast.dismiss(loadingToast);
       toast.error("Failed to prepare PDF.");
       setIsPreparingPrint(false);
@@ -169,9 +171,11 @@ export default function DistributeVouchersPage() {
       const { data: agentData } = await supabase.from('delivery_agents').select('*').eq('company_id', appUser.company_id).order('name')
       if (agentData) setAgents(agentData)
 
-      // ✨ Fetch Reference Persons
       const { data: refData } = await supabase.from('voucher_reference_persons').select('*').eq('company_id', appUser.company_id).order('name')
       if (refData) setReferencePersons(refData)
+
+      const { data: bData } = await supabase.from('voucher_bookings').select('*').eq('company_id', appUser.company_id).neq('status', 'completed').order('created_at', { ascending: false })
+      if (bData) setBookings(bData)
 
       const { data: batchData } = await supabase
         .from("voucher_batches")
@@ -189,18 +193,11 @@ export default function DistributeVouchersPage() {
               .eq('status', 'in_stock');
 
             return {
-              id: b.id,
-              batch_no: b.batch_no,
-              prefix: b.prefix,
-              discount_value: b.discount_value,
-              handling_fee: b.handling_fee || 0,
-              available_stock: count || 0
+              id: b.id, batch_no: b.batch_no, prefix: b.prefix, discount_value: b.discount_value, handling_fee: b.handling_fee || 0, available_stock: count || 0
             };
           })
         );
-        
-        const formattedBatches = formattedBatchesRaw.filter(b => b.available_stock > 0); 
-        setBatches(formattedBatches);
+        setBatches(formattedBatchesRaw.filter(b => b.available_stock > 0)); 
       }
 
       const { data: records } = await supabase
@@ -259,7 +256,7 @@ export default function DistributeVouchersPage() {
         }
 
         setAvailableVouchers(allData);
-        setQuantity(""); 
+        if (selectedBooking === 'none') setQuantity(""); 
         setCustomStart("");
         setCustomEnd("");
       } catch (error: any) {
@@ -284,7 +281,14 @@ export default function DistributeVouchersPage() {
   }, [quantity, sequenceMode, customStart, availableVouchers]);
 
   const filteredChallans = useMemo(() => {
-    let result = challans.filter(c => c.payment_status === activeTab);
+    // ✨ CHANGED: Tabs routing matches new mode names
+    let result = challans.filter(c => {
+      if (activeTab === 'pending') return c.payment_mode === 'Pending' && !c.event_name;
+      if (activeTab === 'cash') return c.payment_mode === 'Cash' && !c.event_name;
+      if (activeTab === 'received') return c.payment_mode === 'Cash (Received)' && !c.event_name;
+      if (activeTab === 'events') return c.event_name != null;
+      return true;
+    });
 
     if (dateFrom || dateTo) {
       result = result.filter((challan) => {
@@ -294,14 +298,12 @@ export default function DistributeVouchersPage() {
         return isWithinInterval(itemDate, { start, end });
       });
     }
-
     return result;
   }, [challans, activeTab, dateFrom, dateTo]);
 
 
   const exportToCSV = async () => {
     if (filteredChallans.length === 0) return toast.error("No data to export");
-
     const loadingToast = toast.loading("Fetching sequences and preparing export...");
 
     try {
@@ -318,48 +320,32 @@ export default function DistributeVouchersPage() {
       filteredChallans.forEach(c => {
         const challanVouchers = (voucherData || []).filter(v => v.distribution_id === c.id);
         if (challanVouchers.length > 0) {
-          sequenceMap[c.id] = {
-            start: challanVouchers[0].code,
-            end: challanVouchers[challanVouchers.length - 1].code
-          };
+          sequenceMap[c.id] = { start: challanVouchers[0].code, end: challanVouchers[challanVouchers.length - 1].code };
         } else {
           sequenceMap[c.id] = { start: 'N/A', end: 'N/A' };
         }
       });
 
-      const headers = [
-        'Date', 
-        'Distributor', 
-        'Quantity', 
-        'Fee Amount (₹)', 
-        'Status', 
-        'Expiry Date', 
-        'Delivery Agent', 
-        'Sequence Start', 
-        'Sequence End'
-      ];
+      const headers = ['Date', 'Type/Name', 'Quantity', 'Fee Amount (₹)', 'Payment Mode', 'Delivery Status', 'Expiry Date', 'Sequence Start', 'Sequence End'];
 
       const csvData = filteredChallans.map(c => [
         format(new Date(c.created_at), 'dd-MM-yyyy'),
-        `"${c.voucher_distributors?.distributor_name || 'N/A'}"`, 
+        `"${c.event_name ? `Event: ${c.event_name}` : c.voucher_distributors?.distributor_name || 'N/A'}"`, 
         c.quantity,
-        c.total_amount,
-        c.payment_status.toUpperCase(),
+        c.total_amount || 0,
+        c.payment_mode,
+        c.delivery_status.toUpperCase(),
         c.expiry_date ? format(new Date(c.expiry_date), 'dd-MM-yyyy') : 'N/A',
-        `"${c.delivery_agent || 'Self Pickup'}"`,
         sequenceMap[c.id]?.start || 'N/A',
         sequenceMap[c.id]?.end || 'N/A'
       ]);
 
-      csvData.push([]); 
-      csvData.push([]); 
-      csvData.push(['Powered By Biillo ERP']);
+      csvData.push([], [], ['Powered By Biillo ERP']);
 
       const csvContent = [headers.join(','), ...csvData.map(row => row.join(','))].join('\n');
       const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement("a");
-      const url = URL.createObjectURL(blob);
-      link.setAttribute("href", url);
+      link.href = URL.createObjectURL(blob);
       link.setAttribute("download", `Distributions_${activeTab}_${format(new Date(), 'dd-MM-yyyy')}.csv`);
       document.body.appendChild(link);
       link.click();
@@ -367,9 +353,7 @@ export default function DistributeVouchersPage() {
 
       toast.dismiss(loadingToast);
       toast.success("Export downloaded successfully!");
-
     } catch (err) {
-      console.error(err);
       toast.dismiss(loadingToast);
       toast.error("Failed to generate export data.");
     }
@@ -383,10 +367,19 @@ export default function DistributeVouchersPage() {
     const num = parseInt(val);
     const maxAvailable = availableVouchers.length;
     
+    let maxAllowed = maxAvailable;
+    if (selectedBooking !== 'none') {
+      const booking = bookings.find(b => b.id === selectedBooking);
+      if (booking) {
+        const remaining = booking.requested_quantity - booking.fulfilled_quantity;
+        maxAllowed = Math.min(maxAvailable, remaining);
+      }
+    }
+
     if (sequenceMode === 'auto') {
-      if (num > maxAvailable) {
-        setQuantity(maxAvailable.toString());
-        toast.info(`Quantity auto-adjusted to max available stock (${maxAvailable}).`);
+      if (num > maxAllowed) {
+        setQuantity(maxAllowed.toString());
+        toast.info(`Quantity adjusted to max allowed (${maxAllowed}).`);
       } else {
         setQuantity(val);
       }
@@ -442,6 +435,8 @@ export default function DistributeVouchersPage() {
     if (allocationType === 'vendor') {
       if (!distributorId) return toast.error("Select a distributor")
       if (!totalFee || parseFloat(totalFee) < 0) return toast.error("Enter a valid total handling fee")
+    } else if (allocationType === 'event') {
+      if (!eventName.trim()) return toast.error("Event Name is required")
     }
 
     let finalExpiryDate = ''
@@ -456,26 +451,43 @@ export default function DistributeVouchersPage() {
     setIsSubmitting(true)
     try {
       const voucherIds = vouchersToUpdate.map(v => v.id);
-      const selectedRefPerson = referencePersonId !== 'none' ? referencePersonId : null; // ✨ Resolve Reference Person
+      const selectedRefPerson = referencePersonId !== 'none' ? referencePersonId : null; 
+      const activeBookingId = selectedBooking !== 'none' ? selectedBooking : null;
+
+      const { data: challan, error: challanErr } = await supabase
+        .from('voucher_distributions')
+        .insert({
+          company_id: appUser?.company_id,
+          distributor_id: allocationType === 'vendor' ? distributorId : null,
+          booking_id: allocationType === 'vendor' ? activeBookingId : null,
+          event_name: allocationType === 'event' ? eventName : null,
+          reference_person_id: selectedRefPerson,
+          quantity: numQuantity,
+          total_amount: allocationType === 'vendor' ? parseFloat(totalFee) : 0,
+          payment_mode: allocationType === 'vendor' ? paymentMode : 'N/A',
+          delivery_status: allocationType === 'vendor' ? 'pending' : 'delivered', 
+          payment_status: allocationType === 'vendor' ? (paymentMode === 'Pending' ? 'pending' : 'paid') : 'paid',
+          expiry_date: finalExpiryDate,
+          delivery_agent: (allocationType === 'vendor' && deliveryAgent && deliveryAgent !== 'none') ? deliveryAgent : null,
+          is_birthday_redemption: isBirthdayRedemption
+        })
+        .select('*, voucher_distributors(*)')
+        .single()
+
+      if (challanErr) throw challanErr
 
       if (allocationType === 'vendor') {
-        const { data: challan, error: challanErr } = await supabase
-          .from('voucher_distributions')
-          .insert({
-            company_id: appUser?.company_id,
-            distributor_id: distributorId,
-            reference_person_id: selectedRefPerson, // ✨ ADDED
-            quantity: numQuantity,
-            total_amount: parseFloat(totalFee),
-            payment_status: 'pending',
-            expiry_date: finalExpiryDate,
-            delivery_agent: (deliveryAgent && deliveryAgent !== 'none') ? deliveryAgent : null,
-            is_birthday_redemption: isBirthdayRedemption
-          })
-          .select('*, voucher_distributors(*)')
-          .single()
-
-        if (challanErr) throw challanErr
+        if (activeBookingId) {
+          const booking = bookings.find(b => b.id === activeBookingId);
+          if (booking) {
+            const newFulfilled = booking.fulfilled_quantity + numQuantity;
+            const newStatus = newFulfilled >= booking.requested_quantity ? 'completed' : 'partially_fulfilled';
+            await supabase.from('voucher_bookings').update({
+              fulfilled_quantity: newFulfilled,
+              status: newStatus
+            }).eq('id', activeBookingId);
+          }
+        }
 
         const { error: updateErr } = await supabase
           .from('vouchers')
@@ -483,8 +495,8 @@ export default function DistributeVouchersPage() {
             status: 'distributed',
             distributor_id: distributorId, 
             distribution_id: challan.id, 
-            reference_person_id: selectedRefPerson, // ✨ ADDED
-            is_event_voucher: false, // ✨ ADDED
+            reference_person_id: selectedRefPerson,
+            is_event_voucher: false,
             expiry_date: finalExpiryDate,
             distributed_at: new Date().toISOString(),
             is_birthday_redemption: isBirthdayRedemption
@@ -505,8 +517,10 @@ export default function DistributeVouchersPage() {
           .from('vouchers')
           .update({
             status: 'unclaimed', 
-            reference_person_id: selectedRefPerson, // ✨ ADDED
-            is_event_voucher: true, // ✨ ADDED
+            distribution_id: challan.id,
+            reference_person_id: selectedRefPerson,
+            is_event_voucher: true, 
+            event_name: eventName,
             expiry_date: finalExpiryDate,
             is_birthday_redemption: isBirthdayRedemption
           })
@@ -521,17 +535,16 @@ export default function DistributeVouchersPage() {
           description: `${numQuantity} vouchers are now live for QR claims.`
         })
 
-        setEventQrData({
-          url: eventUrl,
-          prefix: detectedPrefix,
-          count: numQuantity
-        })
+        setEventQrData({ url: eventUrl, prefix: detectedPrefix, count: numQuantity })
       }
 
       setQuantity('')
       setTotalFee('')
       setDistributorId('')
-      setReferencePersonId('none') // Reset Reference Person
+      setSelectedBooking('none')
+      setReferencePersonId('none') 
+      setPaymentMode('Pending')
+      setEventName('')
       setSelectedBatch('')
       setDeliveryAgent('')
       setCustomStart('')
@@ -544,6 +557,31 @@ export default function DistributeVouchersPage() {
       toast.error(err.message || "Failed to process allocation")
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  // ✨ CHANGED: Explicit dropdown update handlers
+  const handleUpdatePaymentMode = async (challanId: string, newMode: string) => {
+    try {
+      await supabase.from('voucher_distributions').update({ 
+        payment_mode: newMode,
+        payment_status: newMode === 'Pending' ? 'pending' : 'paid',
+        payment_received_at: newMode.includes('Received') ? new Date().toISOString() : null
+      }).eq('id', challanId);
+      toast.success(`Payment updated to ${newMode}`);
+      fetchData();
+    } catch (err) {
+      toast.error("Failed to update payment");
+    }
+  }
+
+  const handleUpdateDeliveryStatus = async (challanId: string, newStatus: string) => {
+    try {
+      await supabase.from('voucher_distributions').update({ delivery_status: newStatus }).eq('id', challanId);
+      toast.success(`Delivery marked as ${newStatus}`);
+      fetchData();
+    } catch (err) {
+      toast.error("Failed to update delivery status");
     }
   }
 
@@ -576,21 +614,25 @@ export default function DistributeVouchersPage() {
     img.src = `data:image/svg+xml;base64,${btoa(svgData)}`;
   };
 
-  const handleMarkPaid = async (challanId: string) => {
+  const handleCreateDistributor = async () => {
+    if (!newDistData.distributor_name.trim()) return toast.error("Distributor name is required");
+    setIsSubmittingDist(true);
     try {
-      const { error } = await supabase
-        .from('voucher_distributions')
-        .update({
-          payment_status: 'paid',
-          payment_received_at: new Date().toISOString()
-        })
-        .eq('id', challanId)
-
-      if (error) throw error
-      toast.success("Payment Recorded! Vouchers handed over.")
-      fetchData()
-    } catch (err) {
-      toast.error("Failed to update payment status")
+      const { data, error } = await supabase.from('voucher_distributors').insert({
+        company_id: appUser?.company_id, ...newDistData
+      }).select().single();
+      
+      if (error) throw error;
+      
+      toast.success("Distributor added successfully!");
+      setDistributors(prev => [...prev, data].sort((a,b) => a.distributor_name.localeCompare(b.distributor_name)));
+      setDistributorId(data.id);
+      setIsNewDistModalOpen(false);
+      setNewDistData({ distributor_name: '', contact_person: '', phone: '', address: '', distributor_type: 'external_shop' });
+    } catch (e: any) {
+      toast.error(e.message || "Failed to create distributor");
+    } finally {
+      setIsSubmittingDist(false);
     }
   }
 
@@ -622,29 +664,6 @@ export default function DistributeVouchersPage() {
     }
   }
 
-  const handleCreateDistributor = async () => {
-    if (!newDistData.distributor_name.trim()) return toast.error("Distributor name is required");
-    setIsSubmittingDist(true);
-    try {
-      const { data, error } = await supabase.from('voucher_distributors').insert({
-        company_id: appUser?.company_id,
-        ...newDistData
-      }).select().single();
-      
-      if (error) throw error;
-      
-      toast.success("Distributor added successfully!");
-      setDistributors(prev => [...prev, data].sort((a,b) => a.distributor_name.localeCompare(b.distributor_name)));
-      setDistributorId(data.id);
-      setIsNewDistModalOpen(false);
-      setNewDistData({ distributor_name: '', contact_person: '', phone: '', address: '', distributor_type: 'external_shop' });
-    } catch (e: any) {
-      toast.error(e.message || "Failed to create distributor");
-    } finally {
-      setIsSubmittingDist(false);
-    }
-  }
-
   if (isLoading) {
     return <div className="p-8 flex justify-center min-h-screen bg-[#fafafa] items-center"><Loader2 className="w-8 h-8 animate-spin text-zinc-400" /></div>
   }
@@ -652,7 +671,6 @@ export default function DistributeVouchersPage() {
   return (
     <div className="flex flex-col min-h-screen bg-[#fafafa] font-sans">
       
-      {/* HEADER */}
       <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-md border-b border-zinc-200 px-4 h-12 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 overflow-hidden">
           <Link href="/vouchers">
@@ -660,15 +678,12 @@ export default function DistributeVouchersPage() {
               <ArrowLeft className="h-4 w-4 text-zinc-500" />
             </Button>
           </Link>
-          
           <Separator orientation="vertical" className="h-4 hidden sm:block" />
-          
           <nav className="hidden sm:flex items-center gap-1.5 text-[13px] whitespace-nowrap overflow-hidden">
             <Link href="/vouchers" className="text-zinc-500 hover:text-zinc-900 transition-colors font-medium">Vouchers</Link>
             <ChevronRight className="h-3.5 w-3.5 text-zinc-400" />
             <span className="font-semibold text-zinc-900 select-none">Distribution Allocation</span>
           </nav>
-          
           <span className="sm:hidden font-semibold text-zinc-900 text-sm">Distribute Vouchers</span>
         </div>
 
@@ -684,19 +699,16 @@ export default function DistributeVouchersPage() {
         
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-6 items-start">
           
-          {/* ============================================== */}
-          {/* LEFT: ALLOCATION & SEQUENCE FORM               */}
-          {/* ============================================== */}
           <Card className="lg:col-span-5 xl:col-span-4 border-zinc-200/60 shadow-sm bg-white lg:sticky lg:top-16 flex flex-col h-auto lg:max-h-[calc(100vh-5rem)] overflow-hidden">
             
             <CardHeader className="bg-zinc-50/50 border-b border-zinc-100 p-4 shrink-0">
               <Tabs value={allocationType} onValueChange={(v: any) => setAllocationType(v)} className="w-full">
                 <TabsList className="w-full grid grid-cols-2 bg-zinc-200/50 p-1">
                   <TabsTrigger value="vendor" className="text-xs font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                    <Store className="w-3.5 h-3.5 mr-1.5" /> Vendor
+                    <Store className="w-3.5 h-3.5 mr-1.5" /> Vendor / Branch
                   </TabsTrigger>
                   <TabsTrigger value="event" className="text-xs font-semibold data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                    <QrCodeIcon className="w-3.5 h-3.5 mr-1.5" /> Event (QR)
+                    <QrCodeIcon className="w-3.5 h-3.5 mr-1.5" /> Digital Event
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -705,42 +717,94 @@ export default function DistributeVouchersPage() {
             <CardContent className="p-4 space-y-4 overflow-y-auto custom-scrollbar flex-1 pb-6">
               
               {allocationType === 'vendor' && (
-                <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2">
-                  <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Distributor</Label>
-                  <Select value={distributorId} onValueChange={(val) => {
-                    if (val === 'ADD_NEW') setIsNewDistModalOpen(true)
-                    else setDistributorId(val)
-                  }}>
-                    <SelectTrigger className="h-10 text-sm bg-zinc-50 border-zinc-200"><SelectValue placeholder="Select partner..." /></SelectTrigger>
-                    <SelectContent className="border-zinc-200 max-h-[300px]">
-                      {distributors.map(d => (
-                        <SelectItem key={d.id} value={d.id}>
-                          <div className="flex items-center gap-2 font-medium">
-                            <Store className="w-3.5 h-3.5 text-zinc-400" /> {d.distributor_name}
-                          </div>
-                        </SelectItem>
-                      ))}
-                      <div className="p-1 mt-1 border-t border-zinc-100">
-                        <SelectItem value="ADD_NEW" className="text-indigo-600 font-semibold bg-indigo-50/50 focus:bg-indigo-100 rounded-md cursor-pointer">
-                          <span className="flex items-center gap-1.5"><PlusCircle className="w-3.5 h-3.5"/> Add New Distributor</span>
-                        </SelectItem>
-                      </div>
-                    </SelectContent>
-                  </Select>
+                <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
+                      <BookmarkCheck className="w-3.5 h-3.5 text-indigo-500" /> Fulfill Open Pre-Order (Optional)
+                    </Label>
+                    <Select value={selectedBooking} onValueChange={setSelectedBooking}>
+                      <SelectTrigger className="h-10 text-sm bg-indigo-50/50 border-indigo-100 text-indigo-900 focus:ring-indigo-500">
+                        <SelectValue placeholder="Select booking to deduct from..." />
+                      </SelectTrigger>
+                      <SelectContent className="border-indigo-100 max-h-[300px]">
+                        <SelectItem value="none" className="text-zinc-500 italic">Direct Ad-hoc Issue (No Booking)</SelectItem>
+                        {bookings.map(b => (
+                          <SelectItem key={b.id} value={b.id}>
+                            <span className="font-mono text-indigo-600 font-bold mr-2">{b.booking_ref}</span>
+                            <span className="font-semibold text-zinc-800">Rem: {b.requested_quantity - b.fulfilled_quantity}</span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Distributor</Label>
+                    <Select 
+                      value={distributorId} 
+                      onValueChange={(val) => {
+                        if (val === 'ADD_NEW') {
+                          setIsNewDistModalOpen(true)
+                        } else {
+                          setDistributorId(val)
+                          
+                          // ✨ THE NEW LOGIC: Check for open bookings on selection
+                          const openBooking = bookings.find(b => b.distributor_id === val);
+                          if (openBooking) {
+                            setSelectedBooking(openBooking.id);
+                            toast.info("Open Booking Found!", {
+                              description: `Auto-linked to pre-order ${openBooking.booking_ref}.`
+                            });
+                          }
+                        }
+                      }} 
+                      disabled={selectedBooking !== 'none'}
+                    >
+                      <SelectTrigger className={`h-10 text-sm bg-zinc-50 border-zinc-200 ${selectedBooking !== 'none' ? 'opacity-70 cursor-not-allowed' : ''}`}>
+                        <SelectValue placeholder="Select partner..." />
+                      </SelectTrigger>
+                      <SelectContent className="border-zinc-200 max-h-[300px]">
+                        {distributors.map(d => (
+                          <SelectItem key={d.id} value={d.id}>
+                            <div className="flex items-center gap-2 font-medium">
+                              <Store className="w-3.5 h-3.5 text-zinc-400" /> {d.distributor_name}
+                            </div>
+                          </SelectItem>
+                        ))}
+                        <div className="p-1 mt-1 border-t border-zinc-100">
+                          <SelectItem value="ADD_NEW" className="text-indigo-600 font-semibold bg-indigo-50/50 focus:bg-indigo-100 rounded-md cursor-pointer">
+                            <span className="flex items-center gap-1.5"><PlusCircle className="w-3.5 h-3.5"/> Add New Distributor</span>
+                          </SelectItem>
+                        </div>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               )}
 
               {allocationType === 'event' && (
-                <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-lg flex items-start gap-2.5 animate-in fade-in slide-in-from-top-2">
-                  <QrCodeIcon className="w-4 h-4 text-indigo-500 mt-0.5 shrink-0" />
-                  <p className="text-[11px] font-medium text-indigo-800 leading-snug">
-                    <strong className="block text-xs font-semibold text-indigo-900 mb-0.5">Digital Event Pool</strong>
-                    These vouchers will bypass physical delivery and instantly become available for customers to claim themselves via the public QR code.
-                  </p>
+                <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                  <div className="bg-indigo-50 border border-indigo-100 p-3 rounded-lg flex items-start gap-2.5">
+                    <QrCodeIcon className="w-4 h-4 text-indigo-500 mt-0.5 shrink-0" />
+                    <p className="text-[11px] font-medium text-indigo-800 leading-snug">
+                      <strong className="block text-xs font-semibold text-indigo-900 mb-0.5">Digital Event Pool</strong>
+                      These bypass physical delivery. They are instantly live for customers to claim via public QR code.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Event Name</Label>
+                    <Input 
+                      placeholder="e.g. Navratri Carnival 2026" 
+                      value={eventName}
+                      onChange={(e) => setEventName(e.target.value)}
+                      className="h-10 text-sm font-semibold border-zinc-200 bg-white"
+                      required
+                    />
+                  </div>
                 </div>
               )}
 
-              {/* ✨ NEW: Reference Person Dropdown (Available in both modes) */}
               <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2 pt-1 border-t border-zinc-100 mt-3">
                 <Label className="text-[11px] font-semibold text-emerald-600 uppercase tracking-wider flex items-center gap-1.5">
                   <Users className="w-3.5 h-3.5"/> Intro Agent / Reference (Optional)
@@ -774,9 +838,6 @@ export default function DistributeVouchersPage() {
                             {batch.batch_no} {batch.prefix && <span className="text-indigo-400">({batch.prefix})</span>}
                           </span>
                           <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-semibold text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded border border-purple-100 hidden sm:inline-block">
-                               ₹{batch.discount_value} Val / ₹{batch.handling_fee} Fee
-                            </span>
                             <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
                               {batch.available_stock} Avail.
                             </span>
@@ -862,12 +923,6 @@ export default function DistributeVouchersPage() {
                   {sequenceError && sequenceMode === 'custom' && (
                     <p className="text-[10px] text-red-500 font-semibold uppercase tracking-wider mt-2">{sequenceError}</p>
                   )}
-
-                  {isValidQuantity && allocationType === 'event' && (
-                    <p className="text-[10px] text-emerald-600 mt-2 font-semibold uppercase tracking-wider text-center pt-1 border-t border-zinc-200">
-                      Auto-Prefix URL: /event/{startCode.replace(/[0-9]/g, '') || startCode.substring(0, 1)}
-                    </p>
-                  )}
                 </div>
               </div>
 
@@ -893,8 +948,8 @@ export default function DistributeVouchersPage() {
 
                 {allocationType === 'vendor' && (
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
-                      <IndianRupee className="w-3.5 h-3.5" /> Handover Fee
+                    <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider flex items-center justify-between">
+                      <span className="flex items-center gap-1.5"><IndianRupee className="w-3.5 h-3.5" /> Handover Fee</span>
                     </Label>
                     <Input 
                       type="number" placeholder="Total (₹)" 
@@ -904,6 +959,22 @@ export default function DistributeVouchersPage() {
                   </div>
                 )}
               </div>
+
+              {allocationType === 'vendor' && (
+                <div className="space-y-1.5 pt-3 border-t border-zinc-100">
+                  <Label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Payment Mode</Label>
+                  <Select value={paymentMode} onValueChange={(val: any) => setPaymentMode(val)}>
+                    <SelectTrigger className="h-10 text-sm font-semibold bg-white border-zinc-200">
+                      <SelectValue placeholder="Select Payment State" />
+                    </SelectTrigger>
+                    <SelectContent className="border-zinc-200">
+                      <SelectItem value="Pending">Pending Payment</SelectItem>
+                      <SelectItem value="Cash">Cash</SelectItem>
+                      <SelectItem value="Cash (Received)">Cash (Received)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
 
               {allocationType === 'vendor' && (
                 <div className="space-y-1.5 pt-3 border-t border-zinc-100">
@@ -962,176 +1033,178 @@ export default function DistributeVouchersPage() {
           </Card>
 
           {/* ============================================== */}
-          {/* RIGHT: CHALLANS TRACKER                        */}
+          {/* RIGHT: RECORDS TRACKER                         */}
           {/* ============================================== */}
           <Card className="lg:col-span-7 xl:col-span-8 border-zinc-200/60 shadow-sm bg-white overflow-hidden flex flex-col min-h-[500px] lg:h-[calc(100vh-5rem)]">
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full flex-1 flex flex-col overflow-hidden">
-              <CardHeader className="bg-zinc-50/80 border-b border-zinc-100 pb-0 pt-4 px-4 shrink-0">
-                <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-2">
-                  <TabsList className="bg-transparent border-none p-0 h-auto gap-6 flex justify-start overflow-x-auto custom-scrollbar">
-                    <TabsTrigger value="pending" className="data-[state=active]:border-b-2 data-[state=active]:border-amber-500 rounded-none px-1 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-400 data-[state=active]:text-amber-700 shadow-none transition-all whitespace-nowrap">
-                      Pending Payment ({challans.filter(c => c.payment_status === 'pending').length})
+            <CardHeader className="bg-white border-b border-zinc-200 p-0 px-4 shrink-0">
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 py-3">
+                  
+                  {/* LEFT: Compact Tabs */}
+                  <TabsList className="bg-transparent border-none p-0 h-auto gap-4 flex justify-start overflow-x-auto hide-scrollbar shrink-0 w-full xl:w-auto">
+                    <TabsTrigger value="pending" className="data-[state=active]:border-b-2 data-[state=active]:border-red-500 rounded-none px-1 py-1.5 text-[11px] font-bold uppercase tracking-widest text-zinc-400 data-[state=active]:text-red-700 shadow-none transition-all whitespace-nowrap">
+                      Pending ({challans.filter(c => c.payment_mode === 'Pending' && !c.event_name).length})
                     </TabsTrigger>
-                    <TabsTrigger value="paid" className="data-[state=active]:border-b-2 data-[state=active]:border-emerald-500 rounded-none px-1 py-2 text-xs font-semibold uppercase tracking-wider text-zinc-400 data-[state=active]:text-emerald-700 shadow-none transition-all whitespace-nowrap">
-                      Completed / Paid ({challans.filter(c => c.payment_status === 'paid').length})
+                    <TabsTrigger value="cash" className="data-[state=active]:border-b-2 data-[state=active]:border-amber-500 rounded-none px-1 py-1.5 text-[11px] font-bold uppercase tracking-widest text-zinc-400 data-[state=active]:text-amber-700 shadow-none transition-all whitespace-nowrap">
+                      Cash ({challans.filter(c => c.payment_mode === 'Cash' && !c.event_name).length})
+                    </TabsTrigger>
+                    <TabsTrigger value="received" className="data-[state=active]:border-b-2 data-[state=active]:border-emerald-500 rounded-none px-1 py-1.5 text-[11px] font-bold uppercase tracking-widest text-zinc-400 data-[state=active]:text-emerald-700 shadow-none transition-all whitespace-nowrap">
+                      Received ({challans.filter(c => c.payment_mode === 'Cash (Received)' && !c.event_name).length})
+                    </TabsTrigger>
+                    <TabsTrigger value="events" className="data-[state=active]:border-b-2 data-[state=active]:border-indigo-500 rounded-none px-1 py-1.5 text-[11px] font-bold uppercase tracking-widest text-zinc-400 data-[state=active]:text-indigo-700 shadow-none transition-all whitespace-nowrap">
+                      Events ({challans.filter(c => c.event_name != null).length})
                     </TabsTrigger>
                   </TabsList>
                   
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pb-3 mt-3 sm:mt-0 w-full sm:w-auto">
+                  {/* RIGHT: Inline Actions */}
+                  <div className="flex flex-nowrap items-center gap-2 overflow-x-auto hide-scrollbar pb-1 xl:pb-0 shrink-0 w-full xl:w-auto">
                     
-                    {/* Unified Date Range Picker */}
-                    <div className="flex items-center w-full sm:w-auto bg-white border border-zinc-200 rounded-lg shadow-sm overflow-hidden focus-within:ring-1 focus-within:ring-indigo-500 focus-within:border-indigo-500 transition-all">
-                      <div className="flex items-center justify-center px-3 bg-zinc-50 border-r border-zinc-200 h-9 shrink-0">
-                        <Calendar className="w-4 h-4 text-zinc-500" />
+                    {/* Slim Date Picker */}
+                    <div className="flex items-center bg-white border border-zinc-200 rounded-md shadow-sm h-9 shrink-0 focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
+                      <div className="flex items-center justify-center px-2.5 border-r border-zinc-200 h-full bg-zinc-50 rounded-l-md">
+                        <Calendar className="w-3.5 h-3.5 text-zinc-500" />
                       </div>
                       
-                      <div className="flex items-center flex-1 sm:flex-none h-9 bg-white">
+                      <div className="flex items-center h-full">
                         <input 
                           type="date" 
                           value={dateFrom} 
                           onChange={(e) => setDateFrom(e.target.value)} 
-                          className="h-full w-full sm:w-[125px] text-xs font-medium border-none shadow-none focus:ring-0 px-2.5 bg-transparent text-zinc-700 outline-none cursor-pointer uppercase tracking-wide [color-scheme:light] [&::-webkit-calendar-picker-indicator]:opacity-40 [&::-webkit-calendar-picker-indicator]:hover:opacity-80"
-                          title="Start Date"
+                          className="h-full w-[115px] text-[11px] font-medium border-none shadow-none focus:ring-0 px-2.5 bg-transparent text-zinc-700 outline-none cursor-pointer uppercase tracking-wider [color-scheme:light] [&::-webkit-calendar-picker-indicator]:opacity-40"
                         />
-                        <div className="h-4 w-px bg-zinc-200 shrink-0" />
+                        <div className="h-3 w-px bg-zinc-200 shrink-0" />
                         <input 
                           type="date" 
                           value={dateTo} 
                           onChange={(e) => setDateTo(e.target.value)} 
-                          className="h-full w-full sm:w-[125px] text-xs font-medium border-none shadow-none focus:ring-0 px-2.5 bg-transparent text-zinc-700 outline-none cursor-pointer uppercase tracking-wide [color-scheme:light] [&::-webkit-calendar-picker-indicator]:opacity-40 [&::-webkit-calendar-picker-indicator]:hover:opacity-80"
-                          title="End Date"
+                          className="h-full w-[115px] text-[11px] font-medium border-none shadow-none focus:ring-0 px-2.5 bg-transparent text-zinc-700 outline-none cursor-pointer uppercase tracking-wider [color-scheme:light] [&::-webkit-calendar-picker-indicator]:opacity-40"
                         />
                       </div>
 
-                      {/* Clear Button */}
                       {(dateFrom || dateTo) && (
                         <button 
                           onClick={() => { setDateFrom(''); setDateTo(''); }}
-                          className="h-9 px-2.5 flex items-center justify-center border-l border-zinc-200 hover:bg-red-50 hover:text-red-600 transition-colors text-zinc-400 shrink-0"
-                          title="Clear dates"
+                          className="h-full px-2.5 flex items-center justify-center border-l border-zinc-200 hover:bg-red-50 hover:text-red-600 transition-colors text-zinc-400 shrink-0 rounded-r-md"
                         >
                           <X className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>
 
-                    {/* Export Buttons */}
-                    <div className="flex items-center gap-2 w-full sm:w-auto">
-                      <Button variant="outline" size="sm" onClick={exportToCSV} className="flex-1 sm:flex-none h-9 px-3 text-xs font-medium shadow-sm border-zinc-200 text-zinc-600 hover:text-zinc-900 bg-white hover:bg-zinc-50">
-                        <Download className="w-3.5 h-3.5 mr-1.5" /> CSV
-                      </Button>
-                      <Button disabled={isPreparingPrint} variant="outline" size="sm" onClick={handlePrepareAndPrint} className="flex-1 sm:flex-none h-9 px-3 text-xs font-medium shadow-sm border-zinc-200 text-zinc-600 hover:text-zinc-900 bg-white hover:bg-zinc-50">
-                        {isPreparingPrint ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Printer className="w-3.5 h-3.5 mr-1.5" />}
-                        PDF / Print
-                      </Button>
-                    </div>
+                    {/* Slim Buttons */}
+                    <Button variant="outline" size="sm" onClick={exportToCSV} className="h-9 px-3 text-[11px] font-semibold tracking-wide shadow-sm border-zinc-200 text-zinc-600 hover:text-zinc-900 bg-white hover:bg-zinc-50 shrink-0">
+                      <Download className="w-3.5 h-3.5 mr-1.5" /> CSV
+                    </Button>
+                    <Button disabled={isPreparingPrint} variant="outline" size="sm" onClick={handlePrepareAndPrint} className="h-9 px-3 text-[11px] font-semibold tracking-wide shadow-sm border-zinc-200 text-zinc-600 hover:text-zinc-900 bg-white hover:bg-zinc-50 shrink-0">
+                      {isPreparingPrint ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Printer className="w-3.5 h-3.5 mr-1.5" />} PDF
+                    </Button>
+
                   </div>
                 </div>
               </CardHeader>
 
               <CardContent className="p-0 flex-1 overflow-hidden relative">
                 
-                {/* PENDING TAB */}
-                <TabsContent value="pending" className="m-0 h-full absolute inset-0 overflow-y-auto custom-scrollbar">
-                  <div ref={activeTab === 'pending' ? tablePrintRef : null} className="w-full">
-                    {/* Print Header */}
-                    <div className="hidden print:block p-8 pb-4">
-                      <h2 className="text-xl font-bold text-zinc-900">Pending Distribution Challans</h2>
-                      <p className="text-sm text-zinc-500">Printed on {format(new Date(), 'dd MMM yyyy')}</p>
-                    </div>
-                    <Table>
-                      <TableHeader className="bg-zinc-50/80 sticky top-0 backdrop-blur-sm z-10 border-b border-zinc-200">
-                        <TableRow className="hover:bg-transparent border-none">
-                          <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 px-4 md:px-6 whitespace-nowrap">Date</TableHead>
-                          <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 whitespace-nowrap">Distributor</TableHead>
-                          <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 text-center whitespace-nowrap">Qty</TableHead>
-                          <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 text-right whitespace-nowrap">Fee Due</TableHead>
-                          <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 text-right pr-4 md:pr-6 whitespace-nowrap print:hidden">Action</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredChallans.map(c => (
-                          <TableRow key={c.id} className="hover:bg-zinc-50/50 transition-colors border-b border-zinc-100">
-                            <TableCell className="text-xs font-medium text-zinc-600 px-4 md:px-6 py-4 whitespace-nowrap">{format(new Date(c.created_at), 'dd MMM yy')}</TableCell>
-                            <TableCell className="py-4 min-w-[120px]">
-                              <span className="font-semibold text-xs text-zinc-900 block">{c.voucher_distributors?.distributor_name}</span>
-                              {c.is_birthday_redemption && <span className="text-[9px] font-semibold text-pink-600 uppercase tracking-wider block mt-0.5">Birthday Rule</span>}
-                            </TableCell>
-                            <TableCell className="text-center font-medium text-xs py-4">{c.quantity}</TableCell>
-                            <TableCell className="text-right font-semibold text-sm text-amber-600 py-4 whitespace-nowrap">₹{c.total_amount.toLocaleString()}</TableCell>
-                            <TableCell className="text-right pr-4 md:pr-6 py-4 print:hidden">
-                              <div className="flex justify-end gap-2">
-                                <Button size="icon" variant="ghost" onClick={() => handleViewChallan(c)} className="h-8 w-8 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50" title="View Details">
+                {['pending', 'cash', 'received', 'events'].map(tab => (
+                  <TabsContent key={tab} value={tab} className="m-0 h-full absolute inset-0 overflow-y-auto custom-scrollbar">
+                    <div ref={activeTab === tab ? tablePrintRef : null} className="w-full">
+                      <div className="hidden print:block p-8 pb-4">
+                        <h2 className="text-xl font-bold text-zinc-900 uppercase">Distribution Records - {tab}</h2>
+                        <p className="text-sm text-zinc-500">Printed on {format(new Date(), 'dd MMM yyyy')}</p>
+                      </div>
+                      <Table>
+                        <TableHeader className="bg-zinc-50/80 sticky top-0 backdrop-blur-sm z-10 border-b border-zinc-200">
+                          <TableRow className="hover:bg-transparent border-none">
+                            <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 px-4 md:px-6 whitespace-nowrap">Date</TableHead>
+                            <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 whitespace-nowrap">Entity / Name</TableHead>
+                            <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 text-center whitespace-nowrap">Qty</TableHead>
+                            <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 text-center whitespace-nowrap">Delivery</TableHead>
+                            <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 text-center whitespace-nowrap">Payment Mode</TableHead>
+                            <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 text-right pr-4 md:pr-6 whitespace-nowrap print:hidden">Action</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredChallans.map(c => (
+                            <TableRow key={c.id} className="hover:bg-zinc-50/50 transition-colors border-b border-zinc-100">
+                              <TableCell className="text-xs font-medium text-zinc-600 px-4 md:px-6 py-4 whitespace-nowrap">{format(new Date(c.created_at), 'dd MMM yy')}</TableCell>
+                              <TableCell className="py-4 min-w-[150px]">
+                                {c.event_name ? (
+                                  <span className="font-semibold text-xs text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-md inline-flex items-center gap-1.5">
+                                    Event: {c.event_name}
+                                  </span>
+                                ) : (
+                                  <span className="font-semibold text-xs text-zinc-900 block">{c.voucher_distributors?.distributor_name}</span>
+                                )}
+                                {c.is_birthday_redemption && <span className="text-[9px] font-semibold text-pink-600 uppercase tracking-wider block mt-1">Birthday Rule</span>}
+                              </TableCell>
+                              <TableCell className="text-center font-bold text-xs py-4">{c.quantity}</TableCell>
+                              
+                              {/* ✨ NEW: Interactive Delivery Status Dropdown */}
+                              <TableCell className="text-center py-4 whitespace-nowrap print:hidden">
+                                {c.event_name ? (
+                                  <span className="text-xs text-zinc-400 italic">Digital</span>
+                                ) : (
+                                  <Select value={c.delivery_status} onValueChange={(val) => handleUpdateDeliveryStatus(c.id, val)}>
+                                    <SelectTrigger className={`h-8 text-[10px] font-bold uppercase tracking-widest ${c.delivery_status === 'delivered' ? 'border-emerald-200 text-emerald-700 bg-emerald-50' : 'border-amber-200 text-amber-700 bg-amber-50'}`}>
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="pending">Pending</SelectItem>
+                                      <SelectItem value="delivered">Delivered</SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-center text-[10px] font-bold uppercase tracking-widest hidden print:table-cell">{c.delivery_status}</TableCell>
+
+                              {/* ✨ NEW: Interactive Payment Mode Dropdown */}
+                              <TableCell className="text-center py-4 whitespace-nowrap print:hidden">
+                                {c.event_name ? (
+                                  <span className="text-xs text-zinc-400 italic">N/A</span>
+                                ) : (
+                                  <div className="flex flex-col items-center gap-1">
+                                    <span className="font-semibold text-xs text-zinc-600">₹{c.total_amount.toLocaleString()}</span>
+                                    <Select value={c.payment_mode} onValueChange={(val) => handleUpdatePaymentMode(c.id, val)}>
+                                      <SelectTrigger className={`h-8 w-[130px] text-[10px] font-bold uppercase tracking-widest ${
+                                        c.payment_mode === 'Pending' ? 'border-red-200 text-red-700 bg-red-50' : 
+                                        c.payment_mode === 'Cash (Received)' ? 'border-emerald-200 text-emerald-700 bg-emerald-50' :
+                                        'border-blue-200 text-blue-700 bg-blue-50'
+                                      }`}>
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="Pending">Pending</SelectItem>
+                                        <SelectItem value="Cash">Cash</SelectItem>
+                                        <SelectItem value="Cash (Received)">Received</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-center text-[10px] font-bold uppercase tracking-widest hidden print:table-cell">{c.payment_mode}</TableCell>
+                              
+                              <TableCell className="text-right pr-4 md:pr-6 py-4 print:hidden">
+                                <Button size="icon" variant="ghost" onClick={() => handleViewChallan(c)} className="h-8 w-8 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 border border-zinc-200 bg-white shadow-sm" title="View Details">
                                   <Eye className="w-4 h-4" />
                                 </Button>
-                                <Button size="sm" onClick={() => handleMarkPaid(c.id)} className="h-8 px-3 text-[10px] font-semibold uppercase tracking-wider bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200 shadow-sm transition-colors whitespace-nowrap">
-                                  Mark Paid
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                        {filteredChallans.length === 0 && (
-                          <TableRow><TableCell colSpan={6} className="text-center py-20 text-zinc-400 text-xs font-medium italic">No pending challans found.</TableCell></TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </TabsContent>
-
-                {/* PAID TAB */}
-                <TabsContent value="paid" className="m-0 h-full absolute inset-0 overflow-y-auto custom-scrollbar">
-                  <div ref={activeTab === 'paid' ? tablePrintRef : null} className="w-full">
-                    {/* Print Header */}
-                    <div className="hidden print:block p-8 pb-4">
-                      <h2 className="text-xl font-bold text-zinc-900">Completed Distribution Challans</h2>
-                      <p className="text-sm text-zinc-500">Printed on {format(new Date(), 'dd MMM yyyy')}</p>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          {filteredChallans.length === 0 && (
+                            <TableRow><TableCell colSpan={6} className="text-center py-20 text-zinc-400 text-xs font-medium italic">No records found for this category.</TableCell></TableRow>
+                          )}
+                        </TableBody>
+                      </Table>
                     </div>
-                    <Table>
-                      <TableHeader className="bg-zinc-50/80 sticky top-0 backdrop-blur-sm z-10 border-b border-zinc-200">
-                        <TableRow className="hover:bg-transparent border-none">
-                          <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 px-4 md:px-6 whitespace-nowrap">Paid On</TableHead>
-                          <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 whitespace-nowrap">Distributor</TableHead>
-                          <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 text-center whitespace-nowrap">Qty</TableHead>
-                          <TableHead className="text-[10px] uppercase font-bold tracking-wider text-zinc-500 h-10 text-right pr-4 md:pr-6 whitespace-nowrap">Fee & Details</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {filteredChallans.map(c => (
-                          <TableRow key={c.id} className="hover:bg-zinc-50/50 transition-colors border-b border-zinc-100">
-                            <TableCell className="text-xs font-medium text-zinc-600 px-4 md:px-6 py-4 whitespace-nowrap">{c.payment_received_at ? format(new Date(c.payment_received_at), 'dd MMM yy') : '---'}</TableCell>
-                            <TableCell className="py-4 min-w-[120px]">
-                              <span className="font-semibold text-xs text-zinc-900 block">{c.voucher_distributors?.distributor_name}</span>
-                              {c.is_birthday_redemption && <span className="text-[9px] font-semibold text-pink-600 uppercase tracking-wider block mt-0.5">Birthday Rule</span>}
-                            </TableCell>
-                            <TableCell className="text-center font-medium text-xs py-4">{c.quantity}</TableCell>
-                            <TableCell className="text-right pr-4 md:pr-6 py-4">
-                              <div className="flex items-center justify-end gap-3">
-                                <span className="font-semibold text-sm text-emerald-600 flex items-center gap-1.5">
-                                  <CheckCircle2 className="w-3.5 h-3.5" /> ₹{c.total_amount.toLocaleString()}
-                                </span>
-                                <Button size="icon" variant="ghost" onClick={() => handleViewChallan(c)} className="h-8 w-8 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50 border border-zinc-200 bg-white shadow-sm print:hidden" title="View Details">
-                                  <Eye className="w-4 h-4" />
-                                </Button>
-                              </div>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                        {filteredChallans.length === 0 && (
-                          <TableRow><TableCell colSpan={4} className="text-center py-20 text-zinc-400 text-xs font-medium italic">No completed distributions found.</TableCell></TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
-                  </div>
-                </TabsContent>
-
+                  </TabsContent>
+                ))}
               </CardContent>
             </Tabs>
           </Card>
         </div>
       </main>
 
-      {/* --- ADD NEW DISTRIBUTOR MODAL --- */}
+      {/* --- MODALS (Add Distributor, QR Code, View Challan) REMAIN UNCHANGED BELOW THIS LINE --- */}
       <Dialog open={isNewDistModalOpen} onOpenChange={setIsNewDistModalOpen}>
         <DialogContent className="sm:max-w-[425px] p-0 border-none shadow-2xl rounded-2xl bg-white overflow-hidden">
           <DialogHeader className="bg-zinc-50 p-6 border-b border-zinc-100">
@@ -1201,7 +1274,6 @@ export default function DistributeVouchersPage() {
         </DialogContent>
       </Dialog>
 
-      {/* --- EVENT QR DOWNLOAD MODAL --- */}
       <Dialog open={!!eventQrData} onOpenChange={(open) => !open && setEventQrData(null)}>
         <DialogContent className="sm:max-w-sm text-center flex flex-col items-center bg-white shadow-2xl rounded-2xl overflow-hidden p-0 border-none">
           <div className="w-full bg-indigo-600 p-6 flex flex-col items-center relative overflow-hidden">
@@ -1235,7 +1307,6 @@ export default function DistributeVouchersPage() {
         </DialogContent>
       </Dialog>
 
-      {/* --- VIEW DETAILS DIALOG --- */}
       <Dialog open={!!viewChallan} onOpenChange={(open) => !open && setViewChallan(null)}>
         <DialogContent className="sm:max-w-[450px] p-0 overflow-hidden border-none shadow-2xl">
           <DialogHeader className="bg-zinc-50 p-6 border-b border-zinc-200">
@@ -1255,7 +1326,6 @@ export default function DistributeVouchersPage() {
 
           {viewChallan && (
             <div className="p-6 space-y-5">
-              
               {viewChallan.is_birthday_redemption && (
                 <div className="bg-pink-50 border border-pink-200 p-3 rounded-lg flex items-center gap-3">
                   <Gift className="w-6 h-6 text-pink-500 shrink-0" />
@@ -1267,8 +1337,8 @@ export default function DistributeVouchersPage() {
               )}
 
               <div className="flex justify-between items-center py-2 border-b border-dashed border-zinc-200">
-                <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Distributor</span>
-                <span className="font-semibold text-sm text-zinc-900">{viewChallan.voucher_distributors?.distributor_name}</span>
+                <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Entity</span>
+                <span className="font-semibold text-sm text-zinc-900">{viewChallan.event_name ? `Event: ${viewChallan.event_name}` : viewChallan.voucher_distributors?.distributor_name}</span>
               </div>
               
               <div className="flex justify-between items-center py-2 border-b border-dashed border-zinc-200">
@@ -1281,10 +1351,12 @@ export default function DistributeVouchersPage() {
                 <span className="font-semibold text-sm text-zinc-900">{format(new Date(viewChallan.expiry_date), 'dd MMM yyyy')}</span>
               </div>
 
-              <div className="flex justify-between items-center py-2 border-b border-dashed border-zinc-200">
-                <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5"><User className="w-3.5 h-3.5"/> Agent</span>
-                <span className="font-semibold text-sm text-zinc-900">{viewChallan.delivery_agent || 'Self Pickup'}</span>
-              </div>
+              {!viewChallan.event_name && (
+                <div className="flex justify-between items-center py-2 border-b border-dashed border-zinc-200">
+                  <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5"><User className="w-3.5 h-3.5"/> Agent</span>
+                  <span className="font-semibold text-sm text-zinc-900">{viewChallan.delivery_agent || 'Self Pickup'}</span>
+                </div>
+              )}
 
               <div className="bg-zinc-50 p-3 rounded border border-zinc-200 mt-4">
                 <Label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider block mb-2">Attached Sequence</Label>
@@ -1298,7 +1370,6 @@ export default function DistributeVouchersPage() {
                   </div>
                 </div>
               </div>
-
             </div>
           )}
           <DialogFooter className="bg-zinc-50 p-4 border-t border-zinc-200">
@@ -1309,12 +1380,10 @@ export default function DistributeVouchersPage() {
         </DialogContent>
       </Dialog>
 
-      {/* --- HIDDEN PRINT TEMPLATE FOR DELIVERY CHALLAN --- */}
       <div className="hidden">
         <div ref={printRef} className="bg-white text-black p-10 font-sans" style={{ width: '210mm', minHeight: '297mm', margin: 0, padding: '40px' }}>
           {viewChallan && companyData && (
             <>
-              {/* Header */}
               <div className="flex justify-between items-start border-b-2 border-black pb-6 mb-8">
                 <div>
                   <h1 className="text-3xl font-black uppercase tracking-widest text-zinc-900">{companyData.trade_name || companyData.legal_name || "COMPANY NAME"}</h1>
@@ -1328,22 +1397,32 @@ export default function DistributeVouchersPage() {
                 </div>
               </div>
 
-              {/* Parties */}
               <div className="grid grid-cols-2 gap-12 mb-10">
                 <div>
-                  <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2 border-b border-zinc-200 pb-1">Issued To (Distributor)</h3>
-                  <p className="text-lg font-bold text-zinc-900">{viewChallan.voucher_distributors?.distributor_name}</p>
-                  <p className="text-sm font-medium text-zinc-600 mt-1">{viewChallan.voucher_distributors?.contact_person || ""}</p>
-                  <p className="text-sm font-medium text-zinc-600">{viewChallan.voucher_distributors?.phone || "No contact provided"}</p>
+                  <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2 border-b border-zinc-200 pb-1">Issued To</h3>
+                  {viewChallan.event_name ? (
+                    <p className="text-lg font-bold text-indigo-700">Event: {viewChallan.event_name}</p>
+                  ) : (
+                    <>
+                      <p className="text-lg font-bold text-zinc-900">{viewChallan.voucher_distributors?.distributor_name}</p>
+                      <p className="text-sm font-medium text-zinc-600 mt-1">{viewChallan.voucher_distributors?.contact_person || ""}</p>
+                      <p className="text-sm font-medium text-zinc-600">{viewChallan.voucher_distributors?.phone || "No contact provided"}</p>
+                    </>
+                  )}
                 </div>
                 <div>
-                  <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2 border-b border-zinc-200 pb-1">Delivery Agent</h3>
-                  <p className="text-lg font-bold text-zinc-900">{viewChallan.delivery_agent || "Self Pickup"}</p>
-                  <p className="text-sm font-medium text-zinc-600 mt-1">Assigned for secure transport.</p>
+                  <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2 border-b border-zinc-200 pb-1">Delivery Info</h3>
+                  {viewChallan.event_name ? (
+                    <p className="text-sm font-bold text-zinc-600 mt-1">Digital QR Distribution</p>
+                  ) : (
+                    <>
+                      <p className="text-lg font-bold text-zinc-900">{viewChallan.delivery_agent || "Self Pickup"}</p>
+                      <p className="text-sm font-medium text-zinc-600 mt-1">Status: {viewChallan.delivery_status.toUpperCase()}</p>
+                    </>
+                  )}
                 </div>
               </div>
 
-              {/* Items Table */}
               <div className="mb-10">
                 <table className="w-full border-collapse">
                   <thead>
@@ -1358,7 +1437,7 @@ export default function DistributeVouchersPage() {
                     <tr className="border-b border-zinc-200">
                       <td className="py-4 px-2 font-bold text-zinc-900">01</td>
                       <td className="py-4 px-2">
-                        <p className="font-bold text-zinc-900 text-lg">Physical Vouchers (Gift/Discount Booklets)</p>
+                        <p className="font-bold text-zinc-900 text-lg">Vouchers (Gift/Discount Booklets)</p>
                         <p className="text-sm text-zinc-600 mt-1 font-mono">Sequence: {viewSequence?.start} to {viewSequence?.end}</p>
                         <p className="text-sm text-zinc-600 mt-1">Valid Until: {format(new Date(viewChallan.expiry_date), 'dd MMM yyyy')}</p>
                         {viewChallan.is_birthday_redemption && (
@@ -1368,13 +1447,12 @@ export default function DistributeVouchersPage() {
                         )}
                       </td>
                       <td className="py-4 px-2 text-center font-black text-xl text-zinc-900">{viewChallan.quantity}</td>
-                      <td className="py-4 px-2 text-right font-bold text-lg text-zinc-900">₹{viewChallan.total_amount.toLocaleString()}</td>
+                      <td className="py-4 px-2 text-right font-bold text-lg text-zinc-900">₹{(viewChallan.total_amount || 0).toLocaleString()}</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
 
-              {/* Total & Terms */}
               <div className="flex justify-between items-start mb-20">
                 <div className="w-2/3 pr-12">
                   <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">Terms & Conditions</h3>
@@ -1388,16 +1466,15 @@ export default function DistributeVouchersPage() {
                 <div className="w-1/3">
                   <div className="flex justify-between items-center py-2 border-b-2 border-black">
                     <span className="font-bold text-zinc-600 uppercase tracking-widest">Total Due:</span>
-                    <span className="font-black text-2xl text-zinc-900">₹{viewChallan.total_amount.toLocaleString()}</span>
+                    <span className="font-black text-2xl text-zinc-900">₹{(viewChallan.total_amount || 0).toLocaleString()}</span>
                   </div>
                   <div className="flex justify-between items-center py-2 text-xs">
-                    <span className="font-bold text-zinc-500 uppercase tracking-widest">Status:</span>
-                    <span className="font-bold text-zinc-900 uppercase">{viewChallan.payment_status}</span>
+                    <span className="font-bold text-zinc-500 uppercase tracking-widest">Payment Mode:</span>
+                    <span className="font-bold text-zinc-900 uppercase">{viewChallan.payment_mode}</span>
                   </div>
                 </div>
               </div>
 
-              {/* Signatures */}
               <div className="grid grid-cols-3 gap-8 mt-auto pt-20 border-t border-zinc-200">
                 <div className="text-center">
                   <div className="h-16 border-b border-zinc-300 mb-2"></div>
@@ -1407,7 +1484,7 @@ export default function DistributeVouchersPage() {
                 <div className="text-center">
                   <div className="h-16 border-b border-zinc-300 mb-2"></div>
                   <p className="text-xs font-bold uppercase tracking-widest text-zinc-500">Agent Signature</p>
-                  <p className="text-[10px] text-zinc-400 mt-1">{viewChallan.delivery_agent || 'N/A'}</p>
+                  <p className="text-[10px] text-zinc-400 mt-1">{viewChallan.event_name ? 'Digital Distribution' : (viewChallan.delivery_agent || 'N/A')}</p>
                 </div>
                 <div className="text-center">
                   <div className="h-16 border-b border-zinc-300 mb-2"></div>
@@ -1418,11 +1495,8 @@ export default function DistributeVouchersPage() {
             </>
           )}
         </div>
-        {/* --- HIDDEN PRINT TEMPLATE FOR FULL MASTER REPORT --- */}
-      <div className="hidden">
+        
         <div ref={tablePrintRef} className="bg-white text-black p-8 font-sans" style={{ width: '297mm', minHeight: '210mm', margin: 0, padding: '40px' }}>
-          
-          {/* Header */}
           <div className="flex justify-between items-end border-b-2 border-black pb-4 mb-6">
             <div>
               <h1 className="text-2xl font-black uppercase tracking-widest text-zinc-900">{companyData?.trade_name || companyData?.legal_name || "COMPANY NAME"}</h1>
@@ -1434,48 +1508,43 @@ export default function DistributeVouchersPage() {
             </div>
           </div>
           
-          {/* Data Table */}
           <table className="w-full border-collapse text-xs">
             <thead>
               <tr className="border-y-2 border-black text-left">
                 <th className="py-3 px-2 font-bold uppercase tracking-wider text-zinc-500 w-[10%]">Date</th>
-                <th className="py-3 px-2 font-bold uppercase tracking-wider text-zinc-500 w-[20%]">Distributor</th>
+                <th className="py-3 px-2 font-bold uppercase tracking-wider text-zinc-500 w-[20%]">Entity</th>
                 <th className="py-3 px-2 font-bold uppercase tracking-wider text-zinc-500 w-[15%]">Agent / Delivery</th>
                 <th className="py-3 px-2 text-center font-bold uppercase tracking-wider text-zinc-500 w-[5%]">Qty</th>
                 <th className="py-3 px-2 font-bold uppercase tracking-wider text-zinc-500 w-[10%]">Expiry</th>
                 <th className="py-3 px-2 font-bold uppercase tracking-wider text-zinc-500 w-[20%]">Sequence Range</th>
                 <th className="py-3 px-2 text-right font-bold uppercase tracking-wider text-zinc-500 w-[10%]">Fee (₹)</th>
-                <th className="py-3 px-2 text-center font-bold uppercase tracking-wider text-zinc-500 w-[10%]">Status</th>
+                <th className="py-3 px-2 text-center font-bold uppercase tracking-wider text-zinc-500 w-[10%]">Pmt Mode</th>
               </tr>
             </thead>
             <tbody>
               {filteredChallans.map(c => (
                 <tr key={c.id} className="border-b border-zinc-200">
                   <td className="py-3 px-2 text-zinc-700 font-medium">{format(new Date(c.created_at), 'dd-MM-yy')}</td>
-                  <td className="py-3 px-2 font-bold text-zinc-900">{c.voucher_distributors?.distributor_name}</td>
-                  <td className="py-3 px-2 text-zinc-700">{c.delivery_agent || 'Self Pickup'}</td>
+                  <td className="py-3 px-2 font-bold text-zinc-900">{c.event_name ? `Event: ${c.event_name}` : c.voucher_distributors?.distributor_name}</td>
+                  <td className="py-3 px-2 text-zinc-700">{c.event_name ? 'Digital' : (c.delivery_agent || 'Self Pickup')}</td>
                   <td className="py-3 px-2 text-center font-bold text-zinc-900">{c.quantity}</td>
                   <td className="py-3 px-2 text-zinc-700">{c.expiry_date ? format(new Date(c.expiry_date), 'dd-MM-yy') : 'N/A'}</td>
                   <td className="py-3 px-2 font-mono text-[10px] text-zinc-600 bg-zinc-50">
                     {reportSequences[c.id]?.start} <span className="text-zinc-400 mx-1">to</span> {reportSequences[c.id]?.end}
                   </td>
-                  <td className="py-3 px-2 text-right font-bold text-zinc-900">₹{c.total_amount.toLocaleString()}</td>
-                  <td className="py-3 px-2 text-center text-[10px] font-bold uppercase tracking-wider text-zinc-500">{c.payment_status}</td>
+                  <td className="py-3 px-2 text-right font-bold text-zinc-900">₹{(c.total_amount || 0).toLocaleString()}</td>
+                  <td className="py-3 px-2 text-center text-[10px] font-bold uppercase tracking-wider text-zinc-500">{c.payment_mode}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           
-          {/* Footer Branding */}
           <div className="mt-8 pt-4 border-t border-zinc-200 text-center flex items-center justify-center gap-2">
-            <div className="h-4 w-4 bg-zinc-900 rounded-sm" /> {/* Tiny dummy logo box for Biillo */}
+            <div className="h-4 w-4 bg-zinc-900 rounded-sm" /> 
             <p className="text-[10px] font-bold text-zinc-400 tracking-widest uppercase">Powered By Biillo ERP</p>
           </div>
-          
         </div>
       </div>
-      </div>
-
     </div>
   )
 }

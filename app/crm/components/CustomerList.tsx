@@ -1,6 +1,6 @@
 import React from 'react'
 import { format } from "date-fns"
-import { Phone, User, MessageCircle, Calendar, IndianRupee, Star, AlertCircle, Users, PhoneCall, Ticket, Store, History, MessageSquare, Gift, MapPin, FileText, Zap, Clock, Send } from 'lucide-react'
+import { Phone, User, MessageCircle, Calendar, IndianRupee, Star, AlertCircle, Users, PhoneCall, Ticket, Store, History, MessageSquare, Gift, MapPin, FileText, Zap, Clock, Send, Award } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -20,9 +20,10 @@ interface Props {
   isKitty?: boolean
   onViewHistory: (c: CRMCustomer) => void
   onViewWaActivity: (c: CRMCustomer) => void 
+  onOpenLoyaltyProgram: (customer: CRMCustomer) => void;
 }
 
-export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedule, onViewProfile, onLogCall, onViewHistory, onViewWaActivity, isKitty = false }: Props) {
+export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedule, onViewProfile, onLogCall, onViewHistory, onViewWaActivity, onOpenLoyaltyProgram, isKitty = false }: Props) {
   if (loading) {
     return (
       <div className="p-5 space-y-3">
@@ -98,7 +99,7 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10 px-6">Client Profile</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Follow-up Details</TableHead>
               <TableHead className="text-[10px] font-bold uppercase tracking-wider text-slate-500 h-10">Last Note / Chat</TableHead>
-              <TableHead className="w-[340px] text-right px-6"></TableHead>
+              <TableHead className="w-[420px] text-right px-6"></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -259,30 +260,36 @@ return (
                 </TableCell>
                 
                 <TableCell className="text-right px-6 py-3">
-                  <div className="flex justify-end gap-2">
+                  <div className="flex justify-end items-center gap-1.5 whitespace-nowrap">
+                    
                     <Button variant="outline" size="icon" className="h-8 w-8 text-amber-600 border-amber-200 bg-amber-50 hover:bg-amber-100 shrink-0" onClick={() => onViewHistory(row)} title="Purchase History">
-                      <History className="w-3.5 h-3.5 sm:mr-0" />
+                      <History className="w-3.5 h-3.5" />
                     </Button>
 
                     <Button variant="outline" size="icon" className="h-8 w-8 text-[#1DA851] border-[#25D366]/30 bg-[#25D366]/5 hover:bg-[#25D366]/20 shrink-0" onClick={() => onViewWaActivity(row)} title="WhatsApp Activity Log">
                       <MessageSquare className="w-3.5 h-3.5" /> 
                     </Button>
                     
-                    <Button variant="outline" size="sm" className="h-8 px-3 text-[10px] font-bold uppercase text-blue-700 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:text-blue-800" onClick={() => onLogCall(row)}>
-                      <PhoneCall className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Log Call</span>
+                    <Button variant="outline" size="sm" className="h-8 px-2.5 text-[10px] font-bold uppercase text-emerald-700 border-emerald-200 bg-emerald-50 hover:bg-emerald-100 hover:text-emerald-800 shrink-0" onClick={() => onOpenLoyaltyProgram(row)} title="Loyalty & Points">
+                      <Award className="w-3.5 h-3.5 lg:mr-1.5" /> <span className="hidden lg:inline">Loyalty</span>
                     </Button>
 
-                    <Button variant="outline" size="sm" className="h-8 px-3 text-[10px] font-bold uppercase text-[#1DA851] border-slate-200 bg-white hover:bg-[#25D366]/10" onClick={() => onMessage(row)}>
-                      <MessageCircle className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Message</span>
+                    <Button variant="outline" size="sm" className="h-8 px-2.5 text-[10px] font-bold uppercase text-blue-700 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:text-blue-800 shrink-0" onClick={() => onLogCall(row)}>
+                      <PhoneCall className="w-3.5 h-3.5 lg:mr-1.5" /> <span className="hidden lg:inline">Call</span>
+                    </Button>
+
+                    <Button variant="outline" size="sm" className="h-8 px-2.5 text-[10px] font-bold uppercase text-[#1DA851] border-slate-200 bg-white hover:bg-[#25D366]/10 shrink-0" onClick={() => onMessage(row)}>
+                      <MessageCircle className="w-3.5 h-3.5 lg:mr-1.5" /> <span className="hidden lg:inline">Msg</span>
                     </Button>
                     
-                    <Button variant="outline" size="sm" className="h-8 px-3 text-[10px] font-bold uppercase text-indigo-600 border-slate-200 bg-white hover:bg-indigo-50" onClick={() => onSchedule(row)}>
-                      <Calendar className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Schedule</span>
+                    <Button variant="outline" size="sm" className="h-8 px-2.5 text-[10px] font-bold uppercase text-indigo-600 border-slate-200 bg-white hover:bg-indigo-50 shrink-0" onClick={() => onSchedule(row)}>
+                      <Calendar className="w-3.5 h-3.5 lg:mr-1.5" /> <span className="hidden lg:inline">Sched</span>
                     </Button>
 
                     <Button variant="outline" size="icon" className="h-8 w-8 text-slate-500 border-slate-200 hover:bg-slate-100 shrink-0" onClick={() => onViewProfile(row)} title="View Profile">
-                      <User className="w-4 h-4" />
+                      <User className="w-3.5 h-3.5" />
                     </Button>
+                    
                   </div>
                 </TableCell>
               </TableRow>
@@ -392,7 +399,12 @@ return (
                   </div>
                 )}
               </div>
-              <div className="flex gap-1.5 flex-wrap justify-end max-w-[80px]">
+              <div className="flex gap-1.5 flex-wrap justify-end max-w-[90px]">
+                {/* ✨ NEW LOYALTY BUTTON (MOBILE) */}
+                <Button size="icon" variant="outline" className="h-8 w-8 text-emerald-600 border-emerald-200 bg-emerald-50 rounded-lg hover:bg-emerald-100 shrink-0" onClick={() => onOpenLoyaltyProgram(row)} title="Loyalty & Points">
+                  <Award className="h-4 w-4" />
+                </Button>
+                
                 <Button size="icon" variant="outline" className="h-8 w-8 text-amber-600 border-amber-200 rounded-lg hover:bg-amber-100 shrink-0" onClick={() => onViewHistory(row)}>
                   <History className="h-4 w-4" />
                 </Button>
@@ -404,6 +416,7 @@ return (
                 <Button size="icon" variant="outline" className="h-8 w-8 text-[#1DA851] border-slate-200 rounded-lg hover:bg-[#25D366]/10 shrink-0" onClick={() => onMessage(row)}>
                   <MessageCircle className="h-4 w-4" />
                 </Button>
+                
                 <Button size="icon" variant="outline" className="h-8 w-8 text-slate-500 border-slate-200 rounded-lg hover:bg-slate-100 shrink-0" onClick={() => onViewProfile(row)}>
                   <User className="h-4 w-4" />
                 </Button>

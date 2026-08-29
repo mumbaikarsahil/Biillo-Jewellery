@@ -19,17 +19,19 @@ import {
   Bot, Ticket, Settings2,
   Hammer,
   Wrench,
-  FileText, History
+  FileText, History, Award
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CRMCustomer, Warehouse } from '../types'
 import { Separator } from '@radix-ui/react-separator'
+import CustomerLoyaltyPanel from '@/components/loyalty/CustomerLoyaltyPanel'
 
 interface CRMModalsProps {
   isImportModalOpen: boolean; setIsImportModalOpen: (v: boolean) => void;
   isPreviewModalOpen: boolean; setIsPreviewModalOpen: (v: boolean) => void;
   isProfileModalOpen: boolean; setIsProfileModalOpen: (v: boolean) => void;
   isLoyaltyModalOpen: boolean; setIsLoyaltyModalOpen: (v: boolean) => void;
+  isCelebrationModalOpen?: boolean; setIsCelebrationModalOpen?: (v: boolean) => void;
   isAddModalOpen: boolean; setIsAddModalOpen: (v: boolean) => void;
   isAddKittyModalOpen: boolean; setIsAddKittyModalOpen: (v: boolean) => void;
   isFollowupModalOpen: boolean; setIsFollowupModalOpen: (v: boolean) => void;
@@ -50,7 +52,7 @@ interface CRMModalsProps {
   };
   setCallForm: React.Dispatch<React.SetStateAction<{
     caller_profile_id: string;
-      outcome: string;
+    outcome: string;
     interest_level?: string; 
     notes: string;
     next_call_date: string;
@@ -67,6 +69,7 @@ interface CRMModalsProps {
   dynamicTemplates: any[]; 
   customers: CRMCustomer[]; 
   kittyConfigs: any[]; 
+  appUser?: any;
   
   newCustForm: any; setNewCustForm: (f: any) => void;
   newKittyForm: any; setNewKittyForm: (f: any) => void;
@@ -102,13 +105,14 @@ export function CRMModals(props: CRMModalsProps) {
     isHistoryModalOpen, setIsHistoryModalOpen, customerHistory, isHistoryLoading,
     isImportModalOpen, setIsImportModalOpen, isPreviewModalOpen, setIsPreviewModalOpen,
     isProfileModalOpen, setIsProfileModalOpen, isLoyaltyModalOpen, setIsLoyaltyModalOpen,
+    isCelebrationModalOpen, setIsCelebrationModalOpen,
     isAddModalOpen, setIsAddModalOpen, isAddKittyModalOpen, setIsAddKittyModalOpen,
     isFollowupModalOpen, setIsFollowupModalOpen, isWhatsAppModalOpen, setIsWhatsAppModalOpen,
     isWaActivityModalOpen, setIsWaActivityModalOpen,
     
     isCallModalOpen, setIsCallModalOpen, callForm, setCallForm, handleLogCall,
 
-    importFile, setImportFile, previewData, selectedCustomer, selectedLocation, warehouses, activeAiFilter, dynamicTemplates, customers, kittyConfigs,
+    importFile, setImportFile, previewData, selectedCustomer, selectedLocation, warehouses, activeAiFilter, dynamicTemplates, customers, kittyConfigs, appUser,
     newCustForm, setNewCustForm, newKittyForm, setNewKittyForm, loyaltyForm, setLoyaltyForm,
     waTemplateId, customMessage, setCustomMessage, followupReason, setFollowupReason, followupDate, setFollowupDate,
     interactionNotes, setInteractionNotes, isImporting, isSubmitting,
@@ -123,33 +127,30 @@ export function CRMModals(props: CRMModalsProps) {
   const [sequenceForm, setSequenceForm] = useState({ status: '', interval_hours: 96, current_step: 1 });
   const [isUpdatingSequence, setIsUpdatingSequence] = useState(false);
 
-  // 1. Add the state to hold the fetched profiles
-const [profilesList, setProfilesList] = useState<any[]>([]);
+  const [profilesList, setProfilesList] = useState<any[]>([]);
 
-// 2. Add this useEffect to fetch the active users from Supabase
-useEffect(() => {
-  const fetchProfiles = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('id, full_name, role')
-        .eq('is_active', true) // Only show active employees
-        .order('full_name', { ascending: true });
+  useEffect(() => {
+    const fetchProfiles = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('id, full_name, role')
+          .eq('is_active', true)
+          .order('full_name', { ascending: true });
 
-      if (error) throw error;
-      
-      if (data) {
-        setProfilesList(data);
+        if (error) throw error;
+        
+        if (data) {
+          setProfilesList(data);
+        }
+      } catch (error) {
+        console.error("Error fetching profiles:", error);
       }
-    } catch (error) {
-      console.error("Error fetching profiles:", error);
-    }
-  };
+    };
 
-  fetchProfiles();
-}, []);
+    fetchProfiles();
+  }, []);
 
-  // ✨ Separate Activity Arrays for clean rendering
   const waActivity = customerHistory?.filter((item: any) => item.type === 'WhatsApp Webhook') || [];
   const purchaseActivity = customerHistory?.filter((item: any) => item.type !== 'WhatsApp Webhook') || [];
 
@@ -451,12 +452,12 @@ useEffect(() => {
                           ...newKittyForm, 
                           full_name: selectedCustomer.full_name || '', 
                           phone: selectedCustomer.phone || '', 
-                          email: selectedCustomer.email || '',
-                          city: selectedCustomer.city || '',
-                          address: selectedCustomer.address || '',
-                          pan_no: selectedCustomer.pan_no || '',
-                          birth_date: selectedCustomer.birth_date || '',
-                          anniversary_date: selectedCustomer.anniversary_date || ''
+                          email: selectedCustomer.email || '', 
+                          city: selectedCustomer.city || '', 
+                          address: selectedCustomer.address || '', 
+                          pan_no: selectedCustomer.pan_no || '', 
+                          birth_date: selectedCustomer.birth_date || '', 
+                          anniversary_date: selectedCustomer.anniversary_date || '' 
                         });
                         setTimeout(() => setIsAddKittyModalOpen(true), 300);
                       }}
@@ -887,6 +888,25 @@ useEffect(() => {
         </DialogContent>
       </Dialog>
 
+      {/* ✨ CELEBRATION PLAN / LOYALTY MODAL */}
+      <Dialog open={isCelebrationModalOpen} onOpenChange={setIsCelebrationModalOpen}>
+        <DialogContent className="sm:max-w-[450px] p-0 border-none bg-transparent shadow-none overflow-visible">
+          
+          {/* ✨ ADD THIS LINE to fix the accessibility crash */}
+          <DialogTitle className="sr-only">Loyalty Program Settings</DialogTitle>
+          
+          {selectedCustomer && (
+            <CustomerLoyaltyPanel
+              customerId={selectedCustomer.id}
+              customerPhone={selectedCustomer.phone}
+              customerName={selectedCustomer.full_name}
+              userId={appUser?.id || appUser?.user_id}
+              warehouseId={selectedLocation}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* ✨ PURCHASE HISTORY MODAL */}
       <Dialog open={isHistoryModalOpen} onOpenChange={setIsHistoryModalOpen}>
         <DialogContent className={cn(DIALOG_CONTENT_CLASS, "sm:max-w-[450px]")}>
@@ -948,7 +968,7 @@ useEffect(() => {
         </DialogContent>
       </Dialog>
 
-      {/* ✨ WHATSAPP ACTIVITY MODAL (Now using Vertical Timeline UI) */}
+      {/* ✨ WHATSAPP ACTIVITY MODAL */}
       <Dialog open={isWaActivityModalOpen} onOpenChange={setIsWaActivityModalOpen}>
         <DialogContent className={cn(DIALOG_CONTENT_CLASS, "sm:max-w-[450px]")}>
           <DialogHeader className="bg-white p-5 border-b border-zinc-200 shrink-0">
@@ -1017,8 +1037,6 @@ useEffect(() => {
           </DialogHeader>
 
           <div className="space-y-4 p-5 bg-zinc-50 overflow-y-auto custom-scrollbar flex-1">
-            
-            {/* NEW: USER / CALLER SELECTOR */}
             <div className="space-y-1.5 animate-in fade-in slide-in-from-top-1">
               <label className="text-sm font-medium text-zinc-700">Logged By (Caller) <span className="text-red-500">*</span></label>
               <Select value={callForm.caller_profile_id || ''} onValueChange={(val) => setCallForm({ ...callForm, caller_profile_id: val })}>
@@ -1026,7 +1044,6 @@ useEffect(() => {
                   <SelectValue placeholder="Select user..." />
                 </SelectTrigger>
                 <SelectContent className="rounded-md border-zinc-200 shadow-md">
-                  {/* Ensure profilesList is fetched in your parent component containing { id, full_name, role } */}
                   {profilesList?.map((profile: any) => (
                     <SelectItem key={profile.id} value={profile.id} className="text-sm">
                       {profile.full_name} <span className="text-zinc-400 capitalize">({profile.role?.replace('_', ' ')})</span>
@@ -1058,7 +1075,6 @@ useEffect(() => {
               </Select>
             </div>
 
-            {/* ✨ UPDATED: CONDITIONAL INTEREST LEVEL DROPDOWN */}
             {['Connected / Spoke to Customer', 'Not Interested (Do Not Disturb)', 'Wrong Number'].includes(callForm.outcome) && (
               <div className="space-y-1.5 animate-in fade-in slide-in-from-top-1">
                 <label className="text-sm font-medium text-zinc-700">Customer Interest Level <span className="text-red-500">*</span></label>
@@ -1109,7 +1125,6 @@ useEffect(() => {
                 !callForm.caller_profile_id || 
                 !callForm.outcome || 
                 !callForm.notes.trim() || 
-                // ✨ UPDATED: Validates interest level only if those 3 outcomes are selected
                 (['Connected / Spoke to Customer', 'Not Interested (Do Not Disturb)', 'Wrong Number'].includes(callForm.outcome) && !callForm.interest_level)
               } 
               className="w-full sm:flex-[2] h-9 rounded-md text-sm font-medium bg-zinc-900 hover:bg-zinc-800 text-white shadow-sm" 
@@ -1120,7 +1135,6 @@ useEffect(() => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
 
       {/* SCHEDULE / AUTOMATION CONTROL MODAL */}
       <Dialog open={isFollowupModalOpen} onOpenChange={setIsFollowupModalOpen}>

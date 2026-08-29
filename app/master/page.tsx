@@ -65,9 +65,9 @@ const masterMenu = [
         description: "Workshop management and labor rate tables." 
       },
       { 
-        title: "Client Directory", 
+        title: "Loyalty & Kitty settings", 
         icon: UsersRound, 
-        href: "/crm", 
+        href: "/master/loyalty", 
         description: "Customer details , credits, and trade history." 
       },
     ]

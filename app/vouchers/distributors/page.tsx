@@ -21,7 +21,9 @@ import {
   Search,
   Filter,
   TrendingUp,
-  Users
+  Users,
+  Calendar,
+  Settings
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -76,7 +78,7 @@ interface Distributor {
   contact_person: string;
   phone: string;
   address: string;
-  distributor_type: 'internal_branch' | 'external_shop' | 'corporate_partner' | 'voucher_printing_press' | 'sales_person';
+  distributor_type: string; // ✨ Relaxed strict typing to allow dynamic categories
   created_at: string;
   metrics?: DistributorMetrics;
 }
@@ -89,7 +91,6 @@ interface DeliveryAgent {
   created_at: string;
 }
 
-// ✨ NEW: Reference Person Interface
 interface ReferencePerson {
   id: string;
   name: string;
@@ -102,22 +103,45 @@ interface ReferencePerson {
   };
 }
 
+// ✨ NEW: Event summary interface
+interface EventSummary {
+  event_name: string;
+  voucher_count: number;
+  last_generated: string;
+}
+
 export default function DistributorsPage() {
   const { toast } = useToast();
   const { appUser } = useAuth();
 
   const [distributors, setDistributors] = useState<Distributor[]>([]);
   const [agents, setAgents] = useState<DeliveryAgent[]>([]);
-  const [referencePersons, setReferencePersons] = useState<ReferencePerson[]>([]); // ✨ NEW STATE
-  const [isLoading, setIsLoading] = useState(true);
+  const [referencePersons, setReferencePersons] = useState<ReferencePerson[]>([]); 
+  const [events, setEvents] = useState<EventSummary[]>([]); // ✨ NEW STATE for Events
   
+  const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
 
   const [isPartnerDialogOpen, setIsPartnerDialogOpen] = useState(false);
   const [isAgentDialogOpen, setIsAgentDialogOpen] = useState(false);
-  const [isRefPersonDialogOpen, setIsRefPersonDialogOpen] = useState(false); // ✨ NEW MODAL STATE
+  const [isRefPersonDialogOpen, setIsRefPersonDialogOpen] = useState(false); 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // ✨ NEW: Dynamic Categories State
+  const defaultCategories = [
+    "external_shop", 
+    "internal_branch", 
+    "corporate_partner", 
+    "voucher_printing_press", 
+    "sales_person",
+    "campaign",           // Added requested category
+    "retail_associates",  // Added requested category
+    "institute_retail"    // Added requested category
+  ];
+  const [availableCategories, setAvailableCategories] = useState<string[]>(defaultCategories);
+  const [isAddingNewCategory, setIsAddingNewCategory] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
 
   const [partnerFormData, setPartnerFormData] = useState({
     distributor_name: "",
@@ -133,7 +157,6 @@ export default function DistributorsPage() {
     agency_details: "",
   });
 
-  // ✨ NEW FORM STATE
   const [refPersonFormData, setRefPersonFormData] = useState({
     name: "",
     phone: "",
@@ -144,7 +167,7 @@ export default function DistributorsPage() {
   const fetchRegistries = async () => {
     setIsLoading(true);
     try {
-      // 1. Fetch Partners AND their associated vouchers
+      // 1. Fetch Partners
       const { data: distData, error: distErr } = await supabase
         .from("voucher_distributors")
         .select("*, vouchers(status)")
@@ -152,6 +175,13 @@ export default function DistributorsPage() {
         .order("created_at", { ascending: false });
 
       if (distErr) throw distErr;
+
+      // Extract any custom categories that might exist in DB but not in default list
+      if (distData) {
+        const dbCategories = Array.from(new Set(distData.map(d => d.distributor_type).filter(Boolean)));
+        const combinedCategories = Array.from(new Set([...defaultCategories, ...dbCategories]));
+        setAvailableCategories(combinedCategories);
+      }
 
       const enrichedDistributors = (distData || []).map((distributor) => {
         let registeredCount = 0;
@@ -167,16 +197,10 @@ export default function DistributorsPage() {
             }
           });
         }
-
         const conversionRate = registeredCount > 0 ? (redeemedCount / registeredCount) * 100 : 0;
-
         return {
           ...distributor,
-          metrics: {
-            registered: registeredCount,
-            redeemed: redeemedCount,
-            conversionRate: conversionRate
-          }
+          metrics: { registered: registeredCount, redeemed: redeemedCount, conversionRate }
         };
       });
 
@@ -188,19 +212,48 @@ export default function DistributorsPage() {
         .select("*")
         .eq("company_id", appUser?.company_id)
         .order("created_at", { ascending: false });
-
       if (agentErr) throw agentErr;
       setAgents(agentData || []);
 
-      // ✨ 3. Fetch Reference Persons (Business Intro Agents)
+      // 3. Fetch Reference Persons
       const { data: refData, error: refErr } = await supabase
         .from("voucher_reference_persons")
         .select("*, linked_distributor:linked_distributor_id(distributor_name)")
         .eq("company_id", appUser?.company_id)
         .order("created_at", { ascending: false });
-
       if (refErr) throw refErr;
       setReferencePersons(refData || []);
+
+      // ✨ 4. Fetch Event Summaries from Vouchers
+      // Using a raw query to group by event_name where is_event_voucher is true
+      const { data: eventData, error: eventErr } = await supabase
+        .from("vouchers")
+        .select("event_name, created_at")
+        .eq("is_event_voucher", true)
+        .not("event_name", "is", null);
+      
+      if (eventErr) throw eventErr;
+
+      // Manually aggregate since Supabase JS client doesn't have simple Group By
+      if (eventData) {
+        const eventMap = new Map<string, { count: number, latest: string }>();
+        eventData.forEach((v: any) => {
+          const name = v.event_name;
+          const current = eventMap.get(name) || { count: 0, latest: v.created_at };
+          eventMap.set(name, {
+            count: current.count + 1,
+            latest: new Date(v.created_at) > new Date(current.latest) ? v.created_at : current.latest
+          });
+        });
+
+        const formattedEvents: EventSummary[] = Array.from(eventMap.entries()).map(([name, data]) => ({
+          event_name: name,
+          voucher_count: data.count,
+          last_generated: data.latest
+        })).sort((a, b) => new Date(b.last_generated).getTime() - new Date(a.last_generated).getTime());
+
+        setEvents(formattedEvents);
+      }
 
     } catch (error: any) {
       console.error("Error fetching registries:", error);
@@ -213,6 +266,21 @@ export default function DistributorsPage() {
   useEffect(() => {
     if (appUser) fetchRegistries();
   }, [appUser]);
+
+  // ✨ Handle Custom Category Creation
+  const handleCreateCategory = () => {
+    if (!newCategoryName.trim()) return;
+    const formattedName = newCategoryName.trim().toLowerCase().replace(/\s+/g, '_');
+    
+    if (!availableCategories.includes(formattedName)) {
+      setAvailableCategories(prev => [...prev, formattedName]);
+    }
+    
+    setPartnerFormData(prev => ({ ...prev, distributor_type: formattedName }));
+    setNewCategoryName("");
+    setIsAddingNewCategory(false);
+    toast({ title: "Category Added", description: "You can now use this category for the partner." });
+  };
 
   const handlePartnerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -262,7 +330,6 @@ export default function DistributorsPage() {
     }
   };
 
-  // ✨ NEW: Handle Reference Person Submit
   const handleRefPersonSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -301,6 +368,12 @@ export default function DistributorsPage() {
         return <Badge variant="outline" className="bg-orange-50 text-orange-600 border-orange-200 text-[10px] font-bold h-5 uppercase">Printing Press</Badge>;
       case 'sales_person':
         return <Badge variant="outline" className="bg-indigo-50 text-indigo-600 border-indigo-200 text-[10px] font-bold h-5 uppercase">Sales Person</Badge>;
+      case 'campaign':
+        return <Badge variant="outline" className="bg-rose-50 text-rose-600 border-rose-200 text-[10px] font-bold h-5 uppercase">Campaign</Badge>;
+      case 'retail_associates':
+        return <Badge variant="outline" className="bg-teal-50 text-teal-600 border-teal-200 text-[10px] font-bold h-5 uppercase">Retail Associate</Badge>;
+      case 'institute_retail':
+        return <Badge variant="outline" className="bg-cyan-50 text-cyan-600 border-cyan-200 text-[10px] font-bold h-5 uppercase">Institute</Badge>;
       default:
         return <Badge variant="secondary" className="text-[10px] h-5 uppercase">{(type || "Unknown").replace(/_/g, ' ')}</Badge>;
     }
@@ -316,7 +389,6 @@ export default function DistributorsPage() {
 
   return (
     <div className="flex flex-col min-h-screen bg-[#fafafa]">
-      {/* --- COMPACT IDE-STYLE TOOLBAR HEADER --- */}
       <header className="sticky top-0 z-40 w-full bg-white/80 backdrop-blur-md border-b border-gray-200 px-4 h-12 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 overflow-hidden">
           <Link href="/vouchers">
@@ -362,7 +434,6 @@ export default function DistributorsPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              {/* ✨ Add Reference Person Dialog */}
               <Dialog open={isRefPersonDialogOpen} onOpenChange={setIsRefPersonDialogOpen}>
                 <DialogTrigger asChild>
                   <Button variant="outline" size="sm" className="h-9 px-4 font-bold text-xs uppercase tracking-tight shadow-sm border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800">
@@ -432,7 +503,7 @@ export default function DistributorsPage() {
                     <DialogTitle className="text-lg font-bold text-gray-900">Add B2B Partner</DialogTitle>
                     <DialogDescription className="text-xs font-medium text-gray-500">Configure a new distribution point.</DialogDescription>
                   </DialogHeader>
-                  <form id="add-partner-form" className="p-6 space-y-4">
+                  <form id="add-partner-form" className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
                     <div className="space-y-1.5">
                       <Label className="text-[11px] font-bold text-gray-400 uppercase">Business Name</Label>
                       <div className="relative">
@@ -440,19 +511,44 @@ export default function DistributorsPage() {
                         <Input placeholder="e.g. Metro Jewelry Hub" className="pl-9 h-9 text-sm border-gray-200" value={partnerFormData.distributor_name} onChange={(e) => setPartnerFormData({...partnerFormData, distributor_name: e.target.value})} required />
                       </div>
                     </div>
+                    
                     <div className="space-y-1.5">
-                      <Label className="text-[11px] font-bold text-gray-400 uppercase">Partner Category</Label>
-                      <Select value={partnerFormData.distributor_type} onValueChange={(v) => setPartnerFormData({...partnerFormData, distributor_type: v})}>
-                        <SelectTrigger className="h-9 text-sm border-gray-200"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="external_shop">External Vendor</SelectItem>
-                          <SelectItem value="internal_branch">Internal Branch</SelectItem>
-                          <SelectItem value="corporate_partner">Corporate Account</SelectItem>
-                          <SelectItem value="voucher_printing_press">Voucher Printing Press</SelectItem>
-                          <SelectItem value="sales_person">Sales Person</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[11px] font-bold text-gray-400 uppercase">Partner Category</Label>
+                        {/* ✨ NEW: Admin control to add custom categories */}
+                        {(appUser?.role === 'owner' || appUser?.role === 'manager') && !isAddingNewCategory && (
+                          <Button type="button" variant="ghost" size="sm" className="h-5 px-1.5 text-[10px] text-blue-600 font-bold p-0 uppercase tracking-widest hover:bg-transparent" onClick={() => setIsAddingNewCategory(true)}>
+                            <Settings className="w-3 h-3 mr-1" /> Add Custom
+                          </Button>
+                        )}
+                      </div>
+                      
+                      {isAddingNewCategory ? (
+                        <div className="flex gap-2">
+                          <Input 
+                            placeholder="New Category Name..." 
+                            className="h-9 text-sm border-blue-200 focus-visible:ring-blue-500" 
+                            value={newCategoryName} 
+                            onChange={(e) => setNewCategoryName(e.target.value)} 
+                            autoFocus
+                          />
+                          <Button type="button" size="sm" onClick={handleCreateCategory} className="bg-blue-600 text-white shrink-0">Add</Button>
+                          <Button type="button" variant="ghost" size="sm" onClick={() => setIsAddingNewCategory(false)}>X</Button>
+                        </div>
+                      ) : (
+                        <Select value={partnerFormData.distributor_type} onValueChange={(v) => setPartnerFormData({...partnerFormData, distributor_type: v})}>
+                          <SelectTrigger className="h-9 text-sm border-gray-200"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {availableCategories.map(cat => (
+                              <SelectItem key={cat} value={cat}>
+                                {cat.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </div>
+
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <Label className="text-[11px] font-bold text-gray-400 uppercase">Contact Rep</Label>
@@ -480,7 +576,6 @@ export default function DistributorsPage() {
                 </DialogContent>
               </Dialog>
 
-              {/* Add Agent Dialog */}
               <Dialog open={isAgentDialogOpen} onOpenChange={setIsAgentDialogOpen}>
                 <DialogTrigger asChild>
                   <Button size="sm" className="h-9 px-4 font-bold text-xs uppercase tracking-tight shadow-md bg-black text-white hover:bg-indigo-600">
@@ -532,18 +627,20 @@ export default function DistributorsPage() {
               <TabsTrigger value="partners" className="data-[state=active]:border-b-2 data-[state=active]:border-gray-900 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-gray-900 shadow-none transition-all bg-transparent whitespace-nowrap">
                 B2B Partners ({filteredDistributors.length})
               </TabsTrigger>
-              {/* ✨ NEW TAB FOR REFERENCE AGENTS */}
               <TabsTrigger value="reference_persons" className="data-[state=active]:border-b-2 data-[state=active]:border-emerald-600 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-emerald-700 shadow-none transition-all bg-transparent whitespace-nowrap">
                 Intro Agents ({referencePersons.length})
               </TabsTrigger>
               <TabsTrigger value="agents" className="data-[state=active]:border-b-2 data-[state=active]:border-indigo-600 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-indigo-700 shadow-none transition-all bg-transparent whitespace-nowrap">
                 Delivery Agents ({agents.length})
               </TabsTrigger>
+              {/* ✨ NEW: EVENTS TAB */}
+              <TabsTrigger value="events" className="data-[state=active]:border-b-2 data-[state=active]:border-rose-600 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-rose-700 shadow-none transition-all bg-transparent whitespace-nowrap">
+                Digital Events ({events.length})
+              </TabsTrigger>
             </TabsList>
 
             <CardContent className="p-0">
               
-              {/* PARTNERS TABLE */}
               <TabsContent value="partners" className="m-0">
                 <div className="flex flex-col sm:flex-row gap-3 p-4 bg-white border-b border-gray-100">
                   <div className="relative flex-1 max-w-sm">
@@ -563,11 +660,11 @@ export default function DistributorsPage() {
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="all">All Categories</SelectItem>
-                        <SelectItem value="external_shop">External Vendor</SelectItem>
-                        <SelectItem value="internal_branch">Internal Branch</SelectItem>
-                        <SelectItem value="corporate_partner">Corporate Account</SelectItem>
-                        <SelectItem value="voucher_printing_press">Voucher Printing Press</SelectItem>
-                        <SelectItem value="sales_person">Sales Person</SelectItem>
+                        {availableCategories.map(cat => (
+                          <SelectItem key={`filter-${cat}`} value={cat}>
+                            {cat.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                   </div>
@@ -645,7 +742,6 @@ export default function DistributorsPage() {
                 )}
               </TabsContent>
 
-              {/* ✨ NEW: REFERENCE PERSONS TABLE */}
               <TabsContent value="reference_persons" className="m-0">
                 {isLoading ? (
                   <div className="flex justify-center items-center py-20"><Loader2 className="h-8 w-8 animate-spin text-gray-200" /></div>
@@ -713,7 +809,6 @@ export default function DistributorsPage() {
                 )}
               </TabsContent>
 
-              {/* AGENTS TABLE */}
               <TabsContent value="agents" className="m-0">
                 {isLoading ? (
                   <div className="flex justify-center items-center py-20"><Loader2 className="h-8 w-8 animate-spin text-gray-200" /></div>
@@ -762,6 +857,60 @@ export default function DistributorsPage() {
                             </TableCell>
                             <TableCell className="px-4 text-right">
                               <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors">
+                                <MoreHorizontal className="h-4 w-4" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                )}
+              </TabsContent>
+
+              {/* ✨ NEW: EVENTS TAB CONTENT */}
+              <TabsContent value="events" className="m-0">
+                {isLoading ? (
+                  <div className="flex justify-center items-center py-20"><Loader2 className="h-8 w-8 animate-spin text-gray-200" /></div>
+                ) : events.length === 0 ? (
+                  <div className="text-center py-20 bg-gray-50/30">
+                    <Calendar className="w-12 h-12 mx-auto mb-4 text-rose-200" />
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-tighter italic font-sans">No digital events generated yet</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader className="bg-gray-50/50 border-b">
+                        <TableRow className="hover:bg-transparent">
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-6 h-10">Event Name</TableHead>
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10 text-center">Vouchers Generated</TableHead>
+                          <TableHead className="text-[10px] font-black uppercase tracking-widest text-gray-400 px-4 h-10">Last Batch Created</TableHead>
+                          <TableHead className="w-[50px]"></TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {events.map((event, idx) => (
+                          <TableRow key={`evt-${idx}`} className="hover:bg-gray-50/50 transition-colors border-b border-gray-100">
+                            <TableCell className="px-6 py-4">
+                              <div className="flex items-center gap-3">
+                                <div className="h-8 w-8 rounded bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-500">
+                                  <Calendar className="h-4 w-4" />
+                                </div>
+                                <span className="font-bold text-sm text-gray-900">{event.event_name}</span>
+                              </div>
+                            </TableCell>
+                            <TableCell className="px-4 text-center">
+                              <Badge variant="secondary" className="bg-rose-50 text-rose-700 hover:bg-rose-100 font-bold border-rose-200">
+                                {event.voucher_count} Vouchers
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="px-4">
+                              <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">
+                                {format(new Date(event.last_generated), "dd MMM yyyy, hh:mm a")}
+                              </span>
+                            </TableCell>
+                            <TableCell className="px-4 text-right">
+                              <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors">
                                 <MoreHorizontal className="h-4 w-4" />
                               </Button>
                             </TableCell>

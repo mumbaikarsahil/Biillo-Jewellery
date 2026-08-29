@@ -1,24 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
 import { 
-  PackageCheck, 
-  Printer, 
-  Loader2, 
-  RefreshCw,
-  ChevronRight,
-  ArrowLeft,
-  Database,
-  Inbox,
-  CheckCircle2,
-  Download,
-  Share2,
-  Trash2,
-  X,
-  AlertTriangle
+  PackageCheck, Printer, Loader2, RefreshCw, ChevronRight, ArrowLeft, Database, Inbox, CheckCircle2, Download, Share2, Trash2, X, AlertTriangle, Blocks
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -29,13 +16,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 
 interface VoucherBatch {
@@ -47,7 +30,7 @@ interface VoucherBatch {
   quantity: number;
   discount_value: number;
   printer_name: string;
-  status: 'generated' | 'sent_for_printing' | 'received_from_printer' | 'deleted';
+  status: 'generated' | 'sent_for_printing' | 'received_from_printer' | 'partially_received' | 'deleted';
   created_at: string;
   received_at: string | null;
   cancel_reason?: string;
@@ -57,9 +40,8 @@ export default function BatchesPage() {
   const { toast } = useToast();
   const [batches, setBatches] = useState<VoucherBatch[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'active' | 'deleted'>('active'); // ✨ NEW: Tabs State
+  const [activeTab, setActiveTab] = useState<'active' | 'deleted'>('active');
   
-  // Processing States
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [exportingId, setExportingId] = useState<string | null>(null);
   
@@ -71,6 +53,13 @@ export default function BatchesPage() {
   const [deleteProgress, setDeleteProgress] = useState(0);
   const [deleteStatusText, setDeleteStatusText] = useState("");
   const [retainedCount, setRetainedCount] = useState(0); 
+
+  // ✨ NEW: Partial Receive Modal States
+  const [receiveModalBatch, setReceiveModalBatch] = useState<VoucherBatch | null>(null);
+  const [receiveMode, setReceiveMode] = useState<'full' | 'partial'>('full');
+  const [receiveStart, setReceiveStart] = useState("");
+  const [receiveEnd, setReceiveEnd] = useState("");
+  const [isReceiving, setIsReceiving] = useState(false);
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://biillo-jewellery.vercel.app';
 
@@ -95,36 +84,63 @@ export default function BatchesPage() {
     fetchBatches();
   }, []);
 
-  // Filter batches based on the selected tab
   const filteredBatches = batches.filter(batch => 
     activeTab === 'active' ? batch.status !== 'deleted' : batch.status === 'deleted'
   );
 
-  // --- 1. RECEIVE INVENTORY LOGIC ---
-  const handleMarkAsReceived = async (batchId: string, batchNo: string) => {
-    if (!confirm(`Confirm ingestion for Batch ${batchNo}? Vouchers will be moved to active inventory.`)) return;
+  // --- 1. RECEIVE INVENTORY LOGIC (Updated for Partial) ---
+  const handleOpenReceiveModal = (batch: VoucherBatch) => {
+    setReceiveModalBatch(batch);
+    setReceiveMode('full');
+    setReceiveStart(`${batch.prefix}${String(batch.start_sequence).padStart(4, '0')}`);
+    setReceiveEnd(`${batch.prefix}${String(batch.end_sequence).padStart(4, '0')}`);
+  };
 
-    setProcessingId(batchId);
+  const handleProcessReceive = async () => {
+    if (!receiveModalBatch) return;
+
+    setIsReceiving(true);
     try {
-      const { error: batchError } = await supabase.from("voucher_batches")
-        .update({ status: "received_from_printer", received_at: new Date().toISOString() })
-        .eq("id", batchId);
-      if (batchError) throw batchError;
+      let query = supabase.from("vouchers").update({ status: "in_stock" }).eq("batch_id", receiveModalBatch.id).eq("status", "pending_print");
 
-      const { error: voucherError } = await supabase.from("vouchers")
-        .update({ status: "in_stock" })
-        .eq("batch_id", batchId)
-        .eq("status", "pending_print");
+      if (receiveMode === 'partial') {
+        if (!receiveStart || !receiveEnd) {
+          throw new Error("Start and End sequences are required for partial receiving.");
+        }
+        // Assuming sequence codes are strictly alphabetical prefix + numeric, we filter alphabetically.
+        query = query.gte('code', receiveStart).lte('code', receiveEnd);
+      }
+
+      const { error: voucherError } = await query;
       if (voucherError) throw voucherError;
 
-      toast({ title: "Inventory Received", description: `Batch ${batchNo} is now marked as In Stock.` });
+      // Determine batch status based on remaining pending vouchers
+      const { count: pendingCount, error: countError } = await supabase
+        .from('vouchers')
+        .select('*', { count: 'exact', head: true })
+        .eq('batch_id', receiveModalBatch.id)
+        .eq('status', 'pending_print');
+      
+      if (countError) throw countError;
+
+      const newBatchStatus = pendingCount === 0 ? "received_from_printer" : "partially_received";
+
+      const { error: batchError } = await supabase.from("voucher_batches")
+        .update({ status: newBatchStatus, received_at: new Date().toISOString() })
+        .eq("id", receiveModalBatch.id);
+      
+      if (batchError) throw batchError;
+
+      toast({ title: "Inventory Received", description: `Vouchers marked as In Stock.` });
+      setReceiveModalBatch(null);
       fetchBatches();
     } catch (error: any) {
       toast({ title: "Update Failed", description: error.message, variant: "destructive" });
     } finally {
-      setProcessingId(null);
+      setIsReceiving(false);
     }
   };
+
 
   // --- 2. EXPORT & SHARE LOGIC ---
   const handleExport = async (batch: VoucherBatch, mode: 'download' | 'share') => {
@@ -181,13 +197,11 @@ export default function BatchesPage() {
     }
   };
 
-  // --- 3. UPDATED: STRICT ERROR THROWING ---
-  // --- 3. ✨ FIXED: DIRECT BULK DELETE & AUDIT LOGIC ---
+  // --- 3. DELETE LOGIC ---
   const confirmDelete = async () => {
     if (!batchToDelete || !deleteReason.trim()) return;
     
     try {
-      // Step A: Validate for claimed vouchers before attempting delete
       if (!validationWarning) {
         setIsDeleting(true);
         setDeleteStatusText("Checking voucher statuses...");
@@ -201,31 +215,29 @@ export default function BatchesPage() {
         if (checkError) throw checkError;
 
         if (claimedCount && claimedCount > 0) {
-          setRetainedCount(claimedCount); // Save for the audit trail
+          setRetainedCount(claimedCount); 
           setValidationWarning(`Found ${claimedCount} vouchers that are already claimed or registered. Proceeding will ONLY delete the remaining unused vouchers and void the batch. Proceed?`);
           setIsDeleting(false);
           return; 
         }
       }
 
-      // Step B: Direct Bulk Deletion (No URL length limits!)
       setIsDeleting(true);
       setValidationWarning(null);
-      setDeleteProgress(50); // Set to 50% immediately to show action
+      setDeleteProgress(50); 
       setDeleteStatusText("Erasing unused vouchers...");
 
       const { error: deleteError } = await supabase
         .from("vouchers")
         .delete()
         .eq("batch_id", batchToDelete.id)
-        .in("status", ["pending_print", "in_stock", "sent_for_printing"]); // Safe statuses
+        .in("status", ["pending_print", "in_stock", "sent_for_printing"]); 
 
       if (deleteError) throw deleteError;
 
       const expectedDeletedCount = batchToDelete.quantity - retainedCount;
       setDeleteProgress(80);
 
-      // Step C: Mark the Batch Ledger as Voided with Strict Audit Trail
       setDeleteStatusText("Writing audit trail...");
       
       const auditTrail = retainedCount > 0 
@@ -245,7 +257,6 @@ export default function BatchesPage() {
           .eq("id", batchToDelete.id);
       }
 
-      // Completion
       setDeleteProgress(100);
       setDeleteStatusText("Operation complete!");
       toast({ title: "Ledger Updated", description: `Audit trail saved for batch ${batchToDelete.batch_no}.` });
@@ -274,9 +285,10 @@ export default function BatchesPage() {
   const getStatusBadge = (status: VoucherBatch['status']) => {
     switch (status) {
       case "generated":
-        return <span className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-semibold bg-amber-500/10 text-amber-600 border border-amber-500/20">Pending Print</span>;
       case "sent_for_printing":
-        return <span className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-semibold bg-blue-500/10 text-blue-600 border border-blue-500/20">At Printer</span>;
+        return <span className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-semibold bg-amber-500/10 text-amber-600 border border-amber-500/20">Pending Print</span>;
+      case "partially_received":
+        return <span className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-semibold bg-indigo-500/10 text-indigo-600 border border-indigo-500/20">Partially Received</span>;
       case "received_from_printer":
         return <span className="inline-flex items-center px-2.5 py-1 rounded-md text-[11px] font-semibold bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">In Stock</span>;
       case "deleted":
@@ -303,7 +315,6 @@ export default function BatchesPage() {
   return (
     <div className="flex flex-col min-h-screen bg-muted/20 font-sans">
       
-      {/* HEADER */}
       <header className="sticky top-0 z-40 w-full bg-background/80 backdrop-blur-md border-b border-border px-4 h-14 flex items-center justify-between shadow-sm">
         <div className="flex items-center gap-3 overflow-hidden">
           <Link href="/vouchers">
@@ -341,7 +352,6 @@ export default function BatchesPage() {
 
       <main className="p-4 md:p-8 max-w-[1200px] w-full mx-auto space-y-6 animate-in fade-in duration-500">
         
-        {/* Page Header & Tabs */}
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
             <h2 className="text-2xl font-bold tracking-tight text-foreground">Purchase Orders & Ingestion</h2>
@@ -349,7 +359,6 @@ export default function BatchesPage() {
           </div>
           
           <div className="flex flex-wrap items-center gap-3">
-            {/* ✨ NEW: Tab Switcher UI */}
             <div className="flex bg-muted/50 p-1 rounded-lg border border-border">
               <button
                 onClick={() => setActiveTab('active')}
@@ -374,7 +383,6 @@ export default function BatchesPage() {
           </div>
         </div>
 
-        {/* Data Table */}
         <Card className="shadow-sm border-border overflow-hidden bg-card rounded-xl">
           <CardContent className="p-0">
             {isLoading ? (
@@ -445,12 +453,12 @@ export default function BatchesPage() {
                           <div className="flex items-center justify-end gap-2">
                             {batch.status !== 'deleted' && (
                               <>
-                                {(batch.status === "generated" || batch.status === "sent_for_printing") && (
+                                {(batch.status === "generated" || batch.status === "sent_for_printing" || batch.status === "partially_received") && (
                                   <Button
                                     size="sm"
                                     variant="outline"
                                     className="h-8 px-3 text-xs font-medium bg-background border-border hover:bg-secondary shadow-sm rounded-md transition-all text-primary"
-                                    onClick={() => handleMarkAsReceived(batch.id, batch.batch_no)}
+                                    onClick={() => handleOpenReceiveModal(batch)}
                                     disabled={processingId === batch.id || exportingId === batch.id}
                                   >
                                     {processingId === batch.id ? <Loader2 className="h-3 w-3 animate-spin mr-1.5" /> : <PackageCheck className="h-3.5 w-3.5 mr-1.5" />}
@@ -505,6 +513,85 @@ export default function BatchesPage() {
         </Card>
       </main>
 
+      {/* --- ✨ RECEIVE INVENTORY MODAL --- */}
+      <Dialog open={!!receiveModalBatch} onOpenChange={(open) => !open && setReceiveModalBatch(null)}>
+        <DialogContent className="sm:max-w-md p-0 border-none shadow-2xl rounded-2xl bg-card overflow-hidden">
+          <DialogHeader className="bg-primary/5 p-6 border-b border-border">
+            <DialogTitle className="text-lg font-bold text-foreground flex items-center gap-2">
+              <PackageCheck className="w-5 h-5 text-primary" /> Receive Inventory
+            </DialogTitle>
+            <DialogDescription className="text-xs font-medium text-muted-foreground mt-1">
+              Move vouchers from {receiveModalBatch?.batch_no} into active stock.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="p-6 space-y-5">
+            <div className="flex bg-muted/50 p-1 rounded-lg border border-border">
+              <button
+                onClick={() => setReceiveMode('full')}
+                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-all uppercase tracking-widest ${receiveMode === 'full' ? 'bg-background shadow-sm text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+              >
+                Full Batch
+              </button>
+              <button
+                onClick={() => setReceiveMode('partial')}
+                className={`flex-1 py-2 text-xs font-semibold rounded-md transition-all uppercase tracking-widest ${receiveMode === 'partial' ? 'bg-background shadow-sm text-indigo-600' : 'text-muted-foreground hover:text-indigo-600'}`}
+              >
+                Partial Batch
+              </button>
+            </div>
+
+            {receiveMode === 'full' ? (
+              <div className="bg-primary/5 border border-primary/20 p-4 rounded-xl text-center">
+                <Blocks className="w-8 h-8 text-primary mx-auto mb-2 opacity-80" />
+                <p className="text-sm font-semibold text-foreground">Receive All Remaining Vouchers</p>
+                <p className="text-xs text-muted-foreground mt-1">This will mark all pending vouchers in this batch as In-Stock.</p>
+              </div>
+            ) : (
+              <div className="space-y-4 animate-in fade-in slide-in-from-top-2">
+                <div className="bg-indigo-500/10 border border-indigo-500/20 p-3 rounded-lg flex items-start gap-2.5">
+                  <AlertTriangle className="w-4 h-4 text-indigo-600 mt-0.5 shrink-0" />
+                  <p className="text-[11px] font-medium text-indigo-800 leading-snug">
+                    <strong className="block text-xs font-semibold text-indigo-900 mb-0.5">Partial Receiving</strong>
+                    Enter the exact code sequence range that has physically arrived from the printer.
+                  </p>
+                </div>
+                
+                <div className="flex items-center gap-3">
+                  <div className="space-y-1.5 flex-1">
+                    <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">Start Code</Label>
+                    <Input 
+                      value={receiveStart} 
+                      onChange={(e) => setReceiveStart(e.target.value.toUpperCase())}
+                      className="font-mono text-sm uppercase bg-background"
+                      placeholder={`${receiveModalBatch?.prefix}0001`}
+                    />
+                  </div>
+                  <span className="text-muted-foreground pt-5">to</span>
+                  <div className="space-y-1.5 flex-1">
+                    <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">End Code</Label>
+                    <Input 
+                      value={receiveEnd} 
+                      onChange={(e) => setReceiveEnd(e.target.value.toUpperCase())}
+                      className="font-mono text-sm uppercase bg-background"
+                      placeholder={`${receiveModalBatch?.prefix}0500`}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="bg-secondary/50 p-4 border-t border-border">
+            <Button variant="outline" className="rounded-xl text-xs font-bold uppercase tracking-widest" onClick={() => setReceiveModalBatch(null)} disabled={isReceiving}>Cancel</Button>
+            <Button className="rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground font-bold text-xs uppercase tracking-widest" onClick={handleProcessReceive} disabled={isReceiving || (receiveMode === 'partial' && (!receiveStart || !receiveEnd))}>
+              {isReceiving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <PackageCheck className="w-4 h-4 mr-2" />} Confirm Ingestion
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* --- DELETE MODAL --- */}
       {batchToDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
           <Card className="w-full max-w-md bg-card border-border shadow-2xl rounded-2xl overflow-hidden m-4 animate-in zoom-in-95 duration-200">

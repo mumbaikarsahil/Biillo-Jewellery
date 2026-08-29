@@ -32,6 +32,8 @@ import { CRMMetrics } from './components/CRMMetrics'
 import { CRMModals } from './components/CRMModals'
 import { WhatsAppSenderModal } from '@/components/WhatsAppSenderModal'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@radix-ui/react-dropdown-menu'
+import CustomerLoyaltyPanel from '@/components/loyalty/CustomerLoyaltyPanel' // Adjust path if needed
+
 
 // Defined Call Outcomes for Strict Logging
 const CALL_OUTCOMES = [
@@ -110,6 +112,12 @@ export default function CRMPage() {
   // WhatsApp Integration States
   const [isSenderModalOpen, setIsSenderModalOpen] = useState(false);
   const [messageRecipients, setMessageRecipients] = useState<any[]>([]);
+
+  const [isCelebrationModalOpen, setIsCelebrationModalOpen] = useState(false)
+  const openCelebrationPlanModal = (customer: CRMCustomer) => {
+    setSelectedCustomer(customer);
+    setIsCelebrationModalOpen(true);
+  }
   
 
   // Modals
@@ -1401,6 +1409,7 @@ export default function CRMPage() {
                       onLogCall={openCallLoggerModal} 
                       onViewHistory={handleViewHistory}
                       onViewWaActivity={openWaActivityModal}
+                      onOpenLoyaltyProgram={openCelebrationPlanModal}
                       isKitty={tab === 'kitty'}
                    />
                    {/* Pagination Footer */}
@@ -1449,6 +1458,9 @@ export default function CRMPage() {
       />
 
       <CRMModals 
+        isCelebrationModalOpen={isCelebrationModalOpen} 
+        setIsCelebrationModalOpen={setIsCelebrationModalOpen}
+        appUser={appUser}
         isImportModalOpen={isImportModalOpen} setIsImportModalOpen={setIsImportModalOpen}
         isPreviewModalOpen={isPreviewModalOpen} setIsPreviewModalOpen={setIsPreviewModalOpen}
         isProfileModalOpen={isProfileModalOpen} setIsProfileModalOpen={setIsProfileModalOpen}
@@ -1504,6 +1516,7 @@ export default function CRMPage() {
         customerHistory={customerHistory}
         isHistoryLoading={isHistoryLoading}
       />
+      
     </div>
   )
 }

@@ -44,6 +44,7 @@ export default function GenerateVouchersPage() {
     discountValue: 500,
     handlingFee: 0,
     printerName: "",
+    eventName: "", // ✨ Added Event Name state
   });
 
   const [intendedUse, setIntendedUse] = useState<'physical' | 'digital'>('physical');
@@ -105,7 +106,6 @@ export default function GenerateVouchersPage() {
     return () => clearTimeout(timeoutId);
   }, [formData.prefix, fetchNextSequence]);
 
-  // ✨ FIX 2: Mathematical Sequence Update to prevent DB latency issues
   const handleResetAfterSuccess = () => {
     setShowSuccessModal(false);
     
@@ -113,11 +113,12 @@ export default function GenerateVouchersPage() {
     
     setFormData(prev => ({
       ...prev,
-      startingNumber: nextSequence, // Instantly jump to the correct next number
+      startingNumber: nextSequence,
       quantity: 100,
       discountValue: 500,
       handlingFee: 0,
-      printerName: ""
+      printerName: "",
+      eventName: "", // ✨ Reset Event Name
     }));
     
     setSuccessBatch(null);
@@ -135,6 +136,10 @@ export default function GenerateVouchersPage() {
     
     if (intendedUse === 'physical' && !formData.printerName) {
       return toast({ title: "Validation Error", description: "Please select a Printing Press.", variant: "destructive" });
+    }
+
+    if (intendedUse === 'digital' && !formData.eventName.trim()) {
+      return toast({ title: "Validation Error", description: "Please enter an Event Name.", variant: "destructive" });
     }
 
     setIsGenerating(true);
@@ -183,6 +188,8 @@ export default function GenerateVouchersPage() {
         handling_fee: handlingFee,
         status: "pending_print", 
         expiry_date: expiryIsoStr,
+        is_event_voucher: intendedUse === 'digital', // ✨ Set event flag
+        event_name: intendedUse === 'digital' ? formData.eventName.trim() : null // ✨ Set event name
       }));
 
       const chunkSize = 1000; 
@@ -222,40 +229,14 @@ export default function GenerateVouchersPage() {
     const exportData = successBatch.codes.map((code, index) => ({
       "Sr No": index + 1, "Voucher Code": code, "Credit Value (₹)": successBatch.discount,
       "Handling Fee (₹)": successBatch.handlingFee, "Initial Expiry": successBatch.expiry,
-      "Batch Ref": successBatch.batchNo, "Claim URL": `${baseUrl}/claim?code=${code}`
+      "Batch Ref": successBatch.batchNo, 
+      "Event Name": intendedUse === 'digital' ? formData.eventName : "N/A", // ✨ Added to Excel output
+      "Claim URL": `${baseUrl}/claim?code=${code}`
     }));
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Vouchers");
     XLSX.writeFile(workbook, `Vouchers_${successBatch.batchNo}.xlsx`);
-  };
-
-  const shareExcel = async () => {
-    if (!successBatch) return;
-    const exportData = successBatch.codes.map((code, index) => ({
-      "Sr No": index + 1, "Voucher Code": code, "Credit Value (₹)": successBatch.discount,
-      "Handling Fee (₹)": successBatch.handlingFee, "Initial Expiry": successBatch.expiry,
-      "Batch Ref": successBatch.batchNo, "Claim URL": `${baseUrl}/claim?code=${code}`
-    }));
-    const worksheet = XLSX.utils.json_to_sheet(exportData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Vouchers");
-    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-    const file = new File([excelBuffer], `Vouchers_${successBatch.batchNo}.xlsx`, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-
-    if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      try {
-        await navigator.share({
-          files: [file],
-          title: `Voucher Manifest - ${successBatch.batchNo}`,
-          text: `Here is the Excel manifest for voucher batch ${successBatch.batchNo}.`,
-        });
-      } catch (error: any) {
-        if (error.name !== 'AbortError') toast({ title: "Sharing Failed", description: "Could not share the file.", variant: "destructive" });
-      }
-    } else {
-      toast({ title: "Not Supported", description: "Your device does not support direct file sharing. Use Download instead.", variant: "destructive" });
-    }
   };
 
   return (
@@ -286,7 +267,7 @@ export default function GenerateVouchersPage() {
         <div className="flex items-center gap-2">
           <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-medium text-gray-500 hover:text-gray-900" 
             onClick={() => {
-              setFormData({ prefix: "A", startingNumber: 1, quantity: 100, discountValue: 500, handlingFee: 0, printerName: "" });
+              setFormData({ prefix: "A", startingNumber: 1, quantity: 100, discountValue: 500, handlingFee: 0, printerName: "", eventName: "" });
               setTimeout(() => fetchNextSequence("A"), 200);
             }}>
             <RefreshCw className="h-3.5 w-3.5 mr-1.5" /> Reset Form
@@ -334,6 +315,22 @@ export default function GenerateVouchersPage() {
                     </Button>
                   </div>
                 </div>
+
+                {/* ✨ Conditional Event Name Input */}
+                {intendedUse === 'digital' && (
+                  <div className="space-y-2 pb-5 border-b border-gray-100">
+                    <Label htmlFor="eventName" className="text-xs font-bold text-indigo-600 uppercase tracking-tight">Event Name</Label>
+                    <Input 
+                      id="eventName" 
+                      name="eventName" 
+                      placeholder="e.g., Annual Tech Summit 2026" 
+                      className="h-10 text-sm border-indigo-200 focus-visible:ring-indigo-500 rounded-md bg-indigo-50/50 shadow-inner" 
+                      value={formData.eventName} 
+                      onChange={handleInputChange} 
+                      required 
+                    />
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-5">
                   <div className="space-y-2">
@@ -449,9 +446,7 @@ export default function GenerateVouchersPage() {
         </div>
       </main>
 
-      {/* ✨ FIX 1: Strict Success Modal with Integrated Guidelines and Navigation */}
       <Dialog open={showSuccessModal} onOpenChange={(open) => {
-          // Prevent closing by clicking outside or pressing Escape to force intentional navigation
           if (!open) return; 
       }}>
         <DialogContent 
@@ -459,7 +454,6 @@ export default function GenerateVouchersPage() {
           onInteractOutside={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => e.preventDefault()}
         >
-          {/* Header Area */}
           <div className="w-full bg-emerald-500 p-8 flex flex-col items-center justify-center relative">
             <div className="w-16 h-16 bg-white text-emerald-600 rounded-full flex items-center justify-center mb-3 shadow-lg">
               <CheckCircle2 className="w-8 h-8" />
@@ -472,7 +466,6 @@ export default function GenerateVouchersPage() {
 
           <div className="w-full p-6 bg-white">
             
-            {/* Action Buttons (Download/Print) moved inside the modal */}
             <div className="flex gap-3 mb-6">
               <Button onClick={downloadExcel} variant="outline" className="flex-1 h-12 text-xs font-bold bg-white border-gray-200 rounded-xl shadow-sm text-gray-700 hover:text-emerald-700 hover:bg-emerald-50 hover:border-emerald-200">
                 <FileSpreadsheet className="mr-2 h-4 w-4" /> Download Manifest
@@ -484,7 +477,6 @@ export default function GenerateVouchersPage() {
               )}
             </div>
 
-            {/* Strict Guidelines Required by Prompt */}
             <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 text-left flex items-start gap-3 mb-6">
               <Info className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
               <div className="space-y-2 text-sm text-blue-900 leading-relaxed">
@@ -497,7 +489,6 @@ export default function GenerateVouchersPage() {
               </div>
             </div>
 
-            {/* Mandatory Navigation Routing */}
             <DialogFooter className="w-full sm:justify-center flex-col sm:flex-col gap-3">
               <div className="grid grid-cols-2 gap-3 w-full">
                 <Link href="/vouchers/batches" className="w-full">
@@ -512,7 +503,6 @@ export default function GenerateVouchersPage() {
                 </Link>
               </div>
               
-              {/* Reset Form Option */}
               <Button 
                 variant="ghost" 
                 className="w-full mt-2 text-gray-500 hover:text-gray-900 text-xs font-semibold"
@@ -525,7 +515,6 @@ export default function GenerateVouchersPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Hidden Print Wrapper */}
       {(successBatch && successBatch.codes.length <= 1000) && (
         <div className="hidden">
           <div ref={printRef}>
