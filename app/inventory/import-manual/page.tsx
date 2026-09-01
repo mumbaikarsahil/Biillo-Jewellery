@@ -59,6 +59,7 @@ interface ManualJewelleryItem {
   hsn_code: string;
   remarks: string;
   total_amount: number | string;
+  is_sp_item: boolean; // ✨ NEW
 }
 
 const getCategoryPrefix = (category: string): string => {
@@ -158,6 +159,7 @@ export default function ManualImportPage() {
       hsn_code: '7113', 
       remarks: '',
       total_amount: '',
+      is_sp_item: false,
     }
     
     setItems([newItem, ...items])
@@ -171,7 +173,7 @@ export default function ManualImportPage() {
     setSelectedIds(newSelected)
   }
 
-  const handleItemEdit = (tempId: string, field: keyof ManualJewelleryItem, value: string | number) => {
+  const handleItemEdit = (tempId: string, field: keyof ManualJewelleryItem, value: string | number | boolean) => {
     setItems(prev => prev.map(item => 
       item.temp_id === tempId ? { ...item, [field]: value } : item
     ))
@@ -331,7 +333,8 @@ export default function ManualImportPage() {
             hsn_code: item.hsn_code,
             remarks: item.remarks,
             mrp: Number(item.total_amount) || 0, 
-            status: 'in_stock' 
+            status: 'in_stock' ,
+            is_sp_item: item.is_sp_item
           });
         }
       }
@@ -546,6 +549,7 @@ export default function ManualImportPage() {
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-emerald-700 text-right w-24 border-r border-slate-200">MRP (₹)</th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-20 border-r border-slate-200">HSN</th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-32 border-r border-slate-200">Remarks</th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-amber-600 bg-amber-50/50 text-center w-16 border-r border-slate-200">SP Tag</th>
                         <th className="py-2 px-2 w-10 text-center"></th>
                       </tr>
                     </thead>
@@ -699,13 +703,28 @@ export default function ManualImportPage() {
                               />
                             </td>
                             <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
-                              <EditableCell 
-                                value={item.remarks} 
-                                onChange={(e: any) => handleItemEdit(item.temp_id, 'remarks', e.target.value)} 
-                                className="text-slate-500 italic"
-                                placeholder="Notes..."
-                              />
-                            </td>
+    <EditableCell 
+      value={item.remarks} 
+      onChange={(e: any) => handleItemEdit(item.temp_id, 'remarks', e.target.value)} 
+      className="text-slate-500 italic"
+      placeholder="Notes..."
+    />
+  </td>
+
+  {/* ✨ NEW SP TAG CELL */}
+  <td className="py-1 px-1 align-top pt-2.5 text-center border-r border-slate-100 bg-amber-50/10">
+    <label className="cursor-pointer group flex items-center justify-center h-full">
+      <input 
+        type="checkbox"
+        className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer"
+        checked={item.is_sp_item || false}
+        onChange={(e) => handleItemEdit(item.temp_id, 'is_sp_item', e.target.checked)}
+      />
+    </label>
+  </td>
+
+                            
+                            
                             <td className="py-1 px-1 align-top pt-2 text-center">
                               <Button 
                                 variant="ghost" 

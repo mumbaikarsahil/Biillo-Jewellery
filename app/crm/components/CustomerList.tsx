@@ -110,6 +110,9 @@ export function CustomerList({ data, loading, emptyMessage, onMessage, onSchedul
 
               // ✨ Grab the Sequence Data
               const activeSequence = row.voucher_message_sequences?.find((s: any) => s.status === 'active') || row.voucher_message_sequences?.[0];
+              // ✨ NEW: Get the active assignment and its attempts
+              const activeAssignment = row.voucher_call_assignments?.find((a: any) => a.status === 'pending') || row.voucher_call_assignments?.[0];
+              const callAttempts = activeAssignment?.attempt_count || 0;
 
               let voucherText = "";
               let voucherColor = "";
@@ -156,10 +159,17 @@ return (
                         </Badge>
                       )}
                       {Number(row.pavitram_points) > 0 && (
-                        <Badge className="bg-amber-50 text-amber-600 border-amber-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">
-                          <Star className="w-2.5 h-2.5" /> Points
-                        </Badge>
-                      )}
+    <Badge className="bg-amber-50 text-amber-600 border-amber-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">
+      <Star className="w-2.5 h-2.5" /> Points
+    </Badge>
+  )}
+  
+  {/* ✨ NEW: Call Attempts Badge */}
+  {callAttempts > 0 && (
+    <Badge className="bg-amber-100 text-amber-700 border-amber-300 text-[8px] h-4 px-1.5 uppercase tracking-widest flex items-center gap-1 shadow-sm">
+      <PhoneCall className="w-2.5 h-2.5" /> Attempts: {callAttempts}
+    </Badge>
+  )}
                       
                       {isWalkinActivity && (
                         <Badge className="bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200 text-[8px] h-4 px-1 uppercase tracking-widest flex items-center gap-0.5">

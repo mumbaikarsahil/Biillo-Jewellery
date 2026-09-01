@@ -16,17 +16,21 @@ export function useCart(companyId: string | undefined, selectedLocation: string,
       if (!itemSearchTerm.trim() || !companyId || !selectedLocation) return setSearchResults([])
       
       let query = supabase.from('inventory_items')
-        .select('id, barcode, sku_reference, metal_type, mrp, status, warehouse_id, purity_karat, hsn_code, gross_weight_g, net_weight_g, total_stone_weight_cts')
+        // ✨ UPDATED: Added is_sp_item and is_custom_order to the select list
+        .select('id, barcode, sku_reference, metal_type, mrp, status, warehouse_id, purity_karat, hsn_code, gross_weight_g, net_weight_g, total_stone_weight_cts, is_custom_order, is_sp_item')
         .eq('company_id', companyId)
         .eq('status', 'in_stock') 
-        // --- NEW: HIDE CUSTOM ORDERS FROM NORMAL SEARCH ---
         .eq('is_custom_order', false)
-        // --------------------------------------------------
         .or(`barcode.ilike.%${itemSearchTerm.trim()}%,sku_reference.ilike.%${itemSearchTerm.trim()}%`)
         .limit(15)
 
       if (selectedLocation !== 'ALL') {
         query = query.eq('warehouse_id', selectedLocation)
+      }
+
+      // ✨ NEW: HIDE SP ITEMS FROM SEARCH (Unless we are making a transfer/challan)
+      if (mode !== 'challan') {
+        query = query.eq('is_sp_item', false)
       }
 
       const { data, error } = await query
@@ -36,7 +40,7 @@ export function useCart(companyId: string | undefined, selectedLocation: string,
 
     const timeoutId = setTimeout(() => searchItems(), 300)
     return () => clearTimeout(timeoutId)
-  }, [itemSearchTerm, companyId, selectedLocation])
+  }, [itemSearchTerm, companyId, selectedLocation, mode]) // Added mode to dependencies
 
   const processScannedItem = (item: any) => {
     if (cart.find(c => c.barcode === item.barcode)) {
@@ -51,9 +55,13 @@ export function useCart(companyId: string | undefined, selectedLocation: string,
       return toast.error(`Cannot sell item. Current status is: ${item.status?.replace('_', ' ').toUpperCase()}`)
     }
     
-    // Extra safety net just in case
     if (item.is_custom_order) {
       return toast.error("This is a custom order item. Please use the Custom Order Pickup tab to bill it.")
+    }
+
+    // ✨ NEW: EXTRA SAFETY NET FOR DIRECT QR SCANNING
+    if (item.is_sp_item && mode !== 'challan') {
+      return toast.error("This is a Sample/Display (SP) item and cannot be billed/sold.")
     }
 
     setCart(prev => [{...item, tax_percent: 3, mrp: item.mrp || 0}, ...prev])
@@ -68,10 +76,10 @@ export function useCart(companyId: string | undefined, selectedLocation: string,
 
     try {
       const { data: item, error } = await supabase.from('inventory_items')
-        .select('*') // Adjust columns as needed
+        .select('*') 
         .ilike('barcode', barcode.trim())
         .eq('company_id', companyId)
-        // We do not filter `is_custom_order` out at the DB level here, 
+        // We do not filter `is_custom_order` or `is_sp_item` out at the DB level here, 
         // so that processScannedItem can show a helpful error message instead of a generic "doesn't exist" message.
         .maybeSingle()
 

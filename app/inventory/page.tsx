@@ -119,6 +119,7 @@ interface InventoryItem {
   is_exchanged: boolean
   is_custom_order: boolean
   is_repair_ticket: boolean
+  is_sp_item: boolean // ✨ NEW: SP Item Flag
   custom_order_id: string | null
   origin_name?: string
   custom_orders?: { id: string; order_number: string; origin?: { name: string } }
@@ -213,7 +214,8 @@ export default function InventoryPage() {
 
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
 
-  const [counts, setCounts] = useState({ active: 0, exchange: 0, buyback: 0, repair: 0, others: 0, sold: 0, gifting: 0, packaging: 0 })
+  // ✨ Added sp_items to counts
+  const [counts, setCounts] = useState({ active: 0, exchange: 0, buyback: 0, repair: 0, others: 0, sold: 0, gifting: 0, packaging: 0, sp_items: 0 })
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false)
 
   // Gifting Inventory State
@@ -499,13 +501,17 @@ export default function InventoryPage() {
         if (validStatuses.length > 0) q = q.in('status', validStatuses);
       }
       
-      if (tab === 'exchange') {
+      // ✨ NEW: SP Items Filtering Logic
+      if (tab === 'sp_items') {
+        q = q.eq('is_sp_item', true);
+      } else if (tab === 'exchange') {
         q = q.eq('is_exchanged', true);
       } else if (tab === 'buyback') {
         q = q.ilike('item_category', '%Old Gold%');
       } else if (tab === 'active') {
         q = q.eq('is_exchanged', false);
         q = q.not('item_category', 'ilike', '%Old Gold%');
+        q = q.or('is_sp_item.eq.false,is_sp_item.is.null'); // Hide SP items from active selling stock
       }
     }
 
@@ -538,8 +544,9 @@ export default function InventoryPage() {
         let packQ = supabase.from('packaging_inventory').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id);
         if (selectedLocation !== 'ALL') packQ = packQ.eq('warehouse_id', selectedLocation);
 
-        const [a, e, b, s, r, o, g, p] = await Promise.all([
-          getQ('active'), getQ('exchange'), getQ('buyback'), getQ('sold'), repQ, getQ('others'), giftQ, packQ
+        // ✨ NEW: Added SP Items query
+        const [a, e, b, s, r, o, g, p, sp] = await Promise.all([
+          getQ('active'), getQ('exchange'), getQ('buyback'), getQ('sold'), repQ, getQ('others'), giftQ, packQ, getQ('sp_items')
         ]);
 
         setCounts({
@@ -550,7 +557,8 @@ export default function InventoryPage() {
           repair: r.count || 0,
           others: o.count || 0,
           gifting: g.count || 0,
-          packaging: p.count || 0
+          packaging: p.count || 0,
+          sp_items: sp.count || 0
         });
       } catch (e) {
         console.warn("Count Fetch Error:", e);
@@ -617,7 +625,7 @@ export default function InventoryPage() {
             net_weight_g: rep.issued_gold_g || 0, total_stone_weight_cts: rep.issued_diamond_cts || 0, total_stone_pieces: 0, solitaire_weight_cts: 0, solitaire_pieces: 0, melee_weight_cts: 0,
             melee_pieces: 0, color_stone_weight_cts: 0, color_stone_pieces: 0, mrp: rep.actual_cost || 0, status: rep.status,
             warehouse_id: rep.status === 'fixed_ready_for_dispatch' && warehouses.find(w => w.name.includes('HQ'))?.id ? warehouses.find(w => w.name.includes('HQ'))?.id || rep.origin_warehouse_id : rep.origin_warehouse_id, 
-            is_exchanged: false, is_custom_order: false, is_repair_ticket: true, custom_order_id: null, origin_name: rep.origin?.name || 'Unknown Branch', 
+            is_exchanged: false, is_custom_order: false, is_repair_ticket: true, is_sp_item: false, custom_order_id: null, origin_name: rep.origin?.name || 'Unknown Branch', 
             karigars: null, created_from_job_bag: null, huid_code: null, hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: rep.stone_shape || null, diamond_color: null,
             diamond_clarity: null, cost_metal: 0, cost_stone: 0, cost_making: rep.labor_charges || 0, cost_total: rep.actual_cost || 0, wastage_weight_g: 0,
             cost_price: null, label_1: null, label_2: null,
@@ -817,7 +825,6 @@ export default function InventoryPage() {
     }
   };
 
-  // ✨ FIXED: Added validation to prevent transferring into the void
   const handleConsumableTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!appUser || !consumableToTransfer) return;
@@ -908,7 +915,7 @@ export default function InventoryPage() {
               net_weight_g: rep.issued_gold_g || 0, total_stone_weight_cts: rep.issued_diamond_cts || 0, total_stone_pieces: 0, solitaire_weight_cts: 0, solitaire_pieces: 0, melee_weight_cts: 0,
               melee_pieces: 0, color_stone_weight_cts: 0, color_stone_pieces: 0, mrp: rep.actual_cost || 0, status: rep.status,
               warehouse_id: rep.status === 'fixed_ready_for_dispatch' && warehouses.find(w => w.name.includes('HQ'))?.id ? warehouses.find(w => w.name.includes('HQ'))?.id || rep.origin_warehouse_id : rep.origin_warehouse_id, 
-              is_exchanged: false, is_custom_order: false, is_repair_ticket: true, custom_order_id: null, origin_name: '', 
+              is_exchanged: false, is_custom_order: false, is_repair_ticket: true, is_sp_item: false, custom_order_id: null, origin_name: '', 
               karigars: null, created_from_job_bag: null, huid_code: null, hsn_code: '9987', image_url: rep.condition_photo_url || null, remarks: rep.issue_description || '', metal_color: 'N/A', diamond_shape: rep.stone_shape || null, diamond_color: null,
               diamond_clarity: null, cost_metal: 0, cost_stone: 0, cost_making: rep.labor_charges || 0, cost_total: rep.actual_cost || 0, wastage_weight_g: 0,
               cost_price: null, label_1: null, label_2: null,
@@ -920,7 +927,7 @@ export default function InventoryPage() {
            if (!data || data.length < limit) hasMoreLoop = false; else start += limit;
         } else {
            let globalQuery = supabase.from('inventory_items')
-             .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged, diamond_shape, diamond_color, diamond_clarity, audit_history')
+             .select('id, barcode, sku_reference, item_category, metal_type, purity_karat, purity_percent, gross_weight_g, net_weight_g, total_stone_weight_cts, mrp, status, warehouse_id, is_exchanged, is_sp_item, diamond_shape, diamond_color, diamond_clarity, audit_history')
            globalQuery = buildServerQuery(globalQuery, activeTab); 
            globalQuery = globalQuery.range(start, start + limit - 1);
            const { data, error } = await globalQuery;
@@ -1051,6 +1058,7 @@ export default function InventoryPage() {
       diamond_color: item.diamond_color || '',
       diamond_clarity: item.diamond_clarity || '',
 
+      is_sp_item: item.is_sp_item || false, // ✨ NEW: SP Item State
       reason: ''
     });
   }
@@ -1089,6 +1097,7 @@ export default function InventoryPage() {
         diamond_shape: fullEditForm.diamond_shape,
         diamond_color: fullEditForm.diamond_color,
         diamond_clarity: fullEditForm.diamond_clarity,
+        is_sp_item: Boolean(fullEditForm.is_sp_item), // ✨ NEW: SP Item Save Payload
         updated_by: appUser.user_id || appUser.id
       };
 
@@ -1096,6 +1105,7 @@ export default function InventoryPage() {
       if (Number(fullEditItem.mrp) !== payload.mrp) diffs.push(`MRP: ${fullEditItem.mrp} -> ${payload.mrp}`);
       if (Number(fullEditItem.gross_weight_g) !== payload.gross_weight_g) diffs.push(`Gross: ${fullEditItem.gross_weight_g}g -> ${payload.gross_weight_g}g`);
       if (Number(fullEditItem.net_weight_g) !== payload.net_weight_g) diffs.push(`Net: ${fullEditItem.net_weight_g}g -> ${payload.net_weight_g}g`);
+      if (Boolean(fullEditItem.is_sp_item) !== payload.is_sp_item) diffs.push(`SP Status: ${fullEditItem.is_sp_item} -> ${payload.is_sp_item}`); // ✨ Add diff tracking
       
       const newLogEntry: AuditLogEntry = {
         timestamp: new Date().toISOString(),
@@ -1643,6 +1653,12 @@ export default function InventoryPage() {
               <TabsTrigger value="repair" className="rounded-none border-b-2 border-transparent data-[state=active]:border-indigo-600 data-[state=active]:text-indigo-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-500 transition-all hover:text-slate-800">
                 Repairs <Badge className="ml-1.5 bg-slate-100 text-slate-600 shadow-none px-1.5">{counts.repair}</Badge>
               </TabsTrigger>
+              
+              {/* ✨ NEW: SP Items Tab */}
+              <TabsTrigger value="sp_items" className="rounded-none border-b-2 border-transparent data-[state=active]:border-fuchsia-600 data-[state=active]:text-fuchsia-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-500 transition-all hover:text-slate-800">
+                SP Items <Badge className="ml-1.5 bg-fuchsia-50 text-fuchsia-700 shadow-none px-1.5">{counts.sp_items}</Badge>
+              </TabsTrigger>
+
               <TabsTrigger value="others" className="rounded-none border-b-2 border-transparent data-[state=active]:border-amber-600 data-[state=active]:text-amber-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-500 transition-all hover:text-slate-800">
                 Other Statuses <Badge className="ml-1.5 bg-slate-100 text-slate-600 shadow-none px-1.5">{counts.others}</Badge>
               </TabsTrigger>
@@ -1660,7 +1676,7 @@ export default function InventoryPage() {
             </TabsList>
           </div>
 
-          {['active', 'exchange', 'buyback', 'repair', 'others', 'sold'].map(tab => (
+          {['active', 'exchange', 'buyback', 'repair', 'sp_items', 'others', 'sold'].map(tab => (
              <TabsContent key={tab} value={tab}>
                <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative">
                   {loading && <GeminiLoader />}
@@ -2186,6 +2202,21 @@ export default function InventoryPage() {
 
             <div className="p-5 flex-1 overflow-y-auto custom-scrollbar">
               <TabsContent value="basic" className="m-0 space-y-4">
+                
+                {/* ✨ NEW: Checkbox to toggle SP Status */}
+                <div className="flex items-center gap-3 bg-fuchsia-50/50 border border-fuchsia-100 p-3 rounded-xl mb-4">
+                   <Checkbox 
+                      id="sp_item_check"
+                      checked={fullEditForm.is_sp_item} 
+                      onCheckedChange={(c) => setFullEditForm({...fullEditForm, is_sp_item: !!c})} 
+                      className="data-[state=checked]:bg-fuchsia-600 data-[state=checked]:border-fuchsia-600"
+                   />
+                   <div className="grid gap-0.5">
+                      <Label htmlFor="sp_item_check" className="text-xs font-bold text-fuchsia-900 cursor-pointer">Mark as Sample/Display Item (SP)</Label>
+                      <p className="text-[10px] text-fuchsia-600/70">SP Items cannot be billed to customers but can be transferred.</p>
+                   </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold text-slate-500 uppercase">Design SKU</Label>
@@ -2503,6 +2534,7 @@ export default function InventoryPage() {
                       viewItem.status === 'in_stock' ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-slate-100 text-slate-600 border-slate-200")}>
                      {viewItem.status.replace(/_/g, ' ')}
                    </Badge>
+                   {viewItem.is_sp_item && <Badge className="bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200 text-[9px] uppercase tracking-widest">SP ITEM</Badge>}
                    {viewItem.is_custom_order && <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[9px] uppercase tracking-widest">Custom: {viewItem.custom_orders?.origin?.name || 'Branch'}</Badge>}
                    {viewItem.is_repair_ticket && <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest">Repair: {viewItem.origin_name}</Badge>}
                 </div>
@@ -2825,6 +2857,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                        </div>
                        
                        <div className="flex gap-1 mt-1.5 flex-wrap">
+                         {item.is_sp_item && <Badge className="bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">SP ITEM</Badge>}
                          {karigar && <Badge className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4" title={karigar.full_name}>Mkr: {karigar.karigar_code || karigar.full_name}</Badge>}
                          {item.is_exchanged && <Badge className="bg-rose-100 text-rose-700 border-rose-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Exchange</Badge>}
                          {item.item_category?.toLowerCase().includes('old gold') && <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Buyback</Badge>}
@@ -2910,29 +2943,27 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                   <TableCell className="text-right px-6 py-3">
                      <div className="flex justify-end gap-1.5">
                      {canChangeStatus && !item.is_repair_ticket && (
-  <Select
-    value={item.status}
-    onValueChange={(val) => handleStatusChange(item, val)}
-  >
-    <SelectTrigger className="h-8 w-[130px] text-[10px] font-bold border-slate-200 bg-white rounded-md focus:ring-indigo-500 shadow-sm">
-      <SelectValue />
-    </SelectTrigger>
-    <SelectContent className="rounded-xl border-slate-200 shadow-xl z-50">
-      <SelectItem value="in_stock"          className="text-xs font-medium">In Stock</SelectItem>
-      <SelectItem value="in_vault"          className="text-xs font-medium">In Vault</SelectItem>
-      <SelectItem value="transit"           className="text-xs font-medium">In Transit</SelectItem>
-      <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>
-      <SelectItem value="job_work_out"      className="text-xs font-medium">Job Work Out</SelectItem>
-      <SelectItem value="pending_repair"    className="text-xs font-medium">Pending Repair</SelectItem>
-      <SelectItem value="pending_melting"   className="text-xs font-medium">Pending Melting</SelectItem>
-      <SelectItem value="melting"           className="text-xs font-medium">Melting</SelectItem>
-      <SelectItem value="disputed"          className="text-xs font-medium">Disputed</SelectItem>
-      <SelectItem value="written_off_lost"  className="text-xs font-medium text-rose-600">Written Off / Lost</SelectItem>
-      {isSoldTab && <SelectItem value="sold_unbilled" className="text-xs font-medium text-rose-600">Sold Unbilled</SelectItem>}
-      {isSoldTab && <SelectItem value="delivered" className="text-xs font-medium text-rose-600">Delivered</SelectItem>}
-    </SelectContent>
-  </Select>
-)}
+                        <Select value={item.status} onValueChange={(val) => handleStatusChange(item, val)}>
+                          <SelectTrigger className="h-8 w-[130px] text-[10px] font-bold border-slate-200 bg-white rounded-md focus:ring-indigo-500 shadow-sm">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="rounded-xl border-slate-200 shadow-xl z-50">
+                            <SelectItem value="in_stock"          className="text-xs font-medium">In Stock</SelectItem>
+                            <SelectItem value="in_vault"          className="text-xs font-medium">In Vault</SelectItem>
+                            <SelectItem value="transit"           className="text-xs font-medium">In Transit</SelectItem>
+                            {/* ✨ NEW: Hide Sold options for SP Items */}
+                            {!item.is_sp_item && <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>}
+                            <SelectItem value="job_work_out"      className="text-xs font-medium">Job Work Out</SelectItem>
+                            <SelectItem value="pending_repair"    className="text-xs font-medium">Pending Repair</SelectItem>
+                            <SelectItem value="pending_melting"   className="text-xs font-medium">Pending Melting</SelectItem>
+                            <SelectItem value="melting"           className="text-xs font-medium">Melting</SelectItem>
+                            <SelectItem value="disputed"          className="text-xs font-medium">Disputed</SelectItem>
+                            <SelectItem value="written_off_lost"  className="text-xs font-medium text-rose-600">Written Off / Lost</SelectItem>
+                            {isSoldTab && !item.is_sp_item && <SelectItem value="sold_unbilled" className="text-xs font-medium text-rose-600">Sold Unbilled</SelectItem>}
+                            {isSoldTab && !item.is_sp_item && <SelectItem value="delivered" className="text-xs font-medium text-rose-600">Delivered</SelectItem>}
+                          </SelectContent>
+                        </Select>
+                      )}
                         <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors" onClick={() => setViewItem(item)} title="View Full Details">
                           <Eye className="h-4 w-4" />
                         </Button>
@@ -2997,9 +3028,12 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                        </div>
                      </div>
 
-                     {karigar && <span className="block text-[9px] font-bold text-indigo-600 uppercase tracking-widest mt-1.5">Maker: {karigar.full_name}</span>}
-                     {item.is_custom_order && <span className="block text-[9px] font-bold text-purple-600 uppercase tracking-widest mt-1">Custom: {item.custom_orders?.origin?.name || 'Branch'}</span>}
-                     {item.is_repair_ticket && <span className="block text-[9px] font-bold text-amber-600 uppercase tracking-widest mt-1">Repair: {item.origin_name}</span>}
+                     <div className="flex flex-wrap gap-1 mt-1.5">
+                        {item.is_sp_item && <span className="block text-[9px] font-bold text-fuchsia-600 uppercase tracking-widest border border-fuchsia-200 px-1 py-0.5 rounded bg-fuchsia-50">SP ITEM</span>}
+                        {karigar && <span className="block text-[9px] font-bold text-indigo-600 uppercase tracking-widest">Maker: {karigar.full_name}</span>}
+                        {item.is_custom_order && <span className="block text-[9px] font-bold text-purple-600 uppercase tracking-widest">Custom: {item.custom_orders?.origin?.name || 'Branch'}</span>}
+                        {item.is_repair_ticket && <span className="block text-[9px] font-bold text-amber-600 uppercase tracking-widest">Repair: {item.origin_name}</span>}
+                     </div>
                    </div>
                  </div>
                  
@@ -3069,29 +3103,27 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                  </div>
                  <div className="flex gap-1.5">
                  {canChangeStatus && !item.is_repair_ticket && (
-  <Select
-    value={item.status}
-    onValueChange={(val) => handleStatusChange(item, val)}
-  >
-    <SelectTrigger className="h-8 w-[120px] text-[10px] font-bold border-slate-200 bg-white rounded-md focus:ring-indigo-500">
-      <SelectValue />
-    </SelectTrigger>
-    <SelectContent className="rounded-xl border-slate-200 shadow-xl z-50">
-      <SelectItem value="in_stock"          className="text-xs font-medium">In Stock</SelectItem>
-      <SelectItem value="in_vault"          className="text-xs font-medium">In Vault</SelectItem>
-      <SelectItem value="transit"           className="text-xs font-medium">In Transit</SelectItem>
-      <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>
-      <SelectItem value="job_work_out"      className="text-xs font-medium">Job Work Out</SelectItem>
-      <SelectItem value="pending_repair"    className="text-xs font-medium">Pending Repair</SelectItem>
-      <SelectItem value="pending_melting"   className="text-xs font-medium">Pending Melting</SelectItem>
-      <SelectItem value="melting"           className="text-xs font-medium">Melting</SelectItem>
-      <SelectItem value="disputed"          className="text-xs font-medium">Disputed</SelectItem>
-      <SelectItem value="written_off_lost"  className="text-xs font-medium text-rose-600">Written Off / Lost</SelectItem>
-      {isSoldTab && <SelectItem value="sold_unbilled" className="text-xs font-medium text-rose-600">Sold Unbilled</SelectItem>}
-      {isSoldTab && <SelectItem value="delivered" className="text-xs font-medium text-rose-600">Delivered</SelectItem>}
-    </SelectContent>
-  </Select>
-)}
+                    <Select value={item.status} onValueChange={(val) => handleStatusChange(item, val)}>
+                      <SelectTrigger className="h-8 w-[120px] text-[10px] font-bold border-slate-200 bg-white rounded-md focus:ring-indigo-500">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl border-slate-200 shadow-xl z-50">
+                        <SelectItem value="in_stock"          className="text-xs font-medium">In Stock</SelectItem>
+                        <SelectItem value="in_vault"          className="text-xs font-medium">In Vault</SelectItem>
+                        <SelectItem value="transit"           className="text-xs font-medium">In Transit</SelectItem>
+                        {/* ✨ NEW: Hide Sold options for SP Items */}
+                        {!item.is_sp_item && <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>}
+                        <SelectItem value="job_work_out"      className="text-xs font-medium">Job Work Out</SelectItem>
+                        <SelectItem value="pending_repair"    className="text-xs font-medium">Pending Repair</SelectItem>
+                        <SelectItem value="pending_melting"   className="text-xs font-medium">Pending Melting</SelectItem>
+                        <SelectItem value="melting"           className="text-xs font-medium">Melting</SelectItem>
+                        <SelectItem value="disputed"          className="text-xs font-medium">Disputed</SelectItem>
+                        <SelectItem value="written_off_lost"  className="text-xs font-medium text-rose-600">Written Off / Lost</SelectItem>
+                        {isSoldTab && !item.is_sp_item && <SelectItem value="sold_unbilled" className="text-xs font-medium text-rose-600">Sold Unbilled</SelectItem>}
+                        {isSoldTab && !item.is_sp_item && <SelectItem value="delivered" className="text-xs font-medium text-rose-600">Delivered</SelectItem>}
+                      </SelectContent>
+                    </Select>
+                  )}
                   
                    {!isSoldTab && (item.status === 'in_stock' || item.status === 'in_vault' || item.status === 'fixed_ready_for_dispatch') && (
                      <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>

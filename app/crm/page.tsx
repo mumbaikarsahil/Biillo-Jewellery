@@ -467,24 +467,21 @@ export default function CRMPage() {
     setIsSubmitting(true);
     try {
       const isDND = callForm.outcome === 'Not Interested (Do Not Disturb)';
-      const isCompletedOutcome = ['Connected / Spoke to Customer', 'Not Interested (Do Not Disturb)', 'Wrong Number'].includes(callForm.outcome);
       
-      // ✨ FIX 1: Capture the exact user selected from the dropdown (fallback to logged-in user)
-      const actualCallerId = callForm.caller_profile_id || appUser?.id || appUser?.user_id;
+      // FIX 1: Ensure we grab the correct User ID regardless of role
+      const actualCallerId = callForm.caller_profile_id || appUser?.user_id || appUser?.id;
 
-      // ✨ FIX 2: Add the user/caller IDs directly to the base entry so it works for BOTH inserts and updates!
       const baseCallLogEntry = {
         outcome: callForm.outcome,
         notes: callForm.notes,
         next_call_date: callForm.next_call_date || null,
         next_call_time: callForm.next_call_time || null,
-        user_id: actualCallerId,            // Updates the main user_id column
-        caller_profile_id: actualCallerId,  // Updates the FK profile column
+        user_id: actualCallerId,
+        caller_profile_id: actualCallerId,
       };
 
-      // 1. UPDATE OR INSERT CALL RECORD
+      // 1. UPDATE OR INSERT GLOBAL CALL RECORD
       if (activeCallRecordId) {
-        // Because actualCallerId is now in baseCallLogEntry, it will successfully overwrite the column here!
         const { error: logErr } = await supabase.from('call_records').update(baseCallLogEntry).eq('id', activeCallRecordId);
         if (logErr) throw logErr;
       } else {
@@ -496,29 +493,40 @@ export default function CRMPage() {
         if (logErr) throw logErr;
       }
 
-      // 2. UPDATE VOUCHER ASSIGNMENT
+      /// 2. UPDATE VOUCHER ASSIGNMENT (Keep Pending, Track Attempts)
       if (activeTab === 'assigned_calls') {
-          let assignmentUpdate: any = { 
-              call_outcome: callForm.outcome,
-              interest_level: callForm.interest_level || null,
-              call_notes: callForm.notes,
-              // ✨ FIX 3: Explicitly push the caller profile ID to the assignments table update payload!
-              caller_profile_id: actualCallerId 
-          };
+        const { data: existingAssignment } = await supabase
+            .from('voucher_call_assignments')
+            .select('id, call_notes, attempt_count') // ✨ Fetch attempt_count
+            .eq('customer_id', selectedCustomer.id)
+            .eq('status', 'pending')
+            .maybeSingle();
 
-          if (isCompletedOutcome) {
-              assignmentUpdate.status = isDND ? 'dnd' : 'called';
-              assignmentUpdate.completed_at = new Date().toISOString();
-          }
+        if (existingAssignment) {
+            const prevNotes = existingAssignment.call_notes || '';
+            
+            // ✨ Clean integer addition
+            const currentAttempt = (existingAssignment.attempt_count || 0) + 1;
+            
+            const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short' });
+            const newNoteEntry = `[Attempt ${currentAttempt} | ${dateStr}] ${callForm.outcome}: ${callForm.notes}`;
+            const combinedNotes = prevNotes ? `${newNoteEntry}\n${prevNotes}` : newNoteEntry;
 
-          await supabase.from('voucher_call_assignments')
-             .update(assignmentUpdate)
-             .eq('customer_id', selectedCustomer.id)
-             .eq('assigned_to', appUser?.id)
-             .eq('status', 'pending');
-      }
+            let assignmentUpdate: any = {
+                call_outcome: callForm.outcome,
+                interest_level: callForm.interest_level || null,
+                call_notes: combinedNotes,
+                caller_profile_id: actualCallerId,
+                attempt_count: currentAttempt // ✨ Save new count to DB
+            };
 
-      // Safe Activity Timeline Stacking (Protects Manual Data)
+            await supabase.from('voucher_call_assignments')
+                .update(assignmentUpdate)
+                .eq('id', existingAssignment.id);
+        }
+    }
+
+      // 3. UPDATE CUSTOMER TIMELINE & DND STATUS
       const { data: existing } = await supabase.from('customers').select('id, activity_timeline').eq('id', selectedCustomer.id).single();
 
       const newSystemEvent = {
@@ -554,7 +562,8 @@ export default function CRMPage() {
       setActiveCallRecordId(null);
       setCallForm({ caller_profile_id: '', outcome: 'Connected / Spoke to Customer', interest_level: undefined, notes: '', next_call_date: '', next_call_time: '' });
       
-      if (isCompletedOutcome) {
+      // Only remove it from the Assigned Calls count if they are DND
+      if (isDND) {
         setGlobalCounts(prev => ({...prev, assignedCalls: Math.max(0, prev.assignedCalls - 1)}));
       }
       fetchPage(page);
@@ -623,10 +632,10 @@ export default function CRMPage() {
           kitty_plans(*),
           vouchers${requireVoucherJoin ? '!inner' : ''}(id, code, status, expiry_date, distributor_id, voucher_distributors(distributor_name)),
           voucher_message_sequences(id, status, current_step, next_send_at),
-          voucher_call_assignments${requireAssignmentJoin ? '!inner' : ''}(id, status, assigned_to),
+          voucher_call_assignments${requireAssignmentJoin ? '!inner' : ''}(id, status, assigned_to, attempt_count), /* ✨ ADDED attempt_count HERE */
           customer_gifts_history(gift_name, created_at)
         `);
-        
+
         q = buildServerQuery(q, activeTab);
 
         if (activeTab === 'assigned_calls') {
