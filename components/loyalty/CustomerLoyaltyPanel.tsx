@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Loader2, UploadCloud, Award, UserPlus } from "lucide-react";
+import { Loader2, UploadCloud, Award, UserPlus, FileImage } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,12 +10,60 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 
+// ✨ NEW: Zero-dependency native image compressor utility
+const compressImage = (file: File, maxWidth = 1000, quality = 0.7): Promise<File> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        // Scale down if it exceeds max width
+        if (width > maxWidth) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, width, height);
+
+        // Export as JPEG
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              const newFileName = file.name.replace(/\.[^/.]+$/, "") + "_compressed.jpg";
+              const newFile = new File([blob], newFileName, {
+                type: 'image/jpeg',
+                lastModified: Date.now(),
+              });
+              resolve(newFile);
+            } else {
+              reject(new Error('Compression failed'));
+            }
+          },
+          'image/jpeg',
+          quality
+        );
+      };
+      img.onerror = (error) => reject(error);
+    };
+    reader.onerror = (error) => reject(error);
+  });
+};
+
 interface CustomerLoyaltyPanelProps {
   customerId: string;
   customerPhone?: string;
   customerName?: string;
-  userId?: string;       // ✨ Added for tracking
-  warehouseId?: string;  // ✨ Added for tracking
+  userId?: string;
+  warehouseId?: string;
 }
 
 export default function CustomerLoyaltyPanel({ customerId, customerPhone, customerName, userId, warehouseId }: CustomerLoyaltyPanelProps) {
@@ -58,47 +106,41 @@ export default function CustomerLoyaltyPanel({ customerId, customerPhone, custom
     setIsLoading(false);
   };
 
-  // Add `mappingString` to the arguments
-const sendWhatsAppNotification = async (templateName: string, mappingString: string, specificContext: any) => {
-  if (!settings?.is_wa_enabled || !templateName || !customerPhone) return;
+  const sendWhatsAppNotification = async (templateName: string, mappingString: string, specificContext: any) => {
+    if (!settings?.is_wa_enabled || !templateName || !customerPhone) return;
 
-  try {
-    // 1. Build the full context dictionary of ALL available variables
-    const baseContext = {
-      customer_name: customerName || 'Customer',
-      customer_phone: customerPhone,
-      total_balance: specificContext.total_balance || balance,
-      activity_name: specificContext.activity_name || 'Loyalty Update',
-      points_awarded: specificContext.points_awarded || 0,
-      points_redeemed: specificContext.points_redeemed || 0,
-    };
+    try {
+      const baseContext = {
+        customer_name: customerName || 'Customer',
+        customer_phone: customerPhone,
+        total_balance: specificContext.total_balance || balance,
+        activity_name: specificContext.activity_name || 'Loyalty Update',
+        points_awarded: specificContext.points_awarded || 0,
+        points_redeemed: specificContext.points_redeemed || 0,
+      };
 
-    // 2. Parse the mapping string from settings (e.g., "customer_name, points_awarded, total_balance")
-    //    and create the exact ordered array required by Meta for {{1}}, {{2}}, {{3}}
-    const mappedParams = mappingString
-      ? mappingString.split(',').map(v => baseContext[v.trim() as keyof typeof baseContext]?.toString() || "")
-      : [];
+      const mappedParams = mappingString
+        ? mappingString.split(',').map(v => baseContext[v.trim() as keyof typeof baseContext]?.toString() || "")
+        : [];
 
-    // NOTE: Replace this endpoint with your actual WhatsApp API route
-    await fetch("/api/whatsapp", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        phone: customerPhone,
-        template: templateName,
-        parameters: mappedParams, // 👈 Passes the ordered array directly to the Meta API
-        data: baseContext         // Keeps the full payload for webhook logging or debugging
-      })
-    });
-  } catch (error) {
-    console.error("WhatsApp trigger failed", error);
-  }
-};
+      await fetch("/api/whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: customerPhone,
+          template: templateName,
+          parameters: mappedParams,
+          data: baseContext 
+        })
+      });
+    } catch (error) {
+      console.error("WhatsApp trigger failed", error);
+    }
+  };
 
   const handleEnrollCustomer = async () => {
     setIsSubmitting(true);
     try {
-      // ✨ Attach User ID and Store ID to the enrollment record
       const { error } = await supabase.from('loyalty_accounts').insert({ 
         customer_id: customerId,
         enrolled_by: userId || null,
@@ -123,7 +165,10 @@ const sendWhatsAppNotification = async (templateName: string, mappingString: str
 
   const handleAwardPoints = async () => {
     if (!selectedActivity || !settings) return toast.error("Configuration missing");
-    if (selectedActivity.requires_evidence && !evidenceFile) return toast.error(`Evidence required: ${selectedActivity.evidence_type}`);
+    
+    if (selectedActivity.requires_evidence && !evidenceFile) {
+        return toast.error(`Evidence required: Please upload the ${selectedActivity.evidence_type}`);
+    }
 
     setIsSubmitting(true);
     try {
@@ -141,11 +186,30 @@ const sendWhatsAppNotification = async (templateName: string, mappingString: str
 
       let evidenceUrl = null;
       if (evidenceFile) {
-        const fileExt = evidenceFile.name.split('.').pop();
+        let fileToUpload = evidenceFile;
+        
+        // ✨ NEW: Compress image before uploading
+        if (evidenceFile.type.startsWith('image/')) {
+          toast.loading("Compressing image...", { id: 'upload-toast' });
+          try {
+            fileToUpload = await compressImage(evidenceFile);
+          } catch (err) {
+            console.warn("Compression failed, using original file", err);
+          }
+        } else {
+          toast.loading("Uploading evidence...", { id: 'upload-toast' });
+        }
+
+        const fileExt = fileToUpload.name.split('.').pop() || 'jpg';
         const fileName = `${customerId}-${Date.now()}.${fileExt}`;
-        const { data: uploadData, error: uploadError } = await supabase.storage.from('loyalty-evidence').upload(fileName, evidenceFile);
+        
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('loyalty-evidence')
+          .upload(fileName, fileToUpload);
+          
         if (uploadError) throw uploadError;
         evidenceUrl = uploadData.path;
+        toast.dismiss('upload-toast');
       }
 
       const expiryDate = new Date();
@@ -153,7 +217,6 @@ const sendWhatsAppNotification = async (templateName: string, mappingString: str
 
       const { data: account } = await supabase.from('loyalty_accounts').select('id').eq('customer_id', customerId).single();
       
-      // ✨ Attach recorded_by User ID to the transaction
       const { error: txError } = await supabase.from('loyalty_transactions').insert({
         account_id: account?.id,
         activity_category: selectedActivity.category,
@@ -172,21 +235,22 @@ const sendWhatsAppNotification = async (templateName: string, mappingString: str
       const newBalance = balance + pointsToAward;
       setBalance(newBalance);
 
-      // Trigger Earned WA Message
-await sendWhatsAppNotification(
-  settings?.wa_template_points_earned, 
-  settings?.wa_mapping_points_earned, 
-  {
-    points_awarded: pointsToAward,
-    total_balance: newBalance,
-    activity_name: selectedActivity.name
-  }
-);
+      await sendWhatsAppNotification(
+        settings?.wa_template_points_earned, 
+        settings?.wa_mapping_points_earned, 
+        {
+          points_awarded: pointsToAward,
+          total_balance: newBalance,
+          activity_name: selectedActivity.name
+        }
+      );
+      
       setSelectedActivityId("");
       setDynamicAmount("");
       setEvidenceFile(null);
 
     } catch (error: any) {
+      toast.dismiss('upload-toast');
       toast.error(error.message);
     } finally {
       setIsSubmitting(false);
@@ -240,36 +304,32 @@ await sendWhatsAppNotification(
       <CardContent className="p-5 space-y-5">
         <div className="space-y-1.5">
           <Label className="text-xs font-medium text-zinc-700">Select Activity</Label>
-          <Select value={selectedActivityId} onValueChange={setSelectedActivityId}>
-  <SelectTrigger className="w-full h-9 bg-white border-zinc-200 text-sm shadow-sm relative z-50">
-    <SelectValue placeholder="Choose an action to award points..." />
-  </SelectTrigger>
-  
-  {/* Update this SelectContent component */}
-  <SelectContent 
-    position="popper" 
-    side="bottom" 
-    sideOffset={4} 
-    className="max-h-[250px] z-[100] border-zinc-200 shadow-xl rounded-md"
-  >
-    {activities.map(activity => (
-      <SelectItem key={activity.id} value={activity.id} className="text-sm py-2 cursor-pointer">
-        {activity.name} 
-        <span className="text-zinc-400 ml-1 font-medium">
-          ({activity.is_dynamic ? '5%' : `${activity.points} Pts`})
-        </span>
-      </SelectItem>
-    ))}
-  </SelectContent>
-</Select>
+          <Select value={selectedActivityId} onValueChange={(val) => {
+              setSelectedActivityId(val);
+              setEvidenceFile(null); 
+          }}>
+            <SelectTrigger className="w-full h-9 bg-white border-zinc-200 text-sm shadow-sm relative z-50">
+              <SelectValue placeholder="Choose an action to award points..." />
+            </SelectTrigger>
+            <SelectContent position="popper" side="bottom" sideOffset={4} className="max-h-[250px] z-[100] border-zinc-200 shadow-xl rounded-md">
+              {activities.map(activity => (
+                <SelectItem key={activity.id} value={activity.id} className="text-sm py-2 cursor-pointer">
+                  {activity.name} 
+                  <span className="text-zinc-400 ml-1 font-medium">
+                    ({activity.is_dynamic ? '5%' : `${activity.points} Pts`})
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         {selectedActivity?.is_dynamic && (
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-zinc-700">Purchase / Referral Amount (₹)</Label>
+          <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2 duration-300">
+            <Label className="text-xs font-medium text-zinc-700">Base Amount (₹)</Label>
             <Input 
               type="number" 
-              placeholder="Enter base amount to calculate 5%" 
+              placeholder="Enter amount to calculate points" 
               value={dynamicAmount} 
               onChange={e => setDynamicAmount(e.target.value)}
               className="h-9 border-zinc-200 text-sm shadow-sm"
@@ -278,24 +338,43 @@ await sendWhatsAppNotification(
         )}
 
         {selectedActivity?.requires_evidence && (
-          <div className="space-y-1.5">
-            <Label className="text-xs font-medium text-zinc-700 flex items-center gap-1.5">
-              Evidence Required: <span className="text-zinc-500">{selectedActivity.evidence_type}</span>
-            </Label>
-            <label className="flex flex-col items-center justify-center w-full h-24 border border-dashed border-zinc-300 rounded-lg cursor-pointer bg-zinc-50 hover:bg-zinc-100 transition-colors">
-              <div className="flex flex-col items-center justify-center pt-5 pb-6">
-                <UploadCloud className="w-5 h-5 mb-2 text-zinc-400" />
-                <p className="text-xs font-medium text-zinc-500">{evidenceFile ? evidenceFile.name : "Click to upload image"}</p>
-              </div>
-              <input type="file" className="hidden" accept="image/*" onChange={e => setEvidenceFile(e.target.files?.[0] || null)} />
-            </label>
+          <div className="space-y-2 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-center justify-between">
+              <Label className="text-xs font-medium text-zinc-700">Proof of Action Required</Label>
+              <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                {selectedActivity.evidence_type}
+              </span>
+            </div>
+            
+            {evidenceFile ? (
+               <div className="flex items-center justify-between p-3 border border-emerald-200 bg-emerald-50 rounded-lg">
+                 <div className="flex items-center gap-3">
+                   <FileImage className="w-5 h-5 text-emerald-600" />
+                   <div>
+                     <p className="text-xs font-bold text-emerald-800 truncate max-w-[200px]">{evidenceFile.name}</p>
+                     <p className="text-[10px] font-medium text-emerald-600">{(evidenceFile.size / 1024).toFixed(1)} KB</p>
+                   </div>
+                 </div>
+                 <Button variant="ghost" size="sm" onClick={() => setEvidenceFile(null)} className="h-7 text-[10px] text-emerald-700 hover:bg-emerald-100 font-bold">
+                   Remove
+                 </Button>
+               </div>
+            ) : (
+              <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-zinc-300 rounded-lg cursor-pointer bg-zinc-50 hover:bg-zinc-100 hover:border-indigo-300 transition-colors group">
+                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                  <UploadCloud className="w-6 h-6 mb-2 text-zinc-400 group-hover:text-indigo-500 transition-colors" />
+                  <p className="text-xs font-medium text-zinc-500">Click to upload <span className="font-bold text-zinc-700">{selectedActivity.evidence_type}</span></p>
+                </div>
+                <input type="file" className="hidden" accept="image/*,.pdf" onChange={e => setEvidenceFile(e.target.files?.[0] || null)} />
+              </label>
+            )}
           </div>
         )}
 
         <div className="pt-2">
           <Button 
             className="w-full bg-zinc-900 hover:bg-zinc-800 text-white font-medium h-9 shadow-sm" 
-            disabled={!selectedActivityId || isSubmitting}
+            disabled={!selectedActivityId || isSubmitting || (selectedActivity?.requires_evidence && !evidenceFile)}
             onClick={handleAwardPoints}
           >
             {isSubmitting ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Award className="w-3.5 h-3.5 mr-2" />}

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Loader2, Settings2, Save, Plus, MessageCircle, Code2 } from "lucide-react";
+import { Loader2, Settings2, Save, Plus, MessageCircle, Code2, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,8 +32,25 @@ export default function LoyaltySettingsPanel() {
   const [isSaving, setIsSaving] = useState(false);
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
 
+  // ✨ Added evidence types from the document
+  const EVIDENCE_OPTIONS = [
+    "Screen Shot",
+    "Profile update record",
+    "Picture in showroom",
+    "Attendance record",
+    "Completed enrollment form",
+    "Purchase record",
+    "Event details and attendance record"
+  ];
+
   const [newActivity, setNewActivity] = useState({
-    category: "In-store Engagement", name: "", is_dynamic: "false", points: "", requires_evidence: "false", evidence_type: "", update_method: "Manual"
+    category: "Social & Digital Engagement", 
+    name: "", 
+    is_dynamic: "false", 
+    points: "", 
+    requires_evidence: "true", // Default to true based on doc
+    evidence_type: EVIDENCE_OPTIONS[0], 
+    update_method: "Manual upload in ERP"
   });
 
   useEffect(() => { fetchData(); }, []);
@@ -92,7 +109,7 @@ export default function LoyaltySettingsPanel() {
       if (error) throw error;
       toast.success("New earning rule created.");
       setIsActivityModalOpen(false);
-      setNewActivity({ category: "In-store Engagement", name: "", is_dynamic: "false", points: "", requires_evidence: "false", evidence_type: "", update_method: "Manual" });
+      setNewActivity({ category: "Social & Digital Engagement", name: "", is_dynamic: "false", points: "", requires_evidence: "true", evidence_type: EVIDENCE_OPTIONS[0], update_method: "Manual upload in ERP" });
       fetchData();
     } catch (error: any) {
       toast.error(error.message);
@@ -132,7 +149,7 @@ export default function LoyaltySettingsPanel() {
         </CardHeader>
         
         <CardContent className="p-0">
-          {/* TAB 1: GLOBAL RULES */}
+          {/* TAB 1: GLOBAL RULES (Unchanged) */}
           <TabsContent value="rules" className="m-0 p-4 sm:p-6 space-y-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 sm:gap-6">
               <div className="space-y-1.5">
@@ -174,19 +191,47 @@ export default function LoyaltySettingsPanel() {
                     <Plus className="w-3.5 h-3.5 mr-1.5" /> Add Rule
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="sm:max-w-md p-0 border-none shadow-xl rounded-xl w-[95vw]">
+                <DialogContent className="sm:max-w-[550px] p-0 border-none shadow-xl rounded-xl w-[95vw]">
                   <DialogHeader className="bg-zinc-50/80 p-5 border-b border-zinc-100">
                     <DialogTitle className="text-sm font-semibold text-zinc-900">Create Earning Rule</DialogTitle>
                   </DialogHeader>
-                  <div className="p-5 space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-medium text-zinc-700">Category</Label>
-                      <Input value={newActivity.category} onChange={e => setNewActivity({...newActivity, category: e.target.value})} className="h-9 border-zinc-200 text-sm" />
+                  <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto custom-scrollbar">
+                    
+                    {/* ✨ Add Rule Form: Updated to match document spec */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-medium text-zinc-700">Category</Label>
+                        <Select value={newActivity.category} onValueChange={v => setNewActivity({...newActivity, category: v})}>
+                          <SelectTrigger className="h-9 border-zinc-200 text-sm shadow-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Social & Digital Engagement">Social & Digital Engagement</SelectItem>
+                            <SelectItem value="Customer Profile Capture">Customer Profile Capture</SelectItem>
+                            <SelectItem value="In-store Engagement">In-store Engagement</SelectItem>
+                            <SelectItem value="Event Participation">Event Participation</SelectItem>
+                            <SelectItem value="Program Enrollment">Program Enrollment</SelectItem>
+                            <SelectItem value="Purchase & Referral">Purchase & Referral</SelectItem>
+                            <SelectItem value="Community Outreach">Community Outreach</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-medium text-zinc-700">Update Method</Label>
+                        <Select value={newActivity.update_method} onValueChange={v => setNewActivity({...newActivity, update_method: v})}>
+                          <SelectTrigger className="h-9 border-zinc-200 text-sm shadow-sm"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Manual upload in ERP">Manual (Staff Appears in POS)</SelectItem>
+                            <SelectItem value="Auto update in ERP">Auto (System Background)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
+
                     <div className="space-y-1.5">
                       <Label className="text-xs font-medium text-zinc-700">Action Name</Label>
-                      <Input value={newActivity.name} onChange={e => setNewActivity({...newActivity, name: e.target.value})} className="h-9 border-zinc-200 text-sm" />
+                      <Input placeholder="e.g. Visit showroom on Birthday" value={newActivity.name} onChange={e => setNewActivity({...newActivity, name: e.target.value})} className="h-9 border-zinc-200 text-sm" />
                     </div>
+
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <Label className="text-xs font-medium text-zinc-700">Point System</Label>
@@ -200,25 +245,39 @@ export default function LoyaltySettingsPanel() {
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-xs font-medium text-zinc-700">Points Awarded</Label>
-                        <Input type="number" disabled={newActivity.is_dynamic === "true"} placeholder={newActivity.is_dynamic === "true" ? "Auto Calculated" : "e.g. 500"} value={newActivity.points} onChange={e => setNewActivity({...newActivity, points: e.target.value})} className="h-9 border-zinc-200 text-sm shadow-sm" />
+                        <Input type="number" disabled={newActivity.is_dynamic === "true"} placeholder={newActivity.is_dynamic === "true" ? "Calculated at checkout" : "e.g. 500"} value={newActivity.points} onChange={e => setNewActivity({...newActivity, points: e.target.value})} className="h-9 border-zinc-200 text-sm shadow-sm" />
                       </div>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-                      <div className="space-y-1.5">
-                        <Label className="text-xs font-medium text-zinc-700">Evidence Required?</Label>
-                        <Select value={newActivity.requires_evidence} onValueChange={v => setNewActivity({...newActivity, requires_evidence: v})}>
-                          <SelectTrigger className="h-9 border-zinc-200 text-sm shadow-sm"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="false">No</SelectItem>
-                            <SelectItem value="true">Yes</SelectItem>
-                          </SelectContent>
-                        </Select>
+
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-3 mt-2">
+                      <div className="flex items-center gap-2 mb-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600" />
+                        <span className="text-xs font-bold text-amber-800">Evidence Configuration</span>
                       </div>
-                      <div className="space-y-1.5">
-                        <Label className="text-xs font-medium text-zinc-700">Evidence Type</Label>
-                        <Input disabled={newActivity.requires_evidence === "false"} placeholder="e.g. Screenshot" value={newActivity.evidence_type} onChange={e => setNewActivity({...newActivity, evidence_type: e.target.value})} className="h-9 border-zinc-200 text-sm shadow-sm" />
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-medium text-amber-900">Requires Evidence?</Label>
+                          <Select value={newActivity.requires_evidence} onValueChange={v => setNewActivity({...newActivity, requires_evidence: v})}>
+                            <SelectTrigger className="h-9 border-amber-200 bg-white text-sm shadow-sm"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="true">Yes</SelectItem>
+                              <SelectItem value="false">No</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-medium text-amber-900">Evidence Type</Label>
+                          <Select disabled={newActivity.requires_evidence === "false"} value={newActivity.evidence_type} onValueChange={v => setNewActivity({...newActivity, evidence_type: v})}>
+                            <SelectTrigger className="h-9 border-amber-200 bg-white text-sm shadow-sm"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {EVIDENCE_OPTIONS.map(opt => <SelectItem key={opt} value={opt}>{opt}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
+                        </div>
                       </div>
                     </div>
+                    
                   </div>
                   <DialogFooter className="p-4 bg-zinc-50 border-t border-zinc-100 flex flex-col sm:flex-row gap-2 shrink-0">
                     <Button variant="outline" className="h-9 text-xs font-medium w-full sm:w-auto" onClick={() => setIsActivityModalOpen(false)}>Cancel</Button>
@@ -229,12 +288,14 @@ export default function LoyaltySettingsPanel() {
                 </DialogContent>
               </Dialog>
             </div>
+            
             <div className="max-h-[500px] overflow-y-auto custom-scrollbar">
               <Table>
                 <TableHeader className="bg-zinc-50/80 sticky top-0 z-10 border-b border-zinc-100">
                   <TableRow className="hover:bg-transparent border-none">
                     <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4 sm:px-6">Category / Action</TableHead>
                     <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4">Reward</TableHead>
+                    <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4">Evidence Required</TableHead>
                     <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4 text-center">Active</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -243,12 +304,21 @@ export default function LoyaltySettingsPanel() {
                     <TableRow key={activity.id} className={`hover:bg-zinc-50/50 transition-colors border-b border-zinc-100 ${!activity.is_active ? 'opacity-50' : ''}`}>
                       <TableCell className="py-3.5 px-4 sm:px-6">
                         <p className="text-[13px] font-medium text-zinc-900">{activity.name}</p>
-                        <p className="text-[11px] text-zinc-500 mt-1">{activity.category} • {activity.requires_evidence ? `Req: ${activity.evidence_type}` : 'No Evidence Req'}</p>
+                        <p className="text-[11px] text-zinc-500 mt-1">{activity.category} • {activity.update_method === 'Manual upload in ERP' ? 'POS Manual' : 'Auto'}</p>
                       </TableCell>
                       <TableCell className="py-3.5 px-4">
                         <span className="inline-flex px-2 py-0.5 rounded text-[11px] font-medium bg-zinc-100 text-zinc-700 border border-zinc-200">
                           {activity.is_dynamic ? 'Dynamic 5%' : `${activity.points} Pts`}
                         </span>
+                      </TableCell>
+                      <TableCell className="py-3.5 px-4">
+                        {activity.requires_evidence ? (
+                          <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 uppercase tracking-widest">
+                            {activity.evidence_type}
+                          </span>
+                        ) : (
+                          <span className="text-[11px] text-zinc-400 font-medium">None</span>
+                        )}
                       </TableCell>
                       <TableCell className="py-3.5 px-4 text-center">
                         <div className="flex justify-center items-center h-full">
@@ -267,9 +337,8 @@ export default function LoyaltySettingsPanel() {
             </div>
           </TabsContent>
 
-          {/* TAB 3: AUTOMATIONS (WITH TEMPLATE MAPPING) */}
+          {/* TAB 3: AUTOMATIONS (Unchanged) */}
           <TabsContent value="automations" className="m-0 p-4 sm:p-6 space-y-6">
-            
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-100 pb-4">
               <div>
                 <h3 className="text-sm font-semibold text-zinc-900">WhatsApp Integrations</h3>
