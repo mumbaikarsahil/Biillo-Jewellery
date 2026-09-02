@@ -316,6 +316,12 @@ export default function DistributeVouchersPage() {
 
     try {
       const challanIds = filteredChallans.map(c => c.id);
+      // ✨ ADD THIS SAFETY CHECK
+      if (challanIds.length === 0) {
+        toast.dismiss(loadingToast);
+        toast.error("No valid challans found for this filter.");
+        return;
+      }
       const { data: voucherData, error } = await supabase
         .from('vouchers')
         .select('code, distribution_id')
@@ -484,6 +490,9 @@ export default function DistributeVouchersPage() {
 
       if (challanErr) throw challanErr
 
+      // ✨ LOWERED CHUNK SIZE: 20 is highly safe for URL limits
+      const chunkSize = 20;
+
       if (allocationType === 'vendor') {
         if (activeBookingId) {
           const booking = bookings.find(b => b.id === activeBookingId);
@@ -497,21 +506,25 @@ export default function DistributeVouchersPage() {
           }
         }
 
-        const { error: updateErr } = await supabase
-          .from('vouchers')
-          .update({
-            status: 'distributed',
-            distributor_id: distributorId, 
-            distribution_id: challan.id, 
-            reference_person_id: selectedRefPerson,
-            is_event_voucher: false,
-            expiry_date: finalExpiryDate,
-            distributed_at: new Date().toISOString(),
-            is_birthday_redemption: isBirthdayRedemption
-          })
-          .in('id', voucherIds)
+        // Loop through the voucher chunks securely
+        for (let i = 0; i < voucherIds.length; i += chunkSize) {
+          const chunk = voucherIds.slice(i, i + chunkSize);
+          const { error: updateErr } = await supabase
+            .from('vouchers')
+            .update({
+              status: 'distributed',
+              distributor_id: distributorId, 
+              distribution_id: challan.id, 
+              reference_person_id: selectedRefPerson,
+              is_event_voucher: false,
+              expiry_date: finalExpiryDate,
+              distributed_at: new Date().toISOString(),
+              is_birthday_redemption: isBirthdayRedemption
+            })
+            .in('id', chunk);
 
-        if (updateErr) throw updateErr
+          if (updateErr) throw updateErr;
+        }
 
         toast.success("Delivery Challan Generated!", {
           description: `Successfully issued ${numQuantity} vouchers (${startCode} to ${endCode}).`
@@ -521,20 +534,25 @@ export default function DistributeVouchersPage() {
         setViewSequence({ start: startCode, end: endCode })
         
       } else {
-        const { error: updateErr } = await supabase
-          .from('vouchers')
-          .update({
-            status: 'unclaimed', 
-            distribution_id: challan.id,
-            reference_person_id: selectedRefPerson,
-            is_event_voucher: true, 
-            event_name: eventName,
-            expiry_date: finalExpiryDate,
-            is_birthday_redemption: isBirthdayRedemption
-          })
-          .in('id', voucherIds)
+        
+        // Loop through the voucher chunks securely for digital events
+        for (let i = 0; i < voucherIds.length; i += chunkSize) {
+          const chunk = voucherIds.slice(i, i + chunkSize);
+          const { error: updateErr } = await supabase
+            .from('vouchers')
+            .update({
+              status: 'unclaimed', 
+              distribution_id: challan.id,
+              reference_person_id: selectedRefPerson,
+              is_event_voucher: true, 
+              event_name: eventName,
+              expiry_date: finalExpiryDate,
+              is_birthday_redemption: isBirthdayRedemption
+            })
+            .in('id', chunk);
 
-        if (updateErr) throw updateErr
+          if (updateErr) throw updateErr;
+        }
 
         const detectedPrefix = startCode.replace(/[0-9]/g, '') || startCode.substring(0, 1);
         const eventUrl = `${window.location.origin}/event/${detectedPrefix}`;
