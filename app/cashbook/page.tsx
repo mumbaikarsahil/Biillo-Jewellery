@@ -5,19 +5,19 @@ import { format } from "date-fns";
 import { Save, RefreshCw, Store, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Input } from "@/components/ui/input"; // ✨ FIX: Imported missing Input component
+import { Input } from "@/components/ui/input"; 
 import { supabase } from "@/lib/supabaseClient";
-import { useAuth } from "@/hooks/useAuth"; // Adjust path to your auth hook if needed
+import { useAuth } from "@/hooks/useAuth"; 
 import { toast } from "sonner";
 
-// ✨ FIX: Added TypeScript Interfaces for the custom input
 interface SheetInputProps {
   value: string | number;
-  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void; // Made optional
+  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
   className?: string;
   type?: string;
   align?: "left" | "center" | "right";
   readOnly?: boolean;
+  placeholder?: string; // ✨ Added placeholder definition
 }
 
 const SheetInput = ({ 
@@ -26,20 +26,21 @@ const SheetInput = ({
   className = "", 
   type = "text", 
   align = "left", 
-  readOnly = false 
+  readOnly = false,
+  placeholder = "" // ✨ Accept the prop
 }: SheetInputProps) => (
   <input
     type={type}
     value={value}
     onChange={onChange}
     readOnly={readOnly}
+    placeholder={placeholder} // ✨ Pass to native input
     className={`w-full h-full min-h-[24px] px-1 border-none bg-transparent focus:ring-1 focus:ring-blue-500 focus:outline-none outline-none ${
       align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left"
     } ${readOnly ? "text-slate-700" : ""} ${className}`}
   />
 );
 
-// Define type for denominations to fix the key mapping error
 type Denominations = {
   "500": string; "200": string; "100": string; "50": string; 
   "20": string; "10": string; "5": string; "2": string; "1": string;
@@ -51,15 +52,15 @@ export default function DailyCashbook() {
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<string>("");
   
+  
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   // Manual States
   const [yesterdayCash, setYesterdayCash] = useState<string>("");
-  const [cashInOut, setCashInOut] = useState(Array(6).fill({ particulars: "", amount: "" }));
+  const [cashInOut, setCashInOut] = useState(Array(5).fill({ particulars: "", amount: "" }));
   const [expenses, setExpenses] = useState(Array(10).fill({ particulars: "", amount: "" }));
   
-  // ✨ FIX: Strictly typed denominations state
   const [denominations, setDenominations] = useState<Denominations>({
     "500": "", "200": "", "100": "", "50": "", "20": "", "10": "", "5": "", "2": "", "1": ""
   });
@@ -70,7 +71,6 @@ export default function DailyCashbook() {
 
   const isManagerOrOwner = appUser?.role === 'owner' || appUser?.role === 'manager';
 
-  // Fetch Warehouses on Load
   useEffect(() => {
     if (!appUser?.company_id) return;
     const fetchLocations = async () => {
@@ -87,7 +87,6 @@ export default function DailyCashbook() {
     fetchLocations();
   }, [appUser, isManagerOrOwner]);
 
-  // Fetch Data when Date or Location Changes
   useEffect(() => {
     if (selectedLocation && date) {
       fetchCashbookData();
@@ -117,25 +116,28 @@ export default function DailyCashbook() {
         .lte('created_at', endOfDay);
 
       let parsedTx: any[] = [];
-      let calcSummary: Record<string, number> = { CASH: 0, CARD: 0, GPAY: 0, ADV: 0, HP: 0 };
+      let calcSummary: Record<string, number> = { CASH: 0, CARD: 0, UPI: 0, ADV: 0, HP: 0 };
 
-      // Parse Invoices (Handle Split Payments)
+      // Parse Invoices (Handle Split Payments & Normalize Modes)
       invData?.forEach(inv => {
-        // ✨ FIX: Typed 'as any' to prevent array/object mismatch from Supabase relations
         const partyName = (inv.customers as any)?.full_name || 'Walk-in';
         
         if (inv.split_payments && Object.keys(inv.split_payments).length > 0) {
           Object.entries(inv.split_payments).forEach(([mode, amt]) => {
             const numAmt = Number(amt);
             if (numAmt > 0) {
-              parsedTx.push({ bno: inv.invoice_number, party: partyName, amount: numAmt, payment: mode, tag: "", clt: "SI" });
-              calcSummary[mode] = (calcSummary[mode] || 0) + numAmt;
+              const upperMode = mode.toUpperCase();
+              const finalMode = upperMode === 'GPAY' ? 'UPI' : upperMode;
+              parsedTx.push({ bno: inv.invoice_number, party: partyName, amount: numAmt, payment: finalMode, tag: "", clt: "SI" });
+              calcSummary[finalMode] = (calcSummary[finalMode] || 0) + numAmt;
             }
           });
         } else {
           const numAmt = Number(inv.final_total);
-          parsedTx.push({ bno: inv.invoice_number, party: partyName, amount: numAmt, payment: inv.payment_mode, tag: "", clt: "SI" });
-          calcSummary[inv.payment_mode] = (calcSummary[inv.payment_mode] || 0) + numAmt;
+          const upperMode = (inv.payment_mode || 'CASH').toUpperCase();
+          const finalMode = upperMode === 'GPAY' ? 'UPI' : upperMode;
+          parsedTx.push({ bno: inv.invoice_number, party: partyName, amount: numAmt, payment: finalMode, tag: "", clt: "SI" });
+          calcSummary[finalMode] = (calcSummary[finalMode] || 0) + numAmt;
         }
       });
 
@@ -147,7 +149,6 @@ export default function DailyCashbook() {
         calcSummary['ADV'] = (calcSummary['ADV'] || 0) + numAmt;
       });
 
-      // Fill remaining rows to maintain spreadsheet look (min 15 rows)
       const minRows = 15;
       if (parsedTx.length < minRows) {
         parsedTx = [...parsedTx, ...Array(minRows - parsedTx.length).fill({ bno: "", party: "", amount: "", payment: "", tag: "", clt: "" })];
@@ -165,24 +166,27 @@ export default function DailyCashbook() {
 
       if (cbData) {
         setYesterdayCash(cbData.yesterday_cash?.toString() || "");
-        setCashInOut([...(cbData.cash_in_out || []), ...Array(6).fill({ particulars: "", amount: "" })].slice(0, 6));
+        setCashInOut([...(cbData.cash_in_out || []), ...Array(5).fill({ particulars: "", amount: "" })].slice(0, 5));
         setExpenses([...(cbData.expenses || []), ...Array(10).fill({ particulars: "", amount: "" })].slice(0, 10));
         setDenominations({ ...denominations, ...(cbData.denominations || {}) });
       } else {
-        setCashInOut(Array(6).fill({ particulars: "", amount: "" }));
+        setCashInOut(Array(5).fill({ particulars: "", amount: "" }));
         setExpenses(Array(10).fill({ particulars: "", amount: "" }));
         setDenominations({ "500": "", "200": "", "100": "", "50": "", "20": "", "10": "", "5": "", "2": "", "1": "" });
         
-        // Auto-fetch yesterday's closing cash
+        // Auto-fetch yesterday's closing balance
         const prevDate = new Date(date);
         prevDate.setDate(prevDate.getDate() - 1);
-        const { data: prevCb } = await supabase.from('daily_cashbooks').select('denominations').eq('warehouse_id', selectedLocation).eq('record_date', format(prevDate, "yyyy-MM-dd")).maybeSingle();
+        const { data: prevCb } = await supabase.from('daily_cashbooks')
+          .select('closing_balance')
+          .eq('warehouse_id', selectedLocation)
+          .eq('record_date', format(prevDate, "yyyy-MM-dd"))
+          .maybeSingle();
         
-        if (prevCb && prevCb.denominations) {
-           const prevTotal = Object.entries(prevCb.denominations).reduce((sum, [note, pcs]) => sum + (Number(note) * Number(pcs)), 0);
-           setYesterdayCash(prevTotal.toString());
+        if (prevCb && prevCb.closing_balance != null) {
+           setYesterdayCash(prevCb.closing_balance.toString());
         } else {
-           setYesterdayCash("");
+           setYesterdayCash(""); // Allows manual entry if no record exists
         }
       }
     } catch (error) {
@@ -192,6 +196,23 @@ export default function DailyCashbook() {
     }
   };
 
+  // --- Calculations ---
+  // Filter purely 'CASH' transactions for the top left box
+  const autoCashTxs = transactions.filter(t => t.payment === 'CASH' && t.bno);
+  const totalAutoCash = autoCashTxs.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
+  const totalCashSales = summary['CASH'] || 0; // ✨ Added this missing line back!
+  
+  const numYesterdayCash = Number(yesterdayCash) || 0;
+  const totalManualCash = cashInOut.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+  const totalExpense = expenses.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+  const totalDenominations = Object.entries(denominations).reduce((sum, [note, pieces]) => sum + (Number(note) * (Number(pieces) || 0)), 0);
+  const totalTransactions = transactions.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+
+  // Auto-calculated Closing Balance (Opening + Auto Cash Bills + Manual Cash - Expenses)
+  const totalCashInSum = totalAutoCash + totalManualCash;
+  const closingBalance = numYesterdayCash + totalCashInSum - totalExpense;
+  const diff = totalDenominations - closingBalance;
+
   const handleSave = async () => {
     if (!selectedLocation || !appUser?.company_id) return toast.error("Location or Company context missing.");
     setIsSaving(true);
@@ -200,7 +221,8 @@ export default function DailyCashbook() {
         company_id: appUser.company_id,
         warehouse_id: selectedLocation,
         record_date: date,
-        yesterday_cash: Number(yesterdayCash) || 0,
+        yesterday_cash: numYesterdayCash,
+        closing_balance: closingBalance, // Stored to be fetched as tomorrow's yesterday_cash
         cash_in_out: cashInOut.filter(r => r.particulars || r.amount),
         expenses: expenses.filter(r => r.particulars || r.amount),
         denominations: denominations,
@@ -217,12 +239,6 @@ export default function DailyCashbook() {
       setIsSaving(false);
     }
   };
-
-  // Calculations
-  const totalCashInOut = cashInOut.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
-  const totalExpense = expenses.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
-  const totalDenominations = Object.entries(denominations).reduce((sum, [note, pieces]) => sum + (Number(note) * (Number(pieces) || 0)), 0);
-  const totalTransactions = transactions.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
 
   const handleUpdateArray = (setter: any, array: any[], index: number, field: string, value: string) => {
     const newArray = [...array];
@@ -286,7 +302,8 @@ export default function DailyCashbook() {
                   align="right" 
                   value={yesterdayCash} 
                   onChange={(e) => setYesterdayCash(e.target.value)} 
-                  className="bg-transparent" 
+                  className="bg-transparent font-bold text-blue-800" 
+                  placeholder="Manual Entry..."
                 />
               </div>
               <div className="flex-1"></div>
@@ -296,15 +313,32 @@ export default function DailyCashbook() {
               {/* CASH IN AND OUT */}
               <div className="flex-1 border-r-2 border-black flex flex-col">
                 <div className="text-center font-bold border-b border-black bg-[#fff2cc] p-1">CASH IN AND OUT</div>
-                <div className="flex border-b border-black bg-white">
-                  <div className="w-8 border-r border-black flex items-center justify-center font-bold">-</div>
-                  <div className="flex-1 border-r border-black text-center font-bold py-1">OPENING</div>
-                  <div className="w-24 text-center font-bold py-1">-</div>
+                
+                {/* Auto-Calculated Cash Sales Row */}
+                <div className="flex border-b border-black bg-emerald-50">
+                  <div className="w-8 border-r border-black flex items-center justify-center font-bold text-emerald-800">+</div>
+                  <div className="flex-1 border-r border-black font-semibold text-emerald-800 py-1 px-1">AUTO: TODAY'S CASH SALES</div>
+                  <div className="w-24 text-right font-mono font-bold text-emerald-800 py-1 pr-1">{totalCashSales.toLocaleString()}</div>
                 </div>
+
                 <div className="flex flex-1 flex-col">
+                  {/* Dynamic Auto Cash Bills fetched from transactions */}
+                  {autoCashTxs.map((tx, i) => (
+                    <div key={`auto-${i}`} className="flex border-b border-slate-300 bg-white min-h-[24px]">
+                      <div className="w-8 border-r border-slate-300 flex items-center justify-center text-blue-600 font-bold"></div>
+                      <div className="flex-1 border-r border-slate-300">
+                        <SheetInput readOnly value={tx.bno ? `bill no ${tx.bno}` : 'Cash Sale'} className="text-blue-700 font-medium" />
+                      </div>
+                      <div className="w-24">
+                        <SheetInput readOnly type="number" align="right" value={tx.amount} className="text-blue-700 font-medium" />
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Manual Cash In/Out Rows */}
                   {cashInOut.map((row, i) => (
-                    <div key={i} className="flex border-b border-slate-300 bg-white flex-1 min-h-[24px]">
-                      <div className="w-8 border-r border-slate-300"></div>
+                    <div key={`manual-${i}`} className="flex border-b border-slate-300 bg-white flex-1 min-h-[24px]">
+                      <div className="w-8 border-r border-slate-300 flex items-center justify-center text-orange-500 font-bold">{row.particulars || row.amount ? '−' : ''}</div>
                       <div className="flex-1 border-r border-slate-300">
                         <SheetInput value={row.particulars} onChange={(e) => handleUpdateArray(setCashInOut, cashInOut, i, "particulars", e.target.value)} />
                       </div>
@@ -314,10 +348,16 @@ export default function DailyCashbook() {
                     </div>
                   ))}
                 </div>
+                
                 <div className="flex border-t-2 border-black font-bold">
                   <div className="w-8 bg-[#ffff00] border-r border-black flex items-center justify-center">-</div>
-                  <div className="flex-1 p-1 text-center border-r border-black bg-[#ffff00]">BALANCE</div>
-                  <div className="w-24 p-1 text-right font-mono bg-[#ffff00]">{totalCashInOut || "-"}</div>
+                  <div className="flex-1 p-1 text-center border-r border-black bg-[#ffff00]">TOTAL BALANCE</div>
+                  <div className="w-24 p-1 text-right font-mono bg-[#ffff00]">{closingBalance.toLocaleString()}</div>
+                </div>
+                <div className="flex border-t border-black font-bold">
+                  <div className="w-8 bg-[#ffcccc] border-r border-black flex items-center justify-center">-</div>
+                  <div className="flex-1 p-1 text-center border-r border-black bg-[#ffcccc]">DIFF (Denom - Balance)</div>
+                  <div className={`w-24 p-1 text-right font-mono ${diff !== 0 ? 'text-red-600 bg-[#ffcccc]' : 'bg-[#ffcccc]'}`}>{diff.toLocaleString()}</div>
                 </div>
               </div>
 
@@ -337,8 +377,8 @@ export default function DailyCashbook() {
                   ))}
                 </div>
                 <div className="flex border-t-2 border-black font-bold">
-                  <div className="flex-1 p-1 text-center border-r border-black bg-[#ffff00]">TOTAL</div>
-                  <div className="w-24 p-1 text-right font-mono bg-[#ffff00] border-r border-black">{totalExpense || "0"}</div>
+                  <div className="flex-1 p-1 text-center border-r border-black bg-[#ffff00]">TOTAL EXPENSES</div>
+                  <div className="w-24 p-1 text-right font-mono bg-[#ffff00] border-r border-black text-red-600">{totalExpense.toLocaleString()}</div>
                 </div>
               </div>
             </div>
@@ -352,7 +392,6 @@ export default function DailyCashbook() {
               <div className="flex-1 p-1 text-center">VALUE</div>
             </div>
             {Object.keys(denominations).sort((a,b) => Number(b) - Number(a)).map((noteKey) => {
-              // ✨ FIX: Typed key mapping
               const note = noteKey as keyof Denominations;
               const pcs = Number(denominations[note]) || 0;
               const val = Number(note) * pcs;
@@ -373,7 +412,7 @@ export default function DailyCashbook() {
             })}
             <div className="flex border-t-2 border-black font-bold">
               <div className="w-[66.66%] p-1 text-left pl-2 border-r border-black bg-[#ffff00]">TOTAL</div>
-              <div className="flex-1 p-1 text-right font-mono bg-white">{totalDenominations || "0"}</div>
+              <div className="flex-1 p-1 text-right font-mono bg-white">{totalDenominations.toLocaleString()}</div>
             </div>
           </div>
         </div>
@@ -394,9 +433,15 @@ export default function DailyCashbook() {
             
             {transactions.map((row, i) => (
               <div key={i} className="flex border-b border-slate-300 bg-[#fff2cc]/20 min-h-[24px]">
-                <div className="w-24 border-r border-black"><SheetInput readOnly value={row.bno} /></div>
-                <div className="flex-[2] border-r border-black"><SheetInput readOnly value={row.party} /></div>
-                <div className="w-24 border-r border-black"><SheetInput readOnly type="number" align="right" value={row.amount || ""} /></div>
+                <div className="w-24 border-r border-black pl-1">
+                  <SheetInput readOnly value={row.bno} className="font-bold text-blue-900" />
+                </div>
+                <div className="flex-[2] border-r border-black pl-1">
+                  <SheetInput readOnly value={row.party} className="font-bold text-blue-900" />
+                </div>
+                <div className="w-24 border-r border-black pr-1">
+                  <SheetInput readOnly type="number" align="right" value={row.amount || ""} className="font-bold text-blue-900" />
+                </div>
                 <div className="flex-[1.5] border-r border-black"><SheetInput readOnly align="center" value={row.payment} /></div>
                 <div className="w-20 border-r border-black"><SheetInput align="center" value={row.tag} onChange={(e) => handleUpdateArray(setTransactions, transactions, i, "tag", e.target.value)} /></div>
                 <div className="w-16"><SheetInput readOnly align="center" value={row.clt} /></div>
@@ -406,7 +451,7 @@ export default function DailyCashbook() {
             <div className="flex border-t-2 border-black font-bold h-8">
               <div className="w-24 border-r border-black bg-[#fff2cc]"></div>
               <div className="flex-[2] border-r border-black bg-[#fff2cc]"></div>
-              <div className="w-24 p-1 text-right border-r border-black bg-[#ffff00] font-mono">{totalTransactions || "-"}</div>
+              <div className="w-24 p-1 text-right border-r border-black bg-[#ffff00] font-mono">{totalTransactions.toLocaleString()}</div>
               <div className="flex-[1.5] border-r border-black bg-[#fff2cc]"></div>
               <div className="w-20 border-r border-black bg-[#fff2cc]"></div>
               <div className="w-16 bg-[#fff2cc]"></div>
@@ -418,16 +463,20 @@ export default function DailyCashbook() {
             <div className="w-full flex">
               <div className="flex-1 border-r border-black"></div>
               <div className="w-[180px] border-2 border-black border-r-0 border-b-0 bg-[#fff2cc]/50">
-                {['CASH', 'CARD', 'GPAY'].map((type) => (
+                {['UPI', 'CASH', 'CARD'].map((type) => (
                   <div key={type} className="flex border-b border-black min-h-[24px]">
-                    <div className="flex-1 p-1 border-r border-black font-medium text-center">{type}</div>
-                    <div className="w-24 p-1 text-right font-mono bg-white flex items-center justify-end pr-1">{(summary[type] || 0).toLocaleString()}</div>
+                    <div className="flex-1 p-1 border-r border-black font-bold text-center">
+                       {type}
+                    </div>
+                    <div className="w-24 p-1 text-right font-mono font-bold bg-white flex items-center justify-end pr-1">
+                      {(summary[type] || 0).toLocaleString()}
+                    </div>
                   </div>
                 ))}
                 <div className="flex border-b-2 border-black font-bold min-h-[24px]">
-                  <div className="flex-1 p-1 border-r border-black text-center">TOTAL</div>
-                  <div className="w-24 p-1 text-right font-mono bg-white flex items-center justify-end pr-1">
-                    {((summary['CASH'] || 0) + (summary['CARD'] || 0) + (summary['GPAY'] || 0) + (summary['UPI'] || 0)).toLocaleString() || "-"}
+                  <div className="flex-1 p-1 border-r border-black text-center bg-[#ffff00]">TOTAL SALE</div>
+                  <div className="w-24 p-1 text-right font-mono bg-[#ffff00] flex items-center justify-end pr-1">
+                    {((summary['CASH'] || 0) + (summary['CARD'] || 0) + (summary['UPI'] || 0)).toLocaleString()}
                   </div>
                 </div>
                 {['ADV', 'HP'].map(type => (
@@ -436,12 +485,6 @@ export default function DailyCashbook() {
                     <div className="w-24 p-1 text-right font-mono bg-white flex items-center justify-end pr-1">{(summary[type] || 0).toLocaleString()}</div>
                   </div>
                 ))}
-                <div className="flex font-bold min-h-[24px] bg-[#fff2cc]">
-                  <div className="flex-1 p-1 border-r border-black text-center">TOTAL</div>
-                  <div className="w-24 p-1 text-right font-mono bg-white flex items-center justify-end pr-1">
-                    {(summary['ADV'] || 0).toLocaleString() || "-"}
-                  </div>
-                </div>
               </div>
             </div>
           </div>

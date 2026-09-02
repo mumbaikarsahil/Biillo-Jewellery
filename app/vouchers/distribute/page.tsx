@@ -122,6 +122,14 @@ export default function DistributeVouchersPage() {
 
     try {
       const challanIds = filteredChallans.map(c => c.id);
+
+      // ✨ ADD THIS SAFETY CHECK
+      if (challanIds.length === 0) {
+        toast.dismiss(loadingToast);
+        toast.error("No valid challans found for this filter.");
+        setIsPreparingPrint(false);
+        return;
+      }
       const { data: voucherData, error } = await supabase
         .from('vouchers')
         .select('code, distribution_id')
