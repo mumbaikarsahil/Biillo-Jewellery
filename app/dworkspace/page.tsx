@@ -11,7 +11,7 @@ import {
   RefreshCcw,
   FileText,
   Bike,
-  
+  History as HistoryIcon,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -54,16 +54,21 @@ import {
 } from "./components/reports/CrmWidgets";
 
 import { 
-    OpsExchangesWidget, OpsDeliveryAgentsWidget, OpsEstimatesWidget, 
-    OpsInventoryAuditWidget, OpsRepairTicketsWidget 
-  } from "./components/reports/OperationalWidgets";
+  OpsExchangesWidget, OpsDeliveryAgentsWidget, OpsEstimatesWidget, 
+  OpsInventoryAuditWidget, OpsRepairTicketsWidget 
+} from "./components/reports/OperationalWidgets";
 
 // ============================================================================
 // 1. REGISTRY: Categorized for the Add Module Menu
 // ============================================================================
+type ReportModule = {
+  id: string;
+  name: string;
+  icon: React.ElementType; 
+  defaultSpan: string;
+};
 
-
-const REPORT_CATEGORIES = {
+const REPORT_CATEGORIES: Record<string, ReportModule[]> = {
   "Finance & Operations": [
     { id: "sales_summary", name: "Daily Sales Summary", icon: TrendingUp, defaultSpan: "col-span-1" },
     { id: "custom_orders", name: "Custom Orders Pipeline", icon: Hammer, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
@@ -86,7 +91,7 @@ const REPORT_CATEGORIES = {
     { id: "v_in_stock", name: "In Stock (Vault)", icon: Package, defaultSpan: "col-span-1" },
     { id: "v_payment_received", name: "Dist. Payments Received", icon: Landmark, defaultSpan: "col-span-1" },
     { id: "ops_delivery_agents", name: "Delivery Agents Tracking", icon: Bike, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
-],
+  ],
   "Inventory & Stock": [
     { id: "inv_in_stock", name: "Realtime Inventory", icon: PackageSearch, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
     { id: "inv_dead_stock", name: "Dead Stock (>180 Days)", icon: AlertCircle, defaultSpan: "col-span-1" },
@@ -102,8 +107,8 @@ const REPORT_CATEGORIES = {
     { id: "inv_gifting_consumption", name: "Gifting Consumption", icon: Gift, defaultSpan: "col-span-1" },
     { id: "inv_packaging_stock", name: "Packaging Stock", icon: PackageOpen, defaultSpan: "col-span-1" },
     { id: "inv_packaging_consumption", name: "Packaging Consumption", icon: PackageOpen, defaultSpan: "col-span-1" },
-    { id: "ops_inventory_audit", name: "Raw Material Audit Logs", icon: History, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
-],
+    { id: "ops_inventory_audit", name: "Raw Material Audit Logs", icon: HistoryIcon, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
+  ],
   "Production & Logistics": [
     { id: "prod_job_bags", name: "Active Job Bags Tracker", icon: Briefcase, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
     { id: "prod_karigar_perf", name: "Karigar Performance", icon: Scissors, defaultSpan: "col-span-1" },
@@ -112,7 +117,7 @@ const REPORT_CATEGORIES = {
     { id: "prod_transfer_out", name: "Transfers (Outbound)", icon: Truck, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
     { id: "prod_transfer_in", name: "Transfers (Inbound)", icon: ArrowLeftRight, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
     { id: "ops_repair_tickets", name: "Repair & Service Tickets", icon: Wrench, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
-],
+  ],
   "CRM & Loyalty": [
     { id: "crm_customer_base", name: "Customer Base & Status", icon: Users, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
     { id: "crm_upcoming_events", name: "Upcoming Birthdays", icon: CalendarHeart, defaultSpan: "col-span-1" },
@@ -137,23 +142,22 @@ interface WidgetConfig {
 // 2. THE STANDARD WRAPPER
 // ============================================================================
 const ReportWrapper = ({ 
-    widget, 
-    onRemove, 
-    onToggleExpand,
-    onDragStart,
-    onDragEnter,
-    onDragEnd,
-    isDragging
-  }: { 
-    widget: WidgetConfig; 
-    onRemove: (id: string) => void;
-    onToggleExpand: (id: string) => void;
-    // ✨ Add <HTMLDivElement> to these three lines
-    onDragStart: (e: React.DragEvent<HTMLDivElement>, id: string) => void;
-    onDragEnter: (e: React.DragEvent<HTMLDivElement>, id: string) => void;
-    onDragEnd: (e: React.DragEvent<HTMLDivElement>) => void;
-    isDragging: boolean;
-  }) => {
+  widget, 
+  onRemove, 
+  onToggleExpand,
+  onDragStart,
+  onDragEnter,
+  onDragEnd,
+  isDragging
+}: { 
+  widget: WidgetConfig; 
+  onRemove: (id: string) => void;
+  onToggleExpand: (id: string) => void;
+  onDragStart: (e: React.DragEvent<HTMLDivElement>, id: string) => void;
+  onDragEnter: (e: React.DragEvent<HTMLDivElement>, id: string) => void;
+  onDragEnd: (e: React.DragEvent<HTMLDivElement>) => void;
+  isDragging: boolean;
+}) => {
 
   const [isRefreshing, setIsRefreshing] = useState(false);
   const reportDef = FLAT_REGISTRY.find(r => r.id === widget.typeId);
@@ -299,7 +303,6 @@ export default function ModularReportsDashboard() {
     setDraggedWidgetId(id);
     e.dataTransfer.effectAllowed = "move";
     
-    // ✨ FIXED: Use currentTarget, which is strictly typed to the Card container
     const target = e.currentTarget;
     setTimeout(() => { target.classList.add('opacity-40'); }, 0);
   };
@@ -323,7 +326,6 @@ export default function ModularReportsDashboard() {
   const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => {
     setDraggedWidgetId(null);
     
-    // ✨ FIXED: Use currentTarget
     const target = e.currentTarget;
     target.classList.remove('opacity-40');
   };
