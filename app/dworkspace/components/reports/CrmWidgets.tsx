@@ -20,7 +20,8 @@ type CrmReportType =
   | "wallet_balances"
   | "kitty_plans"
   | "gifting_history"
-  | "whatsapp_sequences";
+  | "whatsapp_sequences"
+  | "call_assignments";
 
 interface BaseProps {
   type: CrmReportType;
@@ -134,6 +135,17 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
             const { data: waData } = await supabase.from('voucher_message_sequences').select('id, next_send_at, voucher_code, current_step, status, customers(full_name, phone)').gte('next_send_at', startISO).lte('next_send_at', endISO).order('next_send_at', { ascending: true });
             data = waData || [];
             break;
+
+            case "call_assignments":
+            const { data: caData } = await supabase
+              .from('voucher_call_assignments')
+              .select('id, created_at, status, call_outcome, attempt_count, interest_level, customers(full_name, phone), vouchers(code)')
+              .eq('company_id', appUser.company_id)
+              .gte('created_at', startISO)
+              .lte('created_at', endISO)
+              .order('created_at', { ascending: false });
+            data = caData || [];
+            break;
         }
 
         setRecords(data);
@@ -223,6 +235,17 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
         <th className="p-1.5 text-left border-b border-zinc-300 w-[120px] bg-slate-50">Phone Number</th>
       </tr>
     );
+
+    if (type === 'call_assignments') return (
+        <tr>
+          <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[110px]">Date Assigned</th>
+          <th className="p-1.5 text-left border-b border-r border-zinc-300 min-w-[150px]">Customer</th>
+          <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[110px]">Phone Number</th>
+          <th className="p-1.5 text-center border-b border-r border-zinc-300 w-[100px]">Voucher Ref</th>
+          <th className="p-1.5 text-center border-b border-r border-zinc-300 w-[90px]">Attempts</th>
+          <th className="p-1.5 text-left border-b border-zinc-300 min-w-[150px] bg-slate-50">Status & Outcome</th>
+        </tr>
+      );
     return null;
   };
 
@@ -299,6 +322,26 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
         </>
       );
     }
+    if (type === 'call_assignments') {
+        const cust: any = Array.isArray(r.customers) ? r.customers[0] : r.customers;
+        const v: any = Array.isArray(r.vouchers) ? r.vouchers[0] : r.vouchers;
+        const isCompleted = r.status.toLowerCase() === 'completed';
+        return (
+          <>
+            <td className="p-1.5 border-b border-r border-zinc-300 text-zinc-600">{format(new Date(r.created_at), 'dd-MM-yy HH:mm')}</td>
+            <td className="p-1.5 border-b border-r border-zinc-300 font-bold text-zinc-800 truncate">{cust?.full_name || 'Unknown'}</td>
+            <td className="p-1.5 border-b border-r border-zinc-300 font-mono text-zinc-600">{cust?.phone || '-'}</td>
+            <td className="p-1.5 border-b border-r border-zinc-300 text-center font-mono font-bold text-indigo-700">{v?.code || '-'}</td>
+            <td className="p-1.5 border-b border-r border-zinc-300 text-center font-mono font-bold text-amber-600 bg-amber-50/20">{r.attempt_count || 0}</td>
+            <td className="p-1.5 border-b border-zinc-300 bg-slate-50/50">
+              <div className="flex flex-col">
+                <span className={`text-[9px] font-bold uppercase tracking-widest ${isCompleted ? 'text-emerald-600' : 'text-amber-600'}`}>{r.status}</span>
+                <span className="text-[10px] text-zinc-600 truncate">{r.call_outcome || r.interest_level || 'Awaiting Action'}</span>
+              </div>
+            </td>
+          </>
+        );
+      }
     return null;
   };
 
