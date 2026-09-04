@@ -3,7 +3,8 @@
 import React, { useState } from "react";
 import { 
   Plus, X, RefreshCw, Maximize2, Minimize2, 
-  BarChart3, PieChart, TrendingUp, LayoutDashboard 
+  BarChart3, PieChart, TrendingUp, LayoutDashboard, ArrowRightLeft, Trophy, BookOpen,
+  Hammer
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,15 +15,24 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  
 } from "@/components/ui/dropdown-menu";
+
+import { SalesSummaryWidget } from "./components/reports/SalesSummaryWidget";
+import { CustomOrdersWidget } from "./components/reports/CustomOrdersWidget";
+import { BuybacksWidget } from "./components/reports/BuybacksWidget";
+import { BranchRankingsWidget } from "./components/reports/BranchRankingsWidget";
+import { DailyCashbookWidget } from "./components/reports/DailyCashbookWidget";
 
 // ============================================================================
 // 1. REGISTRY: Define available reports here
 // ============================================================================
 const REPORT_TYPES = [
-  { id: "sales_summary", name: "Daily Sales Summary", icon: TrendingUp, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
-  { id: "top_categories", name: "Top Categories", icon: PieChart, defaultSpan: "col-span-1" },
-  { id: "cashflow_trend", name: "Cashflow Trend", icon: BarChart3, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-3" },
+    { id: "sales_summary", name: "Daily Sales Summary", icon: TrendingUp, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
+    { id: "custom_orders", name: "Custom Orders Pipeline", icon: Hammer, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" }, // ✨ ADDED THIS
+    { id: "buybacks", name: "Returns & Intake Ledger", icon: ArrowRightLeft, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" }, // ✨ Added
+    { id: "branch_rankings", name: "Branch Rankings", icon: Trophy, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" }, // ✨ ADDED
+    { id: "daily_cashbook", name: "Daily Cashbook Logs", icon: BookOpen, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" }, // ✨ ADDED
 ];
 
 interface WidgetConfig {
@@ -80,13 +90,22 @@ const ReportWrapper = ({
         </div>
       </CardHeader>
       
-      <CardContent className="p-4 sm:p-6 flex-1 min-h-[250px] flex items-center justify-center bg-zinc-50/20">
+      <CardContent className="p-4 sm:p-6 flex-1 min-h-[250px] flex flex-col bg-zinc-50/20 relative">
         {/* ========================================================= */}
         {/* 3. COMPONENT INJECTION: Actual report component goes here */}
         {/* ========================================================= */}
-        <div className="text-center">
-          <p className="text-xs text-zinc-400 font-mono">[{widget.typeId}] component rendering here...</p>
-        </div>
+        {widget.typeId === "sales_summary" && <SalesSummaryWidget />}
+        {widget.typeId === "custom_orders" && <CustomOrdersWidget />}
+        {widget.typeId === "buybacks" && <BuybacksWidget />}
+        {widget.typeId === "branch_rankings" && <BranchRankingsWidget />}
+        {widget.typeId === "daily_cashbook" && <DailyCashbookWidget />}
+
+        
+        {widget.typeId !== "sales_summary" && widget.typeId !== "custom_orders" && (
+           <div className="m-auto text-center">
+             <p className="text-xs text-zinc-400 font-mono">[{widget.typeId}] component rendering here...</p>
+           </div>
+        )}
       </CardContent>
     </Card>
   );
