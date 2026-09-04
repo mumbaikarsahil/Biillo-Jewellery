@@ -17,7 +17,7 @@ interface SheetInputProps {
   type?: string;
   align?: "left" | "center" | "right";
   readOnly?: boolean;
-  placeholder?: string; // ✨ Added placeholder definition
+  placeholder?: string;
 }
 
 const SheetInput = ({ 
@@ -27,14 +27,14 @@ const SheetInput = ({
   type = "text", 
   align = "left", 
   readOnly = false,
-  placeholder = "" // ✨ Accept the prop
+  placeholder = "" 
 }: SheetInputProps) => (
   <input
     type={type}
     value={value}
     onChange={onChange}
     readOnly={readOnly}
-    placeholder={placeholder} // ✨ Pass to native input
+    placeholder={placeholder} 
     className={`w-full h-full min-h-[24px] px-1 border-none bg-transparent focus:ring-1 focus:ring-blue-500 focus:outline-none outline-none ${
       align === "right" ? "text-right" : align === "center" ? "text-center" : "text-left"
     } ${readOnly ? "text-slate-700" : ""} ${className}`}
@@ -51,7 +51,6 @@ export default function DailyCashbook() {
   const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [warehouses, setWarehouses] = useState<any[]>([]);
   const [selectedLocation, setSelectedLocation] = useState<string>("");
-  
   
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -107,13 +106,22 @@ export default function DailyCashbook() {
         .lte('created_at', endOfDay)
         .neq('status', 'CANCELLED');
 
-      // 2. Fetch Auto-Transactions (Advances/Orders)
-      const { data: ordData } = await supabase.from('custom_orders')
-        .select('order_number, advance_paid, customers(full_name)')
-        .eq('origin_warehouse_id', selectedLocation)
-        .gt('advance_paid', 0)
-        .gte('created_at', startOfDay)
-        .lte('created_at', endOfDay);
+      // 2. Fetch Auto-Transactions (Advances/Orders) from the NEW LEDGER
+      const { data: ordData, error: ordErr } = await supabase.from('custom_order_payments')
+        .select(`
+          amount, 
+          payment_mode,
+          custom_orders!inner(
+            order_number, 
+            origin_warehouse_id, 
+            customers(full_name)
+          )
+        `)
+        .eq('custom_orders.origin_warehouse_id', selectedLocation)
+        .gte('payment_date', startOfDay)
+        .lte('payment_date', endOfDay);
+
+      if (ordErr) console.error("Order Payments Fetch Error:", ordErr);
 
       let parsedTx: any[] = [];
       let calcSummary: Record<string, number> = { CASH: 0, CARD: 0, UPI: 0, ADV: 0, HP: 0 };
@@ -141,14 +149,42 @@ export default function DailyCashbook() {
         }
       });
 
-      // Parse Custom Order Advances
-      ordData?.forEach(ord => {
-        const numAmt = Number(ord.advance_paid);
-        const partyName = (ord.customers as any)?.full_name || 'Walk-in';
-        parsedTx.push({ bno: ord.order_number, party: partyName, amount: numAmt, payment: 'ADV', tag: "", clt: "ORD" });
-        calcSummary['ADV'] = (calcSummary['ADV'] || 0) + numAmt;
-      });
+      // Parse Custom Order Advances from the Ledger
+      ordData?.forEach((payment: any) => {
+        const numAmt = Number(payment.amount);
+        
+        // Safely extract the joined order data (handling both Object and Array returns)
+        const orderData = Array.isArray(payment.custom_orders) 
+          ? payment.custom_orders[0] 
+          : payment.custom_orders;
+          
+        // Safely extract the deeply nested customer data
+        const customerData = Array.isArray(orderData?.customers)
+          ? orderData?.customers[0]
+          : orderData?.customers;
 
+        const partyName = customerData?.full_name || 'Walk-in';
+        const orderNo = orderData?.order_number;
+        const upperMode = (payment.payment_mode || 'CASH').toUpperCase();
+        const finalMode = upperMode === 'GPAY' ? 'UPI' : upperMode;
+        
+        // Push the transaction to the table
+        parsedTx.push({ 
+          bno: orderNo, 
+          party: partyName, 
+          amount: numAmt, 
+          payment: finalMode, 
+          tag: "ADV", 
+          clt: "ORD" 
+        });
+
+        // Add to the physical mode (CASH, UPI, CARD) to balance the drawer
+        calcSummary[finalMode] = (calcSummary[finalMode] || 0) + numAmt;
+        
+        // ALSO add to the ADV tracking bucket
+        calcSummary['ADV'] = (calcSummary['ADV'] || 0) + numAmt; 
+      });
+      // Pad the table with empty rows to maintain spreadsheet layout
       const minRows = 15;
       if (parsedTx.length < minRows) {
         parsedTx = [...parsedTx, ...Array(minRows - parsedTx.length).fill({ bno: "", party: "", amount: "", payment: "", tag: "", clt: "" })];
@@ -200,7 +236,7 @@ export default function DailyCashbook() {
   // Filter purely 'CASH' transactions for the top left box
   const autoCashTxs = transactions.filter(t => t.payment === 'CASH' && t.bno);
   const totalAutoCash = autoCashTxs.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
-  const totalCashSales = summary['CASH'] || 0; // ✨ Added this missing line back!
+  const totalCashSales = summary['CASH'] || 0; 
   
   const numYesterdayCash = Number(yesterdayCash) || 0;
   const totalManualCash = cashInOut.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);

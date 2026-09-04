@@ -62,11 +62,11 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
 
     setIsFetching(true)
     try {
-      // ✨ FIX: Fetch the invoice AND its associated physical items!
+      // ✨ FIX: Strictly matching the provided schema (subtotal, discount_amount, voucher_discount)
       const { data, error } = await supabase
         .from('invoices')
         .select(`
-          id, subtotal, discount_amount,
+          id, subtotal, discount_amount, voucher_discount,
           invoice_items (
             item_id, rate,
             inventory_items (id, barcode, item_category, gross_weight_g, net_weight_g, total_stone_weight_cts, purity_karat, metal_type)
@@ -136,9 +136,11 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
 
     cost = selectedObjs.reduce((sum, i) => sum + Number(i.rate || 0), 0)
     
-    // Pro-rata the discount based on how much of the bill is being returned
+    // Pro-rata the total combined discounts based on how much of the bill is being returned
     const proportion = invoiceData.subtotal > 0 ? (cost / invoiceData.subtotal) : 1
-    discount = (invoiceData.discount_amount || 0) * proportion
+    const totalInvoiceDiscount = (Number(invoiceData.discount_amount) || 0) + (Number(invoiceData.voucher_discount) || 0)
+    
+    discount = totalInvoiceDiscount * proportion
 
     const aggGross = selectedObjs.reduce((sum, i) => sum + Number(i.inventory_items?.gross_weight_g || 0), 0)
     const aggNet = selectedObjs.reduce((sum, i) => sum + Number(i.inventory_items?.net_weight_g || 0), 0)
@@ -167,7 +169,8 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
     }
   }
 
-  const paidValue = cost - discount
+  // Strict pre-GST minus discount calculation
+  const paidValue = Math.max(0, cost - discount)
   const refundValue = paidValue * (percent / 100)
 
   setDetails((prev: any) => ({
@@ -450,22 +453,30 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
                     type="number" 
                     inputMode="decimal"
                     className={`h-11 rounded-lg font-bold text-base ${flowState === 'found' ? 'bg-slate-100 text-slate-500 border-transparent' : 'bg-white border-slate-300'}`}
-                    value={articleCost} 
+                    value={flowState === 'found' ? (details.articleCost || '') : articleCost} // ✨ FIXED HERE
                     onChange={e => setArticleCost(e.target.value)} 
                     disabled={flowState === 'found'} 
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[11px] font-semibold text-slate-700">Discount Given ₹</Label>
+                  <Label className="text-[11px] font-semibold text-slate-700">Total Discount Given ₹</Label>
                   <Input 
                     type="number" 
                     inputMode="decimal"
                     className={`h-11 rounded-lg font-bold text-base ${flowState === 'found' ? 'bg-rose-50/50 text-rose-400 border-transparent' : 'bg-white border-slate-300 text-rose-600'}`}
-                    value={discountApplied} 
+                    value={flowState === 'found' ? (details.discountApplied || 0) : discountApplied} // ✨ FIXED HERE
                     onChange={e => setDiscountApplied(e.target.value)} 
                     disabled={flowState === 'found'} 
                   />
                 </div>
+              </div>
+
+              {/* ✨ NEW: Net Paid Value Display Block */}
+              <div className="flex justify-between items-center bg-slate-100 p-3 rounded-lg border border-slate-200">
+                <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">Net Paid Value (Pre-GST - Discount)</span>
+                <span className="text-lg font-black text-slate-900">
+                  ₹{details.paidValue?.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) || "0.00"}
+                </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-rose-50/30 p-4 border border-rose-100 rounded-xl">

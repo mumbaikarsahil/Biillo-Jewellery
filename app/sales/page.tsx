@@ -7,7 +7,7 @@ import {
   FileText, TrendingUp, Printer, Store, RefreshCw, Download, 
   Filter, Calendar, Search, ChevronRight, Landmark,
   Scale, BookOpen, Receipt, Eye, MoreHorizontal, Edit2, XCircle, ShieldAlert, X, Loader2,
-  CheckCircle2, Box, Wrench, ArrowRightLeft, HandCoins, User, ChevronLeft, Ticket
+  CheckCircle2, Box, Wrench, ArrowRightLeft, HandCoins, User, ChevronLeft, Ticket, IndianRupee
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -139,6 +139,12 @@ export default function AccountsMasterPage() {
   const [invoiceToEdit, setInvoiceToEdit] = useState<any>(null)
   const [editForm, setEditForm] = useState<any>({})
   const [isEditing, setIsEditing] = useState(false)
+
+  // ✨ NEW: Custom Order Advance States
+  const [orderToAdvance, setOrderToAdvance] = useState<any>(null)
+  const [advanceAmount, setAdvanceAmount] = useState('')
+  const [advanceMode, setAdvanceMode] = useState('CASH')
+  const [isSubmittingAdvance, setIsSubmittingAdvance] = useState(false)
   
   const triggerPrint = useReactToPrint({ 
     contentRef: printRef,
@@ -148,7 +154,6 @@ export default function AccountsMasterPage() {
   useEffect(() => {
     const fetchWarehouses = async () => {
       if (!appUser?.company_id) return
-      // ✨ FIX 1: Fetch ALL warehouse columns instead of just id, name
       const { data } = await supabase.from('warehouses').select('*').eq('company_id', appUser.company_id).eq('is_active', true)
       
       if (data) {
@@ -180,7 +185,8 @@ export default function AccountsMasterPage() {
       if (selectedLocation !== 'ALL') estQuery = estQuery.eq('warehouse_id', selectedLocation)
       if (search.trim()) estQuery = estQuery.ilike('estimate_number', `%${search.trim()}%`)
 
-      let customQuery = supabase.from('custom_orders').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
+      // ✨ UPDATED: Fetch warehouse name for Custom Orders
+      let customQuery = supabase.from('custom_orders').select('*, customers(full_name, phone), warehouses!origin_warehouse_id(name)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') customQuery = customQuery.eq('origin_warehouse_id', selectedLocation)
       if (search.trim()) customQuery = customQuery.ilike('order_number', `%${search.trim()}%`)
 
@@ -249,7 +255,6 @@ export default function AccountsMasterPage() {
         
         coTotal += finalTotal;
         coAdv += advancePaid;
-        // Calculate each order's pending balance (stopping at 0) and add it to the KPI sum
         coPending += Math.max(0, finalTotal - advancePaid); 
       });
       setCustomKpis({ totalValue: coTotal, advance: coAdv, pending: coPending })
@@ -284,6 +289,34 @@ export default function AccountsMasterPage() {
     const delay = setTimeout(() => { fetchAccountingData() }, 300)
     return () => clearTimeout(delay)
   }, [appUser, selectedLocation, startDate, endDate, search, page, recordLimit])
+
+  // ✨ NEW: Additional Advance Submission Logic
+  const handleLogAdvance = async () => {
+    if (!orderToAdvance) return;
+    if (!advanceAmount || Number(advanceAmount) <= 0) return toast.error("Enter a valid amount.");
+
+    setIsSubmittingAdvance(true);
+    try {
+      const { error } = await supabase.from('custom_order_payments').insert({
+        order_id: orderToAdvance.id,
+        amount: Number(advanceAmount),
+        payment_mode: advanceMode,
+        recorded_by: appUser?.id
+      });
+
+      if (error) throw error;
+
+      toast.success("Additional advance logged successfully!");
+      setOrderToAdvance(null);
+      setAdvanceAmount('');
+      setAdvanceMode('CASH');
+      fetchAccountingData(); // Refresh the list automatically
+    } catch (err: any) {
+      toast.error(err.message || "Failed to log advance.");
+    } finally {
+      setIsSubmittingAdvance(false);
+    }
+  };
 
   const downloadBlob = (headers: string[], rows: any[][], filename: string) => {
     const csvContent = [
@@ -370,7 +403,7 @@ export default function AccountsMasterPage() {
     else if (activeTab === 'custom_orders') {
       if (customOrders.length === 0) return toast.error("No custom orders to export");
       const headers = [
-        "Date", "Order Number", "Status", "Customer Name", "Phone", "Created By", 
+        "Date", "Branch", "Order Number", "Status", "Customer Name", "Phone", "Created By", 
         "Category", "Design Ref", "Exp. Gold (g)", "Exp. Dia (cts)", 
         "Base Value", "Manual Discount", "Voucher Code", "Voucher Amount", 
         "Taxable Value", "CGST", "SGST", "Final Total", "Advance Paid", "Balance Due"
@@ -380,7 +413,7 @@ export default function AccountsMasterPage() {
         const advancePaid = Number(co.advance_paid) || 0;
         const balanceDue = Math.max(0, finalTotal - advancePaid);
         return [
-          format(new Date(co.created_at), 'yyyy-MM-dd HH:mm:ss'), co.order_number, co.status, 
+          format(new Date(co.created_at), 'yyyy-MM-dd HH:mm:ss'), co.warehouses?.name || 'Unknown', co.order_number, co.status, 
           co.customers?.full_name || 'Walk-in', co.customers?.phone || '', co.profiles?.full_name || 'System',
           co.item_category, co.design_reference, co.expected_gold_g, co.expected_diamond_cts, 
           co.base_estimated_value || 0, co.discount_amount || 0, co.voucher_code || '', co.voucher_amount || co.voucher_discount || 0,
@@ -415,7 +448,6 @@ export default function AccountsMasterPage() {
     try {
       let mappedData: any = {};
       
-      // ✨ FIX 2: Find the full warehouse object from the state
       const branchObj = warehouses.find(w => w.id === (item.warehouse_id || item.origin_warehouse_id)) || null;
 
       if (type === 'invoice') {
@@ -431,7 +463,7 @@ export default function AccountsMasterPage() {
           invoice_number: invData.invoice_number, 
           date: invData.created_at, 
           customer: invData.customers, 
-          branch: branchObj, // ✨ Added branch
+          branch: branchObj, 
           subtotal: invData.subtotal, 
           discountAmount: invData.discount_amount, 
           taxableValue: invData.taxable_value, 
@@ -458,7 +490,7 @@ export default function AccountsMasterPage() {
         }) || []
         mappedData = {
           mode: 'estimate', invoice_number: estData.estimate_number, date: estData.created_at, customer: estData.customers,
-          branch: branchObj, // ✨ Added branch
+          branch: branchObj, 
           subtotal: estData.subtotal, discountAmount: estData.discount_amount, handlingFee: estData.handling_charge, cgstAmount: estData.cgst, sgstAmount: estData.sgst, roundOffAmount: estData.round_off, finalTotal: estData.total_amount,
           items: safeItems
         }
@@ -471,7 +503,7 @@ export default function AccountsMasterPage() {
           invoice_number: item.order_number, 
           date: item.created_at, 
           customer: item.customers,
-          branch: branchObj, // ✨ Added branch
+          branch: branchObj, 
           customOrder: { 
             designCode: item.design_reference, 
             category: item.item_category, 
@@ -498,7 +530,7 @@ export default function AccountsMasterPage() {
       else if (type === 'repair') {
         mappedData = {
           mode: 'repair', invoice_number: item.ticket_number, date: item.created_at, customer: item.customers,
-          branch: branchObj, // ✨ Added branch
+          branch: branchObj, 
           repair: { purity: item.purity, itemDescription: item.item_description, grossWeight: item.gross_weight_g, estimatedCost: item.estimated_cost },
           finalTotal: item.advance_paid
         }
@@ -506,7 +538,7 @@ export default function AccountsMasterPage() {
       else if (type === 'return') {
         mappedData = {
           mode: 'return', invoice_number: `RTN-${item.id.substring(0,6).toUpperCase()}`, date: item.created_at, customer: item.customers,
-          branch: branchObj, // ✨ Added branch
+          branch: branchObj, 
           returnDetails: { purity: item.purity_karat, itemDescription: item.item_category, grossWeight: item.gross_weight_g, articleCost: item.gross_value, discountApplied: item.deduction_amount, calculatedRefund: item.net_refund },
           finalTotal: item.net_refund
         }
@@ -585,13 +617,11 @@ export default function AccountsMasterPage() {
     setEditForm({
       invoice_number: isCustom ? inv.order_number : (inv.invoice_number || ''),
       created_at: localISOTime,
-      // Load raw subtotal for custom, standard subtotal for normal invoices
       subtotal: isCustom ? (inv.base_estimated_value || 0) : (inv.subtotal || 0),
       discount_amount: inv.discount_amount || 0,
       taxable_value: inv.taxable_value || 0,
       cgst_amount: inv.cgst_amount || inv.cgst || 0,
       sgst_amount: inv.sgst_amount || inv.sgst || 0,
-      // Final total is estimated_value for custom, final_total for normal
       final_total: isCustom ? (inv.estimated_value || 0) : (inv.final_total || 0),
       payment_remarks: inv.payment_remarks || ''
     });
@@ -1194,6 +1224,7 @@ export default function AccountsMasterPage() {
                     <TableRow className="hover:bg-transparent border-purple-100">
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider px-4 bg-purple-50/50 z-20 w-[60px] text-center sticky left-0 border-r border-purple-100">Actions</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider px-4">Date</TableHead>
+                      <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider border-r border-purple-100">Branch</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Order No</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider border-r border-purple-100">Status</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-purple-700 uppercase tracking-wider">Customer</TableHead>
@@ -1211,7 +1242,7 @@ export default function AccountsMasterPage() {
                   </TableHeader>
                   <TableBody>
                     {customOrders.length === 0 ? (
-                      <TableRow><TableCell colSpan={13} className="text-center py-12 text-zinc-400">No custom orders found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={14} className="text-center py-12 text-zinc-400">No custom orders found</TableCell></TableRow>
                     ) : customOrders.map((co) => {
                         const isCancelled = co.status === 'CANCELLED';
                         
@@ -1231,12 +1262,13 @@ export default function AccountsMasterPage() {
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                             <DropdownMenu>
                               <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-zinc-500 hover:text-purple-700 hover:bg-purple-100"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-                              <DropdownMenuContent align="start" className="w-48 rounded-xl shadow-lg border-zinc-200">
+                              <DropdownMenuContent align="start" className="w-56 rounded-xl shadow-lg border-zinc-200">
                                 <DropdownMenuItem onClick={() => handleOpenPreview(co, 'custom')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View Bill</DropdownMenuItem>
                                 {!isCancelled && (
                                   <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem onClick={() => handleOpenEdit(co)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => setOrderToAdvance(co)} className="cursor-pointer py-2"><IndianRupee className="w-4 h-4 mr-2 text-emerald-500" /> Log Additional Advance</DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => setInvoiceToCancel(co)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Order</DropdownMenuItem>
                                   </>
                                 )}
@@ -1244,8 +1276,9 @@ export default function AccountsMasterPage() {
                             </DropdownMenu>
                           </TableCell>
                           <TableCell className="px-4 py-2 text-[12px] font-medium text-zinc-600 whitespace-nowrap">{format(new Date(co.created_at), 'dd MMM yy, HH:mm')}</TableCell>
-                          <TableCell className="py-2 font-mono text-[12px] font-semibold text-zinc-900 border-r border-zinc-100">{co.order_number}</TableCell>
-                          <TableCell className="px-4 py-2"><span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest ${isCancelled ? 'bg-red-100 text-red-600 border-red-200' : 'bg-purple-100 text-purple-700 border border-purple-200'}`}>{co.status.replace(/_/g, ' ')}</span></TableCell>
+                          <TableCell className="px-4 py-2 border-r border-zinc-100"><span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap">{co.warehouses?.name || 'Unknown'}</span></TableCell>
+                          <TableCell className="py-2 font-mono text-[12px] font-semibold text-zinc-900">{co.order_number}</TableCell>
+                          <TableCell className="px-4 py-2 border-r border-zinc-100"><span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest ${isCancelled ? 'bg-red-100 text-red-600 border-red-200' : 'bg-purple-100 text-purple-700 border border-purple-200'}`}>{co.status.replace(/_/g, ' ')}</span></TableCell>
                           <TableCell className="px-4 py-2 min-w-[160px]">
                             <span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate block">{co.customers?.full_name || 'Walk-in'}</span>
                             {co.customers?.phone && <span className="text-[10px] text-zinc-500 font-mono">{co.customers.phone}</span>}
@@ -1317,16 +1350,18 @@ export default function AccountsMasterPage() {
                           <Badge className={`text-[9px] uppercase tracking-widest ${isCancelled ? 'bg-red-100 text-red-600 border-red-200' : 'bg-purple-50 text-purple-700 border-purple-200'}`}>{co.status.replace(/_/g, ' ')}</Badge>
                         </div>
                         <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(co.created_at), 'dd MMM yy, hh:mm a')}</div>
+                        <p className="text-[10px] text-zinc-500 font-mono mt-0.5"><Store className="w-3 h-3 inline mr-1"/>{co.warehouses?.name || 'Unknown'}</p>
                       </div>
                       
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-purple-600 border-zinc-200"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-lg border-zinc-200">
+                        <DropdownMenuContent align="end" className="w-56 rounded-xl shadow-lg border-zinc-200">
                           <DropdownMenuItem onClick={() => handleOpenPreview(co, 'custom')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View Bill</DropdownMenuItem>
                           {!isCancelled && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => handleOpenEdit(co)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => setOrderToAdvance(co)} className="cursor-pointer py-2"><IndianRupee className="w-4 h-4 mr-2 text-emerald-500" /> Log Additional Advance</DropdownMenuItem>
                               <DropdownMenuItem onClick={() => setInvoiceToCancel(co)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Order</DropdownMenuItem>
                             </>
                           )}
@@ -1635,6 +1670,55 @@ export default function AccountsMasterPage() {
               <Button variant="outline" onClick={() => setInvoiceToCancel(null)}>Keep Document</Button>
               <Button variant="destructive" onClick={executeCancelInvoice} disabled={isCancelling || !cancelReason.trim()}>
                 {isCancelling ? 'Voiding...' : 'Confirm Void'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* --- LOG ADDITIONAL ADVANCE MODAL --- */}
+        <Dialog open={!!orderToAdvance} onOpenChange={(open) => !open && setOrderToAdvance(null)}>
+          <DialogContent className="sm:max-w-[400px]">
+            <DialogHeader>
+              <DialogTitle>Log Additional Advance</DialogTitle>
+              <p className="text-xs text-zinc-500">Order Ref: {orderToAdvance?.order_number}</p>
+            </DialogHeader>
+
+            <div className="space-y-4 py-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Amount Received</Label>
+                <div className="relative">
+                  <IndianRupee className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
+                  <Input 
+                    type="number" 
+                    value={advanceAmount} 
+                    onChange={(e) => setAdvanceAmount(e.target.value)} 
+                    className="pl-9 h-10 font-bold" 
+                    placeholder="0.00"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Payment Mode</Label>
+                <Select value={advanceMode} onValueChange={setAdvanceMode}>
+                  <SelectTrigger className="h-10 font-bold bg-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="CASH">CASH</SelectItem>
+                    <SelectItem value="UPI">UPI / GPAY</SelectItem>
+                    <SelectItem value="CARD">CARD</SelectItem>
+                    <SelectItem value="BANK TRANSFER">BANK TRANSFER</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOrderToAdvance(null)} disabled={isSubmittingAdvance}>Cancel</Button>
+              <Button onClick={handleLogAdvance} disabled={isSubmittingAdvance} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
+                {isSubmittingAdvance ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                Record Payment
               </Button>
             </DialogFooter>
           </DialogContent>
