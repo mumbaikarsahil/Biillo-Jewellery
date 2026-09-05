@@ -703,16 +703,24 @@ export function useCheckout({
       // This applies dynamically if we aren't doing an estimate and the array has items.
       if (!isEstimate && selectedPackaging?.length > 0 && (mode === 'normal' || mode === 'custom')) {
         for (const pkg of selectedPackaging) {
+          
+          // ✨ NEW: Pass the auditing payload to the updated RPC
           const { error: packErr } = await supabase.rpc('decrement_packaging_stock', {
             p_id: pkg.id,
-            p_qty: pkg.quantity
+            p_qty: pkg.quantity,
+            p_transaction_type: mode === 'custom' ? 'custom_order' : 'normal_sale',
+            p_reference_id: finalNo, // The generated INV- or ORD- number
+            p_customer_id: selectedCustomer?.id || null,
+            p_user_id: finalizingUserId
           });
+
           if (packErr) {
             console.warn("Failed to decrement packaging for:", pkg.item_name, packErr);
           }
         }
       }
 
+      return { success: true, invoiceNo: finalNo, draftData: finalDraftData }
       return { success: true, invoiceNo: finalNo, draftData: finalDraftData }
       
     } catch (err: any) {

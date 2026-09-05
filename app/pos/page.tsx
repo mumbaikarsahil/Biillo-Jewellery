@@ -406,18 +406,6 @@ export default function POSPage() {
           
           if (result.success) {
             
-            // ✨ NEW: Deduct packaging ONLY on successful checkout!
-            // This applies to both Normal Cart Sales and Custom Orders automatically
-            if (selectedPackaging.length > 0) {
-              for (const pkg of selectedPackaging) {
-                const { error: packErr } = await supabase.rpc('decrement_packaging_stock', {
-                  p_id: pkg.id,
-                  p_qty: pkg.quantity
-                });
-                if (packErr) console.warn("Failed to decrement packaging:", packErr);
-              }
-            }
-
             // 1. Immediately set the new data into the React state
             setLastInvoiceData(result.draftData)
             
