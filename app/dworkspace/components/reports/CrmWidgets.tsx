@@ -11,7 +11,6 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 
 type CrmReportType = 
   | "customer_base"
@@ -22,7 +21,7 @@ type CrmReportType =
   | "gifting_history"
   | "whatsapp_sequences"
   | "call_assignments"
-  | "walkin_customers"; // ✨ NEW
+  | "walkin_customers"; 
 
 interface BaseProps {
   type: CrmReportType;
@@ -31,7 +30,6 @@ interface BaseProps {
   overrideData?: any[];
 }
 
-// Some reports look forward (Follow-ups, Events), others look backward (History, Base)
 const isForwardLooking = (type: CrmReportType) => ["upcoming_events", "followups_due", "whatsapp_sequences"].includes(type);
 
 export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BaseProps) {
@@ -51,7 +49,6 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
   const [page, setPage] = useState(1);
   const pageSize = 15;
 
-  // Fetch Available Branches
   useEffect(() => {
     if (!appUser?.company_id) return;
     supabase.from('warehouses').select('id, name').eq('company_id', appUser.company_id)
@@ -59,7 +56,7 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
   }, [appUser]);
 
   useEffect(() => {
-    // ✨ THE BYPASS (WITH IN-MEMORY WAREHOUSE FILTERING FOR HISTORICAL DATA)
+    // BYPASS FOR HISTORICAL DATA
     if (overrideData) {
       let finalData = overrideData;
       if (warehouseFilter !== "all") {
@@ -101,12 +98,7 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
         const endISO = endDate.toISOString();
 
         let data: any[] = [];
-
-        // Helper to apply warehouse filter directly to Supabase queries
-        const applyWhFilter = (query: any) => {
-          if (warehouseFilter !== "all") return query.eq('warehouse_id', warehouseFilter);
-          return query;
-        };
+        const applyWhFilter = (query: any) => warehouseFilter !== "all" ? query.eq('warehouse_id', warehouseFilter) : query;
 
         switch (type) {
           case "customer_base":
@@ -115,17 +107,22 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
             data = cbData || [];
             break;
 
-          // ✨ NEW: Walk-in Customers Logic
+          // ✨ UPDATED: Now fetches warehouses(name) inside customer_gifts_history
           case "walkin_customers":
             let walkinQuery = supabase.from('customers')
-              .select('id, created_at, full_name, phone, customer_status, warehouse_id, warehouses(name)')
+              .select('id, created_at, full_name, phone, customer_status, warehouse_id, warehouses(name), customer_gifts_history(id, warehouses(name))')
               .eq('company_id', appUser.company_id)
               .eq('customer_status', 'Walk-in')
               .gte('created_at', startISO)
               .lte('created_at', endISO)
               .order('created_at', { ascending: false });
+            
             const { data: walkinData } = await applyWhFilter(walkinQuery);
-            data = walkinData || [];
+            
+            data = walkinData?.map((w: any) => ({
+                ...w,
+                has_gift: w.customer_gifts_history && w.customer_gifts_history.length > 0
+            })) || [];
             break;
 
           case "upcoming_events":
@@ -137,7 +134,6 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
                   const evtDate = new Date(c[field]);
                   const projectedDate = new Date(now.getFullYear(), evtDate.getMonth(), evtDate.getDate());
                   if (projectedDate < startOfDay(now)) projectedDate.setFullYear(now.getFullYear() + 1);
-                  
                   if (isWithinInterval(projectedDate, { start: startDate, end: endDate })) {
                     upcoming.push({ ...c, event_type: field === 'birth_date' ? 'Birthday' : 'Anniversary', projected_date: projectedDate.toISOString(), original_date: c[field] });
                   }
@@ -191,6 +187,39 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
     fetchData();
   }, [appUser, timeframe, customStart, customEnd, type, warehouseFilter, overrideData]);
 
+  // ✨ NEW: STORE-WISE SUMMARY CALCULATOR FOR WALKINS
+  // ✨ NEW: STORE-WISE SUMMARY CALCULATOR FOR WALKINS (WITH AGGRESSIVE FALLBACK)
+  const walkinSummary = useMemo(() => {
+    if (type !== 'walkin_customers') return [];
+    const storeMap: Record<string, { store: string, walkins: number, gifted: number }> = {};
+    
+    records.forEach(r => {
+       // 1. Try to get the store from the customer profile
+       let finalStore = Array.isArray(r.warehouses) ? r.warehouses[0]?.name : r.warehouses?.name;
+
+       // 2. Aggressive Fallback: Check ALL gifts for a warehouse name
+       if (!finalStore && r.customer_gifts_history?.length > 0) {
+         for (const gift of r.customer_gifts_history) {
+           const giftWh = gift.warehouses;
+           const possibleName = Array.isArray(giftWh) ? giftWh[0]?.name : giftWh?.name;
+           if (possibleName) {
+             finalStore = possibleName;
+             break; // Found a store! Stop looking.
+           }
+         }
+       }
+
+       finalStore = finalStore || 'Unknown Store';
+       
+       if (!storeMap[finalStore]) storeMap[finalStore] = { store: finalStore, walkins: 0, gifted: 0 };
+       
+       storeMap[finalStore].walkins += 1;
+       if (r.has_gift) storeMap[finalStore].gifted += 1;
+    });
+    
+    return Object.values(storeMap).sort((a,b) => b.walkins - a.walkins);
+  }, [records, type]);
+
   const totalPages = Math.ceil(records.length / pageSize);
   const paginatedRecords = isExpandedView ? records.slice((page - 1) * pageSize, page * pageSize) : records.slice(0, 5); 
 
@@ -203,10 +232,8 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
     );
   }
 
-  // Define reports that support store filtering
   const supportsStoreFilter = ["customer_base", "walkin_customers", "gifting_history"].includes(type);
 
-  // Column Renderer based on Type
   const renderHeaders = () => {
     if (type === 'customer_base') return (
       <tr>
@@ -223,7 +250,8 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
         <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[110px]">Visit Date</th>
         <th className="p-1.5 text-left border-b border-r border-zinc-300 min-w-[150px]">Walk-in Name</th>
         <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[120px]">Phone Number</th>
-        <th className="p-1.5 text-left border-b border-zinc-300 min-w-[130px] bg-slate-50">Visiting Store</th>
+        <th className="p-1.5 text-left border-b border-r border-zinc-300 min-w-[130px]">Visiting Store</th>
+        <th className="p-1.5 text-center border-b border-zinc-300 w-[100px] bg-emerald-50">Gift Status</th>
       </tr>
     );
     if (type === 'upcoming_events') return (
@@ -279,7 +307,6 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
         <th className="p-1.5 text-left border-b border-zinc-300 min-w-[120px] bg-slate-50">Given From Store</th>
       </tr>
     );
-
     if (type === 'call_assignments') return (
         <tr>
           <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[110px]">Date Assigned</th>
@@ -308,13 +335,33 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
       );
     }
     if (type === 'walkin_customers') {
-      const whName = Array.isArray(r.warehouses) ? r.warehouses[0]?.name : r.warehouses?.name;
+      let whName = Array.isArray(r.warehouses) ? r.warehouses[0]?.name : r.warehouses?.name;
+      
+      // Aggressive Fallback: Check ALL gifts for this walk-in
+      if (!whName && r.customer_gifts_history?.length > 0) {
+         for (const gift of r.customer_gifts_history) {
+           const giftWh = gift.warehouses;
+           const possibleName = Array.isArray(giftWh) ? giftWh[0]?.name : giftWh?.name;
+           if (possibleName) {
+             whName = possibleName;
+             break;
+           }
+         }
+      }
+
       return (
         <>
           <td className="p-1.5 border-b border-r border-zinc-300 text-zinc-600">{format(new Date(r.created_at), 'dd-MM-yy HH:mm')}</td>
           <td className="p-1.5 border-b border-r border-zinc-300 font-bold text-zinc-800 truncate">{r.full_name}</td>
           <td className="p-1.5 border-b border-r border-zinc-300 font-mono text-zinc-600">{r.phone}</td>
-          <td className="p-1.5 border-b border-zinc-300 font-medium text-zinc-700 truncate bg-slate-50/50">{whName || 'Unknown Store'}</td>
+          <td className="p-1.5 border-b border-r border-zinc-300 font-medium text-zinc-700 truncate">{whName || 'Unknown Store'}</td>
+          <td className="p-1.5 border-b border-zinc-300 text-center bg-emerald-50/30">
+            {r.has_gift ? (
+              <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">Gifted</span>
+            ) : (
+              <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-400">-</span>
+            )}
+          </td>
         </>
       );
     }
@@ -419,7 +466,6 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
         
         <div className="flex flex-wrap items-center gap-2 flex-1 justify-end">
           
-          {/* ✨ NEW: Store Filter for relevant CRM modules */}
           {supportsStoreFilter && (
             <Select value={warehouseFilter} onValueChange={setWarehouseFilter}>
               <SelectTrigger className="h-7 w-[130px] text-[11px] font-semibold bg-white border-zinc-300 rounded-sm">
@@ -434,7 +480,6 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
             </Select>
           )}
 
-          {/* Only show timeframe filters if the report relies on dates */}
           {type !== 'wallet_balances' && (
             <>
               {timeframe === 'custom' && (
@@ -462,8 +507,34 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
         </div>
       </div>
 
-      <div className="pt-2 flex-1 flex flex-col min-h-0">
+      <div className="pt-2 flex-1 flex flex-col min-h-0 gap-4">
         
+        {/* ✨ EXCEL-STYLE SUMMARY FOR WALKINS */}
+        {type === 'walkin_customers' && walkinSummary.length > 0 && (
+          <div className="grid grid-cols-1">
+            <table className="w-full border-collapse border border-zinc-300 text-[11px]">
+              <thead>
+                <tr className="bg-zinc-100">
+                  <th className="border border-zinc-300 p-1.5 text-left font-bold text-zinc-700 uppercase">Store / Branch</th>
+                  <th className="border border-zinc-300 p-1.5 text-right font-bold text-zinc-700 uppercase">Total Walk-ins</th>
+                  <th className="border border-zinc-300 p-1.5 text-right font-bold text-zinc-700 uppercase">Gifts Distributed</th>
+                  <th className="border border-zinc-300 p-1.5 text-right font-bold text-zinc-700 uppercase">Gift %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {walkinSummary.map((s, idx) => (
+                  <tr key={idx} className="bg-white hover:bg-emerald-50/20 transition-colors">
+                    <td className="border border-zinc-300 p-1.5 text-zinc-800 font-bold">{s.store}</td>
+                    <td className="border border-zinc-300 p-1.5 text-right font-mono text-zinc-900">{s.walkins}</td>
+                    <td className="border border-zinc-300 p-1.5 text-right font-mono text-emerald-600 font-bold">{s.gifted}</td>
+                    <td className="border border-zinc-300 p-1.5 text-right font-mono text-indigo-600 font-bold">{Math.round((s.gifted / s.walkins) * 100)}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
         <div className="border border-zinc-300 overflow-x-auto flex-1 custom-scrollbar bg-white">
           <table className="w-full border-collapse text-[10px] whitespace-nowrap">
             <thead className="sticky top-0 bg-zinc-100 shadow-[0_1px_0_#d4d4d8] font-bold text-zinc-700 uppercase">
@@ -516,10 +587,6 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
   );
 }
 
-// ============================================================================
-// INDIVIDUAL EXPORTS (The 8 CRM Widgets)
-// ============================================================================
-
 export const CrmCustomerBaseWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="customer_base" title="1) Customer Base & Lead Status" icon={Users} overrideData={overrideData} />)
 export const CrmUpcomingEventsWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="upcoming_events" title="2) Upcoming Birthdays & Anniversaries" icon={CalendarHeart} overrideData={overrideData} />)
 export const CrmFollowupsDueWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="followups_due" title="3) Scheduled Follow-ups Due" icon={PhoneCall} overrideData={overrideData} />)
@@ -527,6 +594,4 @@ export const CrmWalletBalancesWidget = ({ overrideData }: { overrideData?: any[]
 export const CrmKittyPlansWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="kitty_plans" title="5) Active Kitty Installment Plans" icon={ShieldCheck} overrideData={overrideData} />)
 export const CrmGiftingHistoryWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="gifting_history" title="6) Customer Gifting History" icon={Gift} overrideData={overrideData} />)
 export const CrmWhatsAppSequencesWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="whatsapp_sequences" title="7) WhatsApp Auto-Sequences (Vouchers)" icon={Send} overrideData={overrideData} />)
-
-// ✨ NEW
 export const CrmWalkinCustomersWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="walkin_customers" title="8) Store Walk-ins Report" icon={UserPlus} overrideData={overrideData} />)

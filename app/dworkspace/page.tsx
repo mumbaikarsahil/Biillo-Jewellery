@@ -12,6 +12,7 @@ import {
   FileText,
   Bike,
   History as HistoryIcon,
+  UserPlus,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -20,8 +21,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
@@ -48,9 +47,9 @@ import {
   ProdDiamondConsumptionWidget, ProdStockTransfersOutWidget, ProdStockTransfersInWidget 
 } from "./components/reports/ProductionWidgets";
 import { 
-  CrmCustomerBaseWidget, CrmUpcomingEventsWidget, CrmFollowupsDueWidget, 
+  CrmCustomerBaseWidget, CrmWalkinCustomersWidget, CrmUpcomingEventsWidget, CrmFollowupsDueWidget, 
   CrmWalletBalancesWidget, CrmKittyPlansWidget, CrmGiftingHistoryWidget, 
-  CrmWhatsAppSequencesWidget 
+  CrmWhatsAppSequencesWidget, 
 } from "./components/reports/CrmWidgets";
 
 import { 
@@ -120,13 +119,14 @@ const REPORT_CATEGORIES: Record<string, ReportModule[]> = {
   ],
   "CRM & Loyalty": [
     { id: "crm_customer_base", name: "Customer Base & Status", icon: Users, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
+    { id: "crm_walkin_customers", name: "Store Walk-ins Report", icon: UserPlus, defaultSpan: "col-span-1" },
     { id: "crm_upcoming_events", name: "Upcoming Birthdays", icon: CalendarHeart, defaultSpan: "col-span-1" },
     { id: "crm_followups_due", name: "Follow-ups Due", icon: PhoneCall, defaultSpan: "col-span-1" },
     { id: "crm_wallet_balances", name: "Store Credit Liability", icon: Wallet, defaultSpan: "col-span-1" },
     { id: "crm_kitty_plans", name: "Active Kitty Plans", icon: ShieldCheck, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
     { id: "crm_gifting_history", name: "Gifting History", icon: Gift, defaultSpan: "col-span-1" },
     { id: "crm_wa_sequences", name: "WhatsApp Auto-Sequences", icon: Send, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
-  ]
+]
 };
 
 // Flatten for quick lookups
@@ -177,7 +177,8 @@ const ReportWrapper = ({
       onDragEnter={(e) => onDragEnter(e, widget.instanceId)}
       onDragEnd={onDragEnd}
       onDragOver={(e) => e.preventDefault()}
-      className={`flex flex-col bg-white border-zinc-200 shadow-sm transition-all duration-300 ease-in-out ${widget.isExpanded ? 'col-span-1 md:col-span-2 lg:col-span-3 row-span-2 z-10' : reportDef.defaultSpan} ${isDragging ? 'opacity-40 scale-95 border-indigo-400 border-dashed' : 'opacity-100 hover:shadow-md'}`}
+      // ✨ ADDED: resize-y, overflow-hidden, and removed heavy transitions that lag resizing
+      className={`flex flex-col bg-white border-zinc-200 shadow-sm transition-colors duration-200 ease-in-out resize-y overflow-hidden ${widget.isExpanded ? 'col-span-1 md:col-span-2 lg:col-span-3 row-span-2 z-10 min-h-[600px]' : `${reportDef.defaultSpan} min-h-[350px]`} ${isDragging ? 'opacity-40 border-indigo-400 border-dashed' : 'opacity-100 hover:shadow-md'}`}
     >
       <CardHeader className="flex flex-row items-center justify-between p-2 sm:p-3 border-b border-zinc-100 bg-zinc-50/80 cursor-grab active:cursor-grabbing group">
         <div className="flex items-center gap-2">
@@ -203,6 +204,7 @@ const ReportWrapper = ({
         </div>
       </CardHeader>
       
+      {/* Container adapts automatically to the new height when the user drags the resize handle */}
       <CardContent className="p-2 sm:p-4 flex-1 min-h-[250px] flex flex-col bg-zinc-50/10 relative overflow-hidden">
         {widget.typeId === "sales_summary" && <SalesSummaryWidget />}
         {widget.typeId === "custom_orders" && <CustomOrdersWidget />}
@@ -249,6 +251,7 @@ const ReportWrapper = ({
 
         {/* CRM Suite */}
         {widget.typeId === "crm_customer_base" && <CrmCustomerBaseWidget />}
+        {widget.typeId === "crm_walkin_customers" && <CrmWalkinCustomersWidget />}
         {widget.typeId === "crm_upcoming_events" && <CrmUpcomingEventsWidget />}
         {widget.typeId === "crm_followups_due" && <CrmFollowupsDueWidget />}
         {widget.typeId === "crm_wallet_balances" && <CrmWalletBalancesWidget />}
@@ -330,9 +333,14 @@ export default function ModularReportsDashboard() {
     target.classList.remove('opacity-40');
   };
 
-  // Shared Add Button Menu to keep code DRY
-  const ModuleMenuContent = () => (
-    <DropdownMenuContent align="end" className="w-72 rounded-xl border-zinc-200 shadow-2xl max-h-[70vh] overflow-y-auto custom-scrollbar p-0">
+  // ✨ ADDED: side & align parameters to enforce layout placement
+  const ModuleMenuContent = ({ side = "bottom", align = "end", sideOffset = 8 }: any) => (
+    <DropdownMenuContent 
+      side={side} 
+      align={align} 
+      sideOffset={sideOffset} 
+      className="w-72 rounded-xl border-zinc-200 shadow-2xl max-h-[65vh] overflow-y-auto custom-scrollbar p-0 z-[100]"
+    >
       {Object.entries(REPORT_CATEGORIES).map(([category, reports]) => (
         <div key={category} className="pb-1">
           <div className="sticky top-0 bg-zinc-100/95 backdrop-blur-sm z-10 px-3 py-2 border-b border-zinc-200/60 shadow-sm">
@@ -373,7 +381,8 @@ export default function ModularReportsDashboard() {
               <Plus className="w-4 h-4 mr-1.5" /> Add Module
             </Button>
           </DropdownMenuTrigger>
-          <ModuleMenuContent />
+          {/* Top navigation naturally opens downward */}
+          <ModuleMenuContent side="bottom" align="end" />
         </DropdownMenu>
       </header>
 
@@ -392,7 +401,7 @@ export default function ModularReportsDashboard() {
                   <Plus className="w-4 h-4 mr-2" /> Add Your First Report
                 </Button>
               </DropdownMenuTrigger>
-              <ModuleMenuContent />
+              <ModuleMenuContent side="bottom" align="center" />
             </DropdownMenu>
           </div>
         ) : (
@@ -421,7 +430,8 @@ export default function ModularReportsDashboard() {
               <Plus className="w-6 h-6" />
             </Button>
           </DropdownMenuTrigger>
-          <ModuleMenuContent />
+          {/* ✨ Mobile button forces pop-up strictly upwards */}
+          <ModuleMenuContent side="top" align="end" sideOffset={16} />
         </DropdownMenu>
       </div>
 
