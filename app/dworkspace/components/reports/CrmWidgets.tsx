@@ -6,11 +6,12 @@ import { useAuth } from "@/hooks/useAuth";
 import { format, subDays, addDays, startOfMonth, startOfDay, endOfDay, isWithinInterval } from "date-fns";
 import { 
   Loader2, ArrowRight, ChevronLeft, ChevronRight, Users, 
-  Gift, CalendarHeart, PhoneCall, Wallet, Send, ShieldCheck, UserPlus
+  Gift, CalendarHeart, PhoneCall, Wallet, Send, ShieldCheck, UserPlus, Download
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { downloadCSV } from "@/lib/utils";
 
 type CrmReportType = 
   | "customer_base"
@@ -56,7 +57,6 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
   }, [appUser]);
 
   useEffect(() => {
-    // BYPASS FOR HISTORICAL DATA
     if (overrideData) {
       let finalData = overrideData;
       if (warehouseFilter !== "all") {
@@ -107,22 +107,58 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
             data = cbData || [];
             break;
 
-          // ✨ UPDATED: Now fetches warehouses(name) inside customer_gifts_history
+          // ✨ UPDATED: Walk-in Logic checks Timeline AND Invoices for conversions
           case "walkin_customers":
             let walkinQuery = supabase.from('customers')
-              .select('id, created_at, full_name, phone, customer_status, warehouse_id, warehouses(name), customer_gifts_history(id, warehouses(name))')
+              .select(`
+                id, created_at, full_name, phone, customer_status, warehouse_id, warehouses(name), 
+                activity_timeline, 
+                customer_gifts_history(id, warehouses(name)), 
+                invoices(id, created_at)
+              `)
               .eq('company_id', appUser.company_id)
-              .eq('customer_status', 'Walk-in')
-              .gte('created_at', startISO)
-              .lte('created_at', endISO)
               .order('created_at', { ascending: false });
             
             const { data: walkinData } = await applyWhFilter(walkinQuery);
             
-            data = walkinData?.map((w: any) => ({
-                ...w,
-                has_gift: w.customer_gifts_history && w.customer_gifts_history.length > 0
-            })) || [];
+            // 1. Isolate genuine walk-ins within the timeframe
+            const validWalkins = (walkinData || []).filter((w: any) => {
+              // Check if they were created in this timeframe
+              const createdDate = new Date(w.created_at);
+              const createdInTimeframe = createdDate >= startDate && createdDate <= endDate;
+              
+              // If created in timeframe and timeline contains Walk-in (or status is walk-in)
+              if (createdInTimeframe && (w.customer_status === 'Walk-in' || JSON.stringify(w.activity_timeline).includes('Walk-in'))) {
+                return true;
+              }
+
+              // Check specific timeline events for accurate historical walk-ins
+              if (w.activity_timeline && Array.isArray(w.activity_timeline)) {
+                 return w.activity_timeline.some((evt: any) => {
+                    if (JSON.stringify(evt).toLowerCase().includes('walk-in') && evt.timestamp) {
+                       const evtDate = new Date(evt.timestamp);
+                       return evtDate >= startDate && evtDate <= endDate;
+                    }
+                    return false;
+                 });
+              }
+              return false;
+            });
+
+            // 2. Map conversions (Gifts and Purchases)
+            data = validWalkins.map((w: any) => {
+                // Determine if they purchased anything within the timeframe
+                const has_purchase = w.invoices && w.invoices.some((inv: any) => {
+                   const invDate = new Date(inv.created_at);
+                   return invDate >= startDate && invDate <= endDate;
+                });
+
+                return {
+                  ...w,
+                  has_gift: w.customer_gifts_history && w.customer_gifts_history.length > 0,
+                  has_purchase: has_purchase
+                };
+            });
             break;
 
           case "upcoming_events":
@@ -187,34 +223,32 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
     fetchData();
   }, [appUser, timeframe, customStart, customEnd, type, warehouseFilter, overrideData]);
 
-  // ✨ NEW: STORE-WISE SUMMARY CALCULATOR FOR WALKINS
-  // ✨ NEW: STORE-WISE SUMMARY CALCULATOR FOR WALKINS (WITH AGGRESSIVE FALLBACK)
+  // ✨ UPDATED: STORE-WISE SUMMARY WITH PURCHASES
   const walkinSummary = useMemo(() => {
     if (type !== 'walkin_customers') return [];
-    const storeMap: Record<string, { store: string, walkins: number, gifted: number }> = {};
+    const storeMap: Record<string, { store: string, walkins: number, gifted: number, purchased: number }> = {};
     
     records.forEach(r => {
-       // 1. Try to get the store from the customer profile
        let finalStore = Array.isArray(r.warehouses) ? r.warehouses[0]?.name : r.warehouses?.name;
 
-       // 2. Aggressive Fallback: Check ALL gifts for a warehouse name
        if (!finalStore && r.customer_gifts_history?.length > 0) {
          for (const gift of r.customer_gifts_history) {
            const giftWh = gift.warehouses;
            const possibleName = Array.isArray(giftWh) ? giftWh[0]?.name : giftWh?.name;
            if (possibleName) {
              finalStore = possibleName;
-             break; // Found a store! Stop looking.
+             break;
            }
          }
        }
 
        finalStore = finalStore || 'Unknown Store';
        
-       if (!storeMap[finalStore]) storeMap[finalStore] = { store: finalStore, walkins: 0, gifted: 0 };
+       if (!storeMap[finalStore]) storeMap[finalStore] = { store: finalStore, walkins: 0, gifted: 0, purchased: 0 };
        
        storeMap[finalStore].walkins += 1;
        if (r.has_gift) storeMap[finalStore].gifted += 1;
+       if (r.has_purchase) storeMap[finalStore].purchased += 1;
     });
     
     return Object.values(storeMap).sort((a,b) => b.walkins - a.walkins);
@@ -251,7 +285,8 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
         <th className="p-1.5 text-left border-b border-r border-zinc-300 min-w-[150px]">Walk-in Name</th>
         <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[120px]">Phone Number</th>
         <th className="p-1.5 text-left border-b border-r border-zinc-300 min-w-[130px]">Visiting Store</th>
-        <th className="p-1.5 text-center border-b border-zinc-300 w-[100px] bg-emerald-50">Gift Status</th>
+        <th className="p-1.5 text-center border-b border-r border-zinc-300 w-[100px]">Gift Status</th>
+        <th className="p-1.5 text-center border-b border-zinc-300 w-[100px] bg-indigo-50">Purchase</th>
       </tr>
     );
     if (type === 'upcoming_events') return (
@@ -337,7 +372,6 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
     if (type === 'walkin_customers') {
       let whName = Array.isArray(r.warehouses) ? r.warehouses[0]?.name : r.warehouses?.name;
       
-      // Aggressive Fallback: Check ALL gifts for this walk-in
       if (!whName && r.customer_gifts_history?.length > 0) {
          for (const gift of r.customer_gifts_history) {
            const giftWh = gift.warehouses;
@@ -355,9 +389,16 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
           <td className="p-1.5 border-b border-r border-zinc-300 font-bold text-zinc-800 truncate">{r.full_name}</td>
           <td className="p-1.5 border-b border-r border-zinc-300 font-mono text-zinc-600">{r.phone}</td>
           <td className="p-1.5 border-b border-r border-zinc-300 font-medium text-zinc-700 truncate">{whName || 'Unknown Store'}</td>
-          <td className="p-1.5 border-b border-zinc-300 text-center bg-emerald-50/30">
+          <td className="p-1.5 border-b border-r border-zinc-300 text-center bg-emerald-50/30">
             {r.has_gift ? (
               <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded border border-emerald-200">Gifted</span>
+            ) : (
+              <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-400">-</span>
+            )}
+          </td>
+          <td className="p-1.5 border-b border-zinc-300 text-center bg-indigo-50/30">
+            {r.has_purchase ? (
+              <span className="text-[9px] font-bold uppercase tracking-widest text-indigo-600 bg-indigo-100 px-1.5 py-0.5 rounded border border-indigo-200">Purchased</span>
             ) : (
               <span className="text-[9px] font-bold uppercase tracking-widest text-zinc-400">-</span>
             )}
@@ -466,6 +507,16 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
         
         <div className="flex flex-wrap items-center gap-2 flex-1 justify-end">
           
+          <Button 
+            variant="outline" 
+            size="sm" 
+            className="h-7 px-2 text-[10px] font-bold uppercase tracking-widest border-zinc-300 text-zinc-600"
+            onClick={() => downloadCSV(records, type)}
+            disabled={records.length === 0}
+          >
+            <Download className="w-3 h-3 mr-1" /> Export
+          </Button>
+
           {supportsStoreFilter && (
             <Select value={warehouseFilter} onValueChange={setWarehouseFilter}>
               <SelectTrigger className="h-7 w-[130px] text-[11px] font-semibold bg-white border-zinc-300 rounded-sm">
@@ -509,7 +560,6 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
 
       <div className="pt-2 flex-1 flex flex-col min-h-0 gap-4">
         
-        {/* ✨ EXCEL-STYLE SUMMARY FOR WALKINS */}
         {type === 'walkin_customers' && walkinSummary.length > 0 && (
           <div className="grid grid-cols-1">
             <table className="w-full border-collapse border border-zinc-300 text-[11px]">
@@ -519,6 +569,8 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
                   <th className="border border-zinc-300 p-1.5 text-right font-bold text-zinc-700 uppercase">Total Walk-ins</th>
                   <th className="border border-zinc-300 p-1.5 text-right font-bold text-zinc-700 uppercase">Gifts Distributed</th>
                   <th className="border border-zinc-300 p-1.5 text-right font-bold text-zinc-700 uppercase">Gift %</th>
+                  <th className="border border-zinc-300 p-1.5 text-right font-bold text-zinc-700 uppercase">Purchases</th>
+                  <th className="border border-zinc-300 p-1.5 text-right font-bold text-zinc-700 uppercase">Conversion %</th>
                 </tr>
               </thead>
               <tbody>
@@ -527,7 +579,9 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
                     <td className="border border-zinc-300 p-1.5 text-zinc-800 font-bold">{s.store}</td>
                     <td className="border border-zinc-300 p-1.5 text-right font-mono text-zinc-900">{s.walkins}</td>
                     <td className="border border-zinc-300 p-1.5 text-right font-mono text-emerald-600 font-bold">{s.gifted}</td>
-                    <td className="border border-zinc-300 p-1.5 text-right font-mono text-indigo-600 font-bold">{Math.round((s.gifted / s.walkins) * 100)}%</td>
+                    <td className="border border-zinc-300 p-1.5 text-right font-mono text-zinc-600 font-bold">{Math.round((s.gifted / s.walkins) * 100)}%</td>
+                    <td className="border border-zinc-300 p-1.5 text-right font-mono text-indigo-600 font-bold">{s.purchased}</td>
+                    <td className="border border-zinc-300 p-1.5 text-right font-mono text-indigo-600 font-black">{Math.round((s.purchased / s.walkins) * 100)}%</td>
                   </tr>
                 ))}
               </tbody>
