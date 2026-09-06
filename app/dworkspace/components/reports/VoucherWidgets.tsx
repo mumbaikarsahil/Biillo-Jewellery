@@ -25,9 +25,10 @@ interface BaseProps {
   type: VoucherReportType;
   title: string;
   icon: any;
+  overrideData?: any[];
 }
 
-function BaseVoucherWidget({ type, title, icon: Icon }: BaseProps) {
+function BaseVoucherWidget({ type, title, icon: Icon, overrideData }: BaseProps) {
   const { appUser } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [timeframe, setTimeframe] = useState("30d"); 
@@ -41,6 +42,11 @@ function BaseVoucherWidget({ type, title, icon: Icon }: BaseProps) {
   const pageSize = 15;
 
   useEffect(() => {
+    if (overrideData) {
+      setRecords(overrideData);
+      setIsLoading(false);
+      return;
+    }
     if (!appUser?.company_id) return;
     if (timeframe === "custom" && (!customStart || !customEnd)) return;
 
@@ -359,13 +365,13 @@ function BaseVoucherWidget({ type, title, icon: Icon }: BaseProps) {
 // INDIVIDUAL EXPORTS (The 10 Widgets you requested)
 // ============================================================================
 
-export const VoucherSalesBookedWidget = () => <BaseVoucherWidget type="sales_booked" title="1) Voucher Sales Booked" icon={Ticket} />
-export const VoucherUnderPrintingWidget = () => <BaseVoucherWidget type="under_printing" title="2) Vouchers Under Printing" icon={Printer} />
-export const VoucherPaymentPendingWidget = () => <BaseVoucherWidget type="payment_pending" title="3) Dist. Payment Pending" icon={Clock} />
-export const VoucherDeliveryPendingWidget = () => <BaseVoucherWidget type="delivery_pending" title="4) Dist. Delivery Pending" icon={Truck} />
-export const VoucherBookingsWidget = () => <BaseVoucherWidget type="bookings" title="5) Distributor Bookings & Fulfillments" icon={BookOpen} />
-export const VoucherExpiredWidget = () => <BaseVoucherWidget type="expired" title="6) Expired Vouchers" icon={AlertTriangle} />
-export const VoucherRedeemedWidget = () => <BaseVoucherWidget type="redeemed" title="7) Redeemed Vouchers" icon={CheckCircle2} />
-export const VoucherNotRedeemedWidget = () => <BaseVoucherWidget type="not_redeemed" title="8) Active / Not Redeemed" icon={Ticket} />
-export const VoucherInStockWidget = () => <BaseVoucherWidget type="in_stock" title="9) Vouchers in Stock (Vault)" icon={Package} />
-export const VoucherPaymentReceivedWidget = () => <BaseVoucherWidget type="payment_received" title="10) Dist. Payments Received" icon={Landmark} />
+export const VoucherSalesBookedWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseVoucherWidget type="sales_booked" title="1) Voucher Sales Booked" icon={Ticket} overrideData={overrideData} />)
+export const VoucherUnderPrintingWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseVoucherWidget type="under_printing" title="2) Vouchers Under Printing" icon={Printer} overrideData={overrideData} />)
+export const VoucherPaymentPendingWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseVoucherWidget type="payment_pending" title="3) Dist. Payment Pending" icon={Clock} overrideData={overrideData} />)
+export const VoucherDeliveryPendingWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseVoucherWidget type="delivery_pending" title="4) Dist. Delivery Pending" icon={Truck} overrideData={overrideData} />)
+export const VoucherBookingsWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseVoucherWidget type="bookings" title="5) Distributor Bookings & Fulfillments" icon={BookOpen} overrideData={overrideData} />)
+export const VoucherExpiredWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseVoucherWidget type="expired" title="6) Expired Vouchers" icon={AlertTriangle} overrideData={overrideData} />)
+export const VoucherRedeemedWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseVoucherWidget type="redeemed" title="7) Redeemed Vouchers" icon={CheckCircle2} overrideData={overrideData} />)
+export const VoucherNotRedeemedWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseVoucherWidget type="not_redeemed" title="8) Active / Not Redeemed" icon={Ticket} overrideData={overrideData} />)
+export const VoucherInStockWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseVoucherWidget type="in_stock" title="9) Vouchers in Stock (Vault)" icon={Package} overrideData={overrideData} />)
+export const VoucherPaymentReceivedWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseVoucherWidget type="payment_received" title="10) Dist. Payments Received" icon={Landmark} overrideData={overrideData} />)

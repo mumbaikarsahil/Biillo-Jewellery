@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-export function VouchersStockWidget() {
+export function VouchersStockWidget({ overrideData }: { overrideData?: any[] } = {}) {
   const { appUser } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [timeframe, setTimeframe] = useState("30d"); 
@@ -25,6 +25,11 @@ export function VouchersStockWidget() {
   const pageSize = 15;
 
   useEffect(() => {
+    if (overrideData) {
+      setDistributions(overrideData);
+      setIsLoading(false);
+      return;
+    }
     if (!appUser?.company_id) return;
     if (timeframe === "custom" && (!customStart || !customEnd)) return;
 

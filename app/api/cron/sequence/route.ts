@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { jsPDF } from 'jspdf'; // ✨ New PDF Generator
 import autoTable from 'jspdf-autotable'; // ✨ New Table Formatter
+import { startOfDay } from 'date-fns';
 
 // Initialize the Admin Client to bypass all RLS policies safely
 const supabaseAdmin = createClient(
@@ -278,30 +279,237 @@ export async function GET(req: Request) {
           });
 
           let breakdownArr: string[] = [];
-        const sortedBranches = Object.entries(branchStats).sort((a, b) => (b[1].sales + b[1].adv) - (a[1].sales + a[1].adv));
+          const sortedBranches = Object.entries(branchStats).sort((a, b) => (b[1].sales + b[1].adv) - (a[1].sales + a[1].adv));
 
-        sortedBranches.forEach(([loc, stats]) => {
-            breakdownArr.push(`📍 *${loc}* ➼ Sales: ₹${stats.sales.toLocaleString('en-IN')} • Adv: ₹${stats.adv.toLocaleString('en-IN')} • Refunds: ₹${stats.refunds.toLocaleString('en-IN')}`);
-        });
+          sortedBranches.forEach(([loc, stats]) => {
+              breakdownArr.push(`📍 *${loc}* ➼ Sales: ₹${stats.sales.toLocaleString('en-IN')} • Adv: ₹${stats.adv.toLocaleString('en-IN')} • Refunds: ₹${stats.refunds.toLocaleString('en-IN')}`);
+          });
 
-        let breakdownStr = breakdownArr.join(' | ');
+          let breakdownStr = breakdownArr.join(' | ');
 
-        if (!breakdownStr) breakdownStr = "No financial transactions recorded today.";
-        else if (breakdownStr.length > 950) breakdownStr = breakdownStr.substring(0, 950) + '...[Truncated]';
-        
-        // Strip out any accidental consecutive spaces
-        breakdownStr = breakdownStr.replace(/\s{2,}/g, ' ');
+          if (!breakdownStr) breakdownStr = "No financial transactions recorded today.";
+          else if (breakdownStr.length > 950) breakdownStr = breakdownStr.substring(0, 950) + '...[Truncated]';
+          
+          // Strip out any accidental consecutive spaces
+          breakdownStr = breakdownStr.replace(/\s{2,}/g, ' ');
 
-        const dateStr = new Date().toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
+          const dateStr = new Date().toLocaleString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' });
 
-        sendVariables = [
-          dateStr,                                       
+          sendVariables = [
+            dateStr,                                       
           `₹${globalSales.toLocaleString('en-IN')}`,     
           `₹${globalAdvances.toLocaleString('en-IN')}`,  
           breakdownStr.trim()                            
-        ];
+          ];
 
-        task.payload.template_name = "erp_utility3";
+          task.payload.template_name = "erp_utility3";
+        }
+
+        // ---------------------------------------------------------
+        // SCENARIO D: 🚀 AUTOMATED JSON WIDGET SNAPSHOTS (ALL MODULES)
+        // ---------------------------------------------------------
+        else if (task.task_name.startsWith('generate_json_snapshots')) {
+          const frequency = task.payload.frequency || 'daily'; 
+          const companyId = task.payload.company_id;
+          if (!companyId) throw new Error("Missing company_id for snapshot generation");
+
+          // 1. Timeframe Definitions
+          let startDate = new Date();
+          let endDate = new Date();
+          let futureEndDate = new Date(); // For forward-looking reports (Follow-ups, Events)
+          
+          if (frequency === 'daily') {
+            startDate.setHours(0, 0, 0, 0); 
+            futureEndDate.setHours(23, 59, 59, 999);
+          } else if (frequency === 'weekly') {
+            startDate.setDate(startDate.getDate() - 7);
+            startDate.setHours(0, 0, 0, 0);
+            futureEndDate.setDate(futureEndDate.getDate() + 7);
+            futureEndDate.setHours(23, 59, 59, 999);
+          } else if (frequency === 'monthly') {
+            startDate.setMonth(startDate.getMonth() - 1);
+            startDate.setHours(0, 0, 0, 0);
+            futureEndDate.setMonth(futureEndDate.getMonth() + 1);
+            futureEndDate.setHours(23, 59, 59, 999);
+          }
+          
+          const startISO = startDate.toISOString();
+          const endISO = endDate.toISOString();
+          const futureEndISO = futureEndDate.toISOString();
+          const todayStr = new Date().toISOString().split('T')[0];
+
+          // 2. PARALLEL BATCH 1: Finance, Operations & Custom Orders
+          const [
+            { data: invoices },
+            { data: customOrders },
+            { data: buybacks },
+            { data: cashbooks },
+            { data: estimates },
+            { data: repairTickets }
+          ] = await Promise.all([
+            supabaseAdmin.from('invoices').select('id, invoice_number, final_total, taxable_value, cgst_amount, sgst_amount, discount_amount, voucher_discount, payment_mode, split_payments, created_at, status, warehouse_id, exchange_value, exchange_notes, voucher_code, warehouses(name), profiles!user_id(full_name), customers(full_name)').eq('company_id', companyId).neq('status', 'CANCELLED').gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('custom_orders').select('id, order_number, estimated_value, advance_paid, status, created_at, voucher_code, voucher_amount, voucher_discount, customers(full_name)').eq('company_id', companyId).neq('status', 'CANCELLED').gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('buybacks').select('id, status, is_external_item, item_category, purity_karat, gross_weight_g, gross_value, deduction_amount, net_refund, created_at, customers(full_name), warehouse_id').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('daily_cashbooks').select('id, record_date, yesterday_cash, closing_balance, cash_in_out, expenses, warehouses(name)').eq('company_id', companyId).gte('record_date', startISO.split('T')[0]).lte('record_date', endISO.split('T')[0]),
+            supabaseAdmin.from('estimates').select('id, created_at, estimate_number, status, subtotal, discount_amount, total_amount, customers(full_name)').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('repair_tickets').select('id, created_at, ticket_number, item_description, status, estimated_cost, advance_paid, customers(full_name)').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO)
+          ]);
+
+          // 3. PARALLEL BATCH 2: CRM, Customers & Vouchers
+          const [
+            { data: custBase },
+            { data: custFollowups },
+            { data: custWallet },
+            { data: custEventsRaw },
+            { data: kittyPlans },
+            { data: waSequences },
+            { data: callAssign },
+            { data: giftingHistory }
+          ] = await Promise.all([
+            supabaseAdmin.from('customers').select('id, created_at, full_name, phone, customer_status, last_interaction, warehouses(name)').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('customers').select('id, full_name, phone, next_followup_date, followup_reason, customer_status').eq('company_id', companyId).gte('next_followup_date', todayStr).lte('next_followup_date', futureEndISO.split('T')[0]),
+            supabaseAdmin.from('customers').select('id, full_name, phone, store_credit_balance, pavitram_points').eq('company_id', companyId).or('store_credit_balance.gt.0,pavitram_points.gt.0'), // Snapshot of current liabilities
+            supabaseAdmin.from('customers').select('id, full_name, phone, birth_date, anniversary_date').eq('company_id', companyId).or('birth_date.not.is.null,anniversary_date.not.is.null'),
+            supabaseAdmin.from('kitty_plans').select('id, start_date, plan_amount, total_months, months_paid, status, customers(full_name, phone)').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('voucher_message_sequences').select('id, next_send_at, voucher_code, current_step, status, customers(full_name, phone)').gte('next_send_at', startISO).lte('next_send_at', futureEndISO),
+            supabaseAdmin.from('voucher_call_assignments').select('id, created_at, status, call_outcome, attempt_count, interest_level, customers(full_name, phone), vouchers(code)').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('customer_gifts_history').select('id, created_at, gift_name, warehouses(name), customers(full_name, phone)').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO)
+          ]);
+
+          // 4. PARALLEL BATCH 3: Production, Audit & Logistics
+          const [
+            { data: vBatches },
+            { data: vDistributions },
+            { data: vBookings },
+            { data: vouchers },
+            { data: jobBags },
+            { data: goldCons },
+            { data: diaCons },
+            { data: goldMovs },
+            { data: diaMovs },
+            { data: stockTransfers }
+          ] = await Promise.all([
+            supabaseAdmin.from('voucher_batches').select('id, created_at, batch_no, printer_name, quantity, discount_value').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('voucher_distributions').select('id, created_at, quantity, total_amount, payment_status, delivery_status, delivery_agent, voucher_distributors(distributor_name)').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('voucher_bookings').select('id, created_at, booking_ref, requested_quantity, fulfilled_quantity, status, voucher_distributors(distributor_name)').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('vouchers').select('id, updated_at, code, discount_value, status, expiry_date').gte('updated_at', startISO).lte('updated_at', endISO),
+            supabaseAdmin.from('job_bags').select('id, created_at, job_bag_number, status, gold_expected_weight_g, diamond_expected_weight_cts, issue_date, expected_return_date, karigars(full_name, specialization, is_active)').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('job_bag_gold_consumption').select('id, created_at, consumed_weight_g, loss_weight_g, job_bags(job_bag_number, karigars(full_name)), inventory_gold_batches(batch_number)').gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('job_bag_diamond_consumption').select('id, created_at, consumed_weight_cts, consumed_pieces, breakage_weight_cts, job_bags(job_bag_number, karigars(full_name)), inventory_diamond_lots(lot_number)').gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('gold_lot_movements').select('created_at, movement_type, movement_weight_g, reference_type, notes').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('diamond_lot_movements').select('created_at, movement_type, movement_weight_cts, reference_type, notes').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO),
+            supabaseAdmin.from('stock_transfers').select('id, transfer_number, status, transfer_date, transfer_category, from_warehouse_id, to_warehouse_id').eq('company_id', companyId).gte('created_at', startISO).lte('created_at', endISO)
+          ]);
+
+          // 5. IN-MEMORY DATA TRANSFORMATIONS
+          
+          // A. Inventory Audit Combiner
+          const gMap = (goldMovs || []).map((g: any) => ({ ...g, material: 'Gold', weight: g.movement_weight_g, unit: 'g' }));
+          const dMap = (diaMovs || []).map((d: any) => ({ ...d, material: 'Diamond', weight: d.movement_weight_cts, unit: 'cts' }));
+          const invAuditData = [...gMap, ...dMap].sort((a,b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+
+          // B. Voucher Sales Booked Combiner
+          const mappedInv = (invoices || []).filter((i: any) => i.voucher_code).map((i: any) => ({ 
+            id: i.invoice_number, date: i.created_at, doc_type: 'Tax Invoice', doc_no: i.invoice_number, customer: Array.isArray(i.customers) ? i.customers[0]?.full_name : i.customers?.full_name, v_code: i.voucher_code, v_discount: i.voucher_discount, total: i.final_total 
+          }));
+          const mappedCust = (customOrders || []).filter((c: any) => c.voucher_code).map((c: any) => ({ 
+            id: c.order_number, date: c.created_at, doc_type: 'Custom Order', doc_no: c.order_number, customer: Array.isArray(c.customers) ? c.customers[0]?.full_name : c.customers?.full_name, v_code: c.voucher_code, v_discount: c.voucher_amount || c.voucher_discount, total: c.estimated_value 
+          }));
+          const vSalesBookedData = [...mappedInv, ...mappedCust].sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+          // C. Upcoming Events Projector
+          const upcomingEvents: any[] = [];
+          (custEventsRaw || []).forEach((c: any) => {
+            ['birth_date', 'anniversary_date'].forEach(field => {
+              if (c[field]) {
+                const evtDate = new Date(c[field]);
+                const projectedDate = new Date(startDate.getFullYear(), evtDate.getMonth(), evtDate.getDate());
+                if (projectedDate < startOfDay(startDate)) projectedDate.setFullYear(startDate.getFullYear() + 1);
+                
+                if (projectedDate >= startDate && projectedDate <= futureEndDate) {
+                  upcomingEvents.push({ ...c, event_type: field === 'birth_date' ? 'Birthday' : 'Anniversary', projected_date: projectedDate.toISOString(), original_date: c[field] });
+                }
+              }
+            });
+          });
+          upcomingEvents.sort((a,b) => new Date(a.projected_date).getTime() - new Date(b.projected_date).getTime());
+
+          // 6. BUILD THE SNAPSHOTS ARRAY
+          const snapshotsToInsert = [
+            // Finance & Sales
+            { report_type: 'sales_summary', raw_data: invoices },
+            { report_type: 'branch_rankings', raw_data: invoices },
+            { report_type: 'custom_orders', raw_data: customOrders },
+            { report_type: 'buybacks', raw_data: buybacks },
+            { report_type: 'daily_cashbook', raw_data: cashbooks },
+            
+            // CRM
+            { report_type: 'customer_base', raw_data: custBase },
+            { report_type: 'upcoming_events', raw_data: upcomingEvents },
+            { report_type: 'followups_due', raw_data: custFollowups },
+            { report_type: 'wallet_balances', raw_data: custWallet },
+            { report_type: 'kitty_plans', raw_data: kittyPlans },
+            { report_type: 'gifting_history', raw_data: giftingHistory },
+            { report_type: 'whatsapp_sequences', raw_data: waSequences },
+            { report_type: 'call_assignments', raw_data: callAssign },
+
+            // Vouchers
+            { report_type: 'v_sales_booked', raw_data: vSalesBookedData },
+            { report_type: 'v_under_printing', raw_data: vBatches },
+            { report_type: 'v_payment_pending', raw_data: (vDistributions || []).filter((d: any) => d.payment_status === 'pending') },
+            { report_type: 'v_delivery_pending', raw_data: (vDistributions || []).filter((d: any) => d.delivery_status === 'pending') },
+            { report_type: 'v_payment_received', raw_data: (vDistributions || []).filter((d: any) => d.payment_status === 'paid') },
+            { report_type: 'v_bookings', raw_data: vBookings },
+            { report_type: 'v_expired', raw_data: (vouchers || []).filter((v: any) => v.status !== 'redeemed' && v.expiry_date && v.expiry_date < todayStr) },
+            { report_type: 'v_redeemed', raw_data: (vouchers || []).filter((v: any) => v.status === 'redeemed') },
+            { report_type: 'v_not_redeemed', raw_data: (vouchers || []).filter((v: any) => v.status !== 'redeemed' && (!v.expiry_date || v.expiry_date >= todayStr)) },
+            { report_type: 'v_in_stock', raw_data: (vouchers || []).filter((v: any) => v.status === 'in_stock') },
+
+            // Operations
+            { report_type: 'ops_exchanges', raw_data: (invoices || []).filter((i: any) => i.exchange_value > 0) },
+            { report_type: 'ops_delivery_agents', raw_data: (vDistributions || []).filter((d: any) => d.delivery_agent != null) },
+            { report_type: 'ops_estimates', raw_data: estimates },
+            { report_type: 'ops_repair_tickets', raw_data: repairTickets },
+            { report_type: 'ops_inventory_audit', raw_data: invAuditData },
+
+            // Production
+            { report_type: 'prod_active_job_bags', raw_data: jobBags },
+            { report_type: 'prod_karigar_performance', raw_data: jobBags },
+            { report_type: 'prod_gold_consumption', raw_data: goldCons },
+            { report_type: 'prod_diamond_consumption', raw_data: diaCons },
+            { report_type: 'prod_transfer_out', raw_data: stockTransfers },
+            { report_type: 'prod_transfer_in', raw_data: stockTransfers }
+          ].map(snap => ({
+             company_id: companyId,
+             frequency: frequency,
+             period_start: startISO,
+             period_end: endISO,
+             report_type: snap.report_type,
+             raw_data: snap.raw_data || [],
+             summary_metrics: { total_records: snap.raw_data?.length || 0 }
+          }));
+
+          // 7. BATCH INSERT INTO SNAPSHOTS TABLE
+          const { error: snapError } = await supabaseAdmin.from('report_snapshots').insert(snapshotsToInsert);
+          if (snapError) throw snapError;
+
+          logs.push(`Successfully generated 33 ${frequency} JSON snapshots for Company ${companyId}`);
+          
+          // Fast-forward cron timer to run again tomorrow (or next interval)
+          const nextRunDate = new Date(task.next_run_at);
+          nextRunDate.setHours(nextRunDate.getHours() + (task.interval_hours || 24));
+          
+          while(nextRunDate < new Date()) {
+            nextRunDate.setHours(nextRunDate.getHours() + (task.interval_hours || 24));
+          }
+
+          await supabaseAdmin.from('system_scheduled_tasks').update({
+            last_run_at: nowISO,
+            next_run_at: nextRunDate.toISOString()
+          }).eq('id', task.id);
+          
+          tasksProcessed++;
+          continue; 
         }
 
         // ---------------------------------------------------------

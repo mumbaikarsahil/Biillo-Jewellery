@@ -6,7 +6,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { format, subDays, addDays, startOfMonth, startOfDay, endOfDay, isWithinInterval } from "date-fns";
 import { 
   Loader2, ArrowRight, ChevronLeft, ChevronRight, Users, 
-  Gift, CalendarHeart, PhoneCall, Wallet, Send, ShieldCheck
+  Gift, CalendarHeart, PhoneCall, Wallet, Send, ShieldCheck, UserPlus
 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
@@ -21,18 +21,20 @@ type CrmReportType =
   | "kitty_plans"
   | "gifting_history"
   | "whatsapp_sequences"
-  | "call_assignments";
+  | "call_assignments"
+  | "walkin_customers"; // ✨ NEW
 
 interface BaseProps {
   type: CrmReportType;
   title: string;
   icon: any;
+  overrideData?: any[];
 }
 
 // Some reports look forward (Follow-ups, Events), others look backward (History, Base)
 const isForwardLooking = (type: CrmReportType) => ["upcoming_events", "followups_due", "whatsapp_sequences"].includes(type);
 
-export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
+export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BaseProps) {
   const { appUser } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [timeframe, setTimeframe] = useState("30d"); 
@@ -40,12 +42,34 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
   const [customEnd, setCustomEnd] = useState("");
   const [records, setRecords] = useState<any[]>([]);
 
+  // Branch Filtering
+  const [warehouses, setWarehouses] = useState<any[]>([]);
+  const [warehouseFilter, setWarehouseFilter] = useState("all");
+
   // Pagination State
   const [isExpandedView, setIsExpandedView] = useState(false);
   const [page, setPage] = useState(1);
   const pageSize = 15;
 
+  // Fetch Available Branches
   useEffect(() => {
+    if (!appUser?.company_id) return;
+    supabase.from('warehouses').select('id, name').eq('company_id', appUser.company_id)
+      .then(({ data }) => { if (data) setWarehouses(data); });
+  }, [appUser]);
+
+  useEffect(() => {
+    // ✨ THE BYPASS (WITH IN-MEMORY WAREHOUSE FILTERING FOR HISTORICAL DATA)
+    if (overrideData) {
+      let finalData = overrideData;
+      if (warehouseFilter !== "all") {
+        finalData = overrideData.filter(item => item.warehouse_id === warehouseFilter);
+      }
+      setRecords(finalData);
+      setIsLoading(false);
+      return;
+    }
+
     if (!appUser?.company_id) return;
     if (timeframe === "custom" && (!customStart || !customEnd)) return;
 
@@ -56,14 +80,13 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
         let startDate = new Date();
         let endDate = endOfDay(now);
 
-        // Date logic flips depending on if we are predicting the future or auditing the past
         if (isForwardLooking(type)) {
           startDate = startOfDay(now);
           if (timeframe === "today") endDate = endOfDay(now);
           else if (timeframe === "yesterday") { startDate = startOfDay(subDays(now, 1)); endDate = endOfDay(subDays(now, 1)); }
           else if (timeframe === "7d") endDate = endOfDay(addDays(now, 7));
           else if (timeframe === "30d") endDate = endOfDay(addDays(now, 30));
-          else if (timeframe === "month") endDate = endOfDay(startOfMonth(addDays(now, 30))); // Roughly next month
+          else if (timeframe === "month") endDate = endOfDay(startOfMonth(addDays(now, 30)));
           else if (timeframe === "custom") { startDate = startOfDay(new Date(customStart)); endDate = endOfDay(new Date(customEnd)); }
         } else {
           if (timeframe === "today") startDate = startOfDay(now);
@@ -79,36 +102,50 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
 
         let data: any[] = [];
 
+        // Helper to apply warehouse filter directly to Supabase queries
+        const applyWhFilter = (query: any) => {
+          if (warehouseFilter !== "all") return query.eq('warehouse_id', warehouseFilter);
+          return query;
+        };
+
         switch (type) {
           case "customer_base":
-            const { data: cbData } = await supabase.from('customers').select('id, created_at, full_name, phone, customer_status, last_interaction, warehouses(name)').eq('company_id', appUser.company_id).gte('created_at', startISO).lte('created_at', endISO).order('created_at', { ascending: false });
+            let cbQuery = supabase.from('customers').select('id, created_at, full_name, phone, customer_status, last_interaction, warehouse_id, warehouses(name)').eq('company_id', appUser.company_id).gte('created_at', startISO).lte('created_at', endISO).order('created_at', { ascending: false });
+            const { data: cbData } = await applyWhFilter(cbQuery);
             data = cbData || [];
             break;
 
-            case "upcoming_events":
-                // Birthdays & Anniversaries bypass strict year tracking, so we fetch all with events and filter in-memory for accuracy
-                const { data: evtData } = await supabase.from('customers').select('id, full_name, phone, birth_date, anniversary_date').eq('company_id', appUser.company_id).or('birth_date.not.is.null,anniversary_date.not.is.null');
-                
-                const upcoming: any[] = [];
-                
-                // ✨ FIXED: Added (c: any) to bypass the string indexing error
-                evtData?.forEach((c: any) => {
-                  ['birth_date', 'anniversary_date'].forEach(field => {
-                    if (c[field]) {
-                      const evtDate = new Date(c[field]);
-                      // Project the date into the current year to check if it falls in our timeframe window
-                      const projectedDate = new Date(now.getFullYear(), evtDate.getMonth(), evtDate.getDate());
-                      // If the projected date already passed this year, project it to next year
-                      if (projectedDate < startOfDay(now)) projectedDate.setFullYear(now.getFullYear() + 1);
-                      
-                      if (isWithinInterval(projectedDate, { start: startDate, end: endDate })) {
-                        upcoming.push({ ...c, event_type: field === 'birth_date' ? 'Birthday' : 'Anniversary', projected_date: projectedDate.toISOString(), original_date: c[field] });
-                      }
-                    }
-                  });
-                });
-                data = upcoming.sort((a,b) => new Date(a.projected_date).getTime() - new Date(b.projected_date).getTime());
-                break;
+          // ✨ NEW: Walk-in Customers Logic
+          case "walkin_customers":
+            let walkinQuery = supabase.from('customers')
+              .select('id, created_at, full_name, phone, customer_status, warehouse_id, warehouses(name)')
+              .eq('company_id', appUser.company_id)
+              .eq('customer_status', 'Walk-in')
+              .gte('created_at', startISO)
+              .lte('created_at', endISO)
+              .order('created_at', { ascending: false });
+            const { data: walkinData } = await applyWhFilter(walkinQuery);
+            data = walkinData || [];
+            break;
+
+          case "upcoming_events":
+            const { data: evtData } = await supabase.from('customers').select('id, full_name, phone, birth_date, anniversary_date').eq('company_id', appUser.company_id).or('birth_date.not.is.null,anniversary_date.not.is.null');
+            const upcoming: any[] = [];
+            evtData?.forEach((c: any) => {
+              ['birth_date', 'anniversary_date'].forEach(field => {
+                if (c[field]) {
+                  const evtDate = new Date(c[field]);
+                  const projectedDate = new Date(now.getFullYear(), evtDate.getMonth(), evtDate.getDate());
+                  if (projectedDate < startOfDay(now)) projectedDate.setFullYear(now.getFullYear() + 1);
+                  
+                  if (isWithinInterval(projectedDate, { start: startDate, end: endDate })) {
+                    upcoming.push({ ...c, event_type: field === 'birth_date' ? 'Birthday' : 'Anniversary', projected_date: projectedDate.toISOString(), original_date: c[field] });
+                  }
+                }
+              });
+            });
+            data = upcoming.sort((a,b) => new Date(a.projected_date).getTime() - new Date(b.projected_date).getTime());
+            break;
 
           case "followups_due":
             const { data: fData } = await supabase.from('customers').select('id, full_name, phone, next_followup_date, followup_reason, customer_status').eq('company_id', appUser.company_id).gte('next_followup_date', startISO.split('T')[0]).lte('next_followup_date', endISO.split('T')[0]).order('next_followup_date', { ascending: true });
@@ -116,7 +153,6 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
             break;
 
           case "wallet_balances":
-            // Snapshot report: Ignors date filters, shows current liability
             const { data: wData } = await supabase.from('customers').select('id, full_name, phone, store_credit_balance, pavitram_points').eq('company_id', appUser.company_id).or('store_credit_balance.gt.0,pavitram_points.gt.0').order('store_credit_balance', { ascending: false });
             data = wData || [];
             break;
@@ -127,7 +163,8 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
             break;
 
           case "gifting_history":
-            const { data: ghData } = await supabase.from('customer_gifts_history').select('id, created_at, gift_name, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startISO).lte('created_at', endISO).order('created_at', { ascending: false });
+            let ghQuery = supabase.from('customer_gifts_history').select('id, created_at, gift_name, warehouse_id, warehouses(name), customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startISO).lte('created_at', endISO).order('created_at', { ascending: false });
+            const { data: ghData } = await applyWhFilter(ghQuery);
             data = ghData || [];
             break;
 
@@ -136,14 +173,8 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
             data = waData || [];
             break;
 
-            case "call_assignments":
-            const { data: caData } = await supabase
-              .from('voucher_call_assignments')
-              .select('id, created_at, status, call_outcome, attempt_count, interest_level, customers(full_name, phone), vouchers(code)')
-              .eq('company_id', appUser.company_id)
-              .gte('created_at', startISO)
-              .lte('created_at', endISO)
-              .order('created_at', { ascending: false });
+          case "call_assignments":
+            const { data: caData } = await supabase.from('voucher_call_assignments').select('id, created_at, status, call_outcome, attempt_count, interest_level, customers(full_name, phone), vouchers(code)').eq('company_id', appUser.company_id).gte('created_at', startISO).lte('created_at', endISO).order('created_at', { ascending: false });
             data = caData || [];
             break;
         }
@@ -158,7 +189,7 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
     };
 
     fetchData();
-  }, [appUser, timeframe, customStart, customEnd, type]);
+  }, [appUser, timeframe, customStart, customEnd, type, warehouseFilter, overrideData]);
 
   const totalPages = Math.ceil(records.length / pageSize);
   const paginatedRecords = isExpandedView ? records.slice((page - 1) * pageSize, page * pageSize) : records.slice(0, 5); 
@@ -172,6 +203,9 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
     );
   }
 
+  // Define reports that support store filtering
+  const supportsStoreFilter = ["customer_base", "walkin_customers", "gifting_history"].includes(type);
+
   // Column Renderer based on Type
   const renderHeaders = () => {
     if (type === 'customer_base') return (
@@ -179,8 +213,17 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
         <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[110px]">Date Added</th>
         <th className="p-1.5 text-left border-b border-r border-zinc-300 min-w-[150px]">Customer Name</th>
         <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[120px]">Phone Number</th>
+        <th className="p-1.5 text-left border-b border-r border-zinc-300 min-w-[110px]">Registered Store</th>
         <th className="p-1.5 text-center border-b border-r border-zinc-300 w-[100px]">Status</th>
         <th className="p-1.5 text-left border-b border-zinc-300 min-w-[130px] bg-slate-50">Last Interaction</th>
+      </tr>
+    );
+    if (type === 'walkin_customers') return (
+      <tr>
+        <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[110px]">Visit Date</th>
+        <th className="p-1.5 text-left border-b border-r border-zinc-300 min-w-[150px]">Walk-in Name</th>
+        <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[120px]">Phone Number</th>
+        <th className="p-1.5 text-left border-b border-zinc-300 min-w-[130px] bg-slate-50">Visiting Store</th>
       </tr>
     );
     if (type === 'upcoming_events') return (
@@ -232,7 +275,8 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
         <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[110px]">Date Issued</th>
         <th className="p-1.5 text-left border-b border-r border-zinc-300 min-w-[150px]">Gift Name</th>
         <th className="p-1.5 text-left border-b border-r border-zinc-300 min-w-[150px]">Customer Name</th>
-        <th className="p-1.5 text-left border-b border-zinc-300 w-[120px] bg-slate-50">Phone Number</th>
+        <th className="p-1.5 text-left border-b border-r border-zinc-300 w-[120px]">Phone Number</th>
+        <th className="p-1.5 text-left border-b border-zinc-300 min-w-[120px] bg-slate-50">Given From Store</th>
       </tr>
     );
 
@@ -250,15 +294,30 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
   };
 
   const renderRows = (r: any, idx: number) => {
-    if (type === 'customer_base') return (
-      <>
-        <td className="p-1.5 border-b border-r border-zinc-300 text-zinc-600">{format(new Date(r.created_at), 'dd-MM-yy HH:mm')}</td>
-        <td className="p-1.5 border-b border-r border-zinc-300 font-bold text-zinc-800 truncate">{r.full_name}</td>
-        <td className="p-1.5 border-b border-r border-zinc-300 font-mono text-zinc-600">{r.phone}</td>
-        <td className="p-1.5 border-b border-r border-zinc-300 text-center font-bold text-[9px] uppercase tracking-widest text-indigo-600 bg-indigo-50/50">{r.customer_status}</td>
-        <td className="p-1.5 border-b border-zinc-300 text-zinc-600 truncate bg-slate-50/50">{r.last_interaction || '-'}</td>
-      </>
-    );
+    if (type === 'customer_base') {
+      const whName = Array.isArray(r.warehouses) ? r.warehouses[0]?.name : r.warehouses?.name;
+      return (
+        <>
+          <td className="p-1.5 border-b border-r border-zinc-300 text-zinc-600">{format(new Date(r.created_at), 'dd-MM-yy HH:mm')}</td>
+          <td className="p-1.5 border-b border-r border-zinc-300 font-bold text-zinc-800 truncate">{r.full_name}</td>
+          <td className="p-1.5 border-b border-r border-zinc-300 font-mono text-zinc-600">{r.phone}</td>
+          <td className="p-1.5 border-b border-r border-zinc-300 text-zinc-700 truncate">{whName || 'HQ / Online'}</td>
+          <td className="p-1.5 border-b border-r border-zinc-300 text-center font-bold text-[9px] uppercase tracking-widest text-indigo-600 bg-indigo-50/50">{r.customer_status}</td>
+          <td className="p-1.5 border-b border-zinc-300 text-zinc-600 truncate bg-slate-50/50">{r.last_interaction || '-'}</td>
+        </>
+      );
+    }
+    if (type === 'walkin_customers') {
+      const whName = Array.isArray(r.warehouses) ? r.warehouses[0]?.name : r.warehouses?.name;
+      return (
+        <>
+          <td className="p-1.5 border-b border-r border-zinc-300 text-zinc-600">{format(new Date(r.created_at), 'dd-MM-yy HH:mm')}</td>
+          <td className="p-1.5 border-b border-r border-zinc-300 font-bold text-zinc-800 truncate">{r.full_name}</td>
+          <td className="p-1.5 border-b border-r border-zinc-300 font-mono text-zinc-600">{r.phone}</td>
+          <td className="p-1.5 border-b border-zinc-300 font-medium text-zinc-700 truncate bg-slate-50/50">{whName || 'Unknown Store'}</td>
+        </>
+      );
+    }
     if (type === 'upcoming_events') return (
       <>
         <td className="p-1.5 border-b border-r border-zinc-300 font-bold text-rose-600">{format(new Date(r.projected_date), 'dd-MMM-yyyy')}</td>
@@ -313,12 +372,14 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
     if (type === 'gifting_history') {
       const custName = Array.isArray(r.customers) ? r.customers[0]?.full_name : r.customers?.full_name;
       const custPhone = Array.isArray(r.customers) ? r.customers[0]?.phone : r.customers?.phone;
+      const whName = Array.isArray(r.warehouses) ? r.warehouses[0]?.name : r.warehouses?.name;
       return (
         <>
           <td className="p-1.5 border-b border-r border-zinc-300 text-zinc-600">{format(new Date(r.created_at), 'dd-MM-yy HH:mm')}</td>
           <td className="p-1.5 border-b border-r border-zinc-300 font-bold text-indigo-700 truncate">{r.gift_name}</td>
           <td className="p-1.5 border-b border-r border-zinc-300 font-bold text-zinc-800 truncate">{custName || 'Unknown'}</td>
-          <td className="p-1.5 border-b border-zinc-300 font-mono text-zinc-600 bg-slate-50/50">{custPhone || '-'}</td>
+          <td className="p-1.5 border-b border-r border-zinc-300 font-mono text-zinc-600">{custPhone || '-'}</td>
+          <td className="p-1.5 border-b border-zinc-300 text-zinc-700 truncate bg-slate-50/50">{whName || 'HQ'}</td>
         </>
       );
     }
@@ -347,7 +408,7 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
 
   return (
     <div className="flex flex-col h-full w-full space-y-4">
-      <div className="flex flex-wrap justify-between items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Icon className="w-4 h-4 text-zinc-700" />
           <h3 className="text-sm font-bold text-zinc-800 uppercase tracking-wider">{title}</h3>
@@ -356,31 +417,49 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
           </span>
         </div>
         
-        {/* Only show timeframe filters if the report relies on dates */}
-        {type !== 'wallet_balances' && (
-          <div className="flex items-center gap-2">
-            {timeframe === 'custom' && (
-              <div className="flex items-center gap-1">
-                <Input type="date" className="h-7 text-[10px] py-0 px-2 w-[110px] border-zinc-300" value={customStart} onChange={e => setCustomStart(e.target.value)} />
-                <span className="text-zinc-400 text-[10px]">-</span>
-                <Input type="date" className="h-7 text-[10px] py-0 px-2 w-[110px] border-zinc-300" value={customEnd} onChange={e => setCustomEnd(e.target.value)} />
-              </div>
-            )}
-            <Select value={timeframe} onValueChange={setTimeframe}>
+        <div className="flex flex-wrap items-center gap-2 flex-1 justify-end">
+          
+          {/* ✨ NEW: Store Filter for relevant CRM modules */}
+          {supportsStoreFilter && (
+            <Select value={warehouseFilter} onValueChange={setWarehouseFilter}>
               <SelectTrigger className="h-7 w-[130px] text-[11px] font-semibold bg-white border-zinc-300 rounded-sm">
-                <SelectValue />
+                <SelectValue placeholder="All Stores" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="today">Today</SelectItem>
-                <SelectItem value="yesterday">Yesterday</SelectItem>
-                <SelectItem value="7d">{isForwardLooking(type) ? 'Next 7 Days' : 'Last 7 Days'}</SelectItem>
-                <SelectItem value="30d">{isForwardLooking(type) ? 'Next 30 Days' : 'Last 30 Days'}</SelectItem>
-                <SelectItem value="month">This Month</SelectItem>
-                <SelectItem value="custom">Custom Range</SelectItem>
+                <SelectItem value="all">All Stores</SelectItem>
+                {warehouses.map(w => (
+                  <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
-          </div>
-        )}
+          )}
+
+          {/* Only show timeframe filters if the report relies on dates */}
+          {type !== 'wallet_balances' && (
+            <>
+              {timeframe === 'custom' && (
+                <div className="flex items-center gap-1">
+                  <Input type="date" className="h-7 text-[10px] py-0 px-2 w-[110px] border-zinc-300" value={customStart} onChange={e => setCustomStart(e.target.value)} />
+                  <span className="text-[10px] font-bold">-</span>
+                  <Input type="date" className="h-7 text-[10px] py-0 px-2 w-[110px] border-zinc-300" value={customEnd} onChange={e => setCustomEnd(e.target.value)} />
+                </div>
+              )}
+              <Select value={timeframe} onValueChange={setTimeframe}>
+                <SelectTrigger className="h-7 w-[120px] text-[11px] font-semibold bg-white border-zinc-300 rounded-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="today">Today</SelectItem>
+                  <SelectItem value="yesterday">Yesterday</SelectItem>
+                  <SelectItem value="7d">{isForwardLooking(type) ? 'Next 7 Days' : 'Last 7 Days'}</SelectItem>
+                  <SelectItem value="30d">{isForwardLooking(type) ? 'Next 30 Days' : 'Last 30 Days'}</SelectItem>
+                  <SelectItem value="month">This Month</SelectItem>
+                  <SelectItem value="custom">Custom Range</SelectItem>
+                </SelectContent>
+              </Select>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="pt-2 flex-1 flex flex-col min-h-0">
@@ -438,13 +517,16 @@ export function BaseCrmWidget({ type, title, icon: Icon }: BaseProps) {
 }
 
 // ============================================================================
-// INDIVIDUAL EXPORTS (The 7 CRM Widgets)
+// INDIVIDUAL EXPORTS (The 8 CRM Widgets)
 // ============================================================================
 
-export const CrmCustomerBaseWidget = () => <BaseCrmWidget type="customer_base" title="1) Customer Base & Lead Status" icon={Users} />
-export const CrmUpcomingEventsWidget = () => <BaseCrmWidget type="upcoming_events" title="2) Upcoming Birthdays & Anniversaries" icon={CalendarHeart} />
-export const CrmFollowupsDueWidget = () => <BaseCrmWidget type="followups_due" title="3) Scheduled Follow-ups Due" icon={PhoneCall} />
-export const CrmWalletBalancesWidget = () => <BaseCrmWidget type="wallet_balances" title="4) Store Credit & Points Liability" icon={Wallet} />
-export const CrmKittyPlansWidget = () => <BaseCrmWidget type="kitty_plans" title="5) Active Kitty Installment Plans" icon={ShieldCheck} />
-export const CrmGiftingHistoryWidget = () => <BaseCrmWidget type="gifting_history" title="6) Customer Gifting History" icon={Gift} />
-export const CrmWhatsAppSequencesWidget = () => <BaseCrmWidget type="whatsapp_sequences" title="7) WhatsApp Auto-Sequences (Vouchers)" icon={Send} />
+export const CrmCustomerBaseWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="customer_base" title="1) Customer Base & Lead Status" icon={Users} overrideData={overrideData} />)
+export const CrmUpcomingEventsWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="upcoming_events" title="2) Upcoming Birthdays & Anniversaries" icon={CalendarHeart} overrideData={overrideData} />)
+export const CrmFollowupsDueWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="followups_due" title="3) Scheduled Follow-ups Due" icon={PhoneCall} overrideData={overrideData} />)
+export const CrmWalletBalancesWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="wallet_balances" title="4) Store Credit & Points Liability" icon={Wallet} overrideData={overrideData} />)
+export const CrmKittyPlansWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="kitty_plans" title="5) Active Kitty Installment Plans" icon={ShieldCheck} overrideData={overrideData} />)
+export const CrmGiftingHistoryWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="gifting_history" title="6) Customer Gifting History" icon={Gift} overrideData={overrideData} />)
+export const CrmWhatsAppSequencesWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="whatsapp_sequences" title="7) WhatsApp Auto-Sequences (Vouchers)" icon={Send} overrideData={overrideData} />)
+
+// ✨ NEW
+export const CrmWalkinCustomersWidget = ({ overrideData }: { overrideData?: any[] } = {})=> (<BaseCrmWidget type="walkin_customers" title="8) Store Walk-ins Report" icon={UserPlus} overrideData={overrideData} />)

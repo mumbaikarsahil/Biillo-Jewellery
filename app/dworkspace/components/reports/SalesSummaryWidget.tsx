@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-export function SalesSummaryWidget() {
+export function SalesSummaryWidget({ overrideData }: { overrideData?: any[] } = {}) {
   const { appUser } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [timeframe, setTimeframe] = useState("today"); 

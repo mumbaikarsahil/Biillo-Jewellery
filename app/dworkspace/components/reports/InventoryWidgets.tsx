@@ -33,6 +33,7 @@ interface BaseProps {
   type: InventoryReportType;
   title: string;
   icon: any;
+  overrideData?: any[];
 }
 
 const isSnapshotReport = (type: InventoryReportType) => {
@@ -48,7 +49,7 @@ const isComingSoon = (type: InventoryReportType) => {
   ].includes(type);
 };
 
-export function BaseInventoryWidget({ type, title, icon: Icon }: BaseProps) {
+export function BaseInventoryWidget({ type, title, icon: Icon, overrideData }: BaseProps) {
   const { appUser } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   
@@ -71,6 +72,13 @@ export function BaseInventoryWidget({ type, title, icon: Icon }: BaseProps) {
 
   // ✨ Fetch Available Warehouses and Categories once on mount
   useEffect(() => {
+
+    if (overrideData) {
+      setRecords(overrideData);
+      setIsLoading(false);
+      return;
+    }
+
     if (!appUser?.company_id) return;
     
     // Fetch Warehouses
@@ -665,17 +673,58 @@ export function BaseInventoryWidget({ type, title, icon: Icon }: BaseProps) {
 // INDIVIDUAL EXPORTS (The 14 Inventory Widgets)
 // ============================================================================
 
-export const InvInStockWidget = () => <BaseInventoryWidget type="in_stock" title="1) Realtime Inventory in Stock" icon={PackageSearch} />
-export const InvDeadStockWidget = () => <BaseInventoryWidget type="dead_stock" title="2) Realtime Dead Stock (>180 Days)" icon={AlertCircle} />
-export const InvFastMovingWidget = () => <BaseInventoryWidget type="fast_moving" title="3) Fast Moving Inventory (FIFO Age)" icon={Clock} />
-export const InvBranchRestocksWidget = () => <BaseInventoryWidget type="branch_restocks" title="4) Orders Received from Store" icon={Box} />
-export const InvDispatchedStoresWidget = () => <BaseInventoryWidget type="dispatched_stores" title="5) Orders Dispatched to Stores" icon={Send} />
-export const InvPendingStoresWidget = () => <BaseInventoryWidget type="pending_stores" title="6) Orders Pending to Stores" icon={Hourglass} />
-export const InvKaratWiseWidget = () => <BaseInventoryWidget type="karat_wise" title="7) Stock Wise Report (Karat)" icon={LayoutList} />
-export const InvDiamondWiseWidget = () => <BaseInventoryWidget type="diamond_wise" title="8) Stock Wise Report (Clarity/Color/Shape)" icon={Diamond} />
-export const InvSolitaireWidget = () => <BaseInventoryWidget type="solitaire" title="9) Stock Wise Report (Solitaire)" icon={Gem} />
-export const InvPriceBucketsWidget = () => <BaseInventoryWidget type="price_buckets" title="10) Stock Below 10k, 20k, 50k..." icon={Target} />
-export const InvGiftingStockWidget = () => <BaseInventoryWidget type="gifting_stock" title="11) Gifting Stock" icon={Gift} />
-export const InvGiftingConsumptionWidget = () => <BaseInventoryWidget type="gifting_consumption" title="12) Gifting Stock Consumption" icon={Gift} />
-export const InvPackagingStockWidget = () => <BaseInventoryWidget type="packaging_stock" title="13) Packaging Stock" icon={PackageOpen} />
-export const InvPackagingConsumptionWidget = () => <BaseInventoryWidget type="packaging_consumption" title="14) Packaging Stock Consumption" icon={PackageOpen} />
+export const InvInStockWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="in_stock" title="1) Realtime Inventory in Stock" icon={PackageSearch} overrideData={overrideData} />
+);
+
+export const InvDeadStockWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="dead_stock" title="2) Realtime Dead Stock (>180 Days)" icon={AlertCircle} overrideData={overrideData} />
+);
+
+export const InvFastMovingWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="fast_moving" title="3) Fast Moving Inventory (FIFO Age)" icon={Clock} overrideData={overrideData} />
+);
+
+export const InvBranchRestocksWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="branch_restocks" title="4) Orders Received from Store" icon={Box} overrideData={overrideData} />
+);
+
+export const InvDispatchedStoresWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="dispatched_stores" title="5) Orders Dispatched to Stores" icon={Send} overrideData={overrideData} />
+);
+
+export const InvPendingStoresWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="pending_stores" title="6) Orders Pending to Stores" icon={Hourglass} overrideData={overrideData} />
+);
+
+export const InvKaratWiseWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="karat_wise" title="7) Stock Wise Report (Karat)" icon={LayoutList} overrideData={overrideData} />
+);
+
+export const InvDiamondWiseWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="diamond_wise" title="8) Stock Wise Report (Clarity/Color/Shape)" icon={Diamond} overrideData={overrideData} />
+);
+
+export const InvSolitaireWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="solitaire" title="9) Stock Wise Report (Solitaire)" icon={Gem} overrideData={overrideData} />
+);
+
+export const InvPriceBucketsWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="price_buckets" title="10) Stock Below 10k, 20k, 50k..." icon={Target} overrideData={overrideData} />
+);
+
+export const InvGiftingStockWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="gifting_stock" title="11) Gifting Stock" icon={Gift} overrideData={overrideData} />
+);
+
+export const InvGiftingConsumptionWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="gifting_consumption" title="12) Gifting Stock Consumption" icon={Gift} overrideData={overrideData} />
+);
+
+export const InvPackagingStockWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="packaging_stock" title="13) Packaging Stock" icon={PackageOpen} overrideData={overrideData} />
+);
+
+export const InvPackagingConsumptionWidget = ({ overrideData }: { overrideData?: any[] } = {}) => (
+  <BaseInventoryWidget type="packaging_consumption" title="14) Packaging Stock Consumption" icon={PackageOpen} overrideData={overrideData} />
+);

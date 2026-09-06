@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-export function BuybacksWidget() {
+export function BuybacksWidget({ overrideData }: { overrideData?: any[] } = {}) {
   const { appUser } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [timeframe, setTimeframe] = useState("30d"); 
@@ -23,6 +23,11 @@ export function BuybacksWidget() {
   const pageSize = 15;
 
   useEffect(() => {
+    if (overrideData) {
+      setBuybacks(overrideData);
+      setIsLoading(false);
+      return;
+    }
     if (!appUser?.company_id) return;
     if (timeframe === "custom" && (!customStart || !customEnd)) return; // Wait for dates
 

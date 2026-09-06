@@ -21,11 +21,12 @@ type OperationalReportType =
 
 interface BaseProps {
   type: OperationalReportType;
+  overrideData?: any[];
   title: string;
   icon: any;
 }
 
-export function BaseOperationalWidget({ type, title, icon: Icon }: BaseProps) {
+export function BaseOperationalWidget({ type, title, icon: Icon, overrideData }: BaseProps) {
   const { appUser } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [timeframe, setTimeframe] = useState("30d"); 
@@ -38,6 +39,11 @@ export function BaseOperationalWidget({ type, title, icon: Icon }: BaseProps) {
   const pageSize = 15;
 
   useEffect(() => {
+    if (overrideData) {
+      setRecords(overrideData);
+      setIsLoading(false);
+      return;
+    }
     if (!appUser?.company_id) return;
     if (timeframe === "custom" && (!customStart || !customEnd)) return;
 
@@ -363,8 +369,8 @@ export function BaseOperationalWidget({ type, title, icon: Icon }: BaseProps) {
 // INDIVIDUAL EXPORTS
 // ============================================================================
 
-export const OpsExchangesWidget = () => <BaseOperationalWidget type="exchanges" title="Exchanges & Trade-Ins" icon={RefreshCcw} />
-export const OpsDeliveryAgentsWidget = () => <BaseOperationalWidget type="delivery_agents" title="Voucher Delivery Agents" icon={Bike} />
-export const OpsEstimatesWidget = () => <BaseOperationalWidget type="estimates" title="Estimates & Quotes" icon={FileText} />
-export const OpsInventoryAuditWidget = () => <BaseOperationalWidget type="inventory_audit" title="Raw Material Audit Logs" icon={History} />
-export const OpsRepairTicketsWidget = () => <BaseOperationalWidget type="repair_tickets" title="Repair & Service Tickets" icon={Wrench} />
+export const OpsExchangesWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseOperationalWidget type="exchanges" title="Exchanges & Trade-Ins" icon={RefreshCcw} overrideData={overrideData} />)
+export const OpsDeliveryAgentsWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseOperationalWidget type="delivery_agents" title="Voucher Delivery Agents" icon={Bike} overrideData={overrideData} />)
+export const OpsEstimatesWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseOperationalWidget type="estimates" title="Estimates & Quotes" icon={FileText} overrideData={overrideData} />)
+export const OpsInventoryAuditWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseOperationalWidget type="inventory_audit" title="Raw Material Audit Logs" icon={History} overrideData={overrideData} />)
+export const OpsRepairTicketsWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseOperationalWidget type="repair_tickets" title="Repair & Service Tickets" icon={Wrench} overrideData={overrideData} />)

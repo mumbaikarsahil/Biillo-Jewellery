@@ -21,9 +21,10 @@ interface BaseProps {
   type: ProductionReportType;
   title: string;
   icon: any;
+  overrideData?: any[];
 }
 
-function BaseProductionWidget({ type, title, icon: Icon }: BaseProps) {
+function BaseProductionWidget({ type, title, icon: Icon, overrideData }: BaseProps) {
   const { appUser } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [timeframe, setTimeframe] = useState("30d"); 
@@ -37,6 +38,12 @@ function BaseProductionWidget({ type, title, icon: Icon }: BaseProps) {
   const pageSize = 15;
 
   useEffect(() => {
+    // ✨ THE BYPASS
+    if (overrideData) {
+      setRecords(overrideData);
+      setIsLoading(false);
+      return;
+    }
     if (!appUser?.company_id) return;
     if (timeframe === "custom" && (!customStart || !customEnd)) return;
 
@@ -370,9 +377,9 @@ function BaseProductionWidget({ type, title, icon: Icon }: BaseProps) {
 // INDIVIDUAL EXPORTS (The 6 Production Widgets)
 // ============================================================================
 
-export const ProdActiveJobBagsWidget = () => <BaseProductionWidget type="active_job_bags" title="1) Active Job Bags Tracker" icon={Briefcase} />
-export const ProdKarigarPerformanceWidget = () => <BaseProductionWidget type="karigar_performance" title="2) Karigar Performance / Yield" icon={Scissors} />
-export const ProdGoldConsumptionWidget = () => <BaseProductionWidget type="gold_consumption" title="3) Raw Gold Consumption & Loss" icon={Layers} />
-export const ProdDiamondConsumptionWidget = () => <BaseProductionWidget type="diamond_consumption" title="4) Diamond Consumption & Breakage" icon={Diamond} />
-export const ProdStockTransfersOutWidget = () => <BaseProductionWidget type="stock_transfers_out" title="5) Stock Transfers (Outbound)" icon={Truck} />
-export const ProdStockTransfersInWidget = () => <BaseProductionWidget type="stock_transfers_in" title="6) Stock Transfers (Inbound)" icon={ArrowLeftRight} />
+export const ProdActiveJobBagsWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseProductionWidget type="active_job_bags" title="1) Active Job Bags Tracker" icon={Briefcase} overrideData={overrideData} />)
+export const ProdKarigarPerformanceWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseProductionWidget type="karigar_performance" title="2) Karigar Performance / Yield" icon={Scissors} overrideData={overrideData} />)
+export const ProdGoldConsumptionWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseProductionWidget type="gold_consumption" title="3) Raw Gold Consumption & Loss" icon={Layers} overrideData={overrideData} />)
+export const ProdDiamondConsumptionWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseProductionWidget type="diamond_consumption" title="4) Diamond Consumption & Breakage" icon={Diamond} overrideData={overrideData} />)
+export const ProdStockTransfersOutWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseProductionWidget type="stock_transfers_out" title="5) Stock Transfers (Outbound)" icon={Truck} overrideData={overrideData} />)
+export const ProdStockTransfersInWidget = ({ overrideData }: { overrideData?: any[] } = {})=> ( <BaseProductionWidget type="stock_transfers_in" title="6) Stock Transfers (Inbound)" icon={ArrowLeftRight} overrideData={overrideData} />)
