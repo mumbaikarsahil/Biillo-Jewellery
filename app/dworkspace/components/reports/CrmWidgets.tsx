@@ -108,59 +108,49 @@ export function BaseCrmWidget({ type, title, icon: Icon, overrideData }: BasePro
             break;
 
           // ✨ UPDATED: Walk-in Logic checks Timeline AND Invoices for conversions
-          case "walkin_customers":
-            let walkinQuery = supabase.from('customers')
-              .select(`
-                id, created_at, full_name, phone, customer_status, warehouse_id, warehouses(name), 
-                activity_timeline, 
-                customer_gifts_history(id, warehouses(name)), 
-                invoices(id, created_at)
-              `)
-              .eq('company_id', appUser.company_id)
-              .order('created_at', { ascending: false });
-            
-            const { data: walkinData } = await applyWhFilter(walkinQuery);
-            
-            // 1. Isolate genuine walk-ins within the timeframe
-            const validWalkins = (walkinData || []).filter((w: any) => {
-              // Check if they were created in this timeframe
-              const createdDate = new Date(w.created_at);
-              const createdInTimeframe = createdDate >= startDate && createdDate <= endDate;
-              
-              // If created in timeframe and timeline contains Walk-in (or status is walk-in)
-              if (createdInTimeframe && (w.customer_status === 'Walk-in' || JSON.stringify(w.activity_timeline).includes('Walk-in'))) {
-                return true;
-              }
+         // ✨ UPDATED: Removed strict status check to capture converted Walk-ins!
+         case "walkin_customers":
+          let walkinQuery = supabase.from('customers')
+            .select(`
+              id, created_at, full_name, phone, customer_status, warehouse_id, warehouses(name), 
+              activity_timeline, 
+              customer_gifts_history(id, warehouses(name)), 
+              invoices(id, created_at)
+            `)
+            .eq('company_id', appUser.company_id)
+            .order('created_at', { ascending: false });
+          
+          const { data: walkinData } = await applyWhFilter(walkinQuery);
+          
+          // 1. Isolate genuine walk-ins within the timeframe using the TIMELINE ONLY
+          const validWalkins = (walkinData || []).filter((w: any) => {
+            if (w.activity_timeline && Array.isArray(w.activity_timeline)) {
+               return w.activity_timeline.some((evt: any) => {
+                  // Look for the WALK-IN event logged by the Discovery page
+                  if ((evt.type === 'WALK-IN' || JSON.stringify(evt).toLowerCase().includes('walk-in')) && evt.timestamp) {
+                     const evtDate = new Date(evt.timestamp);
+                     return evtDate >= startDate && evtDate <= endDate;
+                  }
+                  return false;
+               });
+            }
+            return false;
+          });
 
-              // Check specific timeline events for accurate historical walk-ins
-              if (w.activity_timeline && Array.isArray(w.activity_timeline)) {
-                 return w.activity_timeline.some((evt: any) => {
-                    if (JSON.stringify(evt).toLowerCase().includes('walk-in') && evt.timestamp) {
-                       const evtDate = new Date(evt.timestamp);
-                       return evtDate >= startDate && evtDate <= endDate;
-                    }
-                    return false;
-                 });
-              }
-              return false;
-            });
+          // 2. Map conversions (Gifts and Purchases)
+          data = validWalkins.map((w: any) => {
+              const has_purchase = w.invoices && w.invoices.some((inv: any) => {
+                 const invDate = new Date(inv.created_at);
+                 return invDate >= startDate && invDate <= endDate;
+              });
 
-            // 2. Map conversions (Gifts and Purchases)
-            data = validWalkins.map((w: any) => {
-                // Determine if they purchased anything within the timeframe
-                const has_purchase = w.invoices && w.invoices.some((inv: any) => {
-                   const invDate = new Date(inv.created_at);
-                   return invDate >= startDate && invDate <= endDate;
-                });
-
-                return {
-                  ...w,
-                  has_gift: w.customer_gifts_history && w.customer_gifts_history.length > 0,
-                  has_purchase: has_purchase
-                };
-            });
-            break;
-
+              return {
+                ...w,
+                has_gift: w.customer_gifts_history && w.customer_gifts_history.length > 0,
+                has_purchase: has_purchase
+              };
+          });
+          break;
           case "upcoming_events":
             const { data: evtData } = await supabase.from('customers').select('id, full_name, phone, birth_date, anniversary_date').eq('company_id', appUser.company_id).or('birth_date.not.is.null,anniversary_date.not.is.null');
             const upcoming: any[] = [];

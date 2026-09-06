@@ -370,11 +370,17 @@ export default function DiscoveryPage() {
     setIsProcessing(true);
     try {
       let activeCustomerId = existingCustomer?.id;
+      
+      // ✨ 1. Resolve current store context for tracking
+      const validWarehouseId = selectedLocation === 'ALL' ? null : selectedLocation;
+      const currentStoreName = warehouses.find(w => w.id === selectedLocation)?.name || 'HQ / Online';
 
+      // ✨ 2. Enrich the timeline event with the specific store name
       const newSystemEvent = {
         timestamp: new Date().toISOString(),
         type: 'WALK-IN',
-        description: 'Store Visit / Discovery Check-in'
+        description: `Store Visit / Check-in at ${currentStoreName}`,
+        store_id: validWarehouseId
       };
 
       if (existingCustomer) {
@@ -385,6 +391,7 @@ export default function DiscoveryPage() {
           .from('customers')
           .update({ 
             customer_status: 'Walk-in',
+            warehouse_id: validWarehouseId, // ✨ 3. FORCE-UPDATE their current location!
             activity_timeline: updatedTimeline 
           })
           .eq('id', existingCustomer.id);
@@ -395,7 +402,7 @@ export default function DiscoveryPage() {
         
         const payload = {
           company_id: appUser?.company_id,
-          warehouse_id: selectedLocation === 'ALL' ? null : selectedLocation,
+          warehouse_id: validWarehouseId, // Already correct here
           full_name: newCustForm.full_name.trim(),
           phone: phoneInput,
           email: newCustForm.email.trim() || null,
@@ -435,6 +442,7 @@ export default function DiscoveryPage() {
     }
   };
 
+  
   const handleDiscovery = async (qrCodeData: string) => {
     if (!qrCodeData.trim()) return
     if (!selectedLocation) return toast.error("Select your current location first.")
