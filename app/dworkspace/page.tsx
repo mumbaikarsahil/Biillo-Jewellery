@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { useRouter } from "next/navigation";
 import { 
   Plus, X, RefreshCw, Maximize2, Minimize2, 
   BarChart3, PieChart, TrendingUp, LayoutDashboard, ArrowRightLeft, Trophy, BookOpen,
@@ -13,6 +14,9 @@ import {
   Bike,
   History as HistoryIcon,
   UserPlus,
+  Database,
+  ZoomIn,
+  ZoomOut
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -69,7 +73,7 @@ type ReportModule = {
 
 const REPORT_CATEGORIES: Record<string, ReportModule[]> = {
   "Finance & Operations": [
-    { id: "sales_summary", name: "Daily Sales Summary", icon: TrendingUp, defaultSpan: "col-span-1" },
+    { id: "sales_summary", name: "Daily Sales Summary", icon: TrendingUp, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-3" },
     { id: "custom_orders", name: "Custom Orders Pipeline", icon: Hammer, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
     { id: "buybacks", name: "Returns & Intake Ledger", icon: ArrowRightLeft, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
     { id: "branch_rankings", name: "Branch Rankings", icon: Trophy, defaultSpan: "col-span-1" },
@@ -126,10 +130,9 @@ const REPORT_CATEGORIES: Record<string, ReportModule[]> = {
     { id: "crm_kitty_plans", name: "Active Kitty Plans", icon: ShieldCheck, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
     { id: "crm_gifting_history", name: "Gifting History", icon: Gift, defaultSpan: "col-span-1" },
     { id: "crm_wa_sequences", name: "WhatsApp Auto-Sequences", icon: Send, defaultSpan: "col-span-1 md:col-span-2 lg:col-span-2" },
-]
+  ]
 };
 
-// Flatten for quick lookups
 const FLAT_REGISTRY = Object.values(REPORT_CATEGORIES).flat();
 
 interface WidgetConfig {
@@ -177,7 +180,6 @@ const ReportWrapper = ({
       onDragEnter={(e) => onDragEnter(e, widget.instanceId)}
       onDragEnd={onDragEnd}
       onDragOver={(e) => e.preventDefault()}
-      // ✨ ADDED: resize-y, overflow-hidden, and removed heavy transitions that lag resizing
       className={`flex flex-col bg-white border-zinc-200 shadow-sm transition-colors duration-200 ease-in-out resize-y overflow-hidden ${widget.isExpanded ? 'col-span-1 md:col-span-2 lg:col-span-3 row-span-2 z-10 min-h-[600px]' : `${reportDef.defaultSpan} min-h-[350px]`} ${isDragging ? 'opacity-40 border-indigo-400 border-dashed' : 'opacity-100 hover:shadow-md'}`}
     >
       <CardHeader className="flex flex-row items-center justify-between p-2 sm:p-3 border-b border-zinc-100 bg-zinc-50/80 cursor-grab active:cursor-grabbing group">
@@ -204,7 +206,6 @@ const ReportWrapper = ({
         </div>
       </CardHeader>
       
-      {/* Container adapts automatically to the new height when the user drags the resize handle */}
       <CardContent className="p-2 sm:p-4 flex-1 min-h-[250px] flex flex-col bg-zinc-50/10 relative overflow-hidden">
         {widget.typeId === "sales_summary" && <SalesSummaryWidget />}
         {widget.typeId === "custom_orders" && <CustomOrdersWidget />}
@@ -213,7 +214,6 @@ const ReportWrapper = ({
         {widget.typeId === "daily_cashbook" && <DailyCashbookWidget />}
         {widget.typeId === "voucher_stock" && <VouchersStockWidget />}
         
-        {/* Voucher Suite */}
         {widget.typeId === "v_sales_booked" && <VoucherSalesBookedWidget />}
         {widget.typeId === "v_under_printing" && <VoucherUnderPrintingWidget />}
         {widget.typeId === "v_payment_pending" && <VoucherPaymentPendingWidget />}
@@ -225,7 +225,6 @@ const ReportWrapper = ({
         {widget.typeId === "v_in_stock" && <VoucherInStockWidget />}
         {widget.typeId === "v_payment_received" && <VoucherPaymentReceivedWidget />}
 
-        {/* Inventory Suite */}
         {widget.typeId === "inv_in_stock" && <InvInStockWidget />}
         {widget.typeId === "inv_dead_stock" && <InvDeadStockWidget />}
         {widget.typeId === "inv_fast_moving" && <InvFastMovingWidget />}
@@ -241,7 +240,6 @@ const ReportWrapper = ({
         {widget.typeId === "inv_packaging_stock" && <InvPackagingStockWidget />}
         {widget.typeId === "inv_packaging_consumption" && <InvPackagingConsumptionWidget />}
 
-        {/* Production Suite */}
         {widget.typeId === "prod_job_bags" && <ProdActiveJobBagsWidget />}
         {widget.typeId === "prod_karigar_perf" && <ProdKarigarPerformanceWidget />}
         {widget.typeId === "prod_gold_consume" && <ProdGoldConsumptionWidget />}
@@ -249,7 +247,6 @@ const ReportWrapper = ({
         {widget.typeId === "prod_transfer_out" && <ProdStockTransfersOutWidget />}
         {widget.typeId === "prod_transfer_in" && <ProdStockTransfersInWidget />}
 
-        {/* CRM Suite */}
         {widget.typeId === "crm_customer_base" && <CrmCustomerBaseWidget />}
         {widget.typeId === "crm_walkin_customers" && <CrmWalkinCustomersWidget />}
         {widget.typeId === "crm_upcoming_events" && <CrmUpcomingEventsWidget />}
@@ -259,7 +256,6 @@ const ReportWrapper = ({
         {widget.typeId === "crm_gifting_history" && <CrmGiftingHistoryWidget />}
         {widget.typeId === "crm_wa_sequences" && <CrmWhatsAppSequencesWidget />}
 
-        {/* Operational / Misc Suite */}
         {widget.typeId === "ops_exchanges" && <OpsExchangesWidget />}
         {widget.typeId === "ops_delivery_agents" && <OpsDeliveryAgentsWidget />}
         {widget.typeId === "ops_estimates" && <OpsEstimatesWidget />}
@@ -274,10 +270,13 @@ const ReportWrapper = ({
 // 3. MAIN DASHBOARD PAGE
 // ============================================================================
 export default function ModularReportsDashboard() {
-  const [activeWidgets, setActiveWidgets] = useState<WidgetConfig[]>([
-    { instanceId: `inst-${Date.now()}-1`, typeId: "sales_summary", isExpanded: false },
-    { instanceId: `inst-${Date.now()}-2`, typeId: "custom_orders", isExpanded: false }
-  ]);
+  const router = useRouter(); // ✨ Added Router for Library Link
+  
+  // ✨ CHANGED: Start completely blank by default to show instructions!
+  const [activeWidgets, setActiveWidgets] = useState<WidgetConfig[]>([]);
+
+  // ✨ NEW: Zoom State
+  const [zoomLevel, setZoomLevel] = useState(1);
 
   // Drag and Drop State
   const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
@@ -328,12 +327,10 @@ export default function ModularReportsDashboard() {
 
   const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => {
     setDraggedWidgetId(null);
-    
     const target = e.currentTarget;
     target.classList.remove('opacity-40');
   };
 
-  // ✨ ADDED: side & align parameters to enforce layout placement
   const ModuleMenuContent = ({ side = "bottom", align = "end", sideOffset = 8 }: any) => (
     <DropdownMenuContent 
       side={side} 
@@ -375,30 +372,78 @@ export default function ModularReportsDashboard() {
           </nav>
         </div>
 
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button size="sm" className="h-8 sm:h-9 bg-zinc-900 text-white hover:bg-zinc-800 rounded-full font-semibold px-4 shadow-md transition-transform active:scale-95 hidden sm:flex">
-              <Plus className="w-4 h-4 mr-1.5" /> Add Module
+        <div className="flex items-center gap-2 sm:gap-3">
+          
+          {/* ✨ ZOOM CONTROLS */}
+          <div className="hidden md:flex items-center bg-zinc-100 rounded-full p-1 border border-zinc-200">
+            <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full text-zinc-500 hover:text-zinc-900" onClick={() => setZoomLevel(p => Math.max(p - 0.1, 0.5))}>
+              <ZoomOut className="w-3.5 h-3.5" />
             </Button>
-          </DropdownMenuTrigger>
-          {/* Top navigation naturally opens downward */}
-          <ModuleMenuContent side="bottom" align="end" />
-        </DropdownMenu>
+            <span className="text-[10px] font-bold font-mono px-2 w-11 text-center select-none text-zinc-600">
+              {Math.round(zoomLevel * 100)}%
+            </span>
+            <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full text-zinc-500 hover:text-zinc-900" onClick={() => setZoomLevel(p => Math.min(p + 0.1, 1.5))}>
+              <ZoomIn className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+
+          {/* ✨ REPORT LIBRARY LINK */}
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => router.push('/library')} 
+            className="h-8 sm:h-9 text-zinc-700 border-zinc-300 font-semibold px-4 hidden sm:flex shadow-sm rounded-full"
+          >
+            <Database className="w-4 h-4 mr-1.5 text-indigo-600" /> Report Library
+          </Button>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button size="sm" className="h-8 sm:h-9 bg-zinc-900 text-white hover:bg-zinc-800 rounded-full font-semibold px-4 shadow-md transition-transform active:scale-95 hidden sm:flex">
+                <Plus className="w-4 h-4 mr-1.5" /> Add Module
+              </Button>
+            </DropdownMenuTrigger>
+            <ModuleMenuContent side="bottom" align="end" />
+          </DropdownMenu>
+        </div>
       </header>
 
-      <main className="p-3 sm:p-6 md:p-8 max-w-[2000px] w-full mx-auto animate-in fade-in duration-500">
+      {/* ✨ APPLIED CSS ZOOM FOR SEAMLESS SCALING */}
+      <main 
+        className="p-3 sm:p-6 md:p-8 w-full max-w-[2000px] mx-auto animate-in fade-in duration-500 origin-top transition-transform ease-out" 
+        style={{ zoom: zoomLevel }}
+      >
         {activeWidgets.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-20 px-4 text-center">
+          <div className="flex flex-col items-center justify-center py-10 sm:py-20 px-4 text-center">
             <div className="w-16 h-16 bg-zinc-100 rounded-full flex items-center justify-center mb-4 border border-zinc-200 shadow-inner">
               <LayoutDashboard className="w-6 h-6 text-zinc-400" />
             </div>
-            <h2 className="text-lg font-black text-zinc-900 tracking-tight">Your workspace is empty</h2>
-            <p className="text-xs font-medium text-zinc-500 mt-1.5 max-w-sm mb-6">Build your custom intelligence dashboard by adding modules from the registry.</p>
+            <h2 className="text-lg font-black text-zinc-900 tracking-tight mb-6">Build Your Workspace</h2>
+            
+            {/* ✨ UPDATED INSTRUCTIONS */}
+            <div className="flex flex-col text-left gap-4 max-w-sm w-full bg-white p-6 rounded-2xl border border-zinc-200 shadow-sm mb-8">
+              <div className="flex items-start gap-3">
+                <div className="w-6 h-6 rounded-full bg-indigo-50 text-indigo-600 font-bold text-xs flex items-center justify-center shrink-0">1</div>
+                <p className="text-sm font-medium text-zinc-700 leading-tight">Click <b>+ Add Module</b> to load realtime data widgets from the registry.</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-6 h-6 rounded-full bg-indigo-50 text-indigo-600 font-bold text-xs flex items-center justify-center shrink-0">2</div>
+                <p className="text-sm font-medium text-zinc-700 leading-tight"><b>Drag & Drop</b> headers to rearrange the layout.</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-6 h-6 rounded-full bg-indigo-50 text-indigo-600 font-bold text-xs flex items-center justify-center shrink-0">3</div>
+                <p className="text-sm font-medium text-zinc-700 leading-tight">Drag the <b>Bottom Right Corner</b> of any widget to resize it vertically.</p>
+              </div>
+              <div className="flex items-start gap-3 pt-3 border-t border-zinc-100">
+                <Database className="w-5 h-5 text-zinc-400 shrink-0 mt-0.5" />
+                <p className="text-sm font-medium text-zinc-700 leading-tight">Looking for historical snapshots? Access the <a href="/library" className="text-indigo-600 font-bold hover:underline">Report Library</a>.</p>
+              </div>
+            </div>
             
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button className="bg-indigo-600 hover:bg-indigo-700 text-white rounded-full font-bold shadow-md px-6 transition-transform active:scale-95">
-                  <Plus className="w-4 h-4 mr-2" /> Add Your First Report
+                  <Plus className="w-4 h-4 mr-2" /> Select First Module
                 </Button>
               </DropdownMenuTrigger>
               <ModuleMenuContent side="bottom" align="center" />
@@ -422,15 +467,16 @@ export default function ModularReportsDashboard() {
         )}
       </main>
 
-      {/* MOBILE FLOATING ACTION BUTTON */}
-      <div className="sm:hidden fixed bottom-20 right-4 z-50">
+      <div className="sm:hidden fixed bottom-20 right-4 z-50 flex flex-col gap-3">
+        <Button onClick={() => router.push('/library')} size="icon" className="h-12 w-12 rounded-full bg-white text-zinc-900 shadow-lg border border-zinc-200">
+          <Database className="w-5 h-5" />
+        </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button size="icon" className="h-14 w-14 rounded-full bg-zinc-900 text-white shadow-[0_8px_30px_rgb(0,0,0,0.2)] border-2 border-white transition-transform active:scale-90">
               <Plus className="w-6 h-6" />
             </Button>
           </DropdownMenuTrigger>
-          {/* ✨ Mobile button forces pop-up strictly upwards */}
           <ModuleMenuContent side="top" align="end" sideOffset={16} />
         </DropdownMenu>
       </div>
