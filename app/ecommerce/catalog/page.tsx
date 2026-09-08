@@ -20,7 +20,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from "@/components/ui/sheet";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 
 export default function EcommerceCatalogPage() {
@@ -48,6 +48,8 @@ export default function EcommerceCatalogPage() {
   // Bulk Actions State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
+  const [isBulkMoveModalOpen, setIsBulkMoveModalOpen] = useState(false);
+  const [bulkMoveTargetCategory, setBulkMoveTargetCategory] = useState("");
 
   // Modal / Sheet States
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
@@ -126,7 +128,7 @@ export default function EcommerceCatalogPage() {
   };
 
   // ==========================================================================
-  // MANUAL IMAGE & VIDEO UPLOADS (WITH WEBP CONVERSION)
+  // MANUAL IMAGE & VIDEO UPLOADS
   // ==========================================================================
 
   const handleProductImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -234,7 +236,7 @@ export default function EcommerceCatalogPage() {
   };
 
   // ==========================================================================
-  // BULK MIGRATION & WEBP CONVERTER ENGINE
+  // BULK MIGRATION ENGINE
   // ==========================================================================
 
   const parseCSV = (str: string) => {
@@ -335,7 +337,6 @@ export default function EcommerceCatalogPage() {
     if (csvInputRef.current) csvInputRef.current.value = "";
   };
 
-  // Preview Modal Handlers
   const removePreviewItem = (indexToRemove: number) => {
     const absoluteIndex = ((previewPage - 1) * previewPageSize) + indexToRemove;
     const newData = [...parsedCsvData];
@@ -662,6 +663,26 @@ export default function EcommerceCatalogPage() {
     }
   };
 
+  const handleBulkMove = async () => {
+    if (!bulkMoveTargetCategory || selectedIds.size === 0) return;
+    setIsBulkProcessing(true);
+    try {
+      const idsArray = Array.from(selectedIds);
+      const { error } = await supabase.from("ecommerce_products").update({ category_id: bulkMoveTargetCategory }).in("id", idsArray);
+      if (error) throw error;
+      
+      toast({ title: "Products Moved", description: `Successfully moved ${idsArray.length} items.` });
+      setSelectedIds(new Set());
+      setIsBulkMoveModalOpen(false);
+      setBulkMoveTargetCategory("");
+      fetchProducts(); // Refresh to reflect new structure
+    } catch (err: any) {
+      toast({ title: "Move Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsBulkProcessing(false);
+    }
+  };
+
   // ==========================================================================
   // RENDER HELPERS
   // ==========================================================================
@@ -683,18 +704,37 @@ export default function EcommerceCatalogPage() {
   const paginatedIds = paginatedProducts.map((p) => p.id);
   const isCurrentPageAllSelected = paginatedIds.length > 0 && paginatedIds.every((id) => selectedIds.has(id));
 
+  // Renders the side-bar category tree
   const renderCategoryTree = (parentId: string | null = null, depth = 0) => {
     const children = categories.filter((c) => c.parent_id === parentId);
     return children.map((cat) => (
       <React.Fragment key={cat.id}>
-        <div className="flex items-center gap-1" style={{ paddingLeft: `${depth * 16}px` }}>
+        <div className="flex items-center gap-1 group" style={{ paddingLeft: `${depth * 16}px` }}>
           <button
             onClick={() => setSelectedCategoryId(cat.id)}
-            className={`flex-1 flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-all tracking-tight ${selectedCategoryId === cat.id ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50"}`}
+            className={`flex-1 flex items-center justify-between px-3 py-1.5 rounded-md text-sm font-medium transition-all tracking-tight ${selectedCategoryId === cat.id ? "bg-zinc-100 text-zinc-900" : "text-zinc-500 hover:text-zinc-900 hover:bg-zinc-50"}`}
           >
-            {depth > 0 && <CornerDownRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />}
-            <span className="truncate">{cat.name}</span>
-            {!cat.is_active && <XCircle className="w-3 h-3 text-zinc-400 shrink-0 ml-1" />}
+            <div className="flex items-center gap-2 truncate">
+              {depth > 0 && <CornerDownRight className="w-3.5 h-3.5 text-zinc-300 shrink-0" />}
+              <span className="truncate">{cat.name}</span>
+              {!cat.is_active && <XCircle className="w-3 h-3 text-zinc-400 shrink-0 ml-1" />}
+            </div>
+          </button>
+          
+          {/* Quick Edit / Move Category Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setCategoryForm({
+                id: cat.id, name: cat.name, is_active: cat.is_active, 
+                parent_id: cat.parent_id || "none", image_url: cat.image_url || ""
+              });
+              setIsCategoryModalOpen(true);
+            }}
+            className="p-1.5 text-zinc-400 hover:text-zinc-900 hover:bg-zinc-200 rounded-md transition-colors opacity-0 group-hover:opacity-100"
+            title="Edit / Move Category"
+          >
+            <Edit2 className="w-3.5 h-3.5" />
           </button>
         </div>
         {renderCategoryTree(cat.id, depth + 1)}
@@ -702,6 +742,7 @@ export default function EcommerceCatalogPage() {
     ));
   };
 
+  // Renders the select dropdown options for parent/category selections
   const renderCategoryOptions = (parentId: string | null = null, depth = 0) => {
     const children = categories.filter((c) => c.parent_id === parentId);
     return children.map((cat) => (
@@ -792,12 +833,15 @@ export default function EcommerceCatalogPage() {
 
           {/* BULK ACTIONS BAR */}
           {selectedIds.size > 0 && (
-            <div className="flex items-center justify-between bg-indigo-50 border border-indigo-200 p-3 rounded-xl animate-in slide-in-from-bottom-2 duration-200 shadow-sm">
+            <div className="flex items-center justify-between bg-indigo-50 border border-indigo-200 p-3 rounded-xl animate-in slide-in-from-bottom-2 duration-200 shadow-sm flex-wrap gap-3">
               <div className="flex items-center gap-2 text-indigo-700">
                 <span className="flex h-5 w-5 bg-white rounded items-center justify-center text-xs font-bold shadow-sm">{selectedIds.size}</span>
                 <span className="text-sm font-semibold tracking-tight">Products Selected</span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
+                <Button disabled={isBulkProcessing} size="sm" variant="outline" className="h-8 bg-white border-blue-200 text-blue-700 hover:bg-blue-100" onClick={() => setIsBulkMoveModalOpen(true)}>
+                  <FolderTree className="w-3.5 h-3.5 mr-1.5"/> Move
+                </Button>
                 <Button disabled={isBulkProcessing} size="sm" variant="outline" className="h-8 bg-white border-indigo-200 text-indigo-700 hover:bg-indigo-100" onClick={() => handleBulkStatusChange(true)}>
                   <Globe className="w-3.5 h-3.5 mr-1.5"/> Make Live
                 </Button>
@@ -924,6 +968,39 @@ export default function EcommerceCatalogPage() {
           </Card>
         </div>
       </main>
+
+      {/* ========================================================================== */}
+      {/* BULK MOVE MODAL */}
+      {/* ========================================================================== */}
+      <Dialog open={isBulkMoveModalOpen} onOpenChange={setIsBulkMoveModalOpen}>
+        <DialogContent className="sm:max-w-[425px] border-zinc-200 shadow-xl rounded-2xl overflow-hidden bg-white p-0">
+          <DialogHeader className="p-6 border-b border-zinc-100 bg-white">
+            <DialogTitle className="text-lg font-semibold tracking-tight text-zinc-900 flex items-center gap-2">
+              <FolderTree className="w-5 h-5 text-indigo-600" /> Move {selectedIds.size} Products
+            </DialogTitle>
+            <DialogDescription className="text-sm font-medium text-zinc-500 mt-1">
+              Select the destination category to transfer the selected products into.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="p-6 bg-zinc-50/50">
+            <Label className="text-xs font-semibold tracking-tight text-zinc-700 block mb-2">Target Category</Label>
+            <select 
+              className="w-full h-10 px-3 border border-zinc-200 rounded-md text-sm font-medium bg-white focus:ring-1 focus:ring-indigo-600 outline-none" 
+              value={bulkMoveTargetCategory} 
+              onChange={(e) => setBulkMoveTargetCategory(e.target.value)}
+            >
+              <option value="" disabled>Select Target Category...</option>
+              {renderCategoryOptions(null, 0)}
+            </select>
+          </div>
+          <DialogFooter className="p-4 bg-white border-t border-zinc-100 flex items-center justify-between">
+            <Button variant="ghost" onClick={() => setIsBulkMoveModalOpen(false)} className="rounded-lg h-9 font-medium text-zinc-500">Cancel</Button>
+            <Button onClick={handleBulkMove} disabled={!bulkMoveTargetCategory || isBulkProcessing} className="rounded-lg h-9 bg-indigo-600 hover:bg-indigo-700 text-white font-medium shadow-sm px-6">
+              {isBulkProcessing && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Move Items
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ========================================================================== */}
       {/* BULK MIGRATION PREVIEW WIZARD */}
@@ -1082,7 +1159,7 @@ export default function EcommerceCatalogPage() {
         <DialogContent className="sm:max-w-[425px] p-0 border border-zinc-200 shadow-xl rounded-2xl overflow-hidden bg-white">
           <DialogHeader className="p-6 border-b border-zinc-100 bg-white">
             <DialogTitle className="text-lg font-semibold tracking-tight text-zinc-900 flex items-center gap-2">
-              <FolderTree className="w-4 h-4 text-zinc-400" /> {categoryForm.id ? "Edit Category" : "Create Category"}
+              <FolderTree className="w-4 h-4 text-zinc-400" /> {categoryForm.id ? "Edit & Nest Category" : "Create Category"}
             </DialogTitle>
           </DialogHeader>
           <div className="p-6 space-y-5 bg-zinc-50/50">
@@ -1104,7 +1181,7 @@ export default function EcommerceCatalogPage() {
               <Input placeholder="e.g. Diamond Rings" className="h-9 bg-white border-zinc-200 text-sm font-medium focus-visible:ring-zinc-900" value={categoryForm.name} onChange={(e) => setCategoryForm({ ...categoryForm, name: e.target.value })} />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs font-semibold tracking-tight text-zinc-700">Parent Category</Label>
+              <Label className="text-xs font-semibold tracking-tight text-zinc-700">Parent Category (Nesting)</Label>
               <select className="w-full h-9 px-3 border border-zinc-200 rounded-md text-sm font-medium bg-white focus:ring-1 focus:ring-zinc-900 outline-none" value={categoryForm.parent_id} onChange={(e) => setCategoryForm({ ...categoryForm, parent_id: e.target.value })}>
                 <option value="none">-- Top Level (No Parent) --</option>
                 {renderCategoryOptions(null, 0).filter((node: any) => node.key !== categoryForm.id)}
@@ -1121,7 +1198,7 @@ export default function EcommerceCatalogPage() {
           <DialogFooter className="p-4 bg-white border-t border-zinc-100 flex items-center justify-between">
             <Button variant="ghost" onClick={() => setIsCategoryModalOpen(false)} className="rounded-lg h-9 font-medium text-zinc-500">Cancel</Button>
             <Button onClick={handleSaveCategory} disabled={isSubmitting || isUploading} className="rounded-lg h-9 bg-zinc-900 hover:bg-zinc-800 text-white font-medium shadow-sm px-6">
-              {isSubmitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Save
+              {isSubmitting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />} Save Category
             </Button>
           </DialogFooter>
         </DialogContent>
