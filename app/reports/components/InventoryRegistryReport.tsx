@@ -67,13 +67,14 @@ export function InventoryRegistryReport() {
   const [filterMetal, setFilterMetal] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
   const [filterStone, setFilterStone] = useState('all') 
+  const [filterSpItems, setFilterSpItems] = useState('exclude') // ✨ Added SP Items State
   const [priceRange, setPriceRange] = useState<number[]>([0, 1000000])
   const [maxPrice, setMaxPrice] = useState(1000000)
 
   // Actual "Applied" States
   const [activeWhs, setActiveWhs] = useState<string[]>(['ALL'])
   const [activeFilters, setActiveFilters] = useState({
-    search: '', status: 'all', metal: 'all', category: 'all', stone: 'all', priceRange: [0, 1000000]
+    search: '', status: 'all', metal: 'all', category: 'all', stone: 'all', spItems: 'exclude', priceRange: [0, 1000000]
   })
 
   const [showLocDropdown, setShowLocDropdown] = useState(false)
@@ -131,16 +132,16 @@ export function InventoryRegistryReport() {
 
   const handleApplyFilters = () => {
     setActiveWhs(canFullManage ? selectedWhs : [selectedLocation]);
-    setActiveFilters({ search, status: filterStatus, metal: filterMetal, category: filterCategory, stone: filterStone, priceRange });
+    setActiveFilters({ search, status: filterStatus, metal: filterMetal, category: filterCategory, stone: filterStone, spItems: filterSpItems, priceRange });
   }
 
   const handleResetFilters = () => {
-    setSearch(''); setFilterStatus('all'); setFilterCategory('all'); setFilterMetal('all'); setFilterStone('all'); setPriceRange([0, maxPrice]);
+    setSearch(''); setFilterStatus('all'); setFilterCategory('all'); setFilterMetal('all'); setFilterStone('all'); setFilterSpItems('exclude'); setPriceRange([0, maxPrice]);
     const resetLoc = (canFullManage && selectedLocation === 'ALL') ? ['ALL'] : [selectedLocation];
     setSelectedWhs(resetLoc);
     
     setActiveWhs(resetLoc);
-    setActiveFilters({ search: '', status: 'all', metal: 'all', category: 'all', stone: 'all', priceRange: [0, maxPrice] });
+    setActiveFilters({ search: '', status: 'all', metal: 'all', category: 'all', stone: 'all', spItems: 'exclude', priceRange: [0, maxPrice] });
   }
 
   const fetchData = async () => {
@@ -154,8 +155,9 @@ export function InventoryRegistryReport() {
       const limit = 1000;
 
       while (isFetching) {
+        // ✨ Added is_sp_item to the query here
         let query = supabase.from('inventory_items')
-          .select(`id, barcode, item_category, metal_type, purity_karat, gross_weight_g, net_weight_g, total_stone_weight_cts, cost_total, mrp, status, created_at, warehouse_id, diamond_shape, diamond_color, diamond_clarity, solitaire_weight_cts, solitaire_pieces, melee_weight_cts, melee_pieces, warehouses(name)`)
+          .select(`id, barcode, item_category, metal_type, purity_karat, gross_weight_g, net_weight_g, total_stone_weight_cts, cost_total, mrp, status, created_at, warehouse_id, diamond_shape, diamond_color, diamond_clarity, solitaire_weight_cts, solitaire_pieces, melee_weight_cts, melee_pieces, is_sp_item, warehouses(name)`)
           .eq('company_id', appUser.company_id)
           .order('created_at', { ascending: false })
           .order('id', { ascending: true }) 
@@ -210,6 +212,11 @@ export function InventoryRegistryReport() {
       const met = item.metal_type || 'Unknown Metal';
       const bar = item.barcode || '';
       const stat = item.status || 'unknown';
+      const isSp = !!item.is_sp_item;
+
+      // ✨ Added SP Item filter logic
+      if (activeFilters.spItems === 'exclude' && isSp) return false;
+      if (activeFilters.spItems === 'only' && !isSp) return false;
 
       if (activeFilters.search && !bar.toLowerCase().includes(activeFilters.search.toLowerCase()) && !cat.toLowerCase().includes(activeFilters.search.toLowerCase())) return false;
       if (activeFilters.status !== 'all' && stat !== activeFilters.status) return false;
@@ -268,6 +275,11 @@ export function InventoryRegistryReport() {
       const cat = normalizeCategory(item.item_category); 
       const met = item.metal_type || 'Unknown Metal';
       const bar = item.barcode || 'UNKNOWN';
+      const isSp = !!item.is_sp_item;
+
+      // Honor the SP Item filter in the Matrix engine too
+      if (activeFilters.spItems === 'exclude' && isSp) return;
+      if (activeFilters.spItems === 'only' && !isSp) return;
 
       if (activeFilters.search && !bar.toLowerCase().includes(activeFilters.search.toLowerCase()) && !cat.toLowerCase().includes(activeFilters.search.toLowerCase())) return;
       if (activeFilters.metal !== 'all' && met !== activeFilters.metal) return;
@@ -384,7 +396,7 @@ export function InventoryRegistryReport() {
       'Barcode', 'Category', 'Metal', 'Purity', 
       'Gross Wt (g)', 'Net Wt (g)', 'Total Stone Wt (cts)',
       'Diamond Specs', 'Solitaire (Cts / Pcs)', 'Melee (Cts / Pcs)',
-      'Retail Value (₹)', 'Status', 'Location', 'Date Added'
+      'Retail Value (₹)', 'Status', 'Location', 'Date Added', 'Is SP Item'
     ];
     
     csvRows.push(headers.join(','));
@@ -441,7 +453,8 @@ export function InventoryRegistryReport() {
           `"${mrp}"`,
           `"${(d.status || 'unknown').replace('_', ' ').toUpperCase()}"`,
           `"${getWhName(d.warehouse_id)}"`,
-          `"${d.created_at ? format(new Date(d.created_at), 'dd-MMM-yyyy') : '--'}"`
+          `"${d.created_at ? format(new Date(d.created_at), 'dd-MMM-yyyy') : '--'}"`,
+          `"${d.is_sp_item ? 'Yes' : 'No'}"`
         ];
         csvRows.push(row.join(','));
       });
@@ -454,7 +467,7 @@ export function InventoryRegistryReport() {
         `"${catStone.toFixed(2)}"`, 
         `""`, `""`, `""`, 
         `"${catValue.toFixed(2)}"`, 
-        `""`, `""`, `""`  
+        `""`, `""`, `""`, `""`  
       ];
       
       csvRows.push(catSummaryRow.join(','));
@@ -469,7 +482,7 @@ export function InventoryRegistryReport() {
       `"${grandTotalStone.toFixed(2)}"`,
       `""`, `""`, `""`, 
       `"${grandTotalValue.toFixed(2)}"`,
-      `""`, `""`, `""`
+      `""`, `""`, `""`, `""`
     ];
     csvRows.push(grandTotalRow.join(','));
 
@@ -630,29 +643,25 @@ export function InventoryRegistryReport() {
               <Filter className="h-3.5 w-3.5 mr-1.5" /> Filters
             </Button>
 
-            
-
             <div className="flex-1" />
 
             <div className="relative inline-block pt-2">
-  {/* Floating "V2" New Feature Badge */}
-  <span className="absolute -top-0.5 right-3 z-10 bg-indigo-600 text-white text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full shadow-sm pointer-events-none animate-bounce">
-    V2 New
-  </span>
-
-  <Button 
-    variant={showAnalytics ? "default" : "outline"} 
-    className={`h-9 px-4 text-xs font-bold rounded-lg hidden sm:flex transition-all items-center gap-1.5 ${
-      showAnalytics 
-        ? 'bg-zinc-900 text-white hover:bg-zinc-800 border-zinc-900 shadow-md' 
-        : 'border-indigo-200 text-indigo-600 bg-indigo-50/30 hover:bg-indigo-50 shadow-sm'
-    }`}
-    onClick={() => setShowAnalytics(!showAnalytics)}
-  >
-    <Sparkles className="h-3.5 w-3.5 text-indigo-500 animate-pulse" /> 
-    Matrix Analytics
-  </Button>
-</div>
+              <span className="absolute -top-0.5 right-3 z-10 bg-indigo-600 text-white text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full shadow-sm pointer-events-none animate-bounce">
+                V2 New
+              </span>
+              <Button 
+                variant={showAnalytics ? "default" : "outline"} 
+                className={`h-9 px-4 text-xs font-bold rounded-lg hidden sm:flex transition-all items-center gap-1.5 ${
+                  showAnalytics 
+                    ? 'bg-zinc-900 text-white hover:bg-zinc-800 border-zinc-900 shadow-md' 
+                    : 'border-indigo-200 text-indigo-600 bg-indigo-50/30 hover:bg-indigo-50 shadow-sm'
+                }`}
+                onClick={() => setShowAnalytics(!showAnalytics)}
+              >
+                <Sparkles className="h-3.5 w-3.5 text-indigo-500 animate-pulse" /> 
+                Matrix Analytics
+              </Button>
+            </div>
 
             <Button variant="outline" size="icon" className="h-9 w-9 rounded-lg border-zinc-200 shrink-0 hidden sm:flex text-zinc-600 hover:bg-zinc-100" onClick={fetchData}>
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -665,7 +674,7 @@ export function InventoryRegistryReport() {
 
           {showFilters && (
             <div className="pt-4 border-t border-zinc-100 mt-1 animate-in slide-in-from-top-2 duration-200">
-              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4">
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-4">
                 
                 {(!canFullManage || isLocked) ? (
                    <Badge className="h-9 justify-center bg-zinc-100 text-zinc-600 border border-zinc-200 shadow-none font-bold text-xs px-4">
@@ -762,6 +771,19 @@ export function InventoryRegistryReport() {
                   </SelectContent>
                 </Select>
 
+                {/* ✨ Added SP Items Select Filter */}
+                <Select value={filterSpItems} onValueChange={setFilterSpItems}>
+                  <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
+                    <AlertTriangle className={`w-3 h-3 mr-1.5 ${filterSpItems !== 'exclude' ? 'text-rose-500' : 'text-zinc-500'}`} />
+                    <SelectValue placeholder="SP Items" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl shadow-xl border-zinc-200">
+                    <SelectItem value="exclude" className="text-xs font-medium">Hide SP Items</SelectItem>
+                    <SelectItem value="include" className="text-xs font-medium">Include SP Items</SelectItem>
+                    <SelectItem value="only" className="text-xs font-bold text-rose-600">Only SP Items</SelectItem>
+                  </SelectContent>
+                </Select>
+
                 <div className="col-span-2 md:col-span-3 xl:col-span-2 bg-zinc-50/50 p-2 rounded-lg border border-zinc-200">
                   <div className="flex justify-between items-center mb-1.5">
                     <Label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
@@ -782,11 +804,11 @@ export function InventoryRegistryReport() {
                   Clear Settings
                 </Button>
                 <Button 
-              onClick={handleApplyFilters}
-              className="h-9 px-5 text-xs font-bold rounded-lg bg-black text-white hover:bg-zinc-800 shadow-sm shadow-zinc-200"
-            >
-               <Check className="h-3.5 w-3.5 mr-1.5" /> Apply 
-            </Button>
+                  onClick={handleApplyFilters}
+                  className="h-9 px-5 text-xs font-bold rounded-lg bg-black text-white hover:bg-zinc-800 shadow-sm shadow-zinc-200"
+                >
+                   <Check className="h-3.5 w-3.5 mr-1.5" /> Apply 
+                </Button>
               </div>
             </div>
           )}
@@ -918,21 +940,20 @@ export function InventoryRegistryReport() {
                       {analytics.deadStockWarnings.map((w, i) => (
                         <div key={i} className="p-4 hover:bg-zinc-50/50 transition-colors">
                           <div className="flex justify-between items-start mb-3">
-  <div>
-    {/* Changed <p> to <div className="text-xs font-bold text-zinc-900 flex items-center gap-2"> */}
-    <div className="text-xs font-bold text-zinc-900 flex items-center gap-2">
-      {w.category} 
-      <Badge variant="secondary" className="text-[9px] h-4 bg-zinc-100 text-zinc-600 border-none">{w.bracket}</Badge>
-    </div>
-    <p className="text-[10px] font-medium text-zinc-500 mt-1 flex items-center gap-1.5">
-      <Store className="w-3 h-3" /> {w.location}
-    </p>
-  </div>
-  <div className="text-right">
-    <p className="text-[9px] uppercase font-bold text-zinc-400 tracking-widest mb-0.5">Locked Value</p>
-    <p className="text-sm font-black text-rose-600">₹{w.lockedValue.toLocaleString()}</p>
-  </div>
-</div>
+                            <div>
+                              <div className="text-xs font-bold text-zinc-900 flex items-center gap-2">
+                                {w.category} 
+                                <Badge variant="secondary" className="text-[9px] h-4 bg-zinc-100 text-zinc-600 border-none">{w.bracket}</Badge>
+                              </div>
+                              <p className="text-[10px] font-medium text-zinc-500 mt-1 flex items-center gap-1.5">
+                                <Store className="w-3 h-3" /> {w.location}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-[9px] uppercase font-bold text-zinc-400 tracking-widest mb-0.5">Locked Value</p>
+                              <p className="text-sm font-black text-rose-600">₹{w.lockedValue.toLocaleString()}</p>
+                            </div>
+                          </div>
                           
                           {/* Render the specific dead barcodes inline */}
                           {w.deadBarcodes.length > 0 && (
@@ -1088,7 +1109,11 @@ export function InventoryRegistryReport() {
                 <div key={item.id} className="p-4 hover:bg-zinc-50 transition-colors">
                   <div className="flex justify-between items-start mb-2.5">
                     <div>
-                      <div className="font-mono text-[13px] font-bold text-zinc-900 tracking-tight">{item.barcode || '--'}</div>
+                      {/* ✨ Added SP ITEM badge for Mobile View */}
+                      <div className="font-mono text-[13px] font-bold text-zinc-900 tracking-tight flex items-center">
+                        {item.barcode || '--'}
+                        {item.is_sp_item && <Badge variant="secondary" className="ml-2 text-[8px] bg-rose-100 text-rose-700 border-none px-1 py-0 h-4">SP ITEM</Badge>}
+                      </div>
                       <div className="text-[11px] font-medium text-zinc-500 mt-0.5 flex items-center gap-1.5">
                         {normalizeCategory(item.item_category)} 
                         <span className="w-1 h-1 rounded-full bg-zinc-300" />
@@ -1173,7 +1198,11 @@ export function InventoryRegistryReport() {
                   filteredData.map((item) => (
                     <TableRow key={item.id} className="hover:bg-zinc-50/50 transition-colors border-zinc-100">
                       <TableCell className="px-4 py-2.5 sm:py-3">
-                        <div className="font-mono text-xs sm:text-[13px] font-bold text-zinc-900 tracking-tight">{item.barcode || '--'}</div>
+                        {/* ✨ Added SP ITEM badge for Desktop View */}
+                        <div className="font-mono text-xs sm:text-[13px] font-bold text-zinc-900 tracking-tight flex items-center">
+                          {item.barcode || '--'}
+                          {item.is_sp_item && <Badge variant="secondary" className="ml-2 text-[8px] bg-rose-100 text-rose-700 border-none px-1 py-0 h-4">SP ITEM</Badge>}
+                        </div>
                         <div className="text-[10px] text-zinc-400 font-medium mt-0.5 uppercase tracking-widest">{normalizeCategory(item.item_category)}</div>
                       </TableCell>
                       
