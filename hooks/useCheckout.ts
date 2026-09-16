@@ -17,13 +17,12 @@ interface CheckoutConfig {
   callRpc: Function;
   customBillingDate?: string; 
   billedBy?: string; 
-  // ✨ 1. Add selectedPackaging to the interface
   selectedPackaging?: any[]; 
 }
 
 export function useCheckout({ 
   appUser, selectedLocation, cart, subtotal, mode, selectedCustomer, customOrderDetails, repairDetails, returnDetails, allBranches, callRpc, customBillingDate, billedBy, 
-  selectedPackaging = [] // ✨ 2. Destructure it here
+  selectedPackaging = [] 
 }: CheckoutConfig) {
   
   // Payment States
@@ -376,7 +375,6 @@ export function useCheckout({
       const finalDraftData = generateDraftData(isEstimate);
 
       if (isEstimate) {
-        // [Existing Estimate Logic]
         finalNo = `EST-${Date.now().toString().slice(-6)}`
         finalDraftData.invoice_number = finalNo; 
 
@@ -411,7 +409,6 @@ export function useCheckout({
         toast.success("Estimate generated and securely logged.");
       } 
       else if (mode === 'normal') {
-        // [Existing Normal Mode Logic]
         let dbPaymentMode = paymentMode;
         let dbSplitPayments: any = paymentMode === 'split' ? { ...splitPayments } : null;
 
@@ -521,7 +518,6 @@ export function useCheckout({
         toast.success("Tax Invoice Generated!")
       }
       else if (mode === 'repair') { 
-        // [Existing Repair Logic]
         finalNo = `REP-${Date.now().toString().slice(-6)}`
         const { error } = await supabase.from('repair_tickets').insert({
           created_at: effectiveDateISO,
@@ -545,7 +541,6 @@ export function useCheckout({
         toast.success("Repair Ticket Generated!")
       }
       else if (mode === 'return') { 
-        // [Existing Return Logic]
         finalNo = `RET-${Date.now().toString().slice(-6)}`
         const isExternal = returnDetails.physicalDetails?.is_external_item || false;
         
@@ -638,13 +633,11 @@ export function useCheckout({
         toast.success("Return processed & Items sent to Vault!")
       }
       else if (mode === 'challan') {
-        // [Existing Challan Logic]
         finalNo = `CHL-${Date.now().toString().slice(-6)}`
         await supabase.from('inventory_items').update({ status: 'sold_unbilled' }).in('id', cart.map(c => c.id))
         toast.success("Delivery Challan issued.")
       } 
       else if (mode === 'custom') {
-        // [Existing Custom Order Logic]
         if (!selectedCustomer) throw new Error("Please select a customer for this Custom Order.")
         finalNo = `ORD-${Date.now().toString().slice(-6)}`
 
@@ -699,28 +692,27 @@ export function useCheckout({
           finalDraftData.appliedCredit = effectiveCreditAmt;
       }
 
-      // ✨ 3. THE MAGIC FIX: Automatically deduct packaging right before returning success!
-      // This applies dynamically if we aren't doing an estimate and the array has items.
+      // ✨ PACKAGING INVENTORY FIX
+      // Required IDs are now securely passed into the RPC so DB constraints pass
       if (!isEstimate && selectedPackaging?.length > 0 && (mode === 'normal' || mode === 'custom')) {
         for (const pkg of selectedPackaging) {
-          
-          // ✨ NEW: Pass the auditing payload to the updated RPC
           const { error: packErr } = await supabase.rpc('decrement_packaging_stock', {
             p_id: pkg.id,
-            p_qty: pkg.quantity,
+            p_qty: Number(pkg.quantity),
+            p_company_id: appUser?.company_id,         // Fix: Prevents NOT NULL constraint failure
+            p_warehouse_id: selectedLocation,          // Fix: Prevents NOT NULL constraint failure
             p_transaction_type: mode === 'custom' ? 'custom_order' : 'normal_sale',
-            p_reference_id: finalNo, // The generated INV- or ORD- number
+            p_reference_id: finalNo,                   // Fix: Logs the generated INV- or ORD- directly
             p_customer_id: selectedCustomer?.id || null,
             p_user_id: finalizingUserId
           });
 
           if (packErr) {
-            console.warn("Failed to decrement packaging for:", pkg.item_name, packErr);
+            console.error("Packaging deduction failed:", packErr);
           }
         }
       }
 
-      return { success: true, invoiceNo: finalNo, draftData: finalDraftData }
       return { success: true, invoiceNo: finalNo, draftData: finalDraftData }
       
     } catch (err: any) {

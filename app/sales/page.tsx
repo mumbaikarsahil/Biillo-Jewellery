@@ -140,6 +140,10 @@ export default function AccountsMasterPage() {
   const [editForm, setEditForm] = useState<any>({})
   const [isEditing, setIsEditing] = useState(false)
 
+//revoke cancellation
+  const [invoiceToRevoke, setInvoiceToRevoke] = useState<any>(null)
+  const [isRevoking, setIsRevoking] = useState(false)
+
   // ✨ NEW: Custom Order Advance States
   const [orderToAdvance, setOrderToAdvance] = useState<any>(null)
   const [advanceAmount, setAdvanceAmount] = useState('')
@@ -443,6 +447,8 @@ export default function AccountsMasterPage() {
     }
   }
 
+
+
   const handleOpenPreview = async (item: any, type: 'invoice' | 'estimate' | 'custom' | 'repair' | 'return') => {
     setIsFetchingPreview(true)
     try {
@@ -603,6 +609,68 @@ export default function AccountsMasterPage() {
       toast.error(err.message || "Failed to void the document.");
     } finally {
       setIsCancelling(false);
+    }
+  };
+
+  const executeRevokeCancellation = async () => {
+    if (!invoiceToRevoke || !appUser) return;
+    
+    // Strict RBAC Check
+    const allowedRoles = ['owner', 'manager', 'admin'];
+    if (!allowedRoles.includes(appUser.role?.toLowerCase())) {
+      return toast.error("Access Denied: Only Managers or Owners can revoke cancellations.");
+    }
+
+    setIsRevoking(true);
+    try {
+      const isCustom = !!invoiceToRevoke.order_number;
+      const targetTable = isCustom ? 'custom_orders' : 'invoices';
+      
+      // 1. Re-activate the Document
+      const updatePayload: any = {
+        status: isCustom ? 'pending_manufacturing' : 'VALID',
+        cancellation_revoked_at: new Date().toISOString(),
+        cancellation_revoked_by: appUser.id,
+      };
+
+      const { error: invError } = await supabase.from(targetTable).update(updatePayload).eq('id', invoiceToRevoke.id);
+      if (invError) throw invError;
+
+      // 2. Re-deduct Inventory (If standard invoice)
+      if (!isCustom) {
+        const itemIds = invoiceToRevoke.invoice_items?.map((i: any) => i.item_id).filter(Boolean);
+        if (itemIds && itemIds.length > 0) {
+          await supabase.from('inventory_items').update({ status: 'sold' }).in('id', itemIds);
+        }
+      }
+
+      // 3. Re-consume Vouchers
+      if (invoiceToRevoke.voucher_code) {
+        await supabase.from('vouchers').update({ status: 'redeemed' }).eq('code', invoiceToRevoke.voucher_code);
+      }
+
+      // 4. Re-deduct Wallet/Kitty
+      const kittyReturn = Number(invoiceToRevoke.kitty_payment) || 0;
+      const walletReturn = Number(invoiceToRevoke.wallet_payment) || 0;
+      
+      if ((kittyReturn > 0 || walletReturn > 0) && invoiceToRevoke.customer_id) {
+        const { data: customerData } = await supabase.from('customers').select('store_credit_balance, pavitram_points').eq('id', invoiceToRevoke.customer_id).single();
+        if (customerData) {
+          // Re-deduct the refunded amounts
+          await supabase.from('customers').update({
+            store_credit_balance: Math.max(0, Number(customerData.store_credit_balance || 0) - kittyReturn),
+            pavitram_points: Math.max(0, Number(customerData.pavitram_points || 0) - walletReturn)
+          }).eq('id', invoiceToRevoke.customer_id);
+        }
+      }
+
+      toast.success(`Cancellation revoked. Document is active again.`);
+      setInvoiceToRevoke(null);
+      fetchAccountingData();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to revoke cancellation.");
+    } finally {
+      setIsRevoking(false);
     }
   };
 
@@ -1006,6 +1074,12 @@ export default function AccountsMasterPage() {
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem onClick={() => handleOpenEdit(inv)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => setInvoiceToCancel(inv)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Invoice</DropdownMenuItem>
+                                    <DropdownMenuItem 
+        onClick={() => setInvoiceToRevoke(inv)} // Use 'co' for custom orders
+        className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700"
+      >
+        <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
+      </DropdownMenuItem>
                                   </>
                                 )}
                               </DropdownMenuContent>
@@ -1073,6 +1147,12 @@ export default function AccountsMasterPage() {
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem onClick={() => handleOpenEdit(inv)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setInvoiceToCancel(inv)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50"><XCircle className="w-4 h-4 mr-2" /> Cancel Invoice</DropdownMenuItem>
+                                <DropdownMenuItem 
+        onClick={() => setInvoiceToRevoke(inv)} // Use 'co' for custom orders
+        className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700"
+      >
+        <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
+      </DropdownMenuItem>
                               </>
                             )}
                           </DropdownMenuContent>
@@ -1270,6 +1350,12 @@ export default function AccountsMasterPage() {
                                     <DropdownMenuItem onClick={() => handleOpenEdit(co)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => setOrderToAdvance(co)} className="cursor-pointer py-2"><IndianRupee className="w-4 h-4 mr-2 text-emerald-500" /> Log Additional Advance</DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => setInvoiceToCancel(co)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Order</DropdownMenuItem>
+                                    <DropdownMenuItem 
+        onClick={() => setInvoiceToRevoke(co)} // Use 'co' for custom orders
+        className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700"
+      >
+        <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
+      </DropdownMenuItem>
                                   </>
                                 )}
                               </DropdownMenuContent>
@@ -1363,6 +1449,12 @@ export default function AccountsMasterPage() {
                               <DropdownMenuItem onClick={() => handleOpenEdit(co)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                               <DropdownMenuItem onClick={() => setOrderToAdvance(co)} className="cursor-pointer py-2"><IndianRupee className="w-4 h-4 mr-2 text-emerald-500" /> Log Additional Advance</DropdownMenuItem>
                               <DropdownMenuItem onClick={() => setInvoiceToCancel(co)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Order</DropdownMenuItem>
+                              <DropdownMenuItem 
+        onClick={() => setInvoiceToRevoke(co)} // Use 'co' for custom orders
+        className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700"
+      >
+        <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
+      </DropdownMenuItem>
                             </>
                           )}
                         </DropdownMenuContent>
@@ -1670,6 +1762,28 @@ export default function AccountsMasterPage() {
               <Button variant="outline" onClick={() => setInvoiceToCancel(null)}>Keep Document</Button>
               <Button variant="destructive" onClick={executeCancelInvoice} disabled={isCancelling || !cancelReason.trim()}>
                 {isCancelling ? 'Voiding...' : 'Confirm Void'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* --- REVOKE CANCELLATION MODAL --- */}
+        <Dialog open={!!invoiceToRevoke} onOpenChange={(open) => !open && setInvoiceToRevoke(null)}>
+          <DialogContent className="sm:max-w-[425px]">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-emerald-600">
+                <RefreshCw className="w-5 h-5" /> Revoke Cancellation
+              </DialogTitle>
+              <DialogDescription>
+                You are about to restore <strong className="text-zinc-900">{invoiceToRevoke?.invoice_number || invoiceToRevoke?.order_number}</strong>. This will re-deduct the inventory items, consume the voucher, and deduct wallet balances if applicable.
+                <br/><br/>
+                <span className="text-xs text-red-500 font-bold uppercase tracking-widest">Warning:</span> Only proceed if you are certain. Your ID will be logged for this action.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="mt-4">
+              <Button variant="outline" onClick={() => setInvoiceToRevoke(null)}>Cancel</Button>
+              <Button onClick={executeRevokeCancellation} disabled={isRevoking} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                {isRevoking ? 'Restoring...' : 'Confirm Restore'}
               </Button>
             </DialogFooter>
           </DialogContent>
