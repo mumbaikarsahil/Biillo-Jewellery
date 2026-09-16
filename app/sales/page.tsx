@@ -1069,17 +1069,21 @@ export default function AccountsMasterPage() {
                               <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-zinc-500 hover:text-zinc-900 hover:bg-zinc-200"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                               <DropdownMenuContent align="start" className="w-48 rounded-xl shadow-lg border-zinc-200">
                                 <DropdownMenuItem onClick={() => handleOpenPreview(inv, 'invoice')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View / Print Bill</DropdownMenuItem>
+                                
                                 {!isCancelled && (
                                   <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem onClick={() => handleOpenEdit(inv)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => setInvoiceToCancel(inv)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Invoice</DropdownMenuItem>
-                                    <DropdownMenuItem 
-        onClick={() => setInvoiceToRevoke(inv)} // Use 'co' for custom orders
-        className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700"
-      >
-        <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
-      </DropdownMenuItem>
+                                  </>
+                                )}
+
+                                {isCancelled && (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onClick={() => setInvoiceToRevoke(inv)} className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700">
+                                      <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
+                                    </DropdownMenuItem>
                                   </>
                                 )}
                               </DropdownMenuContent>
@@ -1142,17 +1146,21 @@ export default function AccountsMasterPage() {
                           <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-zinc-600 border-zinc-200"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-lg border-zinc-200">
                             <DropdownMenuItem onClick={() => handleOpenPreview(inv, 'invoice')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View Bill</DropdownMenuItem>
+                            
                             {!isCancelled && (
                               <>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem onClick={() => handleOpenEdit(inv)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setInvoiceToCancel(inv)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50"><XCircle className="w-4 h-4 mr-2" /> Cancel Invoice</DropdownMenuItem>
-                                <DropdownMenuItem 
-        onClick={() => setInvoiceToRevoke(inv)} // Use 'co' for custom orders
-        className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700"
-      >
-        <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
-      </DropdownMenuItem>
+                              </>
+                            )}
+
+                            {isCancelled && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => setInvoiceToRevoke(inv)} className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700">
+                                  <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
+                                </DropdownMenuItem>
                               </>
                             )}
                           </DropdownMenuContent>
@@ -1344,18 +1352,22 @@ export default function AccountsMasterPage() {
                               <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-zinc-500 hover:text-purple-700 hover:bg-purple-100"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                               <DropdownMenuContent align="start" className="w-56 rounded-xl shadow-lg border-zinc-200">
                                 <DropdownMenuItem onClick={() => handleOpenPreview(co, 'custom')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View Bill</DropdownMenuItem>
+                                
                                 {!isCancelled && (
                                   <>
                                     <DropdownMenuSeparator />
                                     <DropdownMenuItem onClick={() => handleOpenEdit(co)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => setOrderToAdvance(co)} className="cursor-pointer py-2"><IndianRupee className="w-4 h-4 mr-2 text-emerald-500" /> Log Additional Advance</DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => setInvoiceToCancel(co)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Order</DropdownMenuItem>
-                                    <DropdownMenuItem 
-        onClick={() => setInvoiceToRevoke(co)} // Use 'co' for custom orders
-        className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700"
-      >
-        <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
-      </DropdownMenuItem>
+                                  </>
+                                )}
+
+                                {isCancelled && (
+                                  <>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onClick={() => setInvoiceToRevoke(co)} className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700">
+                                      <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
+                                    </DropdownMenuItem>
                                   </>
                                 )}
                               </DropdownMenuContent>
@@ -1443,18 +1455,22 @@ export default function AccountsMasterPage() {
                         <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-purple-600 border-zinc-200"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-56 rounded-xl shadow-lg border-zinc-200">
                           <DropdownMenuItem onClick={() => handleOpenPreview(co, 'custom')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View Bill</DropdownMenuItem>
+                          
                           {!isCancelled && (
                             <>
                               <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => handleOpenEdit(co)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                               <DropdownMenuItem onClick={() => setOrderToAdvance(co)} className="cursor-pointer py-2"><IndianRupee className="w-4 h-4 mr-2 text-emerald-500" /> Log Additional Advance</DropdownMenuItem>
                               <DropdownMenuItem onClick={() => setInvoiceToCancel(co)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Order</DropdownMenuItem>
-                              <DropdownMenuItem 
-        onClick={() => setInvoiceToRevoke(co)} // Use 'co' for custom orders
-        className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700"
-      >
-        <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
-      </DropdownMenuItem>
+                            </>
+                          )}
+
+                          {isCancelled && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => setInvoiceToRevoke(co)} className="cursor-pointer py-2 text-emerald-600 focus:bg-emerald-50 focus:text-emerald-700">
+                                <RefreshCw className="w-4 h-4 mr-2" /> Revoke Cancellation
+                              </DropdownMenuItem>
                             </>
                           )}
                         </DropdownMenuContent>

@@ -5,7 +5,7 @@ import { format } from 'date-fns'
 import { 
   Download, Filter, Loader2, Package, Search, 
   RefreshCw, FileText, Store, Layers, TrendingDown, TrendingUp, AlertTriangle, Sparkles, IndianRupee, MapPin,
-  CheckCircle2, Trophy, Target, PieChart, Gem, MessageCircle, Printer, ChevronDown, CheckSquare, Square, Check, Barcode
+  CheckCircle2, Trophy, Target, PieChart, Gem, MessageCircle, Printer, ChevronDown, CheckSquare, Square, Check, Barcode, History
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -56,6 +56,10 @@ export function InventoryRegistryReport() {
   const [showFilters, setShowFilters] = useState(false)
   const [showAnalytics, setShowAnalytics] = useState(false)
 
+  // ✨ NEW: TIME MACHINE STATES
+  const [reportMode, setReportMode] = useState<'realtime' | 'historical'>('realtime')
+  const [snapshotDate, setSnapshotDate] = useState(() => new Date().toISOString().split('T')[0])
+
   // RBAC State
   const [userRole, setUserRole] = useState<string>('sales_person')
   const canFullManage = ['owner', 'manager', 'operations_manager'].includes(userRole)
@@ -67,7 +71,7 @@ export function InventoryRegistryReport() {
   const [filterMetal, setFilterMetal] = useState('all')
   const [filterCategory, setFilterCategory] = useState('all')
   const [filterStone, setFilterStone] = useState('all') 
-  const [filterSpItems, setFilterSpItems] = useState('exclude') // ✨ Added SP Items State
+  const [filterSpItems, setFilterSpItems] = useState('exclude') 
   const [priceRange, setPriceRange] = useState<number[]>([0, 1000000])
   const [maxPrice, setMaxPrice] = useState(1000000)
 
@@ -155,13 +159,25 @@ export function InventoryRegistryReport() {
       const limit = 1000;
 
       while (isFetching) {
-        // ✨ Added is_sp_item to the query here
+        // ✨ TIME MACHINE LOGIC: We need invoice details if historical mode is active
+        let queryStr = `id, barcode, item_category, metal_type, purity_karat, gross_weight_g, net_weight_g, total_stone_weight_cts, cost_total, mrp, status, created_at, warehouse_id, diamond_shape, diamond_color, diamond_clarity, solitaire_weight_cts, solitaire_pieces, melee_weight_cts, melee_pieces, is_sp_item, warehouses(name)`;
+        
+        if (reportMode === 'historical') {
+          // Join the sale ledger to see when it was sold
+          queryStr += `, invoice_items(invoices(created_at, status))`;
+        }
+
         let query = supabase.from('inventory_items')
-          .select(`id, barcode, item_category, metal_type, purity_karat, gross_weight_g, net_weight_g, total_stone_weight_cts, cost_total, mrp, status, created_at, warehouse_id, diamond_shape, diamond_color, diamond_clarity, solitaire_weight_cts, solitaire_pieces, melee_weight_cts, melee_pieces, is_sp_item, warehouses(name)`)
+          .select(queryStr)
           .eq('company_id', appUser.company_id)
           .order('created_at', { ascending: false })
           .order('id', { ascending: true }) 
           .range(step * limit, (step + 1) * limit - 1)
+
+        // For historical, we ONLY pull items created on or before the snapshot date
+        if (reportMode === 'historical' && snapshotDate) {
+           query = query.lte('created_at', `${snapshotDate}T23:59:59.999Z`);
+        }
 
         let targetLocations = canFullManage ? activeWhs : [selectedLocation];
         if (!targetLocations.includes('ALL') && targetLocations.length > 0) {
@@ -172,7 +188,43 @@ export function InventoryRegistryReport() {
         if (error) throw error
 
         if (chunkData && chunkData.length > 0) {
-          allItems = [...allItems, ...chunkData];
+          
+          // ✨ FIX: Cast the chunkData to any[] to override Supabase's strict inference
+          let processedChunk = chunkData as any[];
+
+          // ✨ RECONSTRUCT VAULT AT EXACT DATE
+          if (reportMode === 'historical') {
+            const snapTime = new Date(`${snapshotDate}T23:59:59.999Z`).getTime();
+            
+            // ✨ FIX: Explicitly type (item: any) here
+            processedChunk = processedChunk.filter((item: any) => {
+              let soldBeforeSnap = false;
+              
+              if (item.invoice_items && item.invoice_items.length > 0) {
+                // ✨ FIX: Cast the inner array as any[]
+                for (let ii of item.invoice_items as any[]) {
+                  if (ii.invoices && ii.invoices.status !== 'CANCELLED') {
+                    const invTime = new Date(ii.invoices.created_at).getTime();
+                    // If it was sold BEFORE or exactly on the snapshot, it is out of stock in our historical view
+                    if (invTime <= snapTime) {
+                      soldBeforeSnap = true;
+                      break;
+                    }
+                  }
+                }
+              }
+              
+              // If it wasn't sold before the snapshot, it mathematically MUST have been in the vault.
+              if (!soldBeforeSnap) {
+                // Force the status so UI metrics compute it as active stock.
+                item.status = 'in_stock';
+                return true;
+              }
+              return false;
+            });
+          }
+
+          allItems = [...allItems, ...processedChunk];
           step++;
           if (chunkData.length < limit) isFetching = false; 
         } else {
@@ -199,9 +251,10 @@ export function InventoryRegistryReport() {
     }
   }
 
+  // ✨ Triggers fetch when Report Mode or Date changes
   useEffect(() => { 
     if (activeWhs.length > 0) fetchData() 
-  }, [appUser, activeWhs, canFullManage])
+  }, [appUser, activeWhs, canFullManage, reportMode, snapshotDate])
 
   const uniqueCategories = useMemo(() => Array.from(new Set(data.map((d: any) => normalizeCategory(d.item_category)))).filter(Boolean).sort(), [data]);
   const uniqueMetals = useMemo(() => Array.from(new Set(data.map((d: any) => d.metal_type || 'Unknown Metal'))).filter(Boolean).sort(), [data]);
@@ -214,7 +267,6 @@ export function InventoryRegistryReport() {
       const stat = item.status || 'unknown';
       const isSp = !!item.is_sp_item;
 
-      // ✨ Added SP Item filter logic
       if (activeFilters.spItems === 'exclude' && isSp) return false;
       if (activeFilters.spItems === 'only' && !isSp) return false;
 
@@ -260,7 +312,6 @@ export function InventoryRegistryReport() {
     return Object.entries(summary).sort((a, b) => b[1].count - a[1].count);
   }, [filteredData]);
 
-  // ✨ NEXT-GEN V2 MATRIX ANALYTICS ENGINE ✨
   const analytics = useMemo(() => {
     if (filteredData.length === 0) return null;
 
@@ -271,16 +322,17 @@ export function InventoryRegistryReport() {
     const categoryAgg: Record<string, { sold: number, stock: number }> = {};
     const bracketAgg: Record<string, { sold: number }> = {};
     
+    // Set the reference date for dead stock calculations (Historical vs Realtime)
+    const referenceTime = reportMode === 'historical' ? new Date(`${snapshotDate}T23:59:59.999Z`).getTime() : new Date().getTime();
+
     data.forEach(item => {
       const cat = normalizeCategory(item.item_category); 
       const met = item.metal_type || 'Unknown Metal';
       const bar = item.barcode || 'UNKNOWN';
       const isSp = !!item.is_sp_item;
 
-      // Honor the SP Item filter in the Matrix engine too
       if (activeFilters.spItems === 'exclude' && isSp) return;
       if (activeFilters.spItems === 'only' && !isSp) return;
-
       if (activeFilters.search && !bar.toLowerCase().includes(activeFilters.search.toLowerCase()) && !cat.toLowerCase().includes(activeFilters.search.toLowerCase())) return;
       if (activeFilters.metal !== 'all' && met !== activeFilters.metal) return;
       if (activeFilters.category !== 'all' && cat !== activeFilters.category) return;
@@ -306,7 +358,8 @@ export function InventoryRegistryReport() {
         multiDimStats[matrixKey].valStock += price;
         categoryAgg[cat].stock++;
         
-        const daysOld = (new Date().getTime() - new Date(item.created_at).getTime()) / (1000 * 3600 * 24);
+        // Exact Dead Stock logic using the target snapshot date
+        const daysOld = (referenceTime - new Date(item.created_at).getTime()) / (1000 * 3600 * 24);
         if (daysOld > 90) {
            multiDimStats[matrixKey].dead++;
            multiDimStats[matrixKey].deadBarcodes.push(bar);
@@ -326,7 +379,6 @@ export function InventoryRegistryReport() {
       if (stats.sold > stats.stock && stats.sold > 0) {
         restockWarnings.push({ ...stats, deficit: stats.sold - stats.stock });
       }
-      // Consider it a warning if there's dead stock AND it's underperforming (no recent sales in this bracket/cat)
       if (stats.dead >= 1 && stats.sold === 0) { 
         deadStockWarnings.push({ ...stats, deadCount: stats.dead, lockedValue: stats.valStock });
       }
@@ -361,7 +413,7 @@ export function InventoryRegistryReport() {
       deadStockWarnings: deadStockWarnings.sort((a, b) => b.lockedValue - a.lockedValue),
       marketIntel: { bestCategory, worstCategory: worstCategory.name !== 'N/A' ? worstCategory : null, sweetSpot }
     };
-  }, [data, activeFilters, showAnalytics, warehouses]);
+  }, [data, activeFilters, showAnalytics, warehouses, reportMode, snapshotDate]);
 
   const handleExport = () => {
     if (filteredData.length === 0) {
@@ -384,11 +436,12 @@ export function InventoryRegistryReport() {
     const stoneStr = activeFilters.stone === 'all' ? 'All Stones' : activeFilters.stone.toUpperCase();
     const searchStr = activeFilters.search ? ` | Search: "${activeFilters.search}"` : '';
     const priceStr = ` | Retail: ₹${activeFilters.priceRange[0]} to ₹${activeFilters.priceRange[1]}`;
+    const modeStr = reportMode === 'historical' ? ` | SNAPSHOT DATE: ${format(new Date(snapshotDate), 'dd MMM yyyy')}` : '';
 
     let csvRows: string[] = [
       `"ASSET REGISTRY REPORT",,,,,,,,,,,,,`, 
       `"Generated On: ${format(new Date(), 'dd-MMM-yyyy hh:mm a')}",,,,,,,,,,,,,`,
-      `"Filters Applied: Location - ${locationStr} | Status - ${statusStr} | Category - ${catStr} | Metal - ${metalStr} | Stone - ${stoneStr}${priceStr}${searchStr}",,,,,,,,,,,,,`,
+      `"Filters Applied: Location - ${locationStr} | Status - ${statusStr} | Category - ${catStr} | Metal - ${metalStr} | Stone - ${stoneStr}${priceStr}${searchStr}${modeStr}",,,,,,,,,,,,,`,
       `,,,,,,,,,,,,,`, 
     ];
 
@@ -493,7 +546,7 @@ export function InventoryRegistryReport() {
       fileNameParts.push('All_Locations');
     }
     if (activeFilters.status !== 'all') fileNameParts.push(activeFilters.status.toUpperCase());
-    if (activeFilters.category !== 'all') fileNameParts.push(activeFilters.category.replace(/[^a-zA-Z0-9]/g, '_'));
+    if (reportMode === 'historical') fileNameParts.push(`Snapshot_${snapshotDate}`);
     fileNameParts.push(format(new Date(), 'yyyyMMdd'));
 
     const dynamicFileName = fileNameParts.filter(Boolean).join('_').replace(/_+/g, '_') + '.csv';
@@ -516,12 +569,13 @@ export function InventoryRegistryReport() {
     if (categorySummary.length === 0) return;
 
     const locationStr = activeWhs.includes('ALL') ? 'All Locations' : activeWhs.map(id => getWhName(id)).join(' + ');
+    const modeStr = reportMode === 'historical' ? ` | SNAPSHOT DATE: ${format(new Date(snapshotDate), 'dd MMM yyyy')}` : '';
     const headers = ['Category', 'Items Count', 'Total Gross (g)', 'Total Net (g)', 'Total Stone (cts)', 'Total Value (₹)'];
     
     let csvRows = [
       `"ASSET SUMMARY REPORT",,,,,`, 
       `"Location: ${locationStr}",,,,,`,
-      `"Date: ${format(new Date(), 'dd-MMM-yyyy')}",,,,,`,
+      `"Date: ${format(new Date(), 'dd-MMM-yyyy')}${modeStr}",,,,,`,
       `,,,,,`,
       headers.join(',')
     ];
@@ -550,7 +604,9 @@ export function InventoryRegistryReport() {
     }
 
     const locationStr = activeWhs.includes('ALL') ? 'All Locations' : activeWhs.map(id => getWhName(id)).join(' + ');
-    let text = `*📊 ASSET REGISTRY SUMMARY*\n`;
+    const modeStr = reportMode === 'historical' ? `(Snapshot: ${format(new Date(snapshotDate), 'dd-MMM-yyyy')})` : '';
+
+    let text = `*📊 ASSET REGISTRY SUMMARY* ${modeStr}\n`;
     text += `*Location:* ${locationStr}\n`;
     text += `*Date:* ${format(new Date(), 'dd-MMM-yyyy hh:mm a')}\n\n`;
 
@@ -590,33 +646,18 @@ export function InventoryRegistryReport() {
     <>
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
-          @page {
-            margin: 15mm 15mm 20mm 15mm;
-            size: A4 portrait;
-          }
-          * {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-          }
+          @page { margin: 15mm 15mm 20mm 15mm; size: A4 portrait; }
+          * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
           body * { visibility: hidden; }
-          #executive-pdf-report, #executive-pdf-report * {
-            visibility: visible;
-          }
-          #executive-pdf-report {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            margin: 0;
-            padding: 0;
-            background: white !important;
-            color: black !important;
-          }
-          tr, .prevent-break {
-            page-break-inside: avoid;
-            break-inside: avoid;
-          }
+          #executive-pdf-report, #executive-pdf-report * { visibility: visible; }
+          #executive-pdf-report { position: absolute; left: 0; top: 0; width: 100%; margin: 0; padding: 0; background: white !important; color: black !important; }
+          tr, .prevent-break { page-break-inside: avoid; break-inside: avoid; }
         }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 10px; }
       `}} />
 
       <div className="space-y-5 animate-in fade-in duration-500 print:hidden">
@@ -645,10 +686,39 @@ export function InventoryRegistryReport() {
 
             <div className="flex-1" />
 
+            {/* ✨ NEW: TIME MACHINE UI */}
+            <div className="flex items-center gap-2 bg-zinc-50/80 p-1 rounded-xl border border-zinc-200/60 hidden lg:flex">
+              <Button 
+                variant={reportMode === 'realtime' ? 'default' : 'ghost'} 
+                size="sm" 
+                className={`h-7 text-xs font-bold rounded-lg transition-all ${reportMode === 'realtime' ? 'bg-white text-indigo-600 shadow-sm border border-zinc-200' : 'text-zinc-500 hover:text-zinc-900'}`}
+                onClick={() => setReportMode('realtime')}
+              >
+                Live Stock
+              </Button>
+              <Button 
+                variant={reportMode === 'historical' ? 'default' : 'ghost'} 
+                size="sm" 
+                className={`h-7 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 ${reportMode === 'historical' ? 'bg-white text-rose-600 shadow-sm border border-rose-200' : 'text-zinc-500 hover:text-zinc-900'}`}
+                onClick={() => setReportMode('historical')}
+              >
+                <History className="w-3.5 h-3.5" /> Time Machine
+              </Button>
+            </div>
+
+            {reportMode === 'historical' && (
+              <div className="flex items-center gap-2 animate-in fade-in zoom-in-95 ml-1 bg-white border border-rose-200 pl-3 pr-1 py-1 rounded-xl shadow-sm hidden sm:flex">
+                <span className="text-[10px] font-bold text-rose-600 uppercase tracking-widest">Date:</span>
+                <input 
+                   type="date" 
+                   value={snapshotDate} 
+                   onChange={e => setSnapshotDate(e.target.value)} 
+                   className="h-7 text-xs font-mono font-bold bg-transparent border-none focus:ring-0 text-rose-700 outline-none w-28 cursor-pointer"
+                />
+              </div>
+            )}
+
             <div className="relative inline-block pt-2">
-              <span className="absolute -top-0.5 right-3 z-10 bg-indigo-600 text-white text-[8px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded-full shadow-sm pointer-events-none animate-bounce">
-                V2 New
-              </span>
               <Button 
                 variant={showAnalytics ? "default" : "outline"} 
                 className={`h-9 px-4 text-xs font-bold rounded-lg hidden sm:flex transition-all items-center gap-1.5 ${
@@ -674,6 +744,35 @@ export function InventoryRegistryReport() {
 
           {showFilters && (
             <div className="pt-4 border-t border-zinc-100 mt-1 animate-in slide-in-from-top-2 duration-200">
+              {/* ✨ Mobile Time Machine Overlay (Shows only on small screens when filters are open) */}
+              <div className="lg:hidden flex flex-col gap-3 mb-4 p-3 bg-rose-50/50 border border-rose-100 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-rose-700 uppercase tracking-widest flex items-center gap-1.5">
+                    <History className="w-4 h-4" /> Point-in-Time Engine
+                  </p>
+                  <Select value={reportMode} onValueChange={(v:any) => setReportMode(v)}>
+                    <SelectTrigger className="h-8 w-32 text-xs font-bold bg-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="realtime">Live Stock</SelectItem>
+                      <SelectItem value="historical">Time Machine</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {reportMode === 'historical' && (
+                  <div className="flex items-center gap-3">
+                    <Label className="text-xs font-semibold text-rose-800">Snapshot Date:</Label>
+                    <input 
+                       type="date" 
+                       value={snapshotDate} 
+                       onChange={e => setSnapshotDate(e.target.value)} 
+                       className="h-9 flex-1 text-xs font-mono font-bold bg-white border border-rose-200 rounded-lg px-3 text-rose-700 shadow-sm outline-none"
+                    />
+                  </div>
+                )}
+              </div>
+
               <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-4">
                 
                 {(!canFullManage || isLocked) ? (
@@ -771,7 +870,6 @@ export function InventoryRegistryReport() {
                   </SelectContent>
                 </Select>
 
-                {/* ✨ Added SP Items Select Filter */}
                 <Select value={filterSpItems} onValueChange={setFilterSpItems}>
                   <SelectTrigger className="h-9 text-xs font-bold bg-zinc-50 border-zinc-200 rounded-lg focus:ring-0">
                     <AlertTriangle className={`w-3 h-3 mr-1.5 ${filterSpItems !== 'exclude' ? 'text-rose-500' : 'text-zinc-500'}`} />
@@ -1256,6 +1354,7 @@ export function InventoryRegistryReport() {
             </p>
             <p className="text-xs font-semibold text-gray-500 mt-2 uppercase tracking-widest">
               Generated: {format(new Date(), 'dd MMM yyyy • hh:mm a')}
+              {reportMode === 'historical' && ` | Snapshot: ${format(new Date(snapshotDate), 'dd MMM yyyy')}`}
             </p>
           </div>
         </div>
