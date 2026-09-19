@@ -1,9 +1,9 @@
 import React, { useRef, useState, useEffect } from 'react'
-import { QrCode, X, ShieldAlert, Loader2, CheckCircle2, FileText, Truck, Hammer, Printer, Store } from 'lucide-react'
+import { QrCode, X, ShieldAlert, Loader2, CheckCircle2, FileText, Truck, Hammer, Printer, Store, Package } from 'lucide-react'
 import { Scanner } from '@yudiel/react-qr-scanner'
 import { useReactToPrint } from 'react-to-print'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { InvoicePrintTemplate } from '@/components/InvoicePrintTemplate'
 import { BillingMode } from '@/app/pos/page'
 import { toast } from 'sonner'
@@ -14,15 +14,17 @@ export function PosModals({
   showPreviewModal, setShowPreviewModal, 
   showPrintModal, setShowPrintModal, 
   previewData, lastInvoiceData, executeCheckout,
-  isProcessing 
+  isProcessing,
+  selectedPackaging // ✨ NEW: Extract the packaging array
 }: any) {
   
-  // Use stable refs that exist for the lifecycle of the component
   const customerPrintRef = useRef<HTMLDivElement>(null)
   const storePrintRef = useRef<HTMLDivElement>(null)
   
-  // ✨ State to track which copy Android should natively print
   const [printType, setPrintType] = useState<'customer' | 'store'>('customer')
+  
+  // ✨ NEW: Warning Modal State
+  const [showPackagingWarning, setShowPackagingWarning] = useState(false)
 
   const triggerCustomerPrint = useReactToPrint({ contentRef: customerPrintRef })
   const triggerStorePrint = useReactToPrint({ contentRef: storePrintRef })
@@ -33,7 +35,6 @@ export function PosModals({
     if (!data) { toast.error("No data to print"); return; }
     
     setPrintType('customer');
-    // Tiny timeout ensures React state updates before the print spooler freezes the browser
     setTimeout(() => triggerCustomerPrint(), 10);
   };
 
@@ -44,6 +45,16 @@ export function PosModals({
     
     setPrintType('store');
     setTimeout(() => triggerStorePrint(), 10);
+  };
+
+  // ✨ NEW: Intercept Checkout Logic
+  const handleAttemptCheckout = () => {
+    // Only warn on normal sales and custom orders. Ignore repairs/returns/estimates.
+    if ((mode === 'normal' || mode === 'custom') && (!selectedPackaging || selectedPackaging.length === 0)) {
+      setShowPackagingWarning(true);
+    } else {
+      executeCheckout();
+    }
   };
 
   const modeConfig: Record<string, { bg: string, text: string }> = {
@@ -117,18 +128,56 @@ export function PosModals({
               <Button onClick={handlePrintCustomer} variant="outline" className="flex-1 rounded-xl text-xs font-bold border-slate-300 h-11"><Printer className="w-4 h-4 mr-2" /> Test Customer Copy</Button>
             </div>
             <Button variant="ghost" className="rounded-xl text-sm font-bold h-11 text-slate-500" onClick={() => setShowPreviewModal(false)}>Back to Edit</Button>
-            <Button onClick={executeCheckout} disabled={isProcessing} className={`rounded-xl text-sm font-bold text-white w-full sm:w-auto h-11 px-8 ${currentTheme.bg}`}>
+            
+            {/* ✨ NEW: Replaced standard executeCheckout with handleAttemptCheckout */}
+            <Button onClick={handleAttemptCheckout} disabled={isProcessing} className={`rounded-xl text-sm font-bold text-white w-full sm:w-auto h-11 px-8 ${currentTheme.bg}`}>
                {isProcessing ? <Loader2 className="animate-spin w-4 h-4 mr-2" /> : "Confirm & Commit"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* 3. SUCCESS MODAL */}
-      <Dialog open={showPrintModal} onOpenChange={setShowPrintModal}>
+      {/* ✨ 3. NEW: PACKAGING WARNING MODAL */}
+      <Dialog open={showPackagingWarning} onOpenChange={setShowPackagingWarning}>
+        <DialogContent className="sm:max-w-[360px] p-6 text-center border-amber-200 shadow-2xl rounded-2xl bg-white print:hidden">
+          <div className="w-14 h-14 rounded-full bg-amber-50 flex items-center justify-center mx-auto mb-4 border border-amber-100">
+            <Package className="w-6 h-6 text-amber-500" />
+          </div>
+          <DialogTitle className="text-lg font-bold text-slate-900 mb-2">Missing Packaging</DialogTitle>
+          <DialogDescription className="text-sm text-slate-500 mb-6 font-medium">
+            You have not chosen any packaging material for this invoice.
+          </DialogDescription>
+          
+          <div className="flex flex-col gap-4">
+            <Button 
+              className="w-full h-12 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl shadow-sm text-sm"
+              onClick={() => {
+                setShowPackagingWarning(false);
+                setShowPreviewModal(false); // Close preview so they return to the cart
+              }}
+            >
+              <Package className="w-4 h-4 mr-2" /> Choose Packaging Material
+            </Button>
+            
+            <button 
+              onClick={() => {
+                setShowPackagingWarning(false);
+                executeCheckout(); // Bypass warning and push transaction through
+              }}
+              className="text-xs font-bold text-slate-400 hover:text-slate-600 transition-colors underline underline-offset-4"
+            >
+              Continue for now (Skip Packaging)
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+     {/* 4. SUCCESS MODAL */}
+     <Dialog open={showPrintModal} onOpenChange={setShowPrintModal}>
         <DialogContent className="print:hidden sm:max-w-[420px] p-0 rounded-2xl overflow-hidden bg-white">
         <VisuallyHidden.Root>
           <DialogTitle>Transaction Success</DialogTitle>
+          <DialogDescription>Invoice generated successfully</DialogDescription> {/* ✨ ADDED THIS LINE */}
         </VisuallyHidden.Root>
           <div className="flex flex-col items-center justify-center p-10 text-center space-y-6">
             <div className={`w-20 h-20 text-white rounded-full flex items-center justify-center shadow-lg ${currentTheme.bg}`}>

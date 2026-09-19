@@ -693,22 +693,26 @@ export function useCheckout({
       }
 
       // ✨ PACKAGING INVENTORY FIX
-      // Required IDs are now securely passed into the RPC so DB constraints pass
       if (!isEstimate && selectedPackaging?.length > 0 && (mode === 'normal' || mode === 'custom')) {
+        
+        // Prevent passing the text 'ALL' into a UUID column
+        const safeWarehouseId = selectedLocation === 'ALL' ? null : selectedLocation;
+
         for (const pkg of selectedPackaging) {
           const { error: packErr } = await supabase.rpc('decrement_packaging_stock', {
             p_id: pkg.id,
             p_qty: Number(pkg.quantity),
-            p_company_id: appUser?.company_id,         // Fix: Prevents NOT NULL constraint failure
-            p_warehouse_id: selectedLocation,          // Fix: Prevents NOT NULL constraint failure
+            p_company_id: appUser?.company_id || null,         // Force null instead of undefined
+            p_warehouse_id: safeWarehouseId,                   // Safe UUID or null
             p_transaction_type: mode === 'custom' ? 'custom_order' : 'normal_sale',
-            p_reference_id: finalNo,                   // Fix: Logs the generated INV- or ORD- directly
-            p_customer_id: selectedCustomer?.id || null,
-            p_user_id: finalizingUserId
+            p_reference_id: finalNo,                   
+            p_customer_id: selectedCustomer?.id || null,       // Force null instead of undefined
+            p_user_id: finalizingUserId || null                // Force null instead of undefined
           });
 
           if (packErr) {
             console.error("Packaging deduction failed:", packErr);
+            toast.error(`Warning: Failed to deduct packaging (${pkg.item_name})`);
           }
         }
       }

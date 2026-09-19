@@ -91,16 +91,17 @@ export default function POSPage() {
   const [selectedPackaging, setSelectedPackaging] = useState<SelectedPackaging[]>([])
 
   // ✨ NEW: Fetch Packaging Materials for the active location
+  // ✨ FIXED: Added selectedLocation === 'ALL' check to prevent UUID 400 crash
   useEffect(() => {
     const fetchPackaging = async () => {
-      if (!appUser?.company_id || !selectedLocation) return;
+      if (!appUser?.company_id || !selectedLocation || selectedLocation === 'ALL') return; 
       
       const { data, error } = await supabase
         .from('packaging_inventory')
         .select('id, item_name, stock_count')
         .eq('company_id', appUser.company_id)
         .eq('warehouse_id', selectedLocation)
-        .gt('stock_count', 0); // Only fetch items that are actually in stock
+        .gt('stock_count', 0);
 
       if (data) {
         setAvailablePackaging(data);
@@ -218,7 +219,8 @@ export default function POSPage() {
     allBranches,
     
     customBillingDate: isAdmin ? billingDate : undefined,
-    billedBy: billedBy
+    billedBy: billedBy,
+    selectedPackaging: selectedPackaging
   })
 
   const handleWipeSession = () => {
@@ -401,22 +403,27 @@ export default function POSPage() {
         lastInvoiceData={lastInvoiceData} 
         setLastInvoiceData={setLastInvoiceData}
         isProcessing={checkoutHook.isProcessing}
+        selectedPackaging={selectedPackaging}
         executeCheckout={async () => {
           const result = await checkoutHook.executeCheckout(isEstimateCheckout) 
           
           if (result.success) {
             
-            // 1. Immediately set the new data into the React state
+            // ✨ THE FIX: Instantly deduct the used packaging from the local UI state 
+            // so the next customer's bill immediately shows the correct remaining stock!
+            setAvailablePackaging(prev => prev.map(pack => {
+              const usedItem = selectedPackaging.find(p => p.id === pack.id);
+              if (usedItem) {
+                return { ...pack, stock_count: pack.stock_count - usedItem.quantity };
+              }
+              return pack;
+            }));
+
             setLastInvoiceData(result.draftData)
-            
-            // 2. Close preview
             setShowPreviewModal(false)
-            
-            // 3. Short delay before showing print modal & wiping session. 
-            // Wiping clears the selectedPackaging state so it's ready for the next customer!
             setTimeout(() => {
                 setShowPrintModal(true)
-                handleWipeSession()
+                handleWipeSession() // This clears the cart and resets the session
             }, 100);
           }
         }}
