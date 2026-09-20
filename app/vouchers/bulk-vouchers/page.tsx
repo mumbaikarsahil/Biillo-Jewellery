@@ -8,7 +8,8 @@ import { Progress } from '@/components/ui/progress'
 import { toast } from 'sonner'
 import { 
   UploadCloud, Download, FileSpreadsheet, CheckCircle2, 
-  AlertTriangle, Loader2, ChevronLeft, ChevronRight, XCircle, Play
+  AlertTriangle, Loader2, ChevronLeft, ChevronRight, XCircle, Play,
+  ArrowRight
 } from 'lucide-react'
 import { supabase } from '@/lib/supabaseClient'
 import {
