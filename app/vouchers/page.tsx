@@ -21,7 +21,9 @@ import {
   TrendingUp,
   ArrowRight,
   Undo2,
-  CalendarClock
+  CalendarClock,
+  Sparkles,
+  Users
 } from "lucide-react";
 
 import { useAuth } from "@/hooks/useAuth";
@@ -254,6 +256,49 @@ export default function VouchersDashboard() {
             </Card>
 
           </div>
+        </section>
+
+        {/* --- BULK UPLOAD ACTION CARDS (NEW) --- */}
+        <section className="grid gap-4 grid-cols-1 md:grid-cols-2">
+          
+          <Link href="/vouchers/bulk-vouchers" className="block outline-none group">
+            <Card className="border border-indigo-200 bg-indigo-50/30 hover:bg-indigo-50/50 shadow-sm rounded-xl overflow-hidden transition-all h-full">
+              <CardContent className="p-5 sm:p-6 flex items-start gap-4">
+                <div className="w-12 h-12 rounded-full bg-indigo-100 flex items-center justify-center shrink-0 border border-indigo-200">
+                  <Users className="w-6 h-6 text-indigo-600" />
+                </div>
+                <div className="flex flex-col flex-1">
+                  <h3 className="text-sm font-bold text-indigo-900 mb-1 flex items-center justify-between">
+                    Standard Bulk Upload
+                    <ArrowRight className="w-4 h-4 text-indigo-400 group-hover:text-indigo-600 group-hover:translate-x-1 transition-all" />
+                  </h3>
+                  <p className="text-xs font-medium text-indigo-700/80 leading-relaxed">
+                    Upload a CSV of existing voucher codes to claim and assign them to customers instantly.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+
+          <Link href="/vouchers/bulk-event-claims" className="block outline-none group">
+            <Card className="border border-amber-200 bg-amber-50/30 hover:bg-amber-50/50 shadow-sm rounded-xl overflow-hidden transition-all h-full">
+              <CardContent className="p-5 sm:p-6 flex items-start gap-4">
+                <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center shrink-0 border border-amber-200">
+                  <Sparkles className="w-6 h-6 text-amber-600" />
+                </div>
+                <div className="flex flex-col flex-1">
+                  <h3 className="text-sm font-bold text-amber-900 mb-1 flex items-center justify-between">
+                    Event Bulk Allocation
+                    <ArrowRight className="w-4 h-4 text-amber-400 group-hover:text-amber-600 group-hover:translate-x-1 transition-all" />
+                  </h3>
+                  <p className="text-xs font-medium text-amber-700/80 leading-relaxed">
+                    Upload an attendee list. The system will automatically generate and assign exclusive event codes.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </Link>
+
         </section>
 
         {/* --- MODULE GRID --- */}
