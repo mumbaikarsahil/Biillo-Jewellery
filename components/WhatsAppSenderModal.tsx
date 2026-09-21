@@ -36,6 +36,7 @@ export interface WhatsAppSenderModalProps {
   // ✨ NEW: Accepting the explicit variables from the parent
   prefilledMessage?: string;
   templateVariables?: string[];
+  defaultPhone?: string;
 }
 
 type ModalStep = "compose" | "resolving" | "ready" | "sending";

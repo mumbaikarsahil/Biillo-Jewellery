@@ -18,7 +18,7 @@ import { toast } from 'sonner'
 import { 
   Users, Search, Store, Gem, RefreshCw, Download,
   UserPlus, UploadCloud, Settings, ChevronLeft, ChevronRight, MessageSquare, PhoneOff,
-  TicketPercent, ArrowUpDown, Filter, X, PhoneCall, Gift, Zap,
+  TicketPercent, ArrowUpDown, Filter, X, PhoneCall, Gift, Zap,Award,
   Loader2
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -1195,15 +1195,25 @@ export default function CRMPage() {
             <Button onClick={handleBulkBroadcast} className="flex-1 md:flex-none bg-emerald-600 hover:bg-emerald-700 text-white h-10 sm:h-11 px-4 text-xs font-bold rounded-lg shadow-sm transition-none">
               <MessageSquare className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Broadcast</span>
             </Button>
+            
             <Button onClick={() => setIsImportModalOpen(true)} className="flex-1 md:flex-none bg-blue-600 hover:bg-blue-700 text-white h-10 sm:h-11 px-4 text-xs font-bold rounded-lg shadow-sm transition-none">
               <UploadCloud className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Import</span>
             </Button>
+            
             <Button onClick={() => {
               setNewKittyForm(prev => ({ ...prev, full_name: '', phone: '', email: '', city: '', start_date: new Date().toISOString().split('T')[0], referred_by_id: 'none', referral_bonus: '500' }))
               setIsAddKittyModalOpen(true)
             }} className="flex-1 md:flex-none bg-purple-600 hover:bg-purple-700 text-white h-10 sm:h-11 px-4 text-xs font-bold rounded-lg shadow-sm transition-none">
               <Gem className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Kitty Plan</span>
             </Button>
+
+            {/* ✨ NEW: Loyalty Program Page Link */}
+            <Link href="/crm/loyalty" className="flex-1 md:flex-none w-full md:w-auto outline-none">
+              <Button className="w-full bg-amber-500 hover:bg-amber-600 text-white h-10 sm:h-11 px-4 text-xs font-bold rounded-lg shadow-sm transition-none">
+                <Award className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Loyalty Config</span>
+              </Button>
+            </Link>
+
             <Button onClick={() => {
               setNewCustForm({ full_name: '', phone: '', email: '', city: '', customer_status: 'Lead', birth_date: '', anniversary_date: '', next_followup_date: '', followup_reason: '' }) 
               setIsAddModalOpen(true)
