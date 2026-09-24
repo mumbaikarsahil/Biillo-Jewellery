@@ -204,6 +204,9 @@ export default function ReceiveTab({
     if (val === '22K') setPurityPercent('91.6')
     if (val === '18K') setPurityPercent('75.0')
     if (val === '14K') setPurityPercent('58.3')
+    if (val === 'PT950') setPurityPercent('95.0')
+    if (val === '999 Fine Silver') setPurityPercent('99.9')
+    if (val === '925 Sterling Silver') setPurityPercent('92.5')
   }
 
   const loadJobBagItems = useCallback(async () => {
@@ -404,9 +407,9 @@ export default function ReceiveTab({
   const updateBatchItem = (id: string, field: keyof ReceiveItem, value: any) => {
     setReceiveItems(prev => prev.map(item => {
       if (item.job_bag_item_id !== id) return item;
-  
+ 
       const updated = { ...item, [field]: value }
-  
+ 
       if (field === 'solitairePieces' || field === 'meleePieces') {
         const solP = parseInt(field === 'solitairePieces' ? value : updated.solitairePieces) || 0;
         const melP = parseInt(field === 'meleePieces' ? value : updated.meleePieces) || 0;
@@ -436,7 +439,7 @@ export default function ReceiveTab({
       return updated;
     }))
   }
-  
+ 
   const handleImageChange = (id: string, e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
       const file = e.target.files[0]
@@ -520,7 +523,7 @@ export default function ReceiveTab({
     // Overdraft warnings trigger before the modal
     if (stagedFineGoldRequired > pendingFineGold + 0.01) {
       const proceed = window.confirm(
-        `⚠️ WARNING: Negative Gold Reconciliation.\n\nYou are trying to receive ${stagedFineGoldRequired.toFixed(3)}g of FINE GOLD, but only ${pendingFineGold.toFixed(3)}g is available in this Job Bag.\n\nDo you want to FORCE RECEIVE anyway?`
+        `⚠️ WARNING: Negative Metal Reconciliation.\n\nYou are trying to receive ${stagedFineGoldRequired.toFixed(3)}g of FINE METAL, but only ${pendingFineGold.toFixed(3)}g is available in this Job Bag.\n\nDo you want to FORCE RECEIVE anyway?`
       );
       if (!proceed) return;
     }
@@ -754,7 +757,7 @@ export default function ReceiveTab({
         <Card className={cn("shadow-sm transition-all duration-300 border-2", isGoldOverdraft ? "bg-red-50/80 border-red-400" : "bg-amber-50/50 border-amber-200")}>
           <CardContent className="p-4 flex items-center justify-between">
             <div className="space-y-1">
-              <p className={cn("text-[10px] font-bold uppercase tracking-wider", isGoldOverdraft ? "text-red-700" : "text-amber-700")}>Raw Gold Balance (at {purityKarat})</p>
+              <p className={cn("text-[10px] font-bold uppercase tracking-wider", isGoldOverdraft ? "text-red-700" : "text-amber-700")}>Raw Metal Balance (at {purityKarat})</p>
               <div className="flex items-end gap-2">
                 <p className={cn("text-2xl font-black", isGoldOverdraft ? "text-red-600" : "text-amber-600")}>{availableRawGold.toFixed(3)}g</p>
                 <p className="text-xs font-bold text-slate-500 mb-1">Available</p>
@@ -762,7 +765,7 @@ export default function ReceiveTab({
               <p className="text-xs font-semibold text-slate-600">
                 Staged Required: <span className={isGoldOverdraft ? "text-red-600 font-bold" : ""}>{stagedRawGold.toFixed(3)}g</span>
               </p>
-              <p className="text-[9px] text-slate-400 mt-1">*Based on {pendingFineGold.toFixed(3)}g Fine Gold liability.</p>
+              <p className="text-[9px] text-slate-400 mt-1">*Based on {pendingFineGold.toFixed(3)}g Fine Metal liability.</p>
             </div>
             {isGoldOverdraft ? <AlertOctagon className="h-10 w-10 text-red-300" /> : <Database className="h-10 w-10 text-amber-200" />}
           </CardContent>
@@ -819,9 +822,18 @@ export default function ReceiveTab({
               </div>
               <div className="space-y-1.5">
                 <Label className="text-[10px] font-bold uppercase text-muted-foreground">Metal Type</Label>
-                <Select value={metalType} onValueChange={setMetalType}>
+                <Select value={metalType} onValueChange={(val) => {
+                   setMetalType(val);
+                   if (val === 'Gold') { setPurityKarat('14K'); setPurityPercent('58.3'); }
+                   else if (val === 'Silver') { setPurityKarat('925 Sterling Silver'); setPurityPercent('92.5'); }
+                   else if (val === 'Platinum') { setPurityKarat('PT950'); setPurityPercent('95.0'); }
+                }}>
                   <SelectTrigger className="h-9 text-xs border-border bg-muted/20"><SelectValue /></SelectTrigger>
-                  <SelectContent><SelectItem value="Gold" className="text-xs">Gold</SelectItem><SelectItem value="Platinum" className="text-xs">Platinum</SelectItem></SelectContent>
+                  <SelectContent>
+                    <SelectItem value="Gold" className="text-xs">Gold</SelectItem>
+                    <SelectItem value="Platinum" className="text-xs">Platinum</SelectItem>
+                    <SelectItem value="Silver" className="text-xs">Silver</SelectItem>
+                  </SelectContent>
                 </Select>
               </div>
               <div className="space-y-1.5">
@@ -833,6 +845,9 @@ export default function ReceiveTab({
                     <SelectItem value="22K" className="text-xs">22K (91.6%)</SelectItem>
                     <SelectItem value="18K" className="text-xs">18K (75.0%)</SelectItem>
                     <SelectItem value="14K" className="text-xs font-bold text-primary">14K (58.3%)</SelectItem>
+                    <SelectItem value="PT950" className="text-xs">PT950 (95.0%)</SelectItem>
+                    <SelectItem value="999 Fine Silver" className="text-xs">999 Fine Silver (99.9%)</SelectItem>
+                    <SelectItem value="925 Sterling Silver" className="text-xs">925 Sterling Silver (92.5%)</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -976,7 +991,7 @@ export default function ReceiveTab({
                           <div className="space-y-1.5">
                             <div className="flex items-center gap-2">
                               <Label className={cn("text-[9px] font-bold uppercase w-8 shrink-0", item.is_repair ? "text-amber-600" : "text-slate-500")}>
-                                {item.is_repair ? "Add Gold" : "Gross"}
+                                {item.is_repair ? "Add Metal" : "Gross"}
                               </Label>
                               <Input 
                                 type="number" step="0.001" 
@@ -1314,7 +1329,7 @@ export default function ReceiveTab({
           {calcStep === 'params' ? (
             <div className="p-5 space-y-6">
               <div>
-                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 border-b border-slate-100 pb-1">1. Variable Gold Rates</h4>
+                <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 border-b border-slate-100 pb-1">1. Variable Metal Rates</h4>
                 <div className="grid grid-cols-2 gap-4">
                   {Object.entries(goldRates).map(([karat, rate]) => (
                     <div key={karat} className="space-y-1.5">
@@ -1387,7 +1402,7 @@ export default function ReceiveTab({
 
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-[10px] text-slate-500 font-mono leading-relaxed">
                 <span className="font-bold text-slate-700">Formula Engine:</span><br/>
-                1. Base = (NetWt × KaratRate) + (DiaCt × DiaRate)<br/>
+                1. Base = (NetWt × MetalRate) + (DiaCt × DiaRate)<br/>
                 2. Subtotal = Base + (Base × {calcParams.markupPercent}%)<br/>
                 3. Final MRP = Math.round(Subtotal + ₹{calcParams.flatCharge})
               </div>

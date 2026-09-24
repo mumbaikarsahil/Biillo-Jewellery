@@ -18,10 +18,16 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 
-// --- PREDEFINED OPTIONS FOR DATALISTS ---
+// --- PREDEFINED OPTIONS FOR DROPDOWNS ---
 const CATEGORIES = [
   "Necklace", "Ring", "Earring", "Bangle", "Bracelet", "Chain", 
   "Pendant", "Mangalsutra", "Nosepin", "Set", "Coin", "Other"
+]
+const METALS = [
+  "Gold", "Platinum", "Silver", "Rose Gold"
+]
+const PURITIES = [
+  "24K", "22K", "18K", "14K", "PT950", "999 Fine Silver", "925 Sterling Silver"
 ]
 const DIAMOND_SHAPES = [
   "Round", "Princess", "Cushion", "Emerald", "Oval", "Radiant", 
@@ -46,20 +52,20 @@ interface ManualJewelleryItem {
   quantity: number;
   gross_weight_g: number | string;
   net_weight_g: number | string;
-  
+
   solitaire_pcs: number | string;
   solitaire_cts: number | string;
   melee_pcs: number | string;
   melee_cts: number | string;
-  
+
   shape: string;
   color: string;
   clarity: string;
-  
+
   hsn_code: string;
   remarks: string;
   total_amount: number | string;
-  is_sp_item: boolean; // ✨ NEW
+  is_sp_item: boolean;
 }
 
 const getCategoryPrefix = (category: string): string => {
@@ -76,7 +82,7 @@ const getCategoryPrefix = (category: string): string => {
   if (c.includes('NOSE')) return 'NOS';
   if (c.includes('SET')) return 'SET';
   if (c.includes('COIN')) return 'COIN';
-  
+
   return c.substring(0, 3).replace(/[^A-Z]/g, '').padEnd(3, 'X');
 };
 
@@ -91,26 +97,28 @@ const EditableCell = ({ value, onChange, type = "text", align = "left", classNam
   />
 )
 
-const ComboCell = ({ value, onChange, listId, align = "left", className = "", placeholder = "", tabIndex }: any) => (
-  <input 
-    type="text"
-    list={listId}
-    value={value ?? ''}
+// ✨ NEW: Strict Dropdown Cell for consistent data entry
+const DropdownCell = ({ value, onChange, options, align = "left", className = "", placeholder = "Select" }: any) => (
+  <select 
+    value={value || ""}
     onChange={onChange}
-    placeholder={placeholder}
-    tabIndex={tabIndex}
-    className={`w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:bg-white rounded px-1.5 py-1 text-xs outline-none transition-colors text-${align} placeholder:text-slate-400 ${className}`}
-  />
+    className={`w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:bg-white rounded px-0.5 py-1 text-xs outline-none transition-colors text-${align} cursor-pointer ${className}`}
+  >
+    <option value="" disabled>{placeholder}</option>
+    {options.map((opt: string) => (
+      <option key={opt} value={opt}>{opt}</option>
+    ))}
+  </select>
 )
 
 export default function ManualImportPage() {
   const { appUser } = useAuth()
-  
+
   const [warehouses, setWarehouses] = useState<any[]>([])
   const [karigars, setKarigars] = useState<any[]>([])
   const [targetWarehouse, setTargetWarehouse] = useState('')
   const [targetKarigar, setTargetKarigar] = useState('')
-  
+
   const [items, setItems] = useState<ManualJewelleryItem[]>([])
   const [isCommitting, setIsCommitting] = useState(false)
   const [commitSuccess, setCommitSuccess] = useState(false)
@@ -132,7 +140,7 @@ export default function ManualImportPage() {
         .select('id, full_name, karigar_code')
         .eq('company_id', appUser.company_id)
         .eq('is_active', true)
-        
+
       if (kData) setKarigars(kData)
     }
     fetchConfigData()
@@ -153,15 +161,15 @@ export default function ManualImportPage() {
       solitaire_cts: '',
       melee_pcs: '',
       melee_cts: '',
-      shape: '',
-      color: '',
-      clarity: '',
+      shape: 'None',
+      color: 'None',
+      clarity: 'None',
       hsn_code: '7113', 
       remarks: '',
       total_amount: '',
       is_sp_item: false,
     }
-    
+
     setItems([newItem, ...items])
     setSelectedIds(new Set([...selectedIds, newItem.temp_id]))
   }
@@ -235,25 +243,25 @@ export default function ManualImportPage() {
   const isAllFilteredSelected = filteredItems.length > 0 && filteredItems.every(item => selectedIds.has(item.temp_id))
 
   // =========================================================================
-  // THE DATABASE COMMIT LOGIC
+  // THE DATABASE COMMIT & AUDIT LOGIC
   // =========================================================================
   const handleCommitToDatabase = async () => {
     if (!targetWarehouse || !appUser) return toast.error("Please select a target vault first.")
-    if (!targetKarigar) return toast.error("Please select an assigning Karigar.")
+    if (!targetKarigar) return toast.error("Please select an assigning Partner/Karigar.")
     if (selectedIds.size === 0) return toast.error("No items selected to commit.")
 
     const itemsToCommit = items.filter(item => selectedIds.has(item.temp_id))
-    
+
     for (const item of itemsToCommit) {
       if (!item.item_category.trim()) return toast.error("All selected items must have a category.")
       if (!item.barcode.trim()) return toast.error("All selected items must have a barcode.")
     }
 
     setIsCommitting(true)
-    
+
     try {
       const groupedByPrefix: Record<string, typeof itemsToCommit> = {};
-      
+
       [...itemsToCommit].reverse().forEach(item => {
         const prefix = getCategoryPrefix(item.item_category);
         if (!groupedByPrefix[prefix]) groupedByPrefix[prefix] = [];
@@ -261,14 +269,14 @@ export default function ManualImportPage() {
       });
 
       const prefixCounters: Record<string, number> = {};
-      
+
       for (const prefix of Object.keys(groupedByPrefix)) {
         const { data: existingSkus } = await supabase
           .from('inventory_items')
           .select('sku_reference')
           .eq('company_id', appUser.company_id)
           .ilike('sku_reference', `${prefix}-%`)
-          
+
         let maxSeq = 100;
         if (existingSkus && existingSkus.length > 0) {
           existingSkus.forEach(row => {
@@ -285,27 +293,23 @@ export default function ManualImportPage() {
       }
 
       const inventoryPayload: any[] = [];
-      
+
       for (const prefix of Object.keys(groupedByPrefix)) {
         let currentCounter = prefixCounters[prefix];
-        
+
         for (const item of groupedByPrefix[prefix]) {
           const guaranteedUniqueSku = `${prefix}-${currentCounter}`;
           currentCounter++; 
-          
+
           const solPcs = Number(item.solitaire_pcs) || 0;
           const solCts = Number(item.solitaire_cts) || 0;
           const melPcs = Number(item.melee_pcs) || 0;
           const melCts = Number(item.melee_cts) || 0;
-          
+
           inventoryPayload.push({
             company_id: appUser.company_id,
             warehouse_id: targetWarehouse,
-            
-            // --- NEW: Mapped directly to your new karigar_id column ---
             karigar_id: targetKarigar, 
-            // ----------------------------------------------------------
-
             barcode: item.barcode,
             sku_reference: guaranteedUniqueSku,
             item_category: item.item_category,
@@ -316,25 +320,26 @@ export default function ManualImportPage() {
             quantity: Number(item.quantity) || 1,
             gross_weight_g: Number(item.gross_weight_g) || 0,
             net_weight_g: Number(item.net_weight_g) || 0,
-            
+
             solitaire_pieces: solPcs,
             solitaire_weight_cts: solCts,
             melee_pieces: melPcs,
             melee_weight_cts: melCts,
             color_stone_pieces: 0,
             color_stone_weight_cts: 0,
-            
+
             total_stone_pieces: solPcs + melPcs,
             total_stone_weight_cts: solCts + melCts,
-            
+
             diamond_shape: item.shape === 'None' ? '' : item.shape,
             diamond_color: item.color === 'None' ? '' : item.color,
             diamond_clarity: item.clarity === 'None' ? '' : item.clarity,
             hsn_code: item.hsn_code,
             remarks: item.remarks,
             mrp: Number(item.total_amount) || 0, 
-            status: 'in_stock' ,
-            is_sp_item: item.is_sp_item
+            status: 'in_stock',
+            is_sp_item: item.is_sp_item,
+            acquisition_method: 'manual_import'
           });
         }
       }
@@ -342,15 +347,35 @@ export default function ManualImportPage() {
       const chunkSize = 100;
       for (let i = 0; i < inventoryPayload.length; i += chunkSize) {
         const chunk = inventoryPayload.slice(i, i + chunkSize);
-        
-        const { error } = await supabase
+
+        const { data: upsertedItems, error } = await supabase
           .from('inventory_items')
           .upsert(chunk, { 
             onConflict: 'barcode', 
             ignoreDuplicates: true 
-          });
-          
+          })
+          .select('id, quantity');
+
         if (error) throw new Error(`Failed to insert batch ${i}. Error: ${error.message}`);
+
+        // IMMUTABLE AUDIT LOG INGESTION
+        if (upsertedItems && upsertedItems.length > 0) {
+          const auditLogs = upsertedItems.map(ui => ({
+            company_id: appUser.company_id,
+            warehouse_id: targetWarehouse,
+            item_id: ui.id,
+            item_type: 'finished_jewelry',
+            action: 'manual_import',
+            quantity_changed: ui.quantity,
+            previous_stock: 0,
+            new_stock: ui.quantity,
+            reason: 'Manual Partner Ingestion',
+            user_name: appUser.full_name || appUser.email || 'System User'
+          }));
+
+          const { error: auditError } = await supabase.from('inventory_audit_logs').insert(auditLogs);
+          if (auditError) console.error("Audit Logging Failed:", auditError);
+        }
       }
 
       setCommitSuccess(true)
@@ -378,7 +403,7 @@ export default function ManualImportPage() {
       </header>
 
       <main className="max-w-[1600px] mx-auto w-full p-4 sm:p-8 space-y-6">
-        
+
         {commitSuccess ? (
           <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-8 text-center space-y-4 animate-in fade-in zoom-in-95">
             <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto">
@@ -401,9 +426,9 @@ export default function ManualImportPage() {
           </div>
         ) : (
           <div className="flex flex-col gap-6">
-            
+
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-              
+
               <Card className="shadow-sm border-slate-200 lg:col-span-3">
                 <CardContent className="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4 items-end">
                   <div className="w-full">
@@ -426,7 +451,7 @@ export default function ManualImportPage() {
                   </div>
 
                   <div className="w-full">
-                    <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">2. Assign Karigar</Label>
+                    <Label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5 block">2. Assign Partner / Maker</Label>
                     <UISelect onValueChange={setTargetKarigar} value={targetKarigar}>
                       <SelectTrigger className="h-10 border-slate-300 bg-white">
                         <SelectValue placeholder="Select Maker" />
@@ -481,7 +506,7 @@ export default function ManualImportPage() {
             </div>
 
             <Card className="shadow-sm border-slate-200 flex flex-col overflow-hidden h-[75vh] bg-white">
-              
+
               <div className="p-3 border-b border-slate-100 bg-slate-50/80 flex flex-col sm:flex-row justify-between gap-4 shrink-0">
                 <div className="flex items-center gap-3 flex-1">
                   <div className="relative w-full max-w-sm">
@@ -505,12 +530,12 @@ export default function ManualImportPage() {
                     </select>
                   </div>
                 </div>
-                
+
                 <div className="flex items-center gap-2 shrink-0">
                   <Badge variant="outline" className="bg-white text-slate-600 border-slate-200">{filteredItems.length} Entries</Badge>
                 </div>
               </div>
-              
+
               <div className="flex-1 overflow-auto custom-scrollbar relative">
                 {items.length === 0 ? (
                   <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
@@ -536,15 +561,15 @@ export default function ManualImportPage() {
                         </th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-32 border-r border-slate-200">Category *</th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-36 border-r border-slate-200">Barcode *</th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-24 border-r border-slate-200">Purity & Color</th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-32 border-r border-slate-200">Metal Specs<br/><span className="text-[8px] font-medium text-slate-400">Type | Purity | Color</span></th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-20 border-r border-slate-200">Gross (g)</th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-20 border-r border-slate-200">Net (g)</th>
-                        
+
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-indigo-700 bg-indigo-50/50 text-center w-24 border-r border-slate-200">Solitaire<br/><span className="text-[8px] font-medium text-slate-400">Pcs | Cts</span></th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-indigo-700 bg-indigo-50/50 text-center w-24 border-r border-slate-200">Melee<br/><span className="text-[8px] font-medium text-slate-400">Pcs | Cts</span></th>
-                        
+
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-emerald-700 bg-emerald-50/50 text-center w-24 border-r border-slate-200">Total Dia<br/><span className="text-[8px] font-medium text-emerald-600/70">Pcs | Cts</span></th>
-                        
+
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-28 border-r border-slate-200">Dia Specs<br/><span className="text-[8px] font-medium text-slate-400">Shp | Clr | Col</span></th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-emerald-700 text-right w-24 border-r border-slate-200">MRP (₹)</th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-20 border-r border-slate-200">HSN</th>
@@ -556,7 +581,7 @@ export default function ManualImportPage() {
                     <tbody className="divide-y divide-slate-100">
                       {currentItems.map((item) => {
                         const isSelected = selectedIds.has(item.temp_id)
-                        
+
                         const solPcs = Number(item.solitaire_pcs) || 0;
                         const solCts = Number(item.solitaire_cts) || 0;
                         const melPcs = Number(item.melee_pcs) || 0;
@@ -575,8 +600,8 @@ export default function ManualImportPage() {
                               />
                             </td>
                             <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
-                              <ComboCell 
-                                listId="category-list"
+                              <DropdownCell 
+                                options={CATEGORIES}
                                 value={item.item_category} 
                                 onChange={(e: any) => handleItemEdit(item.temp_id, 'item_category', e.target.value)} 
                                 className="font-semibold uppercase"
@@ -594,21 +619,10 @@ export default function ManualImportPage() {
                                 {previewSkus[item.temp_id]}
                               </div>
                             </td>
-                            <td className="py-1 px-1 flex flex-col justify-center border-r border-slate-100 h-full">
-                              <EditableCell 
-                                value={item.purity_karat} 
-                                onChange={(e: any) => handleItemEdit(item.temp_id, 'purity_karat', e.target.value)} 
-                                align="center"
-                                className="font-bold text-amber-600 py-0"
-                                placeholder="18K"
-                              />
-                              <EditableCell 
-                                value={item.metal_color} 
-                                onChange={(e: any) => handleItemEdit(item.temp_id, 'metal_color', e.target.value)} 
-                                align="center"
-                                className="text-[10px] text-slate-500 py-0"
-                                placeholder="Yellow"
-                              />
+                            <td className="py-1 px-1 flex flex-col justify-center border-r border-slate-100 h-full gap-0.5">
+                              <DropdownCell options={METALS} value={item.metal_type} onChange={(e: any) => handleItemEdit(item.temp_id, 'metal_type', e.target.value)} align="center" className="font-bold text-slate-700 py-0" placeholder="Metal" />
+                              <DropdownCell options={PURITIES} value={item.purity_karat} onChange={(e: any) => handleItemEdit(item.temp_id, 'purity_karat', e.target.value)} align="center" className="font-bold text-amber-600 py-0" placeholder="Purity" />
+                              <EditableCell value={item.metal_color} onChange={(e: any) => handleItemEdit(item.temp_id, 'metal_color', e.target.value)} align="center" className="text-[10px] text-slate-500 py-0" placeholder="Color" />
                             </td>
                             <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
                               <EditableCell 
@@ -630,7 +644,7 @@ export default function ManualImportPage() {
                                 placeholder="0.000"
                               />
                             </td>
-                            
+
                             <td className="py-1 px-1 border-r border-slate-100 bg-indigo-50/20">
                               <div className="flex gap-1 h-full items-center">
                                 <EditableCell type="number" value={item.solitaire_pcs} onChange={(e: any) => handleItemEdit(item.temp_id, 'solitaire_pcs', e.target.value)} align="center" className="w-1/2 bg-white/50" placeholder="Pcs" />
@@ -653,8 +667,8 @@ export default function ManualImportPage() {
 
                             <td className="py-1 px-1 align-top border-r border-slate-100">
                               <div className="flex flex-col gap-1 justify-center w-full mt-0.5">
-                                <ComboCell 
-                                  listId="shape-list"
+                                <DropdownCell 
+                                  options={DIAMOND_SHAPES}
                                   value={item.shape} 
                                   onChange={(e: any) => handleItemEdit(item.temp_id, 'shape', e.target.value)} 
                                   align="center"
@@ -662,26 +676,26 @@ export default function ManualImportPage() {
                                   placeholder="Shape"
                                 />
                                 <div className="flex gap-1">
-                                  <ComboCell 
-                                    listId="clarity-list"
+                                  <DropdownCell 
+                                    options={DIAMOND_CLARITIES}
                                     value={item.clarity} 
                                     onChange={(e: any) => handleItemEdit(item.temp_id, 'clarity', e.target.value)} 
                                     align="center"
-                                    className="w-1/2 text-[10px] px-0.5"
+                                    className="w-1/2 text-[10px]"
                                     placeholder="Clr"
                                   />
-                                  <ComboCell 
-                                    listId="color-list"
+                                  <DropdownCell 
+                                    options={DIAMOND_COLORS}
                                     value={item.color} 
                                     onChange={(e: any) => handleItemEdit(item.temp_id, 'color', e.target.value)} 
                                     align="center"
-                                    className="w-1/2 text-[10px] px-0.5"
+                                    className="w-1/2 text-[10px]"
                                     placeholder="Col"
                                   />
                                 </div>
                               </div>
                             </td>
-                            
+
                             <td className="py-1 px-1 align-top pt-2 border-r border-slate-100 pr-2">
                               <EditableCell 
                                 type="number"
@@ -692,7 +706,7 @@ export default function ManualImportPage() {
                                 placeholder="0"
                               />
                             </td>
-                            
+
                             <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
                               <EditableCell 
                                 value={item.hsn_code} 
@@ -703,28 +717,25 @@ export default function ManualImportPage() {
                               />
                             </td>
                             <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
-    <EditableCell 
-      value={item.remarks} 
-      onChange={(e: any) => handleItemEdit(item.temp_id, 'remarks', e.target.value)} 
-      className="text-slate-500 italic"
-      placeholder="Notes..."
-    />
-  </td>
+                              <EditableCell 
+                                value={item.remarks} 
+                                onChange={(e: any) => handleItemEdit(item.temp_id, 'remarks', e.target.value)} 
+                                className="text-slate-500 italic"
+                                placeholder="Notes..."
+                              />
+                            </td>
 
-  {/* ✨ NEW SP TAG CELL */}
-  <td className="py-1 px-1 align-top pt-2.5 text-center border-r border-slate-100 bg-amber-50/10">
-    <label className="cursor-pointer group flex items-center justify-center h-full">
-      <input 
-        type="checkbox"
-        className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer"
-        checked={item.is_sp_item || false}
-        onChange={(e) => handleItemEdit(item.temp_id, 'is_sp_item', e.target.checked)}
-      />
-    </label>
-  </td>
+                            <td className="py-1 px-1 align-top pt-2.5 text-center border-r border-slate-100 bg-amber-50/10">
+                              <label className="cursor-pointer group flex items-center justify-center h-full">
+                                <input 
+                                  type="checkbox"
+                                  className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                                  checked={item.is_sp_item || false}
+                                  onChange={(e) => handleItemEdit(item.temp_id, 'is_sp_item', e.target.checked)}
+                                />
+                              </label>
+                            </td>
 
-                            
-                            
                             <td className="py-1 px-1 align-top pt-2 text-center">
                               <Button 
                                 variant="ghost" 
@@ -776,20 +787,6 @@ export default function ManualImportPage() {
           </div>
         )}
       </main>
-
-      {/* --- GLOBAL DATALISTS FOR AUTOCOMPLETE --- */}
-      <datalist id="category-list">
-        {CATEGORIES.map(c => <option key={c} value={c} />)}
-      </datalist>
-      <datalist id="shape-list">
-        {DIAMOND_SHAPES.map(s => <option key={s} value={s} />)}
-      </datalist>
-      <datalist id="color-list">
-        {DIAMOND_COLORS.map(c => <option key={c} value={c} />)}
-      </datalist>
-      <datalist id="clarity-list">
-        {DIAMOND_CLARITIES.map(c => <option key={c} value={c} />)}
-      </datalist>
 
       <style dangerouslySetInnerHTML={{__html:`
         .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }

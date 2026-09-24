@@ -92,12 +92,10 @@ export default function OverviewTab({ job }: Props) {
   const printRef = useRef<HTMLDivElement>(null)
   const documentPrintRef = useRef<HTMLDivElement>(null)
 
-  // ✨ STATE FOR ON-PAPER EDITING
   const [showLedgerPaper, setShowLedgerPaper] = useState(false)
   const [ledgerEdits, setLedgerEdits] = useState<Record<string, any>>({})
   const [emptyEdits, setEmptyEdits] = useState<Record<number, any>>({})
   const [signatureEdits, setSignatureEdits] = useState({ receiver: '', issuer: '' })
-  // ✨ UPDATED: Added memoDate, issuerName, and bannerText with defaults
   const [ledgerMeta, setLedgerMeta] = useState({ 
     memoDate: format(new Date(), 'dd/MM/yyyy'),
     gstNo: '27AAOPM1004A1ZB', 
@@ -402,7 +400,6 @@ export default function OverviewTab({ job }: Props) {
               </div>
               
               <div className="flex items-center gap-3">
-                {/* ✨ MODIFIED: Opens Full Screen Ledger Print View */}
                 <Button 
                   onClick={() => {
                     const initialEdits: Record<string, any> = {}
@@ -449,7 +446,8 @@ export default function OverviewTab({ job }: Props) {
                 <p className="text-sm font-semibold text-gray-800">{job.design_code || 'N/A'}</p>
               </div>
               <div>
-                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Est. Gold</p>
+                {/* ✨ UPDATED LABEL TO METAL */}
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Est. Metal</p>
                 <p className="text-sm font-semibold text-gray-800">{job.gold_expected_weight_g || 0} <span className="text-gray-400 font-medium">g</span></p>
               </div>
               <div>
@@ -586,7 +584,8 @@ export default function OverviewTab({ job }: Props) {
               </div>
 
               <div className="w-full md:w-32 space-y-1.5">
-                <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Exp. Gold</Label>
+                {/* ✨ UPDATED LABEL TO METAL */}
+                <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Exp. Metal (g)</Label>
                 <div className="relative">
                   <Input type="number" step="0.001" placeholder="0.00" className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all pr-6" value={expectedGold} onChange={(e) => setExpectedGold(e.target.value)} />
                   <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-gray-400">g</span>
@@ -614,7 +613,8 @@ export default function OverviewTab({ job }: Props) {
                         <TableHead className="w-[50px]"></TableHead>
                         <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">SKU / Style Ref</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Category</TableHead>
-                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Gold (g)</TableHead>
+                        {/* ✨ UPDATED LABEL TO METAL */}
+                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Metal (g)</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Dia (ct)</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Context Tags</TableHead>
                       </TableRow>
@@ -719,7 +719,8 @@ export default function OverviewTab({ job }: Props) {
                       </TableHead>
                       <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 px-2">SKU Reference</TableHead>
                       <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Category</TableHead>
-                      <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Gold</TableHead>
+                      {/* ✨ UPDATED LABEL TO METAL */}
+                      <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Metal</TableHead>
                       <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Dia</TableHead>
                       <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Status / Tags</TableHead>
                       <TableHead className="w-[60px] h-11"></TableHead>

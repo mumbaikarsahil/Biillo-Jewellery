@@ -74,6 +74,7 @@ interface Customer {
   invoices?: any[];
   vouchers?: any[];
   activity_timeline?: any[];
+  gift_history?: any[]; // ✨ NEW: Track Past Gifts
   [key: string]: any;
 }
 
@@ -208,14 +209,17 @@ export default function DiscoveryPage() {
           .maybeSingle();
         
         if (custData) {
-          // 2. Fetch Insights (Invoices & Vouchers) in parallel
-          const [invRes, vouchRes] = await Promise.all([
+          // 2. ✨ Fetch Insights INCLUDING Gift History in parallel
+          const [invRes, vouchRes, giftRes] = await Promise.all([
             supabase.from('invoices').select('final_total, invoice_number').eq('customer_id', custData.id),
-            supabase.from('vouchers').select('status, code').eq('customer_id', custData.id)
+            supabase.from('vouchers').select('status, code').eq('customer_id', custData.id),
+            supabase.from('customer_gifts_history').select('gift_name, created_at').eq('customer_id', custData.id)
           ]);
 
           custData.invoices = invRes.data || [];
           custData.vouchers = vouchRes.data || [];
+          custData.gift_history = giftRes.data || []; // Load the gift history
+          
           setExistingCustomer(custData);
         } else {
           setExistingCustomer(null);
@@ -314,6 +318,7 @@ export default function DiscoveryPage() {
       // Merge insights back in so UI doesn't drop them
       data.invoices = existingCustomer.invoices;
       data.vouchers = existingCustomer.vouchers;
+      data.gift_history = existingCustomer.gift_history; // Preserve history
       
       setExistingCustomer(data);
       setIsEditModalOpen(false);
@@ -336,11 +341,13 @@ export default function DiscoveryPage() {
 
         if (giftErr) throw giftErr;
 
+        // ✨ UPDATE: Insert the user ID who gave the gift
         await supabase.from('customer_gifts_history').insert({
           company_id: appUser?.company_id,
           customer_id: customerId,
           warehouse_id: selectedLocation,
-          gift_name: selectedGift
+          gift_name: selectedGift,
+          issued_by: appUser?.id || appUser?.user_id // Logs the active ERP User
         });
 
         await supabase.from('customers').update({ 
@@ -349,9 +356,18 @@ export default function DiscoveryPage() {
 
         toast.success(`${selectedGift} successfully issued and logged!`);
         
+        // ✨ Automatically add the new gift to the UI history so the warning count updates instantly
+        if (existingCustomer) {
+          setExistingCustomer(prev => prev ? {
+             ...prev, 
+             gift_history: [...(prev.gift_history || []), { gift_name: selectedGift }]
+          } : prev);
+        }
+
         setAvailableGifts(prev => prev.map(g => 
           g.item_name === selectedGift ? { ...g, stock_count: g.stock_count - 1 } : g
         ).filter(g => g.stock_count > 0));
+        
         setSelectedGift('none');
         
       } catch (err: any) {
@@ -371,11 +387,9 @@ export default function DiscoveryPage() {
     try {
       let activeCustomerId = existingCustomer?.id;
       
-      // ✨ 1. Resolve current store context for tracking
       const validWarehouseId = selectedLocation === 'ALL' ? null : selectedLocation;
       const currentStoreName = warehouses.find(w => w.id === selectedLocation)?.name || 'HQ / Online';
 
-      // ✨ 2. Enrich the timeline event with the specific store name
       const newSystemEvent = {
         timestamp: new Date().toISOString(),
         type: 'WALK-IN',
@@ -391,7 +405,7 @@ export default function DiscoveryPage() {
           .from('customers')
           .update({ 
             customer_status: 'Walk-in',
-            warehouse_id: validWarehouseId, // ✨ 3. FORCE-UPDATE their current location!
+            warehouse_id: validWarehouseId, 
             activity_timeline: updatedTimeline 
           })
           .eq('id', existingCustomer.id);
@@ -402,7 +416,7 @@ export default function DiscoveryPage() {
         
         const payload = {
           company_id: appUser?.company_id,
-          warehouse_id: validWarehouseId, // Already correct here
+          warehouse_id: validWarehouseId, 
           full_name: newCustForm.full_name.trim(),
           phone: phoneInput,
           email: newCustForm.email.trim() || null,
@@ -426,6 +440,7 @@ export default function DiscoveryPage() {
         
         data.invoices = [];
         data.vouchers = [];
+        data.gift_history = [];
         setExistingCustomer(data);
         toast.success("Customer registered & checked in successfully!");
       }
@@ -526,6 +541,9 @@ export default function DiscoveryPage() {
     gstAmount = basePrice * 0.03
     finalPrice = Math.round(basePrice + gstAmount)
   }
+
+  // ✨ NEW: Calculate how many times they received the currently selected gift
+  const pastGiftCount = existingCustomer?.gift_history?.filter((g: any) => g.gift_name === selectedGift).length || 0;
 
   return (
     <div className="min-h-screen bg-[#fafafa] flex flex-col font-sans selection:bg-indigo-100 pb-20">
@@ -661,7 +679,7 @@ export default function DiscoveryPage() {
                       </div>
                     </div>
 
-                    {/* ✨ VISITOR INSIGHTS PANEL */}
+                    {/* VISITOR INSIGHTS PANEL */}
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                       <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex flex-col justify-center items-center text-center">
                         <Receipt className="w-4 h-4 text-indigo-500 mb-1" />
@@ -693,7 +711,7 @@ export default function DiscoveryPage() {
                       </div>
                     </div>
 
-                    {/* ✨ PROFILE COMPLETION WIDGET */}
+                    {/* PROFILE COMPLETION WIDGET */}
                     {completionStats.percentage < 100 && (
                       <div className="flex items-center justify-between bg-orange-50 border border-orange-200 px-3 py-2 rounded-lg">
                          <div className="flex flex-col gap-0.5">
@@ -724,7 +742,7 @@ export default function DiscoveryPage() {
                     Select branch to issue gifts
                   </div>
                 ) : (
-                  <div className="w-full sm:w-48 shrink-0 mt-3 sm:mt-0">
+                  <div className="w-full sm:w-48 shrink-0 mt-3 sm:mt-0 relative">
                     <Select value={selectedGift} onValueChange={setSelectedGift}>
                       <SelectTrigger className="h-10 border-slate-200 bg-white focus:ring-amber-500">
                         <Gift className={cn("w-4 h-4 mr-2", selectedGift !== 'none' ? "text-amber-500" : "text-slate-400")} />
@@ -745,6 +763,13 @@ export default function DiscoveryPage() {
                         )}
                       </SelectContent>
                     </Select>
+
+                    {/* ✨ NEW: Historical Gift Warning */}
+                    {selectedGift !== 'none' && pastGiftCount > 0 && (
+                      <p className="absolute -bottom-5 left-0 text-[9px] font-bold text-amber-600 flex items-center gap-1 animate-in fade-in whitespace-nowrap">
+                        <AlertCircle className="w-3 h-3" /> Given {pastGiftCount} time{pastGiftCount > 1 ? 's' : ''} previously
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>
