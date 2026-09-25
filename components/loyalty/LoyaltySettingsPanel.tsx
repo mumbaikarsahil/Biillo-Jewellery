@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabaseClient";
-import { Loader2, Settings2, Save, Plus, MessageCircle, Code2, AlertCircle } from "lucide-react";
+import { Loader2, Settings2, Save, Plus, MessageCircle, Code2, AlertCircle, Repeat, Send, Edit, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,12 +27,17 @@ export default function LoyaltySettingsPanel() {
     wa_mapping_points_earned: "",
     wa_mapping_points_redeemed: ""
   });
+  
   const [activities, setActivities] = useState<any[]>([]);
+  const [waTemplates, setWaTemplates] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  
+  // Modal State
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
 
-  // ✨ Added evidence types from the document
   const EVIDENCE_OPTIONS = [
     "Screen Shot",
     "Profile update record",
@@ -43,17 +48,26 @@ export default function LoyaltySettingsPanel() {
     "Event details and attendance record"
   ];
 
-  const [newActivity, setNewActivity] = useState({
+  const defaultActivityState = {
     category: "Social & Digital Engagement", 
     name: "", 
     is_dynamic: "false", 
     points: "", 
-    requires_evidence: "true", // Default to true based on doc
+    requires_evidence: "true",
     evidence_type: EVIDENCE_OPTIONS[0], 
-    update_method: "Manual upload in ERP"
-  });
+    update_method: "Manual upload in ERP",
+    limit_type: "unlimited", 
+    limit_count: "1",
+    wa_template_name: "",
+    wa_mapping: ""
+  };
 
-  useEffect(() => { fetchData(); }, []);
+  const [newActivity, setNewActivity] = useState(defaultActivityState);
+
+  useEffect(() => { 
+    fetchData(); 
+    fetchTemplates();
+  }, []);
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -64,6 +78,29 @@ export default function LoyaltySettingsPanel() {
     if (settingsRes.data) setSettings(settingsRes.data);
     if (activitiesRes.data) setActivities(activitiesRes.data);
     setIsLoading(false);
+  };
+
+  const fetchTemplates = async () => {
+    setIsLoadingTemplates(true);
+    try {
+      const res = await fetch("/api/whatsapp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          action: "template.list", 
+          payload: { limit: 100 } 
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.message || "Failed to fetch templates");
+      
+      const fetched = Array.isArray(json.data) ? json.data : (json.templates || []);
+      setWaTemplates(fetched);
+    } catch (error: any) {
+      toast.error(`Template Error: ${error.message}`);
+    } finally {
+      setIsLoadingTemplates(false);
+    }
   };
 
   const handleSaveSettings = async () => {
@@ -93,23 +130,62 @@ export default function LoyaltySettingsPanel() {
     }
   };
 
-  const handleAddActivity = async () => {
+  const openNewActivityModal = () => {
+    setEditingId(null);
+    setNewActivity(defaultActivityState);
+    setIsActivityModalOpen(true);
+  };
+
+  const openEditActivityModal = (activity: any) => {
+    setEditingId(activity.id);
+    setNewActivity({
+      category: activity.category,
+      name: activity.name,
+      is_dynamic: activity.is_dynamic ? "true" : "false",
+      points: activity.points?.toString() || "0",
+      requires_evidence: activity.requires_evidence ? "true" : "false",
+      evidence_type: activity.evidence_type || EVIDENCE_OPTIONS[0],
+      update_method: activity.update_method,
+      limit_type: activity.limit_type || "unlimited",
+      limit_count: activity.limit_count?.toString() || "1",
+      wa_template_name: activity.wa_template_name || "",
+      wa_mapping: activity.wa_mapping || ""
+    });
+    setIsActivityModalOpen(true);
+  };
+
+  const handleSaveActivity = async () => {
     if (!newActivity.name) return toast.error("Activity name is required");
     setIsSaving(true);
+    
+    const payload = {
+      category: newActivity.category,
+      name: newActivity.name,
+      is_dynamic: newActivity.is_dynamic === "true",
+      points: Number(newActivity.points) || 0,
+      requires_evidence: newActivity.requires_evidence === "true",
+      evidence_type: newActivity.requires_evidence === "true" ? newActivity.evidence_type : null,
+      update_method: newActivity.update_method,
+      limit_type: newActivity.limit_type,
+      limit_count: newActivity.limit_type === 'custom' ? Number(newActivity.limit_count) : 1,
+      wa_template_name: newActivity.wa_template_name.trim() || null,
+      wa_mapping: newActivity.wa_mapping.trim() || null
+    };
+
     try {
-      const { error } = await supabase.from("loyalty_activities").insert({
-        category: newActivity.category,
-        name: newActivity.name,
-        is_dynamic: newActivity.is_dynamic === "true",
-        points: Number(newActivity.points) || 0,
-        requires_evidence: newActivity.requires_evidence === "true",
-        evidence_type: newActivity.requires_evidence === "true" ? newActivity.evidence_type : null,
-        update_method: newActivity.update_method
-      });
-      if (error) throw error;
-      toast.success("New earning rule created.");
+      if (editingId) {
+        const { error } = await supabase.from("loyalty_activities").update(payload).eq("id", editingId);
+        if (error) throw error;
+        toast.success("Earning rule updated.");
+      } else {
+        const { error } = await supabase.from("loyalty_activities").insert(payload);
+        if (error) throw error;
+        toast.success("New earning rule created.");
+      }
+      
       setIsActivityModalOpen(false);
-      setNewActivity({ category: "Social & Digital Engagement", name: "", is_dynamic: "false", points: "", requires_evidence: "true", evidence_type: EVIDENCE_OPTIONS[0], update_method: "Manual upload in ERP" });
+      setNewActivity(defaultActivityState);
+      setEditingId(null);
       fetchData();
     } catch (error: any) {
       toast.error(error.message);
@@ -142,14 +218,14 @@ export default function LoyaltySettingsPanel() {
                 Earning Engine
               </TabsTrigger>
               <TabsTrigger value="automations" className="data-[state=active]:border-b-2 data-[state=active]:border-zinc-900 rounded-none px-1 pb-2 font-medium text-xs">
-                Automations
+                Global Automations
               </TabsTrigger>
             </TabsList>
           </div>
         </CardHeader>
         
         <CardContent className="p-0">
-          {/* TAB 1: GLOBAL RULES (Unchanged) */}
+          {/* TAB 1: GLOBAL RULES */}
           <TabsContent value="rules" className="m-0 p-4 sm:p-6 space-y-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 sm:gap-6">
               <div className="space-y-1.5">
@@ -183,21 +259,22 @@ export default function LoyaltySettingsPanel() {
             <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 sm:p-6 border-b border-zinc-100">
               <div>
                 <h3 className="text-sm font-semibold text-zinc-900">Earning Rules</h3>
-                <p className="text-xs text-zinc-500 mt-0.5">Define actions that award points globally.</p>
+                <p className="text-xs text-zinc-500 mt-0.5">Define actions, limits, and specific WhatsApp messages.</p>
               </div>
               <Dialog open={isActivityModalOpen} onOpenChange={setIsActivityModalOpen}>
-                <DialogTrigger asChild>
-                  <Button size="sm" className="h-9 px-4 mt-3 sm:mt-0 text-xs bg-zinc-900 text-white hover:bg-zinc-800 shadow-sm font-medium w-full sm:w-auto">
-                    <Plus className="w-3.5 h-3.5 mr-1.5" /> Add Rule
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="sm:max-w-[550px] p-0 border-none shadow-xl rounded-xl w-[95vw]">
+                <Button size="sm" onClick={openNewActivityModal} className="h-9 px-4 mt-3 sm:mt-0 text-xs bg-zinc-900 text-white hover:bg-zinc-800 shadow-sm font-medium w-full sm:w-auto">
+                  <Plus className="w-3.5 h-3.5 mr-1.5" /> Add Rule
+                </Button>
+                
+                <DialogContent className="sm:max-w-[600px] p-0 border-none shadow-xl rounded-xl w-[95vw]">
                   <DialogHeader className="bg-zinc-50/80 p-5 border-b border-zinc-100">
-                    <DialogTitle className="text-sm font-semibold text-zinc-900">Create Earning Rule</DialogTitle>
+                    <DialogTitle className="text-sm font-semibold text-zinc-900">
+                      {editingId ? 'Edit Earning Rule' : 'Create Earning Rule'}
+                    </DialogTitle>
                   </DialogHeader>
-                  <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto custom-scrollbar">
+                  <div className="p-5 space-y-5 max-h-[70vh] overflow-y-auto custom-scrollbar">
                     
-                    {/* ✨ Add Rule Form: Updated to match document spec */}
+                    {/* Basic Info */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <Label className="text-xs font-medium text-zinc-700">Category</Label>
@@ -229,14 +306,15 @@ export default function LoyaltySettingsPanel() {
 
                     <div className="space-y-1.5">
                       <Label className="text-xs font-medium text-zinc-700">Action Name</Label>
-                      <Input placeholder="e.g. Visit showroom on Birthday" value={newActivity.name} onChange={e => setNewActivity({...newActivity, name: e.target.value})} className="h-9 border-zinc-200 text-sm" />
+                      <Input placeholder="e.g. Leave a Google Review" value={newActivity.name} onChange={e => setNewActivity({...newActivity, name: e.target.value})} className="h-9 border-zinc-200 text-sm" />
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Points & Limits */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-zinc-50 border border-zinc-100 rounded-lg">
                       <div className="space-y-1.5">
                         <Label className="text-xs font-medium text-zinc-700">Point System</Label>
                         <Select value={newActivity.is_dynamic} onValueChange={v => setNewActivity({...newActivity, is_dynamic: v})}>
-                          <SelectTrigger className="h-9 border-zinc-200 text-sm shadow-sm"><SelectValue /></SelectTrigger>
+                          <SelectTrigger className="h-9 border-zinc-200 text-sm bg-white"><SelectValue /></SelectTrigger>
                           <SelectContent>
                             <SelectItem value="false">Fixed Points</SelectItem>
                             <SelectItem value="true">Dynamic (5%)</SelectItem>
@@ -245,11 +323,61 @@ export default function LoyaltySettingsPanel() {
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-xs font-medium text-zinc-700">Points Awarded</Label>
-                        <Input type="number" disabled={newActivity.is_dynamic === "true"} placeholder={newActivity.is_dynamic === "true" ? "Calculated at checkout" : "e.g. 500"} value={newActivity.points} onChange={e => setNewActivity({...newActivity, points: e.target.value})} className="h-9 border-zinc-200 text-sm shadow-sm" />
+                        <Input type="number" disabled={newActivity.is_dynamic === "true"} placeholder={newActivity.is_dynamic === "true" ? "Calculated" : "e.g. 500"} value={newActivity.points} onChange={e => setNewActivity({...newActivity, points: e.target.value})} className="h-9 border-zinc-200 text-sm bg-white shadow-sm" />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-medium text-zinc-700 flex items-center gap-1.5"><Repeat className="w-3 h-3" /> Frequency</Label>
+                        <Select value={newActivity.limit_type} onValueChange={v => setNewActivity({...newActivity, limit_type: v})}>
+                          <SelectTrigger className="h-9 border-zinc-200 text-sm bg-white"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="unlimited">Unlimited</SelectItem>
+                            <SelectItem value="once_lifetime">Once Per Customer</SelectItem>
+                            <SelectItem value="custom">Custom Limit</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
                     </div>
 
-                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-3 mt-2">
+                    {newActivity.limit_type === 'custom' && (
+                      <div className="space-y-1.5 animate-in fade-in slide-in-from-top-2">
+                        <Label className="text-xs font-medium text-zinc-700">Max times customer can complete this</Label>
+                        <Input type="number" placeholder="e.g. 3" value={newActivity.limit_count} onChange={e => setNewActivity({...newActivity, limit_count: e.target.value})} className="h-9 border-zinc-200 w-1/3" />
+                      </div>
+                    )}
+
+                    {/* WhatsApp Override */}
+                    <div className="bg-[#25D366]/5 border border-[#25D366]/20 rounded-lg p-4 space-y-3">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Send className="w-4 h-4 text-[#25D366]" />
+                        <span className="text-xs font-bold text-zinc-800">Activity-Specific WhatsApp (Optional)</span>
+                      </div>
+                      <p className="text-[11px] text-zinc-500 leading-tight">If provided, this template will be sent instead of the global 'Points Earned' template.</p>
+                      
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                        <div className="space-y-1.5">
+                          <Label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Template Name</Label>
+                          <Select value={newActivity.wa_template_name} onValueChange={v => setNewActivity({...newActivity, wa_template_name: v})}>
+                            <SelectTrigger className="h-9 border-zinc-200 text-sm bg-white">
+                              {isLoadingTemplates ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : null}
+                              <SelectValue placeholder="Select Template" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {waTemplates.map(t => (
+                                <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
+                              ))}
+                              <SelectItem value="none" className="text-zinc-400 italic">None (Use Global)</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Variables Map</Label>
+                          <Input placeholder="e.g. customer_name, points_awarded" value={newActivity.wa_mapping} onChange={e => setNewActivity({...newActivity, wa_mapping: e.target.value})} className="h-9 border-zinc-200 text-sm bg-white font-mono" />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Evidence */}
+                    <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 space-y-3">
                       <div className="flex items-center gap-2 mb-2">
                         <AlertCircle className="w-4 h-4 text-amber-600" />
                         <span className="text-xs font-bold text-amber-800">Evidence Configuration</span>
@@ -281,8 +409,8 @@ export default function LoyaltySettingsPanel() {
                   </div>
                   <DialogFooter className="p-4 bg-zinc-50 border-t border-zinc-100 flex flex-col sm:flex-row gap-2 shrink-0">
                     <Button variant="outline" className="h-9 text-xs font-medium w-full sm:w-auto" onClick={() => setIsActivityModalOpen(false)}>Cancel</Button>
-                    <Button className="h-9 text-xs bg-zinc-900 text-white font-medium w-full sm:w-auto shadow-sm" onClick={handleAddActivity} disabled={isSaving}>
-                      {isSaving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : null} Save Rule
+                    <Button className="h-9 text-xs bg-zinc-900 text-white font-medium w-full sm:w-auto shadow-sm" onClick={handleSaveActivity} disabled={isSaving}>
+                      {isSaving ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : null} {editingId ? 'Update Rule' : 'Save Rule'}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -294,9 +422,10 @@ export default function LoyaltySettingsPanel() {
                 <TableHeader className="bg-zinc-50/80 sticky top-0 z-10 border-b border-zinc-100">
                   <TableRow className="hover:bg-transparent border-none">
                     <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4 sm:px-6">Category / Action</TableHead>
-                    <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4">Reward</TableHead>
-                    <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4">Evidence Required</TableHead>
+                    <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4">Reward & Limits</TableHead>
+                    <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4">Automation / Evidence</TableHead>
                     <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4 text-center">Active</TableHead>
+                    <TableHead className="text-[11px] font-medium text-zinc-500 py-3 px-4 text-center">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -306,20 +435,37 @@ export default function LoyaltySettingsPanel() {
                         <p className="text-[13px] font-medium text-zinc-900">{activity.name}</p>
                         <p className="text-[11px] text-zinc-500 mt-1">{activity.category} • {activity.update_method === 'Manual upload in ERP' ? 'POS Manual' : 'Auto'}</p>
                       </TableCell>
+                      
                       <TableCell className="py-3.5 px-4">
-                        <span className="inline-flex px-2 py-0.5 rounded text-[11px] font-medium bg-zinc-100 text-zinc-700 border border-zinc-200">
-                          {activity.is_dynamic ? 'Dynamic 5%' : `${activity.points} Pts`}
-                        </span>
-                      </TableCell>
-                      <TableCell className="py-3.5 px-4">
-                        {activity.requires_evidence ? (
-                          <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 uppercase tracking-widest">
-                            {activity.evidence_type}
+                        <div className="flex flex-col gap-1.5 items-start">
+                          <span className="inline-flex px-2 py-0.5 rounded text-[11px] font-medium bg-zinc-100 text-zinc-700 border border-zinc-200">
+                            {activity.is_dynamic ? 'Dynamic 5%' : `${activity.points} Pts`}
                           </span>
-                        ) : (
-                          <span className="text-[11px] text-zinc-400 font-medium">None</span>
-                        )}
+                          <span className="text-[10px] font-medium text-zinc-500">
+                            {activity.limit_type === 'once_lifetime' ? 'Once per customer' : 
+                             activity.limit_type === 'custom' ? `Max ${activity.limit_count} times` : 
+                             'Unlimited'}
+                          </span>
+                        </div>
                       </TableCell>
+
+                      <TableCell className="py-3.5 px-4">
+                        <div className="flex flex-col gap-1.5 items-start">
+                          {activity.wa_template_name ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-[#25D366]/10 text-[#1DA851] border border-[#25D366]/20" title={activity.wa_template_name}>
+                              <MessageCircle className="w-3 h-3" /> Custom WA
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-zinc-400 font-medium">Global WA</span>
+                          )}
+                          {activity.requires_evidence && (
+                            <span className="inline-flex px-2 py-0.5 rounded text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200 uppercase tracking-widest">
+                              Req. {activity.evidence_type}
+                            </span>
+                          )}
+                        </div>
+                      </TableCell>
+
                       <TableCell className="py-3.5 px-4 text-center">
                         <div className="flex justify-center items-center h-full">
                           <input
@@ -330,6 +476,13 @@ export default function LoyaltySettingsPanel() {
                           />
                         </div>
                       </TableCell>
+
+                      <TableCell className="py-3.5 px-4 text-center">
+                        <Button variant="ghost" size="icon" className="h-7 w-7 text-zinc-400 hover:text-indigo-600 hover:bg-indigo-50" onClick={() => openEditActivityModal(activity)}>
+                          <Edit className="w-3.5 h-3.5" />
+                        </Button>
+                      </TableCell>
+
                     </TableRow>
                   ))}
                 </TableBody>
@@ -337,7 +490,7 @@ export default function LoyaltySettingsPanel() {
             </div>
           </TabsContent>
 
-          {/* TAB 3: AUTOMATIONS (Unchanged) */}
+          {/* TAB 3: GLOBAL AUTOMATIONS */}
           <TabsContent value="automations" className="m-0 p-4 sm:p-6 space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-zinc-100 pb-4">
               <div>
@@ -376,7 +529,17 @@ export default function LoyaltySettingsPanel() {
                   <Label className="text-[11px] font-medium text-zinc-600 uppercase tracking-widest flex items-center gap-1.5">
                     <MessageCircle className="w-3.5 h-3.5" /> Enrollment Template Name
                   </Label>
-                  <Input placeholder="e.g., loyalty_welcome_01" value={settings.wa_template_enrollment || ""} onChange={e => setSettings({...settings, wa_template_enrollment: e.target.value})} className="h-9 border-zinc-200 font-mono text-sm shadow-sm" />
+                  <Select value={settings.wa_template_enrollment} onValueChange={v => setSettings({...settings, wa_template_enrollment: v})}>
+                    <SelectTrigger className="h-9 border-zinc-200 text-sm shadow-sm bg-white">
+                      {isLoadingTemplates ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : null}
+                      <SelectValue placeholder="Select Template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {waTemplates.map(t => (
+                        <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px] font-medium text-zinc-600 uppercase tracking-widest">Ordered Variables Map</Label>
@@ -388,9 +551,19 @@ export default function LoyaltySettingsPanel() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-white border border-zinc-100 p-4 rounded-xl shadow-sm">
                 <div className="space-y-1.5">
                   <Label className="text-[11px] font-medium text-zinc-600 uppercase tracking-widest flex items-center gap-1.5">
-                    <MessageCircle className="w-3.5 h-3.5" /> Points Earned Template
+                    <MessageCircle className="w-3.5 h-3.5" /> Default Points Earned Template
                   </Label>
-                  <Input placeholder="e.g., loyalty_points_awarded" value={settings.wa_template_points_earned || ""} onChange={e => setSettings({...settings, wa_template_points_earned: e.target.value})} className="h-9 border-zinc-200 font-mono text-sm shadow-sm" />
+                  <Select value={settings.wa_template_points_earned} onValueChange={v => setSettings({...settings, wa_template_points_earned: v})}>
+                    <SelectTrigger className="h-9 border-zinc-200 text-sm shadow-sm bg-white">
+                      {isLoadingTemplates ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : null}
+                      <SelectValue placeholder="Select Template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {waTemplates.map(t => (
+                        <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px] font-medium text-zinc-600 uppercase tracking-widest">Ordered Variables Map</Label>
@@ -404,7 +577,17 @@ export default function LoyaltySettingsPanel() {
                   <Label className="text-[11px] font-medium text-zinc-600 uppercase tracking-widest flex items-center gap-1.5">
                     <MessageCircle className="w-3.5 h-3.5" /> Points Redeemed Template
                   </Label>
-                  <Input placeholder="e.g., loyalty_points_redeemed" value={settings.wa_template_points_redeemed || ""} onChange={e => setSettings({...settings, wa_template_points_redeemed: e.target.value})} className="h-9 border-zinc-200 font-mono text-sm shadow-sm" />
+                  <Select value={settings.wa_template_points_redeemed} onValueChange={v => setSettings({...settings, wa_template_points_redeemed: v})}>
+                    <SelectTrigger className="h-9 border-zinc-200 text-sm shadow-sm bg-white">
+                      {isLoadingTemplates ? <Loader2 className="w-3 h-3 animate-spin mr-2" /> : null}
+                      <SelectValue placeholder="Select Template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {waTemplates.map(t => (
+                        <SelectItem key={t.name} value={t.name}>{t.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-1.5">
                   <Label className="text-[11px] font-medium text-zinc-600 uppercase tracking-widest">Ordered Variables Map</Label>

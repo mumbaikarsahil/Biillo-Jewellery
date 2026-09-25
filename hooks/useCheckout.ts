@@ -30,6 +30,10 @@ export function useCheckout({
   const [splitPayments, setSplitPayments] = useState({ cash: '', card: '', upi: '', bank: '', cheque: '' })
   const [isProcessing, setIsProcessing] = useState(false)
 
+
+  // --- REMARKS STATE ---
+  const [billingRemarks, setBillingRemarks] = useState('')
+  const [paymentRemarks, setPaymentRemarks] = useState('')
   // --- ESTIMATE ADD-ON STATE ---
   const [estimateChargeType, setEstimateChargeType] = useState<'tax' | 'handling' | 'none'>('tax')
   const [estimateHandlingPercent, setEstimateHandlingPercent] = useState<string>('3')
@@ -519,6 +523,10 @@ export function useCheckout({
       }
       else if (mode === 'repair') { 
         finalNo = `REP-${Date.now().toString().slice(-6)}`
+        
+        // ✨ FIX: Grab the remarks directly from the hook's state
+        const combinedNotes = [repairDetails.defectNotes, billingRemarks, paymentRemarks].filter(Boolean).join(' | ');
+
         const { error } = await supabase.from('repair_tickets').insert({
           created_at: effectiveDateISO,
           company_id: appUser?.company_id,
@@ -529,7 +537,9 @@ export function useCheckout({
           item_description: repairDetails.itemDescription,
           gross_weight_g: Number(repairDetails.grossWeight),
           purity: repairDetails.purity,
-          defect_notes: repairDetails.defectNotes,
+          
+          defect_notes: combinedNotes, // ✨ Pushes the merged notes
+          
           estimated_cost: Number(repairDetails.estimatedCost) || 0,
           advance_paid: Number(repairDetails.advancePaid) || 0,
           condition_photo_url: repairDetails.conditionPhotoUrl,
@@ -539,6 +549,7 @@ export function useCheckout({
         })
         if (error) throw error
         toast.success("Repair Ticket Generated!")
+      
       }
       else if (mode === 'return') { 
         finalNo = `RET-${Date.now().toString().slice(-6)}`
