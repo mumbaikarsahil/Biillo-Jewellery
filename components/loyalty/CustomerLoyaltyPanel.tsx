@@ -109,35 +109,52 @@ export default function CustomerLoyaltyPanel({ customerId, customerPhone, custom
   const sendWhatsAppNotification = async (templateName: string, mappingString: string, specificContext: any) => {
     if (!settings?.is_wa_enabled || !templateName || !customerPhone) return;
 
+    // 1. Sanitize and ensure country code exists
+    let formattedPhone = customerPhone.replace(/\D/g, '');
+    if (formattedPhone.length === 10) {
+      formattedPhone = '91' + formattedPhone;
+    }
+
     try {
       const baseContext = {
         customer_name: customerName || 'Customer',
-        customer_phone: customerPhone,
-        total_balance: specificContext.total_balance || balance,
-        activity_name: specificContext.activity_name || 'Loyalty Update',
-        points_awarded: specificContext.points_awarded || 0,
-        points_redeemed: specificContext.points_redeemed || 0,
+        customer_phone: formattedPhone,
+        total_balance: specificContext.total_balance ?? balance,
+        activity_name: specificContext.activity_name ?? 'Loyalty Update',
+        points_awarded: specificContext.points_awarded ?? 0,
+        points_redeemed: specificContext.points_redeemed ?? 0,
       };
 
       const mappedParams = mappingString
-        ? mappingString.split(',').map(v => baseContext[v.trim() as keyof typeof baseContext]?.toString() || "")
+        ? mappingString.split(',').map(v => baseContext[v.trim() as keyof typeof baseContext]?.toString() || "0")
         : [];
 
-      await fetch("/api/whatsapp", {
+      const res = await fetch("/api/whatsapp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          phone: customerPhone,
-          template: templateName,
-          parameters: mappedParams,
-          data: baseContext 
+          action: "message.sendDirect",
+          payload: {
+            user_id: formattedPhone,
+            template_name: templateName,
+            lang: "en",
+            namespace: "bfbb14c4_778e_453b_97c2_92f60bb9e978", // ✨ Added your exact namespace here
+            parameters: mappedParams
+          }
         })
       });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("WhatsApp API rejected the request:", errorText);
+      } else {
+        console.log("WhatsApp message triggered successfully!");
+      }
+
     } catch (error) {
       console.error("WhatsApp trigger failed", error);
     }
   };
-
   const handleEnrollCustomer = async () => {
     setIsSubmitting(true);
     try {
