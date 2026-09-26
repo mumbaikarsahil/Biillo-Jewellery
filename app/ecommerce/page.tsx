@@ -6,7 +6,7 @@ import { format } from "date-fns";
 import { 
   ShoppingCart, PackageSearch, MapPin, ArrowRight, 
   Globe, Loader2, AlertCircle, TrendingUp,
-  Clock, Hammer, CheckCircle2
+  Clock, Hammer, CheckCircle2, LayoutTemplate
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -261,22 +261,32 @@ export default function EcommerceDashboard() {
                 </Card>
               </Link>
 
-              {/* Pincode Routing Module */}
-              <Link href="/ecommerce/routing" className="block outline-none sm:col-span-2">
+              {/* ✨ NEW: Storefront Settings Module */}
+              <Link href="/ecommerce/customise" className="block outline-none">
                 <Card className="shadow-sm border-zinc-200 bg-white rounded-xl hover:border-zinc-300 hover:shadow-md transition-all cursor-pointer group h-full">
-                  <CardContent className="p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
-                    <div className="flex-1">
-                      <div className="w-10 h-10 border border-zinc-200 bg-white text-zinc-600 shadow-sm rounded-lg flex items-center justify-center mb-5 transition-colors group-hover:border-zinc-300">
-                        <MapPin className="w-5 h-5" />
-                      </div>
-                      <h3 className="text-base font-semibold text-zinc-900 tracking-tight">Pincode Routing Engine</h3>
-                      <p className="text-sm text-zinc-500 mt-2 leading-relaxed max-w-md">
-                        Map geographical delivery zones to physical store locations. Controls logistics engine for dynamic ETAs.
-                      </p>
+                  <CardContent className="p-6">
+                    <div className="w-10 h-10 border border-zinc-200 bg-white text-zinc-600 shadow-sm rounded-lg flex items-center justify-center mb-5 transition-colors group-hover:border-zinc-300">
+                      <LayoutTemplate className="w-5 h-5" />
                     </div>
-                    <Button variant="outline" className="hidden sm:flex bg-white border-zinc-200 text-zinc-900 hover:bg-zinc-50 font-medium text-sm h-9 rounded-lg shadow-sm">
-                      Configure Map <ArrowRight className="w-4 h-4 ml-1.5 text-zinc-500" />
-                    </Button>
+                    <h3 className="text-base font-semibold text-zinc-900 tracking-tight">Customisation Settings</h3>
+                    <p className="text-sm text-zinc-500 mt-2 leading-relaxed">
+                      Customize website banners, grid layouts, store locations, shipping fees, and highlight tickers.
+                    </p>
+                  </CardContent>
+                </Card>
+              </Link>
+
+              {/* Pincode Routing Module */}
+              <Link href="/ecommerce/routing" className="block outline-none">
+                <Card className="shadow-sm border-zinc-200 bg-white rounded-xl hover:border-zinc-300 hover:shadow-md transition-all cursor-pointer group h-full">
+                  <CardContent className="p-6">
+                    <div className="w-10 h-10 border border-zinc-200 bg-white text-zinc-600 shadow-sm rounded-lg flex items-center justify-center mb-5 transition-colors group-hover:border-zinc-300">
+                      <MapPin className="w-5 h-5" />
+                    </div>
+                    <h3 className="text-base font-semibold text-zinc-900 tracking-tight">Pincode Routing Engine</h3>
+                    <p className="text-sm text-zinc-500 mt-2 leading-relaxed">
+                      Map geographical delivery zones to physical store locations. Controls logistics engine for dynamic ETAs.
+                    </p>
                   </CardContent>
                 </Card>
               </Link>

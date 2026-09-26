@@ -741,6 +741,7 @@ export function useCheckout({
     setIsExchangeOpen(false); setPaymentMode('cash');
     setAppliedKittyAmount(0); setAppliedKittyPlanId(null); setAppliedCreditAmount(0); 
     setSplitPayments({ cash: '', card: '', upi: '', bank: '', cheque: '' });
+    setBillingRemarks(''); setPaymentRemarks(''); // ✨ Add this line
   }
 
   return {

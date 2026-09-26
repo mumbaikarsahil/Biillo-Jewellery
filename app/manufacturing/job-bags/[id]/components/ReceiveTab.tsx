@@ -1034,6 +1034,7 @@ export default function ReceiveTab({
                                    <SelectItem value="Rose Gold" className="text-[10px]">Rose Gold</SelectItem>
                                    <SelectItem value="White Gold" className="text-[10px]">White Gold</SelectItem>
                                    <SelectItem value="Two-Tone" className="text-[10px]">Two-Tone</SelectItem>
+                                   <SelectItem value="Silver" className="text-[10px]">Silver</SelectItem>
                                    <SelectItem value="Other" className="text-[10px] font-bold text-primary">Other (Type)</SelectItem>
                                  </SelectContent>
                                </Select>

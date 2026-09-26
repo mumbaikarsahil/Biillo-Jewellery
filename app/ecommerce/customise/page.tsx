@@ -6,7 +6,7 @@ import {
   Clock, MoreVertical, Edit2, Trash2, CheckCircle2, XCircle, 
   Loader2, Save, X, Type, Search, Mail, CalendarDays,
   LayoutTemplate, Star, UploadCloud, FileText, LayoutGrid,
-  Gift, Truck
+  Gift, Truck, MapPin, Building, Video
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,8 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { supabase } from "@/lib/supabaseClient"; // adjust to your actual path
 import { toast } from "sonner";
+import { Textarea } from "@/components/ui/textarea";
+
 // --- TYPES ---
 interface Banner { id: string; desktop_image_url: string; mobile_image_url: string; link: string; duration_ms: number; sort_order: number; is_active: boolean; }
 interface Ticker { id: string; text: string; icon_name: string; sort_order: number; is_active: boolean; }
@@ -22,9 +24,8 @@ interface CmsSection { section_key: string; image_url: string; heading: string; 
 interface Subscriber { id: string; email: string; subscribed_at: string; }
 
 // --- UTILITIES ---
-const AVAILABLE_ICONS = ["Diamond", "Gem", "Heart", "RefreshCw", "Shield", "CheckCircle2", "Star", "Gift", "Calendar", "Infinity"];
+const AVAILABLE_ICONS = ["Diamond", "Gem", "Heart", "RefreshCw", "Shield", "CheckCircle2", "Star", "Gift", "Calendar", "Infinity", "MapPin"];
 
-// Removed 'export' to fix Next.js Error (ts 71002)
 const convertToWebP = (file: File): Promise<Blob> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -76,16 +77,19 @@ export default function StorefrontSettings() {
     { id: "category-grid", label: "Category Grid", icon: LayoutGrid },
     { id: "promises", label: "Why Pavitram", icon: CheckCircle2 },
     { id: "cms", label: "Static Sections", icon: LayoutTemplate },
+    { id: "about", label: "About Us Page", icon: Building },
     { id: "occasions", label: "Occasions", icon: Gift },
+    { id: "stores", label: "Store Locations", icon: MapPin },
+    { id: "videos", label: "Experience Videos", icon: Video },
     { id: "reviews", label: "Client Stories", icon: Star },
-    { id: "policies", label: "Legal Pages", icon: FileText }, // ✨ NEW TAB
+    { id: "policies", label: "Legal Pages", icon: FileText },
     { id: "checkout", label: "Checkout & Shipping", icon: Truck },
     { id: "newsletter", label: "Subscribers", icon: Mail },
   ];
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-slate-800 p-4 md:p-8 font-sans w-full">
-      <div className="flex items-center gap-3 mb-8">
+      <div className="flex items-center gap-3 mb-6">
         <div className="w-8 h-8 bg-[#4A1F58] text-white flex items-center justify-center rounded-md shrink-0 shadow-sm">
           <Globe className="w-4 h-4" />
         </div>
@@ -94,18 +98,19 @@ export default function StorefrontSettings() {
         </h1>
       </div>
 
-      <div className="flex overflow-x-auto border-b border-slate-200 mb-8 hide-scrollbar gap-2">
+      {/* ✨ UPDATED WRAPPING TAB DESIGN */}
+      <div className="flex flex-wrap items-center gap-2 mb-8 pb-6 border-b border-slate-200">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-all duration-200 flex items-center gap-2 ${
+            className={`px-3.5 py-2 text-xs md:text-sm font-medium transition-all duration-200 flex items-center gap-2 rounded-lg border ${
               activeTab === tab.id
-                ? "border-[#4A1F58] text-[#4A1F58] bg-slate-100/50 rounded-t-lg"
-                : "border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-50 rounded-t-lg"
+                ? "bg-[#4A1F58] border-[#4A1F58] text-white shadow-sm"
+                : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900"
             }`}
           >
-            <tab.icon className="w-4 h-4" />
+            <tab.icon className={`w-4 h-4 ${activeTab === tab.id ? "text-white" : "text-slate-400"}`} />
             {tab.label}
           </button>
         ))}
@@ -116,7 +121,10 @@ export default function StorefrontSettings() {
       {activeTab === "category-grid" && <CategoryGridManager />}
       {activeTab === "promises" && <PromisesManager />}
       {activeTab === "cms" && <CMSManager />}
+      {activeTab === "about" && <AboutUsManager />} 
       {activeTab === "occasions" && <OccasionsManager />}
+      {activeTab === "stores" && <StoreManager />} 
+      {activeTab === "videos" && <ExperienceVideosManager />} 
       {activeTab === "reviews" && <ReviewsManager />}
       {activeTab === "policies" && <PolicyManager />}
       {activeTab === "checkout" && <CheckoutSettingsManager />}
@@ -124,7 +132,6 @@ export default function StorefrontSettings() {
     </div>
   );
 }
-
 // ==========================================
 // 1. BANNERS MANAGER (WITH IMAGE UPLOAD)
 // ==========================================
@@ -1029,6 +1036,380 @@ function CheckoutSettingsManager() {
         </div>
 
       </div>
+    </div>
+  );
+}
+
+// ==========================================
+// 11. STORE LOCATIONS MANAGER
+// ==========================================
+function StoreManager() {
+  const [items, setItems] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [formData, setFormData] = useState<any>({});
+  const [isSaving, setIsSaving] = useState(false);
+
+  const fetchItems = async () => {
+    setIsLoading(true);
+    const { data } = await supabase.from("store_locations").select("*").order("created_at");
+    if (data) setItems(data);
+    setIsLoading(false);
+  };
+  
+  useEffect(() => { fetchItems(); }, []);
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    toast.info("Uploading Image...");
+    const url = await uploadToSupabase(file, 'banner_images');
+    if (url) setFormData({ ...formData, image_url: url });
+  };
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    try {
+      const payload = {
+        name: formData.name,
+        address: formData.address,
+        phone: formData.phone,
+        working_hours: formData.working_hours,
+        latitude: parseFloat(formData.latitude),
+        longitude: parseFloat(formData.longitude),
+        image_url: formData.image_url || 'https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/ecommerce-assets/banner_images/store-front.webp',
+        is_coming_soon: formData.is_coming_soon || false
+      };
+
+      if (formData.id) {
+        await supabase.from("store_locations").update(payload).eq("id", formData.id);
+      } else {
+        await supabase.from("store_locations").insert([payload]);
+      }
+      toast.success("Store location saved.");
+      setIsModalOpen(false);
+      fetchItems();
+    } catch (err) {
+      toast.error("Failed to save location.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="w-full flex flex-col gap-6 animate-in fade-in duration-300">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-900 tracking-tight">Store Locations</h2>
+          <p className="text-sm text-slate-500 mt-1">Manage physical showrooms shown on the Store Locator page.</p>
+        </div>
+        <button 
+          onClick={() => { setFormData({ is_coming_soon: false }); setIsModalOpen(true); }} 
+          className="bg-[#4A1F58] hover:bg-[#302832] text-white px-4 py-2.5 rounded-lg text-sm flex items-center gap-2"
+        >
+          <Plus className="w-4 h-4" /> Add Location
+        </button>
+      </div>
+
+      {isLoading ? <Loader2 className="w-6 h-6 animate-spin text-slate-400 mx-auto mt-10" /> : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {items.map((store) => (
+            <div key={store.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm flex flex-col">
+              <div className="relative aspect-[16/9] bg-slate-100 border-b border-slate-200">
+                <img src={store.image_url} className="w-full h-full object-cover" alt="Store Front" />
+                {store.is_coming_soon && (
+                  <span className="absolute top-2 left-2 text-[10px] font-bold px-2 py-1 rounded bg-[#C9A15B]/90 text-white backdrop-blur-sm shadow-sm">
+                    Coming Soon
+                  </span>
+                )}
+              </div>
+              <div className="p-4 flex flex-col flex-1 bg-white">
+                <div className="flex justify-between items-start mb-2">
+                  <h4 className="font-bold text-sm text-slate-900">{store.name}</h4>
+                  <div className="flex gap-2">
+                    <button onClick={() => { setFormData(store); setIsModalOpen(true); }} className="text-blue-600"><Edit2 className="w-4 h-4"/></button>
+                    <button onClick={async () => { await supabase.from("store_locations").delete().eq("id", store.id); fetchItems(); }} className="text-rose-600"><Trash2 className="w-4 h-4"/></button>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500 mb-2 line-clamp-2">{store.address}</p>
+                <div className="mt-auto pt-3 border-t border-slate-100 space-y-1">
+                  <p className="text-[10px] text-slate-400 font-mono">Lat: {store.latitude} | Lng: {store.longitude}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {isModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 space-y-4 my-8">
+            <h3 className="text-lg font-semibold">{formData.id ? "Edit Store Location" : "New Store Location"}</h3>
+            
+            <div className="space-y-4 max-h-[60vh] overflow-y-auto custom-scrollbar pr-2">
+              <div>
+                <label className="text-xs font-semibold text-slate-500 mb-1 block">Store Image</label>
+                {formData.image_url && <img src={formData.image_url} className="w-full h-32 object-cover rounded-md mb-2 border" />}
+                <input type="file" accept="image/*" onChange={handleImageUpload} className="text-sm" />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-500 mb-1 block">Store Name *</label>
+                <input type="text" placeholder="e.g. Andheri (W)" value={formData.name || ""} onChange={e => setFormData({...formData, name: e.target.value})} className="w-full border p-2 rounded text-sm" />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-slate-500 mb-1 block">Full Address *</label>
+                <textarea placeholder="Full address details" value={formData.address || ""} onChange={e => setFormData({...formData, address: e.target.value})} className="w-full border p-2 rounded text-sm h-20" />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Phone Number</label>
+                  <input type="text" placeholder="e.g. +91 8657003815" value={formData.phone || ""} onChange={e => setFormData({...formData, phone: e.target.value})} className="w-full border p-2 rounded text-sm" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Working Hours</label>
+                  <input type="text" placeholder="e.g. 11:00 AM to 8:00 PM" value={formData.working_hours || ""} onChange={e => setFormData({...formData, working_hours: e.target.value})} className="w-full border p-2 rounded text-sm" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Latitude *</label>
+                  <input type="number" step="any" placeholder="19.1136" value={formData.latitude || ""} onChange={e => setFormData({...formData, latitude: e.target.value})} className="w-full border p-2 rounded text-sm" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-500 mb-1 block">Longitude *</label>
+                  <input type="number" step="any" placeholder="72.8411" value={formData.longitude || ""} onChange={e => setFormData({...formData, longitude: e.target.value})} className="w-full border p-2 rounded text-sm" />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-2">
+                <Switch checked={formData.is_coming_soon || false} onCheckedChange={(v) => setFormData({...formData, is_coming_soon: v})} />
+                <Label className="text-sm font-semibold">Mark as "Coming Soon"</Label>
+              </div>
+            </div>
+            
+            <div className="flex justify-end gap-2 pt-4 border-t">
+              <button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm text-slate-600">Cancel</button>
+              <button onClick={handleSave} disabled={isSaving} className="bg-[#4A1F58] text-white px-4 py-2 rounded text-sm flex items-center gap-2">
+                {isSaving && <Loader2 className="w-3 h-3 animate-spin"/>} Save Location
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==========================================
+// 12. ABOUT US PAGE MANAGER
+// ==========================================
+function AboutUsManager() {
+  const [data, setData] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const fetchAboutData = async () => {
+    setIsLoading(true);
+    const { data: dbData } = await supabase.from("ecommerce_about_page").select("*").limit(1).single();
+    if (dbData) setData(dbData);
+    setIsLoading(false);
+  };
+
+  useEffect(() => { fetchAboutData(); }, []);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    const payload = { ...data };
+    delete payload.id; // Prevent updating PK
+    delete payload.updated_at;
+
+    const { error } = await supabase.from("ecommerce_about_page").update(payload).eq("id", data.id);
+    if (error) toast.error("Failed to save About Us content.");
+    else toast.success("About Us page updated successfully!");
+    setIsSaving(false);
+  };
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, field: string) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    toast.info("Uploading Image...");
+    const url = await uploadToSupabase(file, 'banner_images');
+    if (url) setData({ ...data, [field]: url });
+  };
+
+  if (isLoading) return <Loader2 className="w-6 h-6 animate-spin text-slate-400 mx-auto mt-10" />;
+  if (!data) return <div className="text-zinc-500">Failed to load configuration. Make sure you ran the SQL setup.</div>;
+
+  return (
+    <div className="w-full flex flex-col gap-6 animate-in fade-in duration-300 max-w-4xl">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-xl font-semibold text-slate-900 tracking-tight">About Us Page Content</h2>
+          <p className="text-sm text-slate-500 mt-1">Manage the narrative and imagery shown on your /policy/about route.</p>
+        </div>
+        <Button onClick={handleSave} disabled={isSaving} className="bg-[#4A1F58] hover:bg-[#302832] text-white">
+          {isSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+          Save All Changes
+        </Button>
+      </div>
+
+      <div className="space-y-6">
+        {/* Top Header Section */}
+        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-900 border-b border-slate-100 pb-3 mb-4 flex items-center gap-2"><Type className="w-4 h-4"/> Page Header</h3>
+          <div className="space-y-4">
+            <div>
+              <Label className="text-xs">Main Heading</Label>
+              <Input value={data.page_heading} onChange={e => setData({...data, page_heading: e.target.value})} className="font-serif text-lg mt-1" />
+            </div>
+            <div>
+              <Label className="text-xs">Subheading (Golden Text)</Label>
+              <Input value={data.page_subheading} onChange={e => setData({...data, page_subheading: e.target.value})} className="font-mono text-xs uppercase mt-1" />
+            </div>
+          </div>
+        </div>
+
+        {/* Brand Story Section */}
+        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-900 border-b border-slate-100 pb-3 mb-4 flex items-center gap-2"><Building className="w-4 h-4"/> The Brand Story (Section 1)</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="space-y-4">
+              <div>
+                <Label className="text-xs">Story Image</Label>
+                {data.story_image_url && <img src={data.story_image_url} className="w-full aspect-[4/5] object-cover rounded-lg border my-2" />}
+                <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'story_image_url')} className="text-xs" />
+              </div>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <Label className="text-xs">Story Section Title</Label>
+                <Input value={data.story_heading} onChange={e => setData({...data, story_heading: e.target.value})} className="mt-1" />
+              </div>
+              <div>
+                <Label className="text-xs">Paragraph 1</Label>
+                <Textarea value={data.story_paragraph_1} onChange={e => setData({...data, story_paragraph_1: e.target.value})} className="mt-1 h-24 text-sm resize-none" />
+              </div>
+              <div>
+                <Label className="text-xs">Paragraph 2</Label>
+                <Textarea value={data.story_paragraph_2} onChange={e => setData({...data, story_paragraph_2: e.target.value})} className="mt-1 h-24 text-sm resize-none" />
+              </div>
+              <div>
+                <Label className="text-xs">Paragraph 3</Label>
+                <Textarea value={data.story_paragraph_3} onChange={e => setData({...data, story_paragraph_3: e.target.value})} className="mt-1 h-24 text-sm resize-none" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Philosophy Section */}
+        <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
+          <h3 className="text-sm font-bold text-slate-900 border-b border-slate-100 pb-3 mb-4 flex items-center gap-2"><Star className="w-4 h-4"/> Our Philosophy (Section 2)</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div className="space-y-4">
+              <div>
+                <Label className="text-xs">Philosophy Title</Label>
+                <Input value={data.philosophy_heading} onChange={e => setData({...data, philosophy_heading: e.target.value})} className="mt-1" />
+              </div>
+              <div>
+                <Label className="text-xs">Golden Quote</Label>
+                <Textarea value={data.philosophy_quote} onChange={e => setData({...data, philosophy_quote: e.target.value})} className="mt-1 h-24 text-sm font-serif italic resize-none" />
+              </div>
+              <div>
+                <Label className="text-xs">Philosophy Context</Label>
+                <Textarea value={data.philosophy_text} onChange={e => setData({...data, philosophy_text: e.target.value})} className="mt-1 h-24 text-sm resize-none" />
+              </div>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <Label className="text-xs">Philosophy Image</Label>
+                {data.philosophy_image_url && <img src={data.philosophy_image_url} className="w-full aspect-[4/3] object-cover rounded-lg border my-2" />}
+                <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, 'philosophy_image_url')} className="text-xs" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Note on Pillars */}
+        <div className="bg-amber-50 border border-amber-100 p-4 rounded-xl text-center">
+          <p className="text-xs text-amber-700 font-medium">Note: The "Pillars of Pavitram" section uses the <strong>Brand Promises</strong> configured in the "Why Pavitram" tab.</p>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// 13. EXPERIENCE VIDEOS MANAGER (YOUTUBE)
+// ==========================================
+function ExperienceVideosManager() {
+  const [videos, setVideos] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [formData, setFormData] = useState<any>({});
+
+  const fetchVideos = async () => {
+    setIsLoading(true);
+    const { data } = await supabase.from("ecommerce_experience_videos").select("*").order("sort_order");
+    if (data) setVideos(data);
+    setIsLoading(false);
+  };
+  useEffect(() => { fetchVideos(); }, []);
+
+  const handleSave = async () => {
+    if (formData.id) await supabase.from("ecommerce_experience_videos").update(formData).eq("id", formData.id);
+    else await supabase.from("ecommerce_experience_videos").insert([formData]);
+    toast.success("Video saved.");
+    setIsModalOpen(false);
+    fetchVideos();
+  };
+
+  return (
+    <div className="w-full flex flex-col gap-6 animate-in fade-in duration-300">
+      <div className="flex justify-between items-center">
+        <div><h2 className="text-xl font-semibold">Experience Videos</h2><p className="text-sm text-slate-500">Manage YouTube shorts shown on the homepage.</p></div>
+        <button onClick={() => { setFormData({ sort_order: videos.length + 1, is_active: true }); setIsModalOpen(true); }} className="bg-[#4A1F58] text-white px-4 py-2 rounded-lg text-sm"><Plus className="w-4 h-4 inline mr-1"/> Add Video</button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
+        {videos.map((vid) => (
+          <div key={vid.id} className={`bg-white border rounded-xl overflow-hidden shadow-sm relative group ${!vid.is_active && 'opacity-50'}`}>
+            {/* Auto-fetches the YouTube thumbnail */}
+            <img src={`https://img.youtube.com/vi/${vid.video_id}/mqdefault.jpg`} className="aspect-[9/16] object-cover w-full" />
+            <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
+              <button onClick={() => { setFormData(vid); setIsModalOpen(true); }} className="bg-white p-2 rounded-full"><Edit2 className="w-4 h-4 text-slate-800"/></button>
+              <button onClick={async () => { await supabase.from("ecommerce_experience_videos").delete().eq("id", vid.id); fetchVideos(); }} className="bg-white p-2 rounded-full"><Trash2 className="w-4 h-4 text-rose-600"/></button>
+            </div>
+            <div className="p-3 bg-white text-center font-semibold text-xs font-mono">{vid.video_id}</div>
+          </div>
+        ))}
+      </div>
+
+      {isModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-4">
+            <h3 className="font-bold">Edit Video</h3>
+            <div>
+              <Label className="text-xs mb-1 block">YouTube Video ID</Label>
+              <Input placeholder="e.g. 3g3Gm6G0MDM" value={formData.video_id || ""} onChange={e => setFormData({...formData, video_id: e.target.value})} className="font-mono" />
+              <p className="text-[10px] text-slate-500 mt-1">Found in the URL: youtube.com/watch?v=<strong>VIDEO_ID</strong></p>
+            </div>
+            <div>
+              <Label className="text-xs mb-1 block">Sort Order</Label>
+              <Input type="number" placeholder="Sort Order" value={formData.sort_order || 0} onChange={e => setFormData({...formData, sort_order: Number(e.target.value)})} />
+            </div>
+            <div className="flex items-center gap-3 py-2">
+              <Switch checked={formData.is_active} onCheckedChange={(v) => setFormData({...formData, is_active: v})} />
+              <Label className="text-sm font-semibold">Active on Storefront</Label>
+            </div>
+            <div className="flex justify-end gap-2 pt-4 border-t"><button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm">Cancel</button><button onClick={handleSave} className="bg-[#4A1F58] text-white px-4 py-2 rounded text-sm">Save</button></div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
