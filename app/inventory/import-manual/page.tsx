@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { 
   AlertCircle, CheckCircle2, ArrowLeft, Database, 
   Warehouse, ChevronLeft, ChevronRight, Search, Filter,
-  Plus, Trash2, Keyboard, UserCircle, Loader2
+  Plus, Trash2, Keyboard, UserCircle, Loader2, 
 } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -13,41 +13,46 @@ import { supabase } from '@/lib/supabaseClient'
 import { useAuth } from '@/hooks/useAuth'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Select as UISelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
 
 // --- PREDEFINED OPTIONS FOR DROPDOWNS ---
 const CATEGORIES = [
   "Necklace", "Ring", "Earring", "Bangle", "Bracelet", "Chain", 
-  "Pendant", "Mangalsutra", "Nosepin", "Set", "Coin", "Other"
+  "Pendant", "Mangalsutra", "Nosepin", "Set", "Coin", "None", "Other"
 ]
 const METALS = [
-  "Gold", "Platinum", "Silver", "Rose Gold"
+  "Gold", "Platinum", "Silver", "Rose Gold", "None"
 ]
 const PURITIES = [
-  "24K", "22K", "18K", "14K", "PT950", "999 Fine Silver", "925 Sterling Silver"
+  "24K", "22K", "18K", "14K", "PT950", "999 Fine Silver", "925 Sterling Silver", "None"
+]
+const METAL_COLORS = [
+  "Yellow", "White", "Rose", "Two-Tone", "None", "Other"
 ]
 const DIAMOND_SHAPES = [
   "Round", "Princess", "Cushion", "Emerald", "Oval", "Radiant", 
-  "Pear", "Marquise", "Asscher", "Heart", "Mixed", "None"
+  "Pear", "Marquise", "Asscher", "Heart", "Mixed", "None", "Other"
 ]
 const DIAMOND_COLORS = [
-  "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "Fancy", "None"
+  "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "Fancy", "None", "Other"
 ]
 const DIAMOND_CLARITIES = [
-  "FL", "IF", "VVS1", "VVS2", "VS1", "VS2", "SI1", "SI2", "I1", "I2", "I3", "None"
+  "FL", "IF", "VVS1", "VVS2", "VS1", "VS2", "SI1", "SI2", "I1", "I2", "I3", "None", "Other"
 ]
 
 // --- EXTENDED SCHEMA INTERFACE ---
 interface ManualJewelleryItem {
   temp_id: string; 
   item_category: string;
+  showCustomCategory?: boolean;
   barcode: string;
   sku_reference?: string; 
   metal_type: string;
   metal_color: string;
+  showCustomColor?: boolean;
   purity_karat: string;
   quantity: number;
   gross_weight_g: number | string;
@@ -59,8 +64,11 @@ interface ManualJewelleryItem {
   melee_cts: number | string;
 
   shape: string;
+  showCustomShape?: boolean;
   color: string;
+  showCustomDiaColor?: boolean;
   clarity: string;
+  showCustomClarity?: boolean;
 
   hsn_code: string;
   remarks: string;
@@ -69,7 +77,7 @@ interface ManualJewelleryItem {
 }
 
 const getCategoryPrefix = (category: string): string => {
-  if (!category) return 'UNK';
+  if (!category || category === 'None') return 'GEN';
   const c = category.toUpperCase();
   if (c.includes('NECKLACE')) return 'NEC';
   if (c.includes('RING')) return 'RNG';
@@ -97,7 +105,6 @@ const EditableCell = ({ value, onChange, type = "text", align = "left", classNam
   />
 )
 
-// ✨ NEW: Strict Dropdown Cell for consistent data entry
 const DropdownCell = ({ value, onChange, options, align = "left", className = "", placeholder = "Select" }: any) => (
   <select 
     value={value || ""}
@@ -150,10 +157,12 @@ export default function ManualImportPage() {
     const newItem: ManualJewelleryItem = {
       temp_id: crypto.randomUUID(),
       item_category: '', 
+      showCustomCategory: false,
       barcode: '',
-      metal_type: 'Gold',
-      metal_color: 'Yellow',
-      purity_karat: '18K',
+      metal_type: '',
+      metal_color: '',
+      showCustomColor: false,
+      purity_karat: '',
       quantity: 1,
       gross_weight_g: '',
       net_weight_g: '',
@@ -162,8 +171,11 @@ export default function ManualImportPage() {
       melee_pcs: '',
       melee_cts: '',
       shape: 'None',
+      showCustomShape: false,
       color: 'None',
+      showCustomDiaColor: false,
       clarity: 'None',
+      showCustomClarity: false,
       hsn_code: '7113', 
       remarks: '',
       total_amount: '',
@@ -253,7 +265,7 @@ export default function ManualImportPage() {
     const itemsToCommit = items.filter(item => selectedIds.has(item.temp_id))
 
     for (const item of itemsToCommit) {
-      if (!item.item_category.trim()) return toast.error("All selected items must have a category.")
+      if (!item.item_category.trim()) return toast.error("All selected items must have a category. Select 'None' if unsure.")
       if (!item.barcode.trim()) return toast.error("All selected items must have a barcode.")
     }
 
@@ -312,10 +324,13 @@ export default function ManualImportPage() {
             karigar_id: targetKarigar, 
             barcode: item.barcode,
             sku_reference: guaranteedUniqueSku,
-            item_category: item.item_category,
-            metal_type: item.metal_type,
-            metal_color: item.metal_color,
-            purity_karat: item.purity_karat,
+            
+            // Allow Nullable Strings Based on "None" selection
+            item_category: item.item_category === 'None' ? null : item.item_category,
+            metal_type: item.metal_type === 'None' ? null : item.metal_type,
+            metal_color: item.metal_color === 'None' ? null : item.metal_color,
+            purity_karat: item.purity_karat === 'None' ? null : item.purity_karat,
+            
             purity_percent: 100, 
             quantity: Number(item.quantity) || 1,
             gross_weight_g: Number(item.gross_weight_g) || 0,
@@ -559,9 +574,9 @@ export default function ManualImportPage() {
                             onChange={(e) => handleSelectAll(e.target.checked)}
                           />
                         </th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-32 border-r border-slate-200">Category *</th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-36 border-r border-slate-200">Category *</th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-36 border-r border-slate-200">Barcode *</th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-32 border-r border-slate-200">Metal Specs<br/><span className="text-[8px] font-medium text-slate-400">Type | Purity | Color</span></th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-36 border-r border-slate-200">Metal Specs<br/><span className="text-[8px] font-medium text-slate-400">Type | Purity | Color</span></th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-20 border-r border-slate-200">Gross (g)</th>
                         <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-20 border-r border-slate-200">Net (g)</th>
 
@@ -600,13 +615,34 @@ export default function ManualImportPage() {
                               />
                             </td>
                             <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
-                              <DropdownCell 
-                                options={CATEGORIES}
-                                value={item.item_category} 
-                                onChange={(e: any) => handleItemEdit(item.temp_id, 'item_category', e.target.value)} 
-                                className="font-semibold uppercase"
-                                placeholder="Category"
-                              />
+                              {!item.showCustomCategory ? (
+                                <DropdownCell 
+                                  options={CATEGORIES}
+                                  value={CATEGORIES.includes(item.item_category) ? item.item_category : (item.item_category ? "Other" : "")} 
+                                  onChange={(e: any) => {
+                                    if (e.target.value === 'Other') {
+                                      handleItemEdit(item.temp_id, 'showCustomCategory', true);
+                                      handleItemEdit(item.temp_id, 'item_category', '');
+                                    } else {
+                                      handleItemEdit(item.temp_id, 'item_category', e.target.value);
+                                    }
+                                  }} 
+                                  className="font-semibold uppercase"
+                                  placeholder="Category"
+                                />
+                              ) : (
+                                <div className="flex gap-0.5 h-6">
+                                  <EditableCell 
+                                    value={item.item_category} 
+                                    onChange={(e: any) => handleItemEdit(item.temp_id, 'item_category', e.target.value)} 
+                                    className="font-semibold uppercase bg-white border-slate-200 shadow-sm"
+                                    placeholder="Custom Cat"
+                                  />
+                                  <Button variant="ghost" size="icon" className="h-6 w-6 text-slate-400 shrink-0 hover:bg-slate-200" onClick={() => handleItemEdit(item.temp_id, 'showCustomCategory', false)}>
+                                    <ArrowLeft className="h-3 w-3" />
+                                  </Button>
+                                </div>
+                              )}
                             </td>
                             <td className="py-1 px-1 align-top pt-1.5 border-r border-slate-100">
                               <EditableCell 
@@ -620,9 +656,39 @@ export default function ManualImportPage() {
                               </div>
                             </td>
                             <td className="py-1 px-1 flex flex-col justify-center border-r border-slate-100 h-full gap-0.5">
-                              <DropdownCell options={METALS} value={item.metal_type} onChange={(e: any) => handleItemEdit(item.temp_id, 'metal_type', e.target.value)} align="center" className="font-bold text-slate-700 py-0" placeholder="Metal" />
+                              <DropdownCell options={METALS} value={item.metal_type} onChange={(e: any) => handleItemEdit(item.temp_id, 'metal_type', e.target.value)} align="center" className="font-bold text-slate-700 py-0" placeholder="Type" />
                               <DropdownCell options={PURITIES} value={item.purity_karat} onChange={(e: any) => handleItemEdit(item.temp_id, 'purity_karat', e.target.value)} align="center" className="font-bold text-amber-600 py-0" placeholder="Purity" />
-                              <EditableCell value={item.metal_color} onChange={(e: any) => handleItemEdit(item.temp_id, 'metal_color', e.target.value)} align="center" className="text-[10px] text-slate-500 py-0" placeholder="Color" />
+                              
+                              {!item.showCustomColor ? (
+                                <DropdownCell 
+                                  options={METAL_COLORS} 
+                                  value={METAL_COLORS.includes(item.metal_color) ? item.metal_color : (item.metal_color ? "Other" : "")} 
+                                  onChange={(e: any) => {
+                                    if (e.target.value === 'Other') {
+                                      handleItemEdit(item.temp_id, 'showCustomColor', true);
+                                      handleItemEdit(item.temp_id, 'metal_color', '');
+                                    } else {
+                                      handleItemEdit(item.temp_id, 'metal_color', e.target.value);
+                                    }
+                                  }} 
+                                  align="center" 
+                                  className="text-[10px] text-slate-500 py-0" 
+                                  placeholder="Color" 
+                                />
+                              ) : (
+                                <div className="flex gap-0.5 h-5 mx-1">
+                                  <EditableCell 
+                                    value={item.metal_color} 
+                                    onChange={(e: any) => handleItemEdit(item.temp_id, 'metal_color', e.target.value)} 
+                                    align="center" 
+                                    className="text-[10px] text-slate-500 py-0 bg-white border-slate-200" 
+                                    placeholder="Custom Color" 
+                                  />
+                                  <Button variant="ghost" size="icon" className="h-5 w-5 text-slate-400 shrink-0 p-0 hover:bg-slate-200" onClick={() => handleItemEdit(item.temp_id, 'showCustomColor', false)}>
+                                    <ArrowLeft className="h-2.5 w-2.5" />
+                                  </Button>
+                                </div>
+                              )}
                             </td>
                             <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
                               <EditableCell 
@@ -667,31 +733,74 @@ export default function ManualImportPage() {
 
                             <td className="py-1 px-1 align-top border-r border-slate-100">
                               <div className="flex flex-col gap-1 justify-center w-full mt-0.5">
-                                <DropdownCell 
-                                  options={DIAMOND_SHAPES}
-                                  value={item.shape} 
-                                  onChange={(e: any) => handleItemEdit(item.temp_id, 'shape', e.target.value)} 
-                                  align="center"
-                                  className="w-full"
-                                  placeholder="Shape"
-                                />
+                                {!item.showCustomShape ? (
+                                  <DropdownCell 
+                                    options={DIAMOND_SHAPES}
+                                    value={DIAMOND_SHAPES.includes(item.shape) ? item.shape : (item.shape ? "Other" : "")} 
+                                    onChange={(e: any) => {
+                                      if (e.target.value === 'Other') {
+                                        handleItemEdit(item.temp_id, 'showCustomShape', true);
+                                        handleItemEdit(item.temp_id, 'shape', '');
+                                      } else {
+                                        handleItemEdit(item.temp_id, 'shape', e.target.value);
+                                      }
+                                    }} 
+                                    align="center"
+                                    className="w-full"
+                                    placeholder="Shape"
+                                  />
+                                ) : (
+                                  <div className="flex gap-0.5 h-6">
+                                    <EditableCell value={item.shape} onChange={(e: any) => handleItemEdit(item.temp_id, 'shape', e.target.value)} className="w-full bg-white border-slate-200 text-center text-[10px]" placeholder="Custom" />
+                                    <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0 p-0" onClick={() => handleItemEdit(item.temp_id, 'showCustomShape', false)}><ArrowLeft className="h-3 w-3" /></Button>
+                                  </div>
+                                )}
                                 <div className="flex gap-1">
-                                  <DropdownCell 
-                                    options={DIAMOND_CLARITIES}
-                                    value={item.clarity} 
-                                    onChange={(e: any) => handleItemEdit(item.temp_id, 'clarity', e.target.value)} 
-                                    align="center"
-                                    className="w-1/2 text-[10px]"
-                                    placeholder="Clr"
-                                  />
-                                  <DropdownCell 
-                                    options={DIAMOND_COLORS}
-                                    value={item.color} 
-                                    onChange={(e: any) => handleItemEdit(item.temp_id, 'color', e.target.value)} 
-                                    align="center"
-                                    className="w-1/2 text-[10px]"
-                                    placeholder="Col"
-                                  />
+                                  {!item.showCustomClarity ? (
+                                    <DropdownCell 
+                                      options={DIAMOND_CLARITIES}
+                                      value={DIAMOND_CLARITIES.includes(item.clarity) ? item.clarity : (item.clarity ? "Other" : "")} 
+                                      onChange={(e: any) => {
+                                        if (e.target.value === 'Other') {
+                                          handleItemEdit(item.temp_id, 'showCustomClarity', true);
+                                          handleItemEdit(item.temp_id, 'clarity', '');
+                                        } else {
+                                          handleItemEdit(item.temp_id, 'clarity', e.target.value);
+                                        }
+                                      }} 
+                                      align="center"
+                                      className="w-1/2 text-[10px] px-0.5"
+                                      placeholder="Clr"
+                                    />
+                                  ) : (
+                                    <div className="flex gap-0.5 h-6 w-1/2">
+                                      <EditableCell value={item.clarity} onChange={(e: any) => handleItemEdit(item.temp_id, 'clarity', e.target.value)} className="w-full bg-white border-slate-200 text-center text-[10px]" placeholder="Cstm" />
+                                      <Button variant="ghost" size="icon" className="h-6 w-4 text-slate-400 shrink-0 p-0" onClick={() => handleItemEdit(item.temp_id, 'showCustomClarity', false)}><ArrowLeft className="h-2 w-2" /></Button>
+                                    </div>
+                                  )}
+                                  
+                                  {!item.showCustomDiaColor ? (
+                                    <DropdownCell 
+                                      options={DIAMOND_COLORS}
+                                      value={DIAMOND_COLORS.includes(item.color) ? item.color : (item.color ? "Other" : "")} 
+                                      onChange={(e: any) => {
+                                        if (e.target.value === 'Other') {
+                                          handleItemEdit(item.temp_id, 'showCustomDiaColor', true);
+                                          handleItemEdit(item.temp_id, 'color', '');
+                                        } else {
+                                          handleItemEdit(item.temp_id, 'color', e.target.value);
+                                        }
+                                      }} 
+                                      align="center"
+                                      className="w-1/2 text-[10px] px-0.5"
+                                      placeholder="Col"
+                                    />
+                                  ) : (
+                                    <div className="flex gap-0.5 h-6 w-1/2">
+                                      <EditableCell value={item.color} onChange={(e: any) => handleItemEdit(item.temp_id, 'color', e.target.value)} className="w-full bg-white border-slate-200 text-center text-[10px]" placeholder="Cstm" />
+                                      <Button variant="ghost" size="icon" className="h-6 w-4 text-slate-400 shrink-0 p-0" onClick={() => handleItemEdit(item.temp_id, 'showCustomDiaColor', false)}><ArrowLeft className="h-2 w-2" /></Button>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             </td>
