@@ -99,17 +99,15 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
 
     // 1. Map the Body Parameters (BODY_{{1}}, BODY_{{2}}, etc.)
     parameters.forEach((val: any, idx: number) => {
-      params[`BODY_{{${idx + 1}}}`] = val ? String(val) : '-';
+      params[`BODY_{{${idx + 1}}}`] = String(val);
     });
-
     // 2. CORRECT CONVO360 BUTTON MAPPING:
     // Authentication templates with a "Copy Code" button require the parameter at index 0 (`BUTTON_0`)
     if (Array.isArray(button_parameters)) {
       button_parameters.forEach((val: any, idx: number) => {
-        params[`BUTTON_${idx}`] = val ? String(val) : '-';
+        params[`BUTTON_${idx}`] = String(val);
       });
     }
-
     return {
       user_id,
       content: {
