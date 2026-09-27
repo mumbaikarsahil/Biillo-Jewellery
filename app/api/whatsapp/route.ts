@@ -105,7 +105,7 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
     // Authentication templates with a "Copy Code" button require the parameter at index 0 (`BUTTON_0`)
     if (Array.isArray(button_parameters)) {
       button_parameters.forEach((val: any, idx: number) => {
-        params[`BUTTON_${idx}`] = String(val);
+        params[`URL_${idx + 1}`] = String(val);
       });
     }
     return {
@@ -263,6 +263,10 @@ export async function POST(req: Request) {
 
     // Build the correctly-nested payload Convo360 requires
     const finalPayload = buildFinalPayload(action, payload);
+    console.log(
+      `[${requestId}] FINAL WHATSAPP PAYLOAD:`,
+      JSON.stringify(finalPayload, null, 2)
+    );
 
     const fetchOptions: RequestInit = {
       method,
