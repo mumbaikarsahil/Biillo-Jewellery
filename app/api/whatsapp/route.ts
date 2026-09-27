@@ -85,7 +85,7 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
     } = payload;
 
     if (!namespace) {
-      console.error(`[buildFinalPayload] namespace is empty for template "${template_name}".`);
+      console.error(`[buildFinalPayload] namespace is empty for template "${template_name}"`);
     }
     
     const params: Record<string, string> = {};
@@ -97,21 +97,16 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       params['HEADER_FILENAME'] = fileName;
     }
 
-    // 1. Map the Body Parameters (e.g., BODY_{{1}}: "482915")
+    // 1. Map the Body Parameters (BODY_{{1}}, BODY_{{2}}, etc.)
     parameters.forEach((val: any, idx: number) => {
       params[`BODY_{{${idx + 1}}}`] = val ? String(val) : '-';
     });
 
-    // 2. BULLETPROOF BUTTON MAPPING:
-    // Injects the OTP into every known Convo360 / Meta button key format simultaneously
+    // 2. CORRECT CONVO360 BUTTON MAPPING:
+    // Authentication templates with a "Copy Code" button require the parameter at index 0 (`BUTTON_0`)
     if (Array.isArray(button_parameters)) {
       button_parameters.forEach((val: any, idx: number) => {
-        const strVal = val ? String(val) : '-';
-        params[`BUTTON_${idx}`] = strVal;          // Convo360 standard 0-indexed
-        params[`BUTTON_${idx + 1}`] = strVal;      // 1-indexed variant
-        params[`BUTTON_{{${idx + 1}}}`] = strVal;  // Template variable variant
-        params[`URL_PARAM_${idx}`] = strVal;       // URL type variant
-        params[`ACTION_PARAM_${idx}`] = strVal;    // Action type variant
+        params[`BUTTON_${idx}`] = val ? String(val) : '-';
       });
     }
 
