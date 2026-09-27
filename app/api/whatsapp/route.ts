@@ -79,7 +79,7 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       lang, 
       namespace, 
       parameters = [], 
-      button_parameters = [], // ✨ NEW: Extract button parameters
+      button_parameters = [], 
       document_link,
       document_name 
     } = payload;
@@ -90,7 +90,6 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
     
     const params: Record<string, string> = {};
 
-    // Document header with URL and required display filename
     if (document_link) {
       const fileName = document_name || 'Biillo_Report.pdf';
       params['HEADER_DOCUMENT'] = document_link;
@@ -98,15 +97,21 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       params['HEADER_FILENAME'] = fileName;
     }
 
-    // Body variables mapped to BODY_{{1}}, BODY_{{2}}, etc.
+    // 1. Map the Body Parameters (e.g., BODY_{{1}}: "482915")
     parameters.forEach((val: any, idx: number) => {
       params[`BODY_{{${idx + 1}}}`] = val ? String(val) : '-';
     });
 
-    // ✨ NEW: Button variables mapped to BUTTON_0, BUTTON_1, etc.
+    // 2. BULLETPROOF BUTTON MAPPING:
+    // Injects the OTP into every known Convo360 / Meta button key format simultaneously
     if (Array.isArray(button_parameters)) {
       button_parameters.forEach((val: any, idx: number) => {
-        params[`BUTTON_${idx}`] = val ? String(val) : '-';
+        const strVal = val ? String(val) : '-';
+        params[`BUTTON_${idx}`] = strVal;          // Convo360 standard 0-indexed
+        params[`BUTTON_${idx + 1}`] = strVal;      // 1-indexed variant
+        params[`BUTTON_{{${idx + 1}}}`] = strVal;  // Template variable variant
+        params[`URL_PARAM_${idx}`] = strVal;       // URL type variant
+        params[`ACTION_PARAM_${idx}`] = strVal;    // Action type variant
       });
     }
 
@@ -120,6 +125,8 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       },
     };
   }
+
+
 
   if (action === 'broadcast.bulk') {
     const { user_id_list, template_name, lang, namespace, parameters = [] } = payload;
