@@ -79,6 +79,7 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
       lang, 
       namespace, 
       parameters = [], 
+      button_parameters = [], // ✨ NEW: Extract button parameters
       document_link,
       document_name 
     } = payload;
@@ -101,6 +102,13 @@ function buildFinalPayload(action: string, payload: Record<string, any>): Record
     parameters.forEach((val: any, idx: number) => {
       params[`BODY_{{${idx + 1}}}`] = val ? String(val) : '-';
     });
+
+    // ✨ NEW: Button variables mapped to BUTTON_0, BUTTON_1, etc.
+    if (Array.isArray(button_parameters)) {
+      button_parameters.forEach((val: any, idx: number) => {
+        params[`BUTTON_${idx}`] = val ? String(val) : '-';
+      });
+    }
 
     return {
       user_id,
