@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 
-// ✨ NEW: Zero-dependency native image compressor utility
+// Zero-dependency native image compressor utility
 const compressImage = (file: File, maxWidth = 1000, quality = 0.7): Promise<File> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -116,6 +116,23 @@ export default function CustomerLoyaltyPanel({ customerId, customerPhone, custom
     }
 
     try {
+      // ✨ FIX: Auto-Resolve the Subscriber in the background before sending
+      try {
+        await fetch("/api/whatsapp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "subscriber.createByPhone",
+            payload: { 
+              phone: formattedPhone, 
+              name: customerName || "Pavitram Customer" 
+            }
+          })
+        });
+      } catch (resolveError) {
+        console.warn("Auto-resolve skipped or failed:", resolveError);
+      }
+
       const baseContext = {
         customer_name: customerName || 'Customer',
         customer_phone: formattedPhone,
@@ -138,7 +155,7 @@ export default function CustomerLoyaltyPanel({ customerId, customerPhone, custom
             user_id: formattedPhone,
             template_name: templateName,
             lang: "en",
-            namespace: "bfbb14c4_778e_453b_97c2_92f60bb9e978", // ✨ Added your exact namespace here
+            namespace: "bfbb14c4_778e_453b_97c2_92f60bb9e978", 
             parameters: mappedParams
           }
         })
@@ -155,6 +172,7 @@ export default function CustomerLoyaltyPanel({ customerId, customerPhone, custom
       console.error("WhatsApp trigger failed", error);
     }
   };
+
   const handleEnrollCustomer = async () => {
     setIsSubmitting(true);
     try {
@@ -205,7 +223,6 @@ export default function CustomerLoyaltyPanel({ customerId, customerPhone, custom
       if (evidenceFile) {
         let fileToUpload = evidenceFile;
         
-        // ✨ NEW: Compress image before uploading
         if (evidenceFile.type.startsWith('image/')) {
           toast.loading("Compressing image...", { id: 'upload-toast' });
           try {
