@@ -390,6 +390,7 @@ export default function POSPage() {
       </div> {/* ✨ End of the print:hidden wrapper */}
 
       {/* ✨ 3. MODALS: Left outside the hidden wrapper so they can survive the print trap! */}
+      {/* ✨ 3. MODALS: Left outside the hidden wrapper so they can survive the print trap! */}
       <PosModals 
         mode={mode}
         showScanner={showScanner} 
@@ -404,12 +405,13 @@ export default function POSPage() {
         setLastInvoiceData={setLastInvoiceData}
         isProcessing={checkoutHook.isProcessing}
         selectedPackaging={selectedPackaging}
+        billedBy={billedBy} // ✨ THE FIX: Pass the state into the modals!
         executeCheckout={async () => {
           const result = await checkoutHook.executeCheckout(isEstimateCheckout) 
           
           if (result.success) {
             
-            // ✨ THE FIX: Instantly deduct the used packaging from the local UI state 
+            // Instantly deduct the used packaging from the local UI state 
             // so the next customer's bill immediately shows the correct remaining stock!
             setAvailablePackaging(prev => prev.map(pack => {
               const usedItem = selectedPackaging.find(p => p.id === pack.id);

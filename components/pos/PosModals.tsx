@@ -1,5 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react'
-import { QrCode, X, ShieldAlert, Loader2, CheckCircle2, FileText, Truck, Hammer, Printer, Store, Package } from 'lucide-react'
+import { QrCode, X, ShieldAlert, Loader2, CheckCircle2, FileText, Truck, Hammer, Printer, Store, Package, UserCircle } from 'lucide-react'
 import { Scanner } from '@yudiel/react-qr-scanner'
 import { useReactToPrint } from 'react-to-print'
 import { Button } from '@/components/ui/button'
@@ -15,7 +15,8 @@ export function PosModals({
   showPrintModal, setShowPrintModal, 
   previewData, lastInvoiceData, executeCheckout,
   isProcessing,
-  selectedPackaging // ✨ NEW: Extract the packaging array
+  selectedPackaging,
+  billedBy // ✨ NEW: Extract the billedBy state
 }: any) {
   
   const customerPrintRef = useRef<HTMLDivElement>(null)
@@ -23,8 +24,9 @@ export function PosModals({
   
   const [printType, setPrintType] = useState<'customer' | 'store'>('customer')
   
-  // ✨ NEW: Warning Modal State
+  // Warning Modal States
   const [showPackagingWarning, setShowPackagingWarning] = useState(false)
+  const [showBilledByWarning, setShowBilledByWarning] = useState(false) // ✨ NEW
 
   const triggerCustomerPrint = useReactToPrint({ contentRef: customerPrintRef })
   const triggerStorePrint = useReactToPrint({ contentRef: storePrintRef })
@@ -47,14 +49,23 @@ export function PosModals({
     setTimeout(() => triggerStorePrint(), 10);
   };
 
-  // ✨ NEW: Intercept Checkout Logic
+  // ✨ UPDATED: Intercept Checkout Logic with layered warnings
   const handleAttemptCheckout = () => {
-    // Only warn on normal sales and custom orders. Ignore repairs/returns/estimates.
+    
+    // Gate 1: Check if Staff is Assigned
+    if (!billedBy) {
+      setShowBilledByWarning(true);
+      return; // Stop checkout completely
+    }
+
+    // Gate 2: Check Packaging (only for specific modes)
     if ((mode === 'normal' || mode === 'custom') && (!selectedPackaging || selectedPackaging.length === 0)) {
       setShowPackagingWarning(true);
-    } else {
-      executeCheckout();
-    }
+      return; // Stop checkout until confirmed
+    } 
+    
+    // If all gates pass, execute!
+    executeCheckout();
   };
 
   const modeConfig: Record<string, { bg: string, text: string }> = {
@@ -129,7 +140,6 @@ export function PosModals({
             </div>
             <Button variant="ghost" className="rounded-xl text-sm font-bold h-11 text-slate-500" onClick={() => setShowPreviewModal(false)}>Back to Edit</Button>
             
-            {/* ✨ NEW: Replaced standard executeCheckout with handleAttemptCheckout */}
             <Button onClick={handleAttemptCheckout} disabled={isProcessing} className={`rounded-xl text-sm font-bold text-white w-full sm:w-auto h-11 px-8 ${currentTheme.bg}`}>
                {isProcessing ? <Loader2 className="animate-spin w-4 h-4 mr-2" /> : "Confirm & Commit"}
             </Button>
@@ -137,7 +147,30 @@ export function PosModals({
         </DialogContent>
       </Dialog>
 
-      {/* ✨ 3. NEW: PACKAGING WARNING MODAL */}
+      {/* ✨ NEW: BILLED BY WARNING MODAL */}
+      <Dialog open={showBilledByWarning} onOpenChange={setShowBilledByWarning}>
+        <DialogContent className="sm:max-w-[360px] p-6 text-center border-rose-200 shadow-2xl rounded-2xl bg-white print:hidden">
+          <div className="w-14 h-14 rounded-full bg-rose-50 flex items-center justify-center mx-auto mb-4 border border-rose-100">
+            <UserCircle className="w-6 h-6 text-rose-500" />
+          </div>
+          <DialogTitle className="text-lg font-bold text-slate-900 mb-2">Assign Sales Staff</DialogTitle>
+          <DialogDescription className="text-sm text-slate-500 mb-6 font-medium">
+            You must select the staff member who processed this bill in the top navigation bar before checking out.
+          </DialogDescription>
+          
+          <Button 
+            className="w-full h-12 bg-rose-500 hover:bg-rose-600 text-white font-bold rounded-xl shadow-sm text-sm"
+            onClick={() => {
+              setShowBilledByWarning(false);
+              setShowPreviewModal(false); // Close preview so they return to the cart and see the header
+            }}
+          >
+            Go to Staff Selector
+          </Button>
+        </DialogContent>
+      </Dialog>
+
+      {/* 3. PACKAGING WARNING MODAL */}
       <Dialog open={showPackagingWarning} onOpenChange={setShowPackagingWarning}>
         <DialogContent className="sm:max-w-[360px] p-6 text-center border-amber-200 shadow-2xl rounded-2xl bg-white print:hidden">
           <div className="w-14 h-14 rounded-full bg-amber-50 flex items-center justify-center mx-auto mb-4 border border-amber-100">
@@ -177,7 +210,7 @@ export function PosModals({
         <DialogContent className="print:hidden sm:max-w-[420px] p-0 rounded-2xl overflow-hidden bg-white">
         <VisuallyHidden.Root>
           <DialogTitle>Transaction Success</DialogTitle>
-          <DialogDescription>Invoice generated successfully</DialogDescription> {/* ✨ ADDED THIS LINE */}
+          <DialogDescription>Invoice generated successfully</DialogDescription>
         </VisuallyHidden.Root>
           <div className="flex flex-col items-center justify-center p-10 text-center space-y-6">
             <div className={`w-20 h-20 text-white rounded-full flex items-center justify-center shadow-lg ${currentTheme.bg}`}>
