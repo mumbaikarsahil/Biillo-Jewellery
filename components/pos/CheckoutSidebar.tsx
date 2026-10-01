@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react'
 import { 
   Loader2, Banknote, CreditCard, QrCode, Building, Split, 
-  FileText, ChevronDown, CheckSquare, Gem, Wallet, IndianRupee 
+  FileText, ChevronDown, CheckSquare, Gem, Wallet, IndianRupee, Award, Share2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
+import { Badge } from '@/components/ui/badge'
 import { 
   Select, SelectContent, SelectItem, 
   SelectTrigger, SelectValue 
@@ -24,28 +25,26 @@ export function CheckoutSidebar({
   selectedCustomer, setSelectedCustomer, 
   onPreviewRequest,
   appUser, selectedLocation,
+  loyaltySettings,
+  autoLoyaltyRules, // ✨ Dynamic Auto Rules
   
-  // Adjustments & Vouchers
   discountType, setDiscountType, discountValue, setDiscountValue,
   voucherCode, setVoucherCode, activeVoucher, setActiveVoucher, handlingFee, setHandlingFee, handleApplyVoucher,
   isExchangeOpen, setIsExchangeOpen, exchangeMode, setExchangeMode, 
   exchangeInvoiceNo, setExchangeInvoiceNo, exchangeValue, setExchangeValue, exchangeNotes, setExchangeNotes,
   handleFetchExchangeItem, exchangeNum, paymentMode, setPaymentMode,
   setExchangePhysicalDetails,
-  // Split Payment Props
   splitPayments, setSplitPayments, currentSplitTotal, 
-  
-  // Custom, Repair, & Return Data
   customOrderDetails, repairDetails, returnDetails,
-  
-  // Ledger Props
   isProcessing, finalPayable, subtotal, discountAmount, appliedVoucherAmount, handlingAmt, 
   finalTaxableValue, cgstAmount, sgstAmount, roundOffAmount,
   
-  // WALLET STATES FROM HOOK
   appliedKittyAmount, setAppliedKittyAmount,
   appliedKittyPlanId, setAppliedKittyPlanId,
   appliedCreditAmount, setAppliedCreditAmount,
+  appliedPointsAmount, setAppliedPointsAmount,
+  rawPointsRedeemed, setRawPointsRedeemed,
+  referrerPhone, setReferrerPhone,
 
   estimateChargeType, 
   setEstimateChargeType,
@@ -74,16 +73,34 @@ export function CheckoutSidebar({
   const [transferType, setTransferType] = useState<string>('IMPS') 
   const [splitRefs, setSplitRefs] = useState({ card: '', upi: '', bank: '', cheque: '' })
   
-  // ✨ UX ENHANCEMENT: Ledger Toggle State
   const [showLedgerDetails, setShowLedgerDetails] = useState(false)
 
-  // Reset wallets if customer is changed
+  // ✨ FIX: Centralized Live Loyalty State (Single Source of Truth)
+  const [liveLoyaltyData, setLiveLoyaltyData] = useState<{id: string, total_points: number} | null>(null);
+
+  useEffect(() => {
+    if (selectedCustomer?.id) {
+      supabase.from('loyalty_accounts')
+        .select('id, total_points')
+        .eq('customer_id', selectedCustomer.id)
+        .maybeSingle()
+        .then(({ data }) => setLiveLoyaltyData(data));
+    } else {
+      setLiveLoyaltyData(null);
+    }
+  }, [selectedCustomer?.id]);
+
+  const isEnrolledInLoyalty = !!liveLoyaltyData;
+  const hasReferralRules = autoLoyaltyRules?.some((r: any) => r.name.toLowerCase().includes('refer'));
+
   useEffect(() => {
     if (!selectedCustomer) {
       setAppliedKittyAmount(0)
       setAppliedCreditAmount(0)
+      setAppliedPointsAmount(0)
+      setRawPointsRedeemed(0)
     }
-  }, [selectedCustomer, setAppliedKittyAmount, setAppliedCreditAmount])
+  }, [selectedCustomer, setAppliedKittyAmount, setAppliedCreditAmount, setAppliedPointsAmount, setRawPointsRedeemed])
 
   useEffect(() => {
     const fetchBanks = async () => {
@@ -98,7 +115,6 @@ export function CheckoutSidebar({
     fetchBanks()
   }, [appUser?.company_id])
 
-  // --- SAFE MATH CALCULATIONS ---
   const cartAdvance = cart?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
   const invoiceTotalValue = (Number(finalTaxableValue) || 0) + (Number(cgstAmount) || 0) + (Number(sgstAmount) || 0) + (Number(roundOffAmount) || 0);
 
@@ -110,7 +126,6 @@ export function CheckoutSidebar({
   const splitRemaining = Math.max(0, displayTotal - (Number(currentSplitTotal) || 0))
   const isSplitValid = Math.abs((Number(currentSplitTotal) || 0) - displayTotal) < 0.1
 
-  // --- ENHANCED CUSTOM ORDER MATH ---
   const customEstBase = Number(customOrderDetails?.estimated_value) || 0;
   const customDiscount = discountType === 'percent' ? (customEstBase * (Number(discountValue) || 0) / 100) : (Number(discountValue) || 0);
   const safeExchangeNum = Number(exchangeNum) || 0;
@@ -118,26 +133,25 @@ export function CheckoutSidebar({
   const handlingVal = Number(activeVoucher?.handling_fee) || 0;
   const effectiveVoucherCredit = Math.max(0, voucherVal - handlingVal);
   
-  // Calculate Taxable after Deductions safely
   const customTaxable = Math.max(0, customEstBase - customDiscount - safeExchangeNum - effectiveVoucherCredit);
   const customCgst = customTaxable * 0.015;
   const customSgst = customTaxable * 0.015;
   const customTotalEstimate = Math.round(customTaxable + customCgst + customSgst);
 
   const customAdvancePaid = Number(customOrderDetails?.advance_paid) || 0;
-  const totalSettlements = (Number(appliedKittyAmount) || 0) + (Number(appliedCreditAmount) || 0);
+  const totalSettlements = (Number(appliedKittyAmount) || 0) + (Number(appliedCreditAmount) || 0) + (Number(appliedPointsAmount) || 0);
 
-  // Final Estimated Balance Due on Delivery
   const customNetEst = Math.max(0, customTotalEstimate - customAdvancePaid - totalSettlements);
 
-  // ONLY clear wallets if an activeVoucher is applied (Manual discounts are now freely allowed to club)
   useEffect(() => {
-    if (activeVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0)) {
+    if (activeVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0 || appliedPointsAmount > 0)) {
       setAppliedKittyAmount(0);
       setAppliedCreditAmount(0);
-      toast.warning("Settlements Reset", { description: "Applying a Voucher clears Wallet/Kitty settlements." });
+      setAppliedPointsAmount(0);
+      setRawPointsRedeemed(0);
+      toast.warning("Settlements Reset", { description: "Applying a Voucher clears Wallet/Loyalty settlements." });
     }
-  }, [activeVoucher, appliedKittyAmount, appliedCreditAmount, setAppliedKittyAmount, setAppliedCreditAmount]);
+  }, [activeVoucher, appliedKittyAmount, appliedCreditAmount, appliedPointsAmount, setAppliedKittyAmount, setAppliedCreditAmount, setAppliedPointsAmount, setRawPointsRedeemed]);
 
   const handleFinalize = (isEstimate: boolean) => {
     let finalRef = transactionRef;
@@ -163,7 +177,10 @@ export function CheckoutSidebar({
       
       applied_kitty: appliedKittyAmount,
       kitty_plan_id: appliedKittyPlanId,
-      applied_credit: appliedCreditAmount
+      applied_credit: appliedCreditAmount,
+      applied_points: appliedPointsAmount,
+      raw_points_redeemed: rawPointsRedeemed,
+      referrer_phone: referrerPhone
     })
   }
 
@@ -172,7 +189,6 @@ export function CheckoutSidebar({
       
       <div className="flex-1 overflow-y-auto p-4 space-y-5 pb-12 custom-scrollbar">
         
-        {/* 1. CUSTOMER SELECTOR */}
         <section>
           <CustomerSelector 
             mode={mode}
@@ -183,9 +199,11 @@ export function CheckoutSidebar({
             appUser={appUser}
             selectedLocation={selectedLocation}
             subtotal={subtotal}
-            onApplyWallet={(type: 'kitty' | 'credit', amount: number, planId?: string) => {
+            loyaltySettings={loyaltySettings}
+            liveLoyaltyData={liveLoyaltyData} // ✨ PASS SHARED STATE DOWN
+            onApplyWallet={(type: 'kitty' | 'credit' | 'points', amount: number, planId?: string, rawAmount?: number) => {
               if (activeVoucher) {
-                 return toast.error("Clubbing Restricted", { description: "Cannot apply Wallet/Kitty when Vouchers are active. Clear the voucher first."});
+                 return toast.error("Clubbing Restricted", { description: "Cannot apply Wallet/Loyalty when Vouchers are active. Clear the voucher first."});
               }
 
               if (type === 'kitty') {
@@ -197,11 +215,19 @@ export function CheckoutSidebar({
                 if (planId) setAppliedKittyPlanId(planId); 
               } 
               else if (type === 'credit') {
-                if (invoiceTotalValue < amount + appliedKittyAmount) {
+                if (invoiceTotalValue < amount + appliedKittyAmount + appliedPointsAmount) {
                    toast.error("Total settlements cannot exceed the invoice value.");
                    return;
                 }
                 setAppliedCreditAmount(amount);
+              }
+              else if (type === 'points') {
+                if (invoiceTotalValue < amount + appliedKittyAmount + appliedCreditAmount) {
+                  toast.error("Total settlements cannot exceed the invoice value.");
+                  return;
+                }
+                setAppliedPointsAmount(amount);
+                if (rawAmount) setRawPointsRedeemed(rawAmount);
               }
             }}
           />
@@ -209,7 +235,6 @@ export function CheckoutSidebar({
 
         <Separator className="bg-slate-200/60" />
 
-        {/* 2. ADJUSTMENTS */}
         {['normal', 'custom'].includes(mode) && (
            <section className="animate-in fade-in duration-300">
              <VoucherExchangePanel 
@@ -221,10 +246,57 @@ export function CheckoutSidebar({
                exchangeNotes={exchangeNotes} setExchangeNotes={setExchangeNotes} handleFetchExchangeItem={handleFetchExchangeItem} exchangeNum={exchangeNum}
                setExchangePhysicalDetails={setExchangePhysicalDetails}
              />
+             
+             {autoLoyaltyRules?.length > 0 && (
+               <div className="space-y-3 mt-3">
+                 {autoLoyaltyRules.map((rule: any) => {
+                   const isRepeat = rule.name.toLowerCase().includes('repeat');
+                   if (!isRepeat) return null;
+
+                   return (
+                     <div key={rule.id} className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl relative flex items-center justify-between">
+                       <div className="flex flex-col gap-0.5">
+                          <div className="flex items-center gap-1.5">
+                            <Award className="h-3.5 w-3.5 text-emerald-600" />
+                            <Label className="text-[10px] font-bold text-emerald-800 uppercase tracking-widest">{rule.name}</Label>
+                          </div>
+                          {isEnrolledInLoyalty ? (
+                            <span className="text-[9px] text-emerald-600 font-medium mt-0.5">
+                              Customer will earn {rule.is_dynamic ? '5%' : rule.points} points on this bill.
+                            </span>
+                          ) : (
+                            <span className="text-[9px] text-zinc-500 font-medium italic mt-0.5">Customer not enrolled. Enroll to award points.</span>
+                          )}
+                       </div>
+                     </div>
+                   )
+                 })}
+
+                 {hasReferralRules && (
+                   <div className="p-3 bg-amber-50/50 border border-amber-200 rounded-xl relative">
+                     <div className="flex justify-between items-center mb-2">
+                        <div className="flex items-center gap-1.5">
+                           <Share2 className="h-3.5 w-3.5 text-amber-500" />
+                           <Label className="text-[10px] font-bold text-amber-800 uppercase tracking-widest">Referral Reward Active</Label>
+                        </div>
+                        <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 border-none text-[8px] h-4">
+                          5% OF BILL
+                        </Badge>
+                     </div>
+                     <Input 
+                       placeholder="Enter Referrer Mobile (Optional)" 
+                       className="h-9 text-xs bg-white border-amber-200 placeholder:text-amber-400 focus-visible:ring-amber-400"
+                       value={referrerPhone}
+                       onChange={(e) => setReferrerPhone(e.target.value.replace(/\D/g, ''))}
+                       maxLength={10}
+                     />
+                   </div>
+                 )}
+               </div>
+             )}
            </section>
         )}
 
-        {/* 3. GENERAL REMARKS */}
         {(['normal', 'custom', 'repair', 'return'].includes(mode)) && (
           <section className="animate-in fade-in slide-in-from-bottom-2">
             <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block">
@@ -242,7 +314,6 @@ export function CheckoutSidebar({
           </section>
         )}
 
-        {/* 4. SETTLEMENT MODE */}
         {(['normal', 'custom', 'repair', 'return'].includes(mode)) && (
           <section className="space-y-3 bg-white p-3 border border-slate-200 rounded-2xl shadow-sm">
             <Label className="text-xs font-bold text-slate-800 uppercase tracking-wider pl-1">
@@ -264,7 +335,7 @@ export function CheckoutSidebar({
                     key={method.id} 
                     onClick={() => {
                       setPaymentMode(method.id);
-                      setTransactionRef(''); // Reset ref on mode change
+                      setTransactionRef('');
                       setSplitRefs({ card: '', upi: '', bank: '', cheque: '' });
                     }}
                     className={`flex flex-col items-center justify-center gap-1 h-14 border rounded-xl transition-all duration-200 ${
@@ -280,7 +351,6 @@ export function CheckoutSidebar({
               })}
             </div>
 
-            {/* A. Bank Transfer Details */}
             {paymentMode === 'bank' && (
               <div className="pt-2 space-y-3 animate-in fade-in slide-in-from-top-2">
                 <div className="grid grid-cols-2 gap-3">
@@ -326,7 +396,6 @@ export function CheckoutSidebar({
               </div>
             )}
 
-            {/* B. UPI, Card, or Cheque Details */}
             {['upi', 'card', 'cheque'].includes(paymentMode) && (
               <div className="pt-2 space-y-3 animate-in fade-in slide-in-from-top-2">
                 {['upi', 'cheque'].includes(paymentMode) && (
@@ -361,7 +430,6 @@ export function CheckoutSidebar({
               </div>
             )}
 
-            {/* C. Split Payment Inputs & Context */}
             {paymentMode === 'split' && (
               <div className="pt-2 space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
                 <div className="grid grid-cols-2 gap-3">
@@ -402,7 +470,6 @@ export function CheckoutSidebar({
                   </div>
                 </div>
 
-                {/* DYNAMIC SPLIT REFERENCES */}
                 {(Number(splitPayments?.card) > 0 || Number(splitPayments?.upi) > 0 || Number(splitPayments?.bank) > 0 || Number(splitPayments?.cheque) > 0) && (
                   <div className="pt-3 border-t border-slate-100 space-y-3">
                     
@@ -487,10 +554,8 @@ export function CheckoutSidebar({
         )}
       </div>
 
-      {/* 4. CONDENSED COLLAPSIBLE LEDGER & FOOTER */}
       <div className="bg-white p-3 sm:p-4 border-t border-slate-200 shadow-[0_-8px_30px_-15px_rgba(0,0,0,0.15)] z-20">
         
-        {/* ✨ UX ENHANCEMENT: Ledger Toggle Button */}
         {['normal', 'custom'].includes(mode) && (
           <button 
             onClick={() => setShowLedgerDetails(!showLedgerDetails)}
@@ -504,10 +569,8 @@ export function CheckoutSidebar({
           </button>
         )}
 
-        {/* ✨ UX ENHANCEMENT: Collapsible Content Wrapper */}
         <div className={`overflow-hidden transition-all duration-300 ease-in-out ${showLedgerDetails ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0'}`}>
           
-          {/* NORMAL MODE LEDGER */}
           {mode === 'normal' && (
             <div className="space-y-1 text-sm text-slate-500 pb-3 border-b border-slate-100 mb-2">
               
@@ -518,14 +581,12 @@ export function CheckoutSidebar({
                 </span>
               </div>
               
-              {/* MANUAL DISCOUNTS */}
               {Number(discountAmount) > 0 && (
                 <div className="flex justify-between items-center text-red-500">
                   <span>Manual Discount</span><span className="tabular-nums">- ₹{(Number(discountAmount) || 0).toLocaleString()}</span>
                 </div>
               )}
               
-              {/* EXCHANGES & VOUCHERS */}
               {safeExchangeNum > 0 && (
                 <div className="flex justify-between items-center text-blue-600">
                   <span>Old Gold / Exchange</span><span className="tabular-nums">- ₹{safeExchangeNum.toLocaleString()}</span>
@@ -537,7 +598,6 @@ export function CheckoutSidebar({
                 </div>
               )}
               
-              {/* TAX CALCULATION (Pre-Tax Subtotal - All Deductions) */}
               <div className="flex justify-between items-center text-slate-800 font-semibold pt-1.5 mt-1 border-t border-slate-100/50">
                 <span>Taxable Value {Number(handlingAmt) > 0 && <span className="text-[10px] font-normal text-slate-400 ml-1">(inc. Handling ₹{handlingAmt})</span>}</span>
                 <span className="tabular-nums">₹{(Number(finalTaxableValue) || 0).toLocaleString()}</span>
@@ -547,13 +607,11 @@ export function CheckoutSidebar({
                 <span>CGST + SGST (3%)</span><span className="tabular-nums">+ ₹{(Number(cgstAmount) + Number(sgstAmount)).toLocaleString()}</span>
               </div>
 
-              {/* TOTAL INVOICE ROW */}
               <div className="flex justify-between items-center font-bold text-slate-900 pt-1.5 mt-1 border-t border-slate-200">
                 <span>Total Invoice Value</span>
                 <span className="tabular-nums">₹{invoiceTotalValue.toLocaleString()}</span>
               </div>
 
-              {/* PRE-PAID SETTLEMENTS (Deductions from the Final Total) */}
               <div className="pt-1.5 space-y-1">
                 {cartAdvance > 0 && (
                   <div className="flex justify-between items-center text-slate-500 italic">
@@ -571,6 +629,12 @@ export function CheckoutSidebar({
                   <div className="flex justify-between items-center text-emerald-600 font-bold animate-in slide-in-from-right-2">
                     <span className="flex items-center gap-1.5"><Wallet className="w-3.5 h-3.5"/> Less: Wallet Payment</span>
                     <span className="tabular-nums">- ₹{(Number(appliedCreditAmount) || 0).toLocaleString()}</span>
+                  </div>
+                )}
+                {Number(appliedPointsAmount) > 0 && (
+                  <div className="flex justify-between items-center text-amber-600 font-bold animate-in slide-in-from-right-2">
+                    <span className="flex items-center gap-1.5"><Award className="w-3.5 h-3.5"/> Less: Loyalty Points</span>
+                    <span className="tabular-nums">- ₹{(Number(appliedPointsAmount) || 0).toLocaleString()}</span>
                   </div>
                 )}
               </div>
@@ -611,7 +675,6 @@ export function CheckoutSidebar({
               
               {activeVoucher && (
                 <div className="flex justify-between items-center text-emerald-600 font-medium">
-                  {/* ✨ FIX: Clarified Label */}
                   <span>Voucher Discount {Number(activeVoucher.handling_fee) > 0 ? `(Post ₹${activeVoucher.handling_fee} Fee)` : ''}</span>
                   <span className="tabular-nums">- ₹{effectiveVoucherCredit.toLocaleString('en-IN')}</span>
                 </div>
@@ -657,6 +720,13 @@ export function CheckoutSidebar({
                 </div>
               )}
 
+              {Number(appliedPointsAmount) > 0 && (
+                <div className="flex justify-between items-center text-amber-600 font-bold mt-1">
+                  <span>Less: Loyalty Points</span>
+                  <span className="tabular-nums">- ₹{appliedPointsAmount.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+
               <div className="flex justify-between items-center text-purple-900 font-bold pt-1.5 mt-1 border-t border-purple-200/50">
                 <span>Est. Balance on Pickup</span>
                 <span className="tabular-nums">₹{customNetEst.toLocaleString('en-IN')}</span>
@@ -664,9 +734,7 @@ export function CheckoutSidebar({
             </div>
           )}
         </div>
-        {/* ✨ END COLLAPSIBLE CONTENT ✨ */}
 
-        {/* ALWAYS VISIBLE: GRAND TOTAL */}
         <div className={`flex justify-between items-end mb-3 ${showLedgerDetails ? 'mt-2' : 'mt-1'}`}>
           <p className="text-xs font-black uppercase text-slate-500">
             {mode === 'custom' || mode === 'repair' ? 'Balance Advance' : mode === 'return' ? 'Refund Amount' : mode === 'challan' ? 'Memo Value' : 'Balance to Pay'}

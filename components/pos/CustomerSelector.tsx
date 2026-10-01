@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useEffect, useMemo } from 'react'
-import { Search, Plus, X, IndianRupee, Gem, Info, Loader2, AlertCircle, Edit2 } from 'lucide-react'
+import { Search, Plus, X, IndianRupee, Gem, Info, Loader2, AlertCircle, Edit2, Award } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -19,7 +19,9 @@ interface CustomerSelectorProps {
   appUser?: any 
   selectedLocation?: string
   subtotal?: number 
-  onApplyWallet?: (type: 'credit' | 'kitty', availableAmount: number, planId?: string) => void 
+  loyaltySettings?: any 
+  liveLoyaltyData?: { id: string, total_points: number } | null // ✨ Passed directly from Sidebar
+  onApplyWallet?: (type: 'credit' | 'kitty' | 'points', availableAmount: number, planId?: string, rawAmount?: number) => void 
 }
 
 const formatToDBDate = (dateStr?: string) => {
@@ -39,13 +41,13 @@ const formatToDisplayDate = (dbDateStr?: string) => {
   if (!dbDateStr) return '';
   const parts = dbDateStr.split('-');
   if (parts.length === 3) {
-    return `${parts[2]}-${parts[1]}-${parts[0]}`; // Convert YYYY-MM-DD to DD-MM-YYYY
+    return `${parts[2]}-${parts[1]}-${parts[0]}`;
   }
   return dbDateStr;
 };
 
 export function CustomerSelector({ 
-  mode, setCustomers, selectedCustomer, setSelectedCustomer, appUser, selectedLocation, subtotal = 0, onApplyWallet 
+  mode, setCustomers, selectedCustomer, setSelectedCustomer, appUser, selectedLocation, subtotal = 0, loyaltySettings, liveLoyaltyData, onApplyWallet 
 }: CustomerSelectorProps) {
   
   const [searchCustomer, setSearchCustomer] = useState('')
@@ -60,7 +62,6 @@ export function CustomerSelector({
     full_name: '', phone: '', email: '', city: '', address: '', pan_no: '', birth_date: '', anniversary_date: '' 
   })
 
-  // ✨ LIVE SERVER-SIDE SEARCH
   useEffect(() => {
     const searchDatabase = async () => {
       const term = searchCustomer.trim();
@@ -92,7 +93,6 @@ export function CustomerSelector({
     return () => clearTimeout(timer);
   }, [searchCustomer, appUser]);
 
-  // ✨ PROFILE COMPLETION ENGINE
   const completionStats = useMemo(() => {
     if (!selectedCustomer) return { percentage: 0, missing: [] };
     
@@ -181,7 +181,6 @@ export function CustomerSelector({
       };
 
       if (isEditMode && selectedCustomer?.id) {
-        // ✨ UPDATE EXISTING CUSTOMER
         const { data, error } = await supabase
           .from('customers')
           .update(payload)
@@ -193,7 +192,6 @@ export function CustomerSelector({
         setSelectedCustomer(data);
         toast.success('Customer profile updated successfully.');
       } else {
-        // ✨ INSERT NEW CUSTOMER
         payload.company_id = appUser?.company_id;
         payload.warehouse_id = selectedLocation;
         
@@ -266,7 +264,35 @@ export function CustomerSelector({
     onApplyWallet?.('credit', netUsableCredit);
   }
 
+  // ✨ LOYALTY POINTS REDEMPTION LOGIC (With Smart Partial Redemption)
+  const handleLoyaltyRedemption = () => {
+    const rawPoints = Number(liveLoyaltyData?.total_points) || 0;
+    if (rawPoints <= 0) return;
+
+    const feePct = Number(loyaltySettings?.redemption_fee_pct) || 0;
+    const pointValue = Number(loyaltySettings?.point_value_rs) || 1;
+
+    // 1. Calculate the maximum possible Rs value they possess
+    const maxGrossValueRs = rawPoints * pointValue;
+    const maxFeeAmountRs = maxGrossValueRs * (feePct / 100);
+    const maxUsableRs = Math.floor(maxGrossValueRs - maxFeeAmountRs);
+
+    // 2. Only take what is needed to cover the subtotal!
+    const neededRs = Math.min(subtotal, maxUsableRs); 
+
+    // 3. Calculate exactly how many points to burn to get the needed Rs
+    // Formula: Points = neededRs / (pointValue * (1 - feePct/100))
+    const multiplier = pointValue * (1 - (feePct / 100));
+    const pointsToBurn = Math.ceil(neededRs / multiplier);
+
+    toast.info("Loyalty Points Applied", {
+      description: `Burning ${pointsToBurn.toLocaleString()} Pts | Usable Value: ₹${neededRs.toLocaleString()}`
+    });
+
+    onApplyWallet?.('points', neededRs, liveLoyaltyData?.id, pointsToBurn);
+  }
   const hasActivePlan = selectedCustomer?.kitty_plans && selectedCustomer.kitty_plans.some((p: any) => ['active', 'matured'].includes(p.status));
+  const hasLoyaltyPoints = Number(liveLoyaltyData?.total_points) > 0;
 
   return (
     <div className="space-y-1.5 relative">
@@ -285,11 +311,18 @@ export function CustomerSelector({
                 <p className="text-sm font-bold text-slate-900 leading-none">{selectedCustomer.full_name || 'Unknown Name'}</p>
                 <p className="text-[10px] font-mono text-slate-500 mt-1">{selectedCustomer.phone} {selectedCustomer.email ? `• ${selectedCustomer.email}` : ''}</p>
                 
-                {(selectedCustomer.customer_status === 'Kitty Member' || hasActivePlan) && (
-                  <Badge className="bg-purple-50 text-purple-700 border-purple-200 text-[9px] px-1.5 py-0 h-4 rounded-sm flex items-center gap-1 font-bold mt-1.5 w-max">
-                    <Gem className="w-2.5 h-2.5" /> Active Kitty Member
-                  </Badge>
-                )}
+                <div className="flex flex-wrap gap-1 mt-1.5">
+                  {(selectedCustomer.customer_status === 'Kitty Member' || hasActivePlan) && (
+                    <Badge className="bg-purple-50 text-purple-700 border-purple-200 text-[9px] px-1.5 py-0 h-4 rounded-sm flex items-center gap-1 font-bold">
+                      <Gem className="w-2.5 h-2.5" /> Active Kitty
+                    </Badge>
+                  )}
+                  {hasLoyaltyPoints && (
+                    <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[9px] px-1.5 py-0 h-4 rounded-sm flex items-center gap-1 font-bold">
+                      <Award className="w-2.5 h-2.5" /> Celebration Plan
+                    </Badge>
+                  )}
+                </div>
               </div>
             </div>
             <Button 
@@ -302,7 +335,6 @@ export function CustomerSelector({
             </Button>
           </div>
 
-          {/* ✨ PROFILE COMPLETION WIDGET */}
           {completionStats.percentage < 100 && (
             <div className="mt-3 pt-2.5 border-t border-orange-100 flex items-center justify-between bg-orange-50/50 -mx-2.5 -mb-2.5 px-3 py-2">
                <div className="flex flex-col gap-0.5">
@@ -324,7 +356,7 @@ export function CustomerSelector({
             </div>
           )}
 
-          {(Number(selectedCustomer.store_credit_balance) > 0 || hasActivePlan) && (
+          {(Number(selectedCustomer.store_credit_balance) > 0 || hasActivePlan || hasLoyaltyPoints) && (
             <div className="flex flex-col gap-1.5 mt-3 pt-3 border-t border-slate-100 w-full">
               
               {selectedCustomer.kitty_plans?.filter((p: any) => ['active', 'matured'].includes(p.status) && p.months_paid > 0).map((plan: any) => {
@@ -387,6 +419,35 @@ export function CustomerSelector({
                       <span className="text-[8px] text-emerald-500 line-through">₹{Number(selectedCustomer.store_credit_balance).toLocaleString()}</span>
                     </div>
                     <span className="bg-emerald-600 text-white text-[9px] font-bold uppercase px-2 py-0.5 rounded-sm opacity-90 group-hover:opacity-100 group-hover:shadow-sm transition-all">Redeem</span>
+                  </div>
+                </div>
+              )}
+
+              {/* ✨ LOYALTY POINTS BLOCK */}
+              {hasLoyaltyPoints && (
+                <div 
+                  onClick={handleLoyaltyRedemption}
+                  className="flex items-center justify-between w-full bg-amber-50 border border-amber-200 rounded-sm p-2 cursor-pointer hover:bg-amber-100 transition-colors group"
+                  title="Redeem Loyalty Points"
+                >
+                  <div className="flex flex-col gap-0.5 text-amber-700">
+                    <div className="flex items-center gap-1.5">
+                      <Award className="w-3.5 h-3.5" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider">Loyalty Points</span>
+                    </div>
+                    {Number(loyaltySettings?.redemption_fee_pct) > 0 && (
+                      <span className="text-[8px] font-semibold text-amber-600 flex items-center gap-1">
+                        <Info className="w-2.5 h-2.5" /> {loyaltySettings?.redemption_fee_pct}% Processing Fee Applies
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="flex flex-col items-end">
+                      <span className="text-xs font-black text-amber-700 tabular-nums leading-none">
+                        {Number(liveLoyaltyData?.total_points).toLocaleString()} Pts
+                      </span>
+                    </div>
+                    <span className="bg-amber-600 text-white text-[9px] font-bold uppercase px-2 py-0.5 rounded-sm opacity-90 group-hover:opacity-100 group-hover:shadow-sm transition-all">Redeem</span>
                   </div>
                 </div>
               )}

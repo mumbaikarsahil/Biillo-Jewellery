@@ -83,7 +83,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const customAdvancePaid = Number(data.advancePayment || customOrder?.advancePayment || 0);
     const appliedKitty = data.appliedKitty || 0;
     const appliedCredit = data.appliedCredit || 0;
-    const totalSettlements = appliedKitty + appliedCredit;
+    const appliedPoints = data.appliedPoints || 0;
+    const totalSettlements = appliedKitty + appliedCredit + appliedPoints;
 
     // Use passed balanceDue or calculate if missing
     const customEstimatedBalance = data.balanceDue ?? Math.max(0, (data.finalTotal || 0) - customAdvancePaid - totalSettlements);
@@ -398,7 +399,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
             <div className={`w-1/2 p-3 space-y-1.5 text-sm font-semibold text-slate-800 ${isEstimate ? 'bg-white' : 'bg-white/40'}`}>
               
-              {/* ✨ EXACT FINANCIAL FLOW FOR CUSTOM ORDERS */}
               {mode === 'custom' && customOrder ? (
                 <>
                   <div className="flex justify-between text-slate-600 mb-1">
@@ -466,6 +466,13 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                       <span>- ₹ {appliedCredit.toLocaleString('en-IN')}</span>
                     </div>
                   )}
+
+                  {appliedPoints > 0 && (
+                    <div className="flex justify-between items-center text-amber-600 font-bold mt-1">
+                      <span>Less: Loyalty Points Redeemed</span>
+                      <span>- ₹ {appliedPoints.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
                   
                   <div className="flex justify-between pt-1.5 mt-1.5 border-t border-slate-300 text-sm font-bold text-[#881798]">
                     <span>Est. Balance on Pickup</span>
@@ -508,7 +515,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   
                   {totalDiscount > 0 && (
                     <div className="flex justify-between text-[#A85B9D]">
-                      <span>Discount</span>
+                      <span>Discount {appliedPoints > 0 ? '(Loyalty Points Redeemed)' : ''}</span>
                       <span>- ₹ {totalDiscount?.toLocaleString()}</span>
                     </div>
                   )}
@@ -551,7 +558,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   
                   {totalDiscount > 0 && (
                     <div className="flex justify-between text-[#A85B9D]">
-                      <span>Discount</span>
+                      <span>Discount {appliedPoints > 0 ? '(Loyalty Points Redeemed)' : ''}</span>
                       <span>- ₹ {totalDiscount?.toLocaleString()}</span>
                     </div>
                   )}

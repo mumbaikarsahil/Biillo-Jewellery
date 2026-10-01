@@ -61,65 +61,60 @@ export default function POSPage() {
   const [allBranches, setAllBranches] = useState<any[]>([])
 
   const [repairDetails, setRepairDetails] = useState<any>({
-    itemDescription: '',
-    grossWeight: '',
-    purity: '22K',
-    defectNotes: '',
-    estimatedCost: '',
-    advancePaid: '',
-    expectedDelivery: '',
-    conditionPhotoUrl: null
+    itemDescription: '', grossWeight: '', purity: '22K', defectNotes: '', estimatedCost: '', advancePaid: '', expectedDelivery: '', conditionPhotoUrl: null
   })
 
   const [customers, setCustomers] = useState<any[]>([])
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null)
   const [customOrderDetails, setCustomOrderDetails] = useState({ 
-    design_reference: '', 
-    item_category: '', 
-    expected_gold_g: '', 
-    expected_diamond_cts: '', 
-    estimated_value: '', 
-    advance_paid: '' 
+    design_reference: '', item_category: '', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '' 
   })
   
   const [returnDetails, setReturnDetails] = useState({
     invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0
   })
 
-  // ✨ NEW: Packaging State
+  // Packaging State
   const [availablePackaging, setAvailablePackaging] = useState<any[]>([])
   const [selectedPackaging, setSelectedPackaging] = useState<SelectedPackaging[]>([])
 
-  // ✨ NEW: Fetch Packaging Materials for the active location
-  // ✨ FIXED: Added selectedLocation === 'ALL' check to prevent UUID 400 crash
+  // ✨ LOYALTY SETTINGS & AUTO RULES
+  const [loyaltySettings, setLoyaltySettings] = useState<any>(null);
+  const [autoLoyaltyRules, setAutoLoyaltyRules] = useState<any[]>([]);
+
   useEffect(() => {
-    const fetchPackaging = async () => {
+    const fetchPackagingAndLoyalty = async () => {
       if (!appUser?.company_id || !selectedLocation || selectedLocation === 'ALL') return; 
       
-      const { data, error } = await supabase
+      const { data: pkgData } = await supabase
         .from('packaging_inventory')
         .select('id, item_name, stock_count')
         .eq('company_id', appUser.company_id)
         .eq('warehouse_id', selectedLocation)
         .gt('stock_count', 0);
 
-      if (data) {
-        setAvailablePackaging(data);
-      }
+      if (pkgData) setAvailablePackaging(pkgData);
+
+      // ✨ Fetch Loyalty Configuration and Auto Rules simultaneously
+      const [lsRes, rulesRes] = await Promise.all([
+        supabase.from('loyalty_settings').select('*').limit(1).maybeSingle(),
+        supabase.from('loyalty_activities').select('*').eq('is_active', true).eq('update_method', 'Auto')
+      ]);
+
+      if (lsRes.data) setLoyaltySettings(lsRes.data);
+      if (rulesRes.data) setAutoLoyaltyRules(rulesRes.data);
     };
 
-    fetchPackaging();
+    fetchPackagingAndLoyalty();
   }, [appUser, selectedLocation]);
 
-  // ✨ NEW: Packaging Handlers
+  // Packaging Handlers
   const handleAddPackaging = (packId: string) => {
     const pack = availablePackaging.find(p => p.id === packId);
     if (!pack) return;
-    
     setSelectedPackaging(prev => {
       const existing = prev.find(p => p.id === packId);
       if (existing) {
-        // Prevent adding more than what's in stock
         if (existing.quantity >= pack.stock_count) {
           toast.error(`Only ${pack.stock_count} units available in stock.`);
           return prev;
@@ -215,12 +210,13 @@ export default function POSPage() {
     selectedCustomer, 
     customOrderDetails,
     repairDetails,     
-    returnDetails,    
+    returnDetails,  
     allBranches,
-    
     customBillingDate: isAdmin ? billingDate : undefined,
     billedBy: billedBy,
-    selectedPackaging: selectedPackaging
+    selectedPackaging: selectedPackaging,
+    autoLoyaltyRules,
+    loyaltySettings // ✨ ADD THIS LINE so the hook can access WhatsApp templates
   })
 
   const handleWipeSession = () => {
@@ -228,7 +224,7 @@ export default function POSPage() {
     checkoutHook.resetCheckoutState()
     setSelectedCustomer(null)
     setBilledBy('') 
-    setSelectedPackaging([]) // ✨ NEW: Clear packaging on wipe
+    setSelectedPackaging([])
     setCustomOrderDetails({ design_reference: '', item_category: '', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '' })
     setReturnDetails({ invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0 })
     setRepairDetails({ itemDescription: '', grossWeight: '', purity: '22K', defectNotes: '', estimatedCost: '', advancePaid: '', expectedDelivery: '', conditionPhotoUrl: null })
@@ -249,8 +245,6 @@ export default function POSPage() {
 
   return (
     <div className="min-h-[100dvh] lg:h-[100dvh] flex flex-col bg-[#E6E6E6] print:bg-white text-slate-900 font-sans overflow-hidden">
-      
-      {/* THE MASTER PRINT TRAP: Everything inside this div vanishes when Android prints! */}
       <div className="print:hidden flex flex-col flex-1 overflow-hidden">
         
         <POSHeader 
@@ -278,14 +272,11 @@ export default function POSPage() {
                  setDetails={setCustomOrderDetails} 
                  currentLocationId={selectedLocation}
                  voucherAmount={checkoutHook.appliedVoucherAmount}
-                 
-                 // ✨ ADD THESE 5 PACKAGING PROPS HERE! ✨
                  availablePackaging={availablePackaging}
                  selectedPackaging={selectedPackaging}
                  onAddPackaging={handleAddPackaging}
                  onRemovePackaging={handleRemovePackaging}
                  onUpdatePackagingQty={handleUpdatePackagingQty}
-
                  onAddToBill={(finalItemData: any) => {
                    setMode('normal');
                    clearCart();
@@ -305,8 +296,6 @@ export default function POSPage() {
                        purity_karat: finalItemData.purity_karat
                      }]);
                      toast.success("Added to cart! Advance payment applied.");
-                   } else {
-                     toast.error("Cart error: Please ensure setCart is exported from useCart.");
                    }
                  }}
                />
@@ -341,8 +330,6 @@ export default function POSPage() {
                         item_category: finalItemData.item_category
                       }]);
                       toast.success("Added to cart! Advance payment applied.");
-                    } else {
-                      toast.error("Cart error: Please ensure setCart is exported.");
                     }
                   }}
                 />
@@ -356,8 +343,6 @@ export default function POSPage() {
                  processScannedItem={processScannedItem}
                  removeFromCart={removeFromCart}
                  onOpenScanner={() => setShowScanner(true)} 
-                 
-                 // ✨ NEW: Passed Packaging Props
                  availablePackaging={availablePackaging}
                  selectedPackaging={selectedPackaging}
                  onAddPackaging={handleAddPackaging}
@@ -384,13 +369,13 @@ export default function POSPage() {
             returnDetails={returnDetails} 
             onPreviewRequest={handlePreviewRequest}
             setMode={setMode}
+            loyaltySettings={loyaltySettings} 
+            autoLoyaltyRules={autoLoyaltyRules} // ✨ Passes dynamic rules to sidebar
             {...checkoutHook} 
           />
         </div>
-      </div> {/* ✨ End of the print:hidden wrapper */}
+      </div> 
 
-      {/* ✨ 3. MODALS: Left outside the hidden wrapper so they can survive the print trap! */}
-      {/* ✨ 3. MODALS: Left outside the hidden wrapper so they can survive the print trap! */}
       <PosModals 
         mode={mode}
         showScanner={showScanner} 
@@ -405,14 +390,11 @@ export default function POSPage() {
         setLastInvoiceData={setLastInvoiceData}
         isProcessing={checkoutHook.isProcessing}
         selectedPackaging={selectedPackaging}
-        billedBy={billedBy} // ✨ THE FIX: Pass the state into the modals!
+        billedBy={billedBy}
         executeCheckout={async () => {
           const result = await checkoutHook.executeCheckout(isEstimateCheckout) 
           
           if (result.success) {
-            
-            // Instantly deduct the used packaging from the local UI state 
-            // so the next customer's bill immediately shows the correct remaining stock!
             setAvailablePackaging(prev => prev.map(pack => {
               const usedItem = selectedPackaging.find(p => p.id === pack.id);
               if (usedItem) {
@@ -425,7 +407,7 @@ export default function POSPage() {
             setShowPreviewModal(false)
             setTimeout(() => {
                 setShowPrintModal(true)
-                handleWipeSession() // This clears the cart and resets the session
+                handleWipeSession()
             }, 100);
           }
         }}
