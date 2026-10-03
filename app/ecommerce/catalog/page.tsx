@@ -541,10 +541,10 @@ export default function EcommerceCatalogPage() {
           </div>
         </div>
 
-        <Link href="/ecommerce/storefront-settings" className="ml-auto">
+        <Link href="/ecommerce/customise" className="ml-auto">
           <Button variant="outline" size="sm" className="h-8 shadow-sm text-zinc-700 bg-white border-zinc-200 hover:bg-zinc-50 font-medium">
             <LayoutTemplate className="w-4 h-4 mr-2 text-indigo-600" />
-            Storefront Settings
+            Customisation Settings
           </Button>
         </Link>
       </header>
