@@ -31,6 +31,7 @@ export default function EcommerceCatalogPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const productImageInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
+  const categoryImageInputRef = useRef<HTMLInputElement>(null); // ✨ NEW: Ref for category image
 
   // Data States
   const [categories, setCategories] = useState<any[]>([]);
@@ -52,7 +53,7 @@ export default function EcommerceCatalogPage() {
   const [isBulkMoveModalOpen, setIsBulkMoveModalOpen] = useState(false);
   const [bulkMoveTargetCategory, setBulkMoveTargetCategory] = useState("");
 
-  // ✨ NEW: Bulk Price Editor States
+  // Bulk Price Editor States
   const [bulkPriceModal, setBulkPriceModal] = useState({ isOpen: false, percentage: "", step: 1 });
   const [bulkPricePreview, setBulkPricePreview] = useState<any[]>([]);
   const [bulkPreviewPage, setBulkPreviewPage] = useState(1);
@@ -149,6 +150,31 @@ export default function EcommerceCatalogPage() {
     }
   };
 
+  // ✨ NEW: Category Image Upload Handler
+  const handleCategoryImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !appUser?.company_id) return;
+    setIsUploading(true);
+    try {
+      const file = files[0];
+      const webpBlob = await convertFileToWebP(file, 0.85);
+      const fileName = `cat-${Date.now()}-${Math.random().toString(36).substring(7)}.webp`;
+      const filePath = `${appUser.company_id}/categories/${fileName}`;
+
+      const { error: uploadError } = await supabase.storage.from("ecommerce-assets").upload(filePath, webpBlob, { contentType: "image/webp" });
+      if (uploadError) throw uploadError;
+
+      const { data } = supabase.storage.from("ecommerce-assets").getPublicUrl(filePath);
+      setCategoryForm((prev) => ({ ...prev, image_url: data.publicUrl }));
+      toast({ title: "Category Image Uploaded" });
+    } catch (err: any) {
+      toast({ title: "Image Upload Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsUploading(false);
+      if (e.target) e.target.value = "";
+    }
+  };
+
   const moveImage = (index: number, direction: "left" | "right") => {
     const newImages = [...productForm.gallery_images];
     if (direction === "left" && index > 0) {
@@ -217,7 +243,6 @@ export default function EcommerceCatalogPage() {
     fetchProducts(); 
   }, [appUser, selectedCategoryId]);
 
-  // ✨ FIX 1: Explicitly isolate Pagination Resetting so it DOES NOT reset on product saves!
   useEffect(() => { 
     setCurrentPage(1); 
   }, [searchQuery, statusFilter, selectedCategoryId]);
@@ -326,7 +351,7 @@ export default function EcommerceCatalogPage() {
 
       toast({ title: productForm.id ? "Product Updated" : "Product Created" });
       setIsProductSheetOpen(false);
-      fetchProducts(); // Doesn't trigger Pagination Reset due to Fix 1
+      fetchProducts();
     } catch (err: any) {
       toast({ title: "Error saving product", description: err.message, variant: "destructive" });
     } finally {
@@ -407,7 +432,7 @@ export default function EcommerceCatalogPage() {
   const isCurrentPageAllSelected = paginatedIds.length > 0 && paginatedIds.every((id) => selectedIds.has(id));
 
   // ==========================================================================
-  // ✨ FIX 2: THE BULK PRICE EDITOR ENGINE
+  // BULK PRICE EDITOR ENGINE
   // ==========================================================================
   const handleGeneratePricePreview = () => {
     const pct = parseFloat(bulkPriceModal.percentage);
@@ -436,7 +461,6 @@ export default function EcommerceCatalogPage() {
   const handleCommitPrices = async () => {
     setIsSubmitting(true);
     try {
-      // Chunk updates to prevent hitting Supabase payload limits
       for(let i = 0; i < bulkPricePreview.length; i += 50) {
         const chunk = bulkPricePreview.slice(i, i + 50);
         await Promise.all(chunk.map(p => 
@@ -445,7 +469,7 @@ export default function EcommerceCatalogPage() {
       }
       toast({ title: "Pricing Updated!", description: `Successfully applied to ${bulkPricePreview.length} products.` });
       setBulkPriceModal({ isOpen: false, percentage: "", step: 1 });
-      fetchProducts(); // Refresh in background without changing active pagination
+      fetchProducts();
     } catch (err: any) {
       toast({ title: "Update Failed", description: err.message, variant: "destructive" });
     } finally {
@@ -490,14 +514,14 @@ export default function EcommerceCatalogPage() {
     ));
   };
 
-  const renderCategoryOptions = (parentId: string | null = null, depth = 0) => {
-    const children = categories.filter((c) => c.parent_id === parentId);
+  const renderCategoryOptions = (parentId: string | null = null, depth = 0, excludeId: string | null = null) => {
+    const children = categories.filter((c) => c.parent_id === parentId && c.id !== excludeId);
     return children.map((cat) => (
       <React.Fragment key={cat.id}>
         <option value={cat.id} disabled={!cat.is_active} className={!cat.is_active ? "text-zinc-300" : ""}>
           {"\u00A0\u00A0\u00A0".repeat(depth)}{depth > 0 ? "↳ " : ""}{cat.name} {!cat.is_active ? "(Hidden)" : ""}
         </option>
-        {renderCategoryOptions(cat.id, depth + 1)}
+        {renderCategoryOptions(cat.id, depth + 1, excludeId)}
       </React.Fragment>
     ));
   };
@@ -517,7 +541,6 @@ export default function EcommerceCatalogPage() {
           </div>
         </div>
 
-        {/* ✨ FIX 3: ADDED STOREFRONT SETTINGS NAVIGATION */}
         <Link href="/ecommerce/storefront-settings" className="ml-auto">
           <Button variant="outline" size="sm" className="h-8 shadow-sm text-zinc-700 bg-white border-zinc-200 hover:bg-zinc-50 font-medium">
             <LayoutTemplate className="w-4 h-4 mr-2 text-indigo-600" />
@@ -571,8 +594,6 @@ export default function EcommerceCatalogPage() {
             </div>
             
             <div className="flex items-center gap-2 w-full sm:w-auto">
-              
-              {/* ✨ NEW: Bulk Price Button */}
               <Button onClick={() => setBulkPriceModal({ isOpen: true, percentage: "", step: 1 })} className="flex-1 sm:flex-none h-9 bg-white text-zinc-700 hover:bg-zinc-50 border border-zinc-200 font-medium tracking-tight shadow-sm rounded-lg">
                 <Percent className="w-4 h-4 mr-1.5 text-blue-600" /> Bulk Price
               </Button>
@@ -685,7 +706,71 @@ export default function EcommerceCatalogPage() {
       </main>
 
       {/* ========================================================================== */}
-      {/* ✨ BULK PRICE UPDATER MODAL */}
+      {/* ✨ NEW: CATEGORY EDIT MODAL */}
+      {/* ========================================================================== */}
+      <Dialog open={isCategoryModalOpen} onOpenChange={(open) => !open && setIsCategoryModalOpen(false)}>
+        <DialogContent className="sm:max-w-[450px] bg-white rounded-xl shadow-2xl p-0 overflow-hidden">
+          <DialogHeader className="p-5 border-b border-zinc-100 bg-zinc-50/50">
+            <DialogTitle className="text-sm font-semibold text-zinc-900">
+              {categoryForm.id ? "Edit Category" : "New Category"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="p-5 space-y-5">
+             
+             {/* Image Upload */}
+             <div className="space-y-2">
+               <Label className="text-xs font-semibold text-zinc-700">Category Cover Image</Label>
+               {categoryForm.image_url ? (
+                 <div className="relative w-24 h-24 rounded-lg overflow-hidden border border-zinc-200 shadow-sm">
+                   <img src={categoryForm.image_url} alt="Category" className="w-full h-full object-cover" />
+                   <Button size="icon" variant="destructive" className="absolute top-1 right-1 h-6 w-6 rounded shadow-sm" onClick={() => setCategoryForm({...categoryForm, image_url: ""})}>
+                     <Trash2 className="w-3 h-3"/>
+                   </Button>
+                 </div>
+               ) : (
+                  <div onClick={() => categoryImageInputRef.current?.click()} className="w-24 h-24 border-2 border-dashed border-zinc-200 rounded-lg flex items-center justify-center cursor-pointer hover:bg-zinc-50 hover:border-zinc-300 transition-all">
+                    {isUploading ? <Loader2 className="w-5 h-5 animate-spin text-zinc-400" /> : <Plus className="w-5 h-5 text-zinc-400" />}
+                  </div>
+               )}
+               <input type="file" ref={categoryImageInputRef} className="hidden" accept="image/*" onChange={handleCategoryImageUpload} />
+             </div>
+             
+             {/* Name */}
+             <div className="space-y-1.5">
+               <Label className="text-xs font-semibold text-zinc-700">Display Name <span className="text-red-500">*</span></Label>
+               <Input className="h-9 text-sm font-medium focus-visible:ring-zinc-900" placeholder="e.g. Diamond Rings" value={categoryForm.name} onChange={(e) => setCategoryForm({...categoryForm, name: e.target.value})} />
+             </div>
+             
+             {/* Parent Category */}
+             <div className="space-y-1.5">
+               <Label className="text-xs font-semibold text-zinc-700">Parent Category</Label>
+               <select className="w-full h-9 px-3 border border-zinc-200 rounded-md text-sm font-medium bg-white focus:ring-1 focus:ring-zinc-900 outline-none" value={categoryForm.parent_id} onChange={(e) => setCategoryForm({...categoryForm, parent_id: e.target.value})}>
+                 <option value="none" className="font-bold text-zinc-900">None (Root Level)</option>
+                 {renderCategoryOptions(null, 0, categoryForm.id)}
+               </select>
+             </div>
+             
+             {/* Active Toggle */}
+             <div className="flex items-center justify-between p-3 bg-zinc-50 rounded-lg border border-zinc-200">
+               <div>
+                 <Label className="text-xs font-semibold text-zinc-900">Active Status</Label>
+                 <p className="text-[10px] text-zinc-500 mt-0.5">Toggle visibility on the storefront</p>
+               </div>
+               <Switch checked={categoryForm.is_active} onCheckedChange={(v) => setCategoryForm({...categoryForm, is_active: v})} className="data-[state=checked]:bg-emerald-600" />
+             </div>
+          </div>
+          <DialogFooter className="p-4 bg-zinc-50 border-t border-zinc-100 flex gap-2">
+             <Button variant="outline" className="h-9 text-xs" onClick={() => setIsCategoryModalOpen(false)}>Cancel</Button>
+             <Button className="h-9 text-xs bg-zinc-900 text-white" onClick={handleSaveCategory} disabled={isSubmitting || isUploading}>
+               {isSubmitting ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />} 
+               Save Category
+             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ========================================================================== */}
+      {/* BULK PRICE UPDATER MODAL */}
       {/* ========================================================================== */}
       <Dialog open={bulkPriceModal.isOpen} onOpenChange={(o) => !o && setBulkPriceModal({ isOpen: false, percentage: "", step: 1 })}>
         <DialogContent className="sm:max-w-[700px] p-0 border-none shadow-2xl rounded-2xl bg-white overflow-hidden">
