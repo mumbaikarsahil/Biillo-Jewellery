@@ -248,7 +248,7 @@ export default function MainDashboard() {
               </div>
               <p className="text-xs font-medium text-slate-700 leading-tight">
                 <span className="font-bold text-slate-900 mr-1">Notice:</span> 
-                All systems normal. Updation of the claim page and voucher functionality is in progress.
+                All systems normal. New Loyalty points feature added
               </p>
             </div>
             <button 

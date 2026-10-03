@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { 
   AlertCircle, CheckCircle2, ArrowLeft, Database, 
@@ -109,7 +109,7 @@ const DropdownCell = ({ value, onChange, options, align = "left", className = ""
   <select 
     value={value || ""}
     onChange={onChange}
-    className={`w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:bg-white rounded px-0.5 py-1 text-xs outline-none transition-colors text-${align} cursor-pointer ${className}`}
+    className={`w-full bg-transparent border border-transparent hover:border-slate-300 focus:border-indigo-500 focus:bg-white rounded px-1 py-1 text-xs outline-none transition-colors text-${align} cursor-pointer ${className}`}
   >
     <option value="" disabled>{placeholder}</option>
     {options.map((opt: string) => (
@@ -136,6 +136,22 @@ export default function ManualImportPage() {
   const [categoryFilter, setCategoryFilter] = useState('ALL')
   const itemsPerPage = 100
 
+  // ✨ NEW: Synced Scroll Refs for Top Scrollbar
+  const topScrollRef = useRef<HTMLDivElement>(null)
+  const tableScrollRef = useRef<HTMLDivElement>(null)
+
+  const handleTopScroll = () => {
+    if (tableScrollRef.current && topScrollRef.current) {
+      tableScrollRef.current.scrollLeft = topScrollRef.current.scrollLeft
+    }
+  }
+
+  const handleTableScroll = () => {
+    if (topScrollRef.current && tableScrollRef.current) {
+      topScrollRef.current.scrollLeft = tableScrollRef.current.scrollLeft
+    }
+  }
+
   useEffect(() => {
     if (!appUser) return
     const fetchConfigData = async () => {
@@ -159,6 +175,7 @@ export default function ManualImportPage() {
       item_category: '', 
       showCustomCategory: false,
       barcode: '',
+      sku_reference: '', 
       metal_type: '',
       metal_color: '',
       showCustomColor: false,
@@ -206,7 +223,7 @@ export default function ManualImportPage() {
     [...items].reverse().forEach(item => {
       const prefix = getCategoryPrefix(item.item_category);
       if (!counters[prefix]) counters[prefix] = 1;
-      skus[item.temp_id] = `${prefix}-NEW-${counters[prefix]}`;
+      skus[item.temp_id] = `${prefix}-${counters[prefix]}`;
       counters[prefix]++;
     });
 
@@ -255,7 +272,7 @@ export default function ManualImportPage() {
   const isAllFilteredSelected = filteredItems.length > 0 && filteredItems.every(item => selectedIds.has(item.temp_id))
 
   // =========================================================================
-  // THE DATABASE COMMIT & AUDIT LOGIC
+  // THE DATABASE COMMIT LOGIC
   // =========================================================================
   const handleCommitToDatabase = async () => {
     if (!targetWarehouse || !appUser) return toast.error("Please select a target vault first.")
@@ -310,8 +327,11 @@ export default function ManualImportPage() {
         let currentCounter = prefixCounters[prefix];
 
         for (const item of groupedByPrefix[prefix]) {
-          const guaranteedUniqueSku = `${prefix}-${currentCounter}`;
-          currentCounter++; 
+          let finalSku = item.sku_reference?.trim();
+          if (!finalSku) {
+            finalSku = `${prefix}-${currentCounter}`;
+            currentCounter++; 
+          }
 
           const solPcs = Number(item.solitaire_pcs) || 0;
           const solCts = Number(item.solitaire_cts) || 0;
@@ -323,9 +343,8 @@ export default function ManualImportPage() {
             warehouse_id: targetWarehouse,
             karigar_id: targetKarigar, 
             barcode: item.barcode,
-            sku_reference: guaranteedUniqueSku,
+            sku_reference: finalSku, 
             
-            // Allow Nullable Strings Based on "None" selection
             item_category: item.item_category === 'None' ? null : item.item_category,
             metal_type: item.metal_type === 'None' ? null : item.metal_type,
             metal_color: item.metal_color === 'None' ? null : item.metal_color,
@@ -373,7 +392,6 @@ export default function ManualImportPage() {
 
         if (error) throw new Error(`Failed to insert batch ${i}. Error: ${error.message}`);
 
-        // IMMUTABLE AUDIT LOG INGESTION
         if (upsertedItems && upsertedItems.length > 0) {
           const auditLogs = upsertedItems.map(ui => ({
             company_id: appUser.company_id,
@@ -520,7 +538,7 @@ export default function ManualImportPage() {
               )}
             </div>
 
-            <Card className="shadow-sm border-slate-200 flex flex-col overflow-hidden h-[75vh] bg-white">
+            <Card className="shadow-sm border-slate-200 flex flex-col overflow-hidden h-[75vh] bg-white relative">
 
               <div className="p-3 border-b border-slate-100 bg-slate-50/80 flex flex-col sm:flex-row justify-between gap-4 shrink-0">
                 <div className="flex items-center gap-3 flex-1">
@@ -551,22 +569,39 @@ export default function ManualImportPage() {
                 </div>
               </div>
 
-              <div className="flex-1 overflow-auto custom-scrollbar relative">
+              {/* ✨ NEW: TOP SCROLLBAR (Synced with Table) */}
+              <div 
+                ref={topScrollRef} 
+                onScroll={handleTopScroll}
+                className="w-full overflow-x-auto custom-scrollbar sticky top-0 z-20 bg-slate-50 border-b border-slate-200 h-[10px]"
+              >
+                {/* Invisible div that dictates the width so the scrollbar appears */}
+                <div className="w-[2180px] h-[1px]"></div>
+              </div>
+
+              <div 
+                ref={tableScrollRef}
+                onScroll={handleTableScroll}
+                className="flex-1 overflow-x-auto custom-scrollbar relative"
+              >
                 {items.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
+                  <div className="h-full w-full flex flex-col items-center justify-center text-slate-400 space-y-4 absolute inset-0">
                     <Keyboard className="w-12 h-12 text-slate-200" />
                     <p className="text-sm font-medium">No items yet. Click "Add Empty Row".</p>
                   </div>
                 ) : filteredItems.length === 0 ? (
-                  <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-2">
+                  <div className="h-full w-full flex flex-col items-center justify-center text-slate-400 space-y-2 absolute inset-0">
                     <Search className="w-8 h-8 text-slate-300" />
                     <p className="text-sm font-medium">No items match your search.</p>
                   </div>
                 ) : (
-                  <table className="w-full text-left text-sm whitespace-nowrap table-fixed">
+                  
+                  // ✨ FIXED: Massive explicit width (2180px total) to prevent ANY squishing
+                  <table className="w-[2180px] text-left text-sm whitespace-nowrap table-fixed">
                     <thead className="sticky top-0 bg-slate-50 shadow-[0_1px_2px_rgba(0,0,0,0.05)] z-10 border-b border-slate-200">
                       <tr>
-                        <th className="py-2 px-2 w-10 text-center border-r border-slate-200">
+                        {/* Exactly 15 Columns in Header */}
+                        <th className="py-2 px-2 text-center border-r border-slate-200 w-[50px]">
                           <input 
                             type="checkbox" 
                             className="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-600 cursor-pointer"
@@ -574,23 +609,29 @@ export default function ManualImportPage() {
                             onChange={(e) => handleSelectAll(e.target.checked)}
                           />
                         </th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-36 border-r border-slate-200">Category *</th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-36 border-r border-slate-200">Barcode *</th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-36 border-r border-slate-200">Metal Specs<br/><span className="text-[8px] font-medium text-slate-400">Type | Purity | Color</span></th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-20 border-r border-slate-200">Gross (g)</th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-20 border-r border-slate-200">Net (g)</th>
+                        
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 border-r border-slate-200 w-[180px]">Category *</th>
+                        
+                        {/* ✨ FIXED: Safely split into TWO separate TH tags */}
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 border-r border-slate-200 w-[180px]">Barcode *</th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 border-r border-slate-200 w-[150px]">Design / SKU</th>
+                        
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center border-r border-slate-200 w-[220px]">Metal Specs<br/><span className="text-[8px] font-medium text-slate-400">Type | Purity | Color</span></th>
+                        
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center border-r border-slate-200 w-[160px]">Weight (g)<br/><span className="text-[8px] font-medium text-slate-400">Gross | Net</span></th>
 
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-indigo-700 bg-indigo-50/50 text-center w-24 border-r border-slate-200">Solitaire<br/><span className="text-[8px] font-medium text-slate-400">Pcs | Cts</span></th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-indigo-700 bg-indigo-50/50 text-center w-24 border-r border-slate-200">Melee<br/><span className="text-[8px] font-medium text-slate-400">Pcs | Cts</span></th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-indigo-700 bg-indigo-50/50 text-center border-r border-slate-200 w-[140px]">Solitaire<br/><span className="text-[8px] font-medium text-slate-400">Pcs | Cts</span></th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-indigo-700 bg-indigo-50/50 text-center border-r border-slate-200 w-[140px]">Melee<br/><span className="text-[8px] font-medium text-slate-400">Pcs | Cts</span></th>
 
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-emerald-700 bg-emerald-50/50 text-center w-24 border-r border-slate-200">Total Dia<br/><span className="text-[8px] font-medium text-emerald-600/70">Pcs | Cts</span></th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-emerald-700 bg-emerald-50/50 text-center border-r border-slate-200 w-[120px]">Total Dia<br/><span className="text-[8px] font-medium text-emerald-600/70">Pcs | Cts</span></th>
 
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center w-28 border-r border-slate-200">Dia Specs<br/><span className="text-[8px] font-medium text-slate-400">Shp | Clr | Col</span></th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-emerald-700 text-right w-24 border-r border-slate-200">MRP (₹)</th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-20 border-r border-slate-200">HSN</th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 w-32 border-r border-slate-200">Remarks</th>
-                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-amber-600 bg-amber-50/50 text-center w-16 border-r border-slate-200">SP Tag</th>
-                        <th className="py-2 px-2 w-10 text-center"></th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 text-center border-r border-slate-200 w-[250px]">Dia Specs<br/><span className="text-[8px] font-medium text-slate-400">Shape | Clarity | Color</span></th>
+                        
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-emerald-700 text-right border-r border-slate-200 w-[150px]">MRP (₹)</th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 border-r border-slate-200 w-[100px]">HSN</th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-slate-600 border-r border-slate-200 w-[200px]">Remarks</th>
+                        <th className="py-2 px-2 text-[10px] font-bold uppercase text-amber-600 bg-amber-50/50 text-center border-r border-slate-200 w-[80px]">SP Tag</th>
+                        <th className="py-2 px-1 text-center w-[60px]"></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
@@ -606,6 +647,9 @@ export default function ManualImportPage() {
 
                         return (
                           <tr key={item.temp_id} className={`transition-colors ${isSelected ? 'bg-indigo-50/20' : 'hover:bg-slate-50/50'}`}>
+                            
+                            {/* Exactly 15 Columns in Body */}
+                            
                             <td className="py-1 px-2 text-center align-top pt-2.5 border-r border-slate-100">
                               <input 
                                 type="checkbox" 
@@ -614,7 +658,8 @@ export default function ManualImportPage() {
                                 onChange={() => handleSelectRow(item.temp_id)}
                               />
                             </td>
-                            <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
+                            
+                            <td className="py-1 px-2 align-top pt-2 border-r border-slate-100">
                               {!item.showCustomCategory ? (
                                 <DropdownCell 
                                   options={CATEGORIES}
@@ -631,7 +676,7 @@ export default function ManualImportPage() {
                                   placeholder="Category"
                                 />
                               ) : (
-                                <div className="flex gap-0.5 h-6">
+                                <div className="flex gap-1 h-6">
                                   <EditableCell 
                                     value={item.item_category} 
                                     onChange={(e: any) => handleItemEdit(item.temp_id, 'item_category', e.target.value)} 
@@ -644,18 +689,28 @@ export default function ManualImportPage() {
                                 </div>
                               )}
                             </td>
-                            <td className="py-1 px-1 align-top pt-1.5 border-r border-slate-100">
+                            
+                            {/* Barcode TD */}
+                            <td className="py-1 px-2 align-top pt-2 border-r border-slate-100">
                               <EditableCell 
                                 value={item.barcode} 
                                 onChange={(e: any) => handleItemEdit(item.temp_id, 'barcode', e.target.value)} 
-                                className="font-mono font-bold text-slate-900 leading-none uppercase"
+                                className="font-mono font-bold text-slate-900 uppercase"
                                 placeholder="Scan Barcode"
                               />
-                              <div className="text-[9px] font-mono font-bold text-indigo-400 px-1.5 mt-0.5">
-                                {previewSkus[item.temp_id]}
-                              </div>
                             </td>
-                            <td className="py-1 px-1 flex flex-col justify-center border-r border-slate-100 h-full gap-0.5">
+
+                            {/* SKU / Design TD */}
+                            <td className="py-1 px-2 align-top pt-2 border-r border-slate-100">
+                              <EditableCell 
+                                value={item.sku_reference} 
+                                onChange={(e: any) => handleItemEdit(item.temp_id, 'sku_reference', e.target.value)} 
+                                className="font-mono font-bold text-indigo-600"
+                                placeholder={previewSkus[item.temp_id]} 
+                              />
+                            </td>
+
+                            <td className="py-1 px-2 flex flex-col justify-center border-r border-slate-100 h-full gap-1">
                               <DropdownCell options={METALS} value={item.metal_type} onChange={(e: any) => handleItemEdit(item.temp_id, 'metal_type', e.target.value)} align="center" className="font-bold text-slate-700 py-0" placeholder="Type" />
                               <DropdownCell options={PURITIES} value={item.purity_karat} onChange={(e: any) => handleItemEdit(item.temp_id, 'purity_karat', e.target.value)} align="center" className="font-bold text-amber-600 py-0" placeholder="Purity" />
                               
@@ -676,13 +731,13 @@ export default function ManualImportPage() {
                                   placeholder="Color" 
                                 />
                               ) : (
-                                <div className="flex gap-0.5 h-5 mx-1">
+                                <div className="flex gap-1 h-5">
                                   <EditableCell 
                                     value={item.metal_color} 
                                     onChange={(e: any) => handleItemEdit(item.temp_id, 'metal_color', e.target.value)} 
                                     align="center" 
                                     className="text-[10px] text-slate-500 py-0 bg-white border-slate-200" 
-                                    placeholder="Custom Color" 
+                                    placeholder="Cstm Col" 
                                   />
                                   <Button variant="ghost" size="icon" className="h-5 w-5 text-slate-400 shrink-0 p-0 hover:bg-slate-200" onClick={() => handleItemEdit(item.temp_id, 'showCustomColor', false)}>
                                     <ArrowLeft className="h-2.5 w-2.5" />
@@ -690,48 +745,49 @@ export default function ManualImportPage() {
                                 </div>
                               )}
                             </td>
-                            <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
-                              <EditableCell 
-                                type="number"
-                                value={item.gross_weight_g} 
-                                onChange={(e: any) => handleItemEdit(item.temp_id, 'gross_weight_g', e.target.value)} 
-                                align="center"
-                                className="font-medium text-slate-700"
-                                placeholder="0.000"
-                              />
-                            </td>
-                            <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
-                              <EditableCell 
-                                type="number"
-                                value={item.net_weight_g} 
-                                onChange={(e: any) => handleItemEdit(item.temp_id, 'net_weight_g', e.target.value)} 
-                                align="center"
-                                className="font-bold text-slate-900"
-                                placeholder="0.000"
-                              />
+
+                            <td className="py-1 px-2 border-r border-slate-100">
+                              <div className="flex gap-1 h-full items-center">
+                                <EditableCell 
+                                  type="number"
+                                  value={item.gross_weight_g} 
+                                  onChange={(e: any) => handleItemEdit(item.temp_id, 'gross_weight_g', e.target.value)} 
+                                  align="center"
+                                  className="w-1/2 font-medium text-slate-700"
+                                  placeholder="Grs"
+                                />
+                                <EditableCell 
+                                  type="number"
+                                  value={item.net_weight_g} 
+                                  onChange={(e: any) => handleItemEdit(item.temp_id, 'net_weight_g', e.target.value)} 
+                                  align="center"
+                                  className="w-1/2 font-bold text-slate-900"
+                                  placeholder="Net"
+                                />
+                              </div>
                             </td>
 
-                            <td className="py-1 px-1 border-r border-slate-100 bg-indigo-50/20">
+                            <td className="py-1 px-2 border-r border-slate-100 bg-indigo-50/20">
                               <div className="flex gap-1 h-full items-center">
                                 <EditableCell type="number" value={item.solitaire_pcs} onChange={(e: any) => handleItemEdit(item.temp_id, 'solitaire_pcs', e.target.value)} align="center" className="w-1/2 bg-white/50" placeholder="Pcs" />
                                 <EditableCell type="number" value={item.solitaire_cts} onChange={(e: any) => handleItemEdit(item.temp_id, 'solitaire_cts', e.target.value)} align="center" className="w-1/2 bg-white/50 font-semibold text-indigo-700" placeholder="Cts" />
                               </div>
                             </td>
-                            <td className="py-1 px-1 border-r border-slate-100 bg-indigo-50/20">
+                            <td className="py-1 px-2 border-r border-slate-100 bg-indigo-50/20">
                               <div className="flex gap-1 h-full items-center">
                                 <EditableCell type="number" value={item.melee_pcs} onChange={(e: any) => handleItemEdit(item.temp_id, 'melee_pcs', e.target.value)} align="center" className="w-1/2 bg-white/50" placeholder="Pcs" />
                                 <EditableCell type="number" value={item.melee_cts} onChange={(e: any) => handleItemEdit(item.temp_id, 'melee_cts', e.target.value)} align="center" className="w-1/2 bg-white/50 font-semibold text-indigo-700" placeholder="Cts" />
                               </div>
                             </td>
 
-                            <td className="py-1 px-1 border-r border-slate-100 bg-emerald-50/20 text-center select-none">
+                            <td className="py-1 px-2 border-r border-slate-100 bg-emerald-50/20 text-center select-none">
                               <div className="flex gap-1 h-full items-center justify-center">
                                 <div className="w-1/2 text-xs font-medium text-slate-600">{totalPcs > 0 ? totalPcs : '-'}</div>
                                 <div className="w-1/2 text-xs font-bold text-emerald-700">{totalCts > 0 ? totalCts.toFixed(2) : '-'}</div>
                               </div>
                             </td>
 
-                            <td className="py-1 px-1 align-top border-r border-slate-100">
+                            <td className="py-1 px-2 align-top border-r border-slate-100">
                               <div className="flex flex-col gap-1 justify-center w-full mt-0.5">
                                 {!item.showCustomShape ? (
                                   <DropdownCell 
@@ -750,9 +806,9 @@ export default function ManualImportPage() {
                                     placeholder="Shape"
                                   />
                                 ) : (
-                                  <div className="flex gap-0.5 h-6">
-                                    <EditableCell value={item.shape} onChange={(e: any) => handleItemEdit(item.temp_id, 'shape', e.target.value)} className="w-full bg-white border-slate-200 text-center text-[10px]" placeholder="Custom" />
-                                    <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0 p-0" onClick={() => handleItemEdit(item.temp_id, 'showCustomShape', false)}><ArrowLeft className="h-3 w-3" /></Button>
+                                  <div className="flex gap-1 h-6">
+                                    <EditableCell value={item.shape} onChange={(e: any) => handleItemEdit(item.temp_id, 'shape', e.target.value)} className="w-full bg-white border-slate-200 text-center text-xs" placeholder="Custom Shape" />
+                                    <Button variant="ghost" size="icon" className="h-6 w-6 text-slate-400 shrink-0 p-0" onClick={() => handleItemEdit(item.temp_id, 'showCustomShape', false)}><ArrowLeft className="h-3 w-3" /></Button>
                                   </div>
                                 )}
                                 <div className="flex gap-1">
@@ -769,13 +825,13 @@ export default function ManualImportPage() {
                                         }
                                       }} 
                                       align="center"
-                                      className="w-1/2 text-[10px] px-0.5"
-                                      placeholder="Clr"
+                                      className="w-1/2 text-xs"
+                                      placeholder="Clarity"
                                     />
                                   ) : (
-                                    <div className="flex gap-0.5 h-6 w-1/2">
-                                      <EditableCell value={item.clarity} onChange={(e: any) => handleItemEdit(item.temp_id, 'clarity', e.target.value)} className="w-full bg-white border-slate-200 text-center text-[10px]" placeholder="Cstm" />
-                                      <Button variant="ghost" size="icon" className="h-6 w-4 text-slate-400 shrink-0 p-0" onClick={() => handleItemEdit(item.temp_id, 'showCustomClarity', false)}><ArrowLeft className="h-2 w-2" /></Button>
+                                    <div className="flex gap-1 h-6 w-1/2">
+                                      <EditableCell value={item.clarity} onChange={(e: any) => handleItemEdit(item.temp_id, 'clarity', e.target.value)} className="w-full bg-white border-slate-200 text-center text-xs" placeholder="Cstm" />
+                                      <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0 p-0" onClick={() => handleItemEdit(item.temp_id, 'showCustomClarity', false)}><ArrowLeft className="h-2 w-2" /></Button>
                                     </div>
                                   )}
                                   
@@ -792,20 +848,20 @@ export default function ManualImportPage() {
                                         }
                                       }} 
                                       align="center"
-                                      className="w-1/2 text-[10px] px-0.5"
-                                      placeholder="Col"
+                                      className="w-1/2 text-xs"
+                                      placeholder="Color"
                                     />
                                   ) : (
-                                    <div className="flex gap-0.5 h-6 w-1/2">
-                                      <EditableCell value={item.color} onChange={(e: any) => handleItemEdit(item.temp_id, 'color', e.target.value)} className="w-full bg-white border-slate-200 text-center text-[10px]" placeholder="Cstm" />
-                                      <Button variant="ghost" size="icon" className="h-6 w-4 text-slate-400 shrink-0 p-0" onClick={() => handleItemEdit(item.temp_id, 'showCustomDiaColor', false)}><ArrowLeft className="h-2 w-2" /></Button>
+                                    <div className="flex gap-1 h-6 w-1/2">
+                                      <EditableCell value={item.color} onChange={(e: any) => handleItemEdit(item.temp_id, 'color', e.target.value)} className="w-full bg-white border-slate-200 text-center text-xs" placeholder="Cstm" />
+                                      <Button variant="ghost" size="icon" className="h-6 w-5 text-slate-400 shrink-0 p-0" onClick={() => handleItemEdit(item.temp_id, 'showCustomDiaColor', false)}><ArrowLeft className="h-2 w-2" /></Button>
                                     </div>
                                   )}
                                 </div>
                               </div>
                             </td>
 
-                            <td className="py-1 px-1 align-top pt-2 border-r border-slate-100 pr-2">
+                            <td className="py-1 px-2 align-top pt-2 border-r border-slate-100">
                               <EditableCell 
                                 type="number"
                                 value={item.total_amount} 
@@ -816,7 +872,7 @@ export default function ManualImportPage() {
                               />
                             </td>
 
-                            <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
+                            <td className="py-1 px-2 align-top pt-2 border-r border-slate-100">
                               <EditableCell 
                                 value={item.hsn_code} 
                                 onChange={(e: any) => handleItemEdit(item.temp_id, 'hsn_code', e.target.value)} 
@@ -825,7 +881,7 @@ export default function ManualImportPage() {
                                 placeholder="7113"
                               />
                             </td>
-                            <td className="py-1 px-1 align-top pt-2 border-r border-slate-100">
+                            <td className="py-1 px-2 align-top pt-2 border-r border-slate-100">
                               <EditableCell 
                                 value={item.remarks} 
                                 onChange={(e: any) => handleItemEdit(item.temp_id, 'remarks', e.target.value)} 
@@ -834,18 +890,18 @@ export default function ManualImportPage() {
                               />
                             </td>
 
-                            <td className="py-1 px-1 align-top pt-2.5 text-center border-r border-slate-100 bg-amber-50/10">
+                            <td className="py-1 px-2 align-top pt-2.5 text-center border-r border-slate-100 bg-amber-50/10">
                               <label className="cursor-pointer group flex items-center justify-center h-full">
                                 <input 
                                   type="checkbox"
-                                  className="w-3.5 h-3.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer"
+                                  className="w-4 h-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer"
                                   checked={item.is_sp_item || false}
                                   onChange={(e) => handleItemEdit(item.temp_id, 'is_sp_item', e.target.checked)}
                                 />
                               </label>
                             </td>
 
-                            <td className="py-1 px-1 align-top pt-2 text-center">
+                            <td className="py-1 px-2 align-top pt-2 text-center">
                               <Button 
                                 variant="ghost" 
                                 size="icon" 
@@ -853,7 +909,7 @@ export default function ManualImportPage() {
                                 onClick={() => handleRemoveRow(item.temp_id)}
                                 title="Remove Row"
                               >
-                                <Trash2 className="h-3.5 w-3.5" />
+                                <Trash2 className="h-4 w-4" />
                               </Button>
                             </td>
                           </tr>
@@ -898,9 +954,9 @@ export default function ManualImportPage() {
       </main>
 
       <style dangerouslySetInnerHTML={{__html:`
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar { height: 10px; width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 10px; border: 2px solid #f1f5f9; }
       `}} />
     </div>
   )
