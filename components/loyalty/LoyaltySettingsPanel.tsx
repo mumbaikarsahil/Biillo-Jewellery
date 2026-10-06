@@ -514,7 +514,7 @@ export default function LoyaltySettingsPanel() {
               <div className="bg-zinc-50 p-4 rounded-lg border border-zinc-200">
                 <h4 className="text-[11px] font-bold text-zinc-600 uppercase tracking-widest mb-3 flex items-center gap-1.5"><Code2 className="w-3.5 h-3.5" /> Available Context Variables</h4>
                 <div className="flex flex-wrap gap-2">
-                  {['customer_name', 'customer_phone', 'points_awarded', 'points_redeemed', 'total_balance', 'activity_name'].map(v => (
+                  {['customer_name', 'customer_phone', 'points_awarded', 'points_redeemed', 'total_balance', 'activity_name', 'member_id', 'referral_code'].map(v => (
                     <span key={v} className="bg-white border border-zinc-200 text-zinc-700 text-[10px] font-mono px-2 py-1 rounded shadow-sm select-all">
                       {v}
                     </span>

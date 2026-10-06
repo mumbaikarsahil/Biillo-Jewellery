@@ -63,30 +63,29 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const repair = data.repair 
     const returnDetails = data.returnDetails
 
-    // Use exact values passed from parent component (No recalculating)
+    // Discount & Value Extractions
     const subtotal = data.subtotal || 0
     const manualDiscount = data.discountAmount || 0
+    const referralDiscount = data.referralDiscount || 0
+    const appliedPoints = data.appliedPoints || 0
+    const appliedKitty = data.appliedKitty || 0
+    const appliedCredit = data.appliedCredit || 0
     
-    const extraDiscounts = (data.appliedKitty || 0) + (data.appliedCredit || 0) + (data.appliedPoints || 0);
-    const totalDiscount = manualDiscount + extraDiscounts;
-
-    const taxableValue = data.taxableValue || Math.max(0, subtotal - totalDiscount)
+    const taxableValue = data.taxableValue || 0
     const cgstAmount = data.cgstAmount || 0
     const sgstAmount = data.sgstAmount || 0
-    const roundOff = data.roundOff || 0 
+    const roundOff = data.roundOffAmount || data.roundOff || 0 
 
     const exchangeVal = data.exchangeValue || 0
     const handlingFee = data.handlingFee || 0
     const effectiveVoucherCredit = data.voucherAmount || 0 
 
-    // --- CUSTOM ORDER VARIABLES ---
-    const customAdvancePaid = Number(data.advancePayment || customOrder?.advancePayment || 0);
-    const appliedKitty = data.appliedKitty || 0;
-    const appliedCredit = data.appliedCredit || 0;
-    const appliedPoints = data.appliedPoints || 0;
-    const totalSettlements = appliedKitty + appliedCredit + appliedPoints;
+    // ✨ FIX: Define cartAdvance here for the ledger math!
+    const cartAdvance = data.items?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
 
-    // Use passed balanceDue or calculate if missing
+    // Custom Order Calculations
+    const customAdvancePaid = Number(data.advancePayment || customOrder?.advancePayment || 0);
+    const totalSettlements = appliedKitty + appliedCredit + appliedPoints;
     const customEstimatedBalance = data.balanceDue ?? Math.max(0, (data.finalTotal || 0) - customAdvancePaid - totalSettlements);
 
     let docTitle = "TAX INVOICE" 
@@ -269,7 +268,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   </tbody>
                 </table>
               </div>
-           ) : mode === 'return' && returnDetails ? (
+            ) : mode === 'return' && returnDetails ? (
             <table className="w-full text-sm">
               <thead className={isEstimate ? "bg-slate-800 text-white" : "bg-[#E8A5D8] text-white"}>
                 <tr>
@@ -407,8 +406,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   </div>
                   
                   {manualDiscount > 0 && (
-                    <div className="flex justify-between text-rose-600">
-                      <span>Discount</span>
+                    <div className="flex justify-between text-[#A85B9D]">
+                      <span>Manual Discount</span>
                       <span>- ₹ {manualDiscount.toLocaleString('en-IN')}</span>
                     </div>
                   )}
@@ -424,6 +423,20 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     <div className="flex justify-between text-[#A85B9D]">
                       <span>Voucher Credit {handlingFee > 0 ? `(Post ₹${handlingFee} Fee)` : ''}</span>
                       <span>- ₹ {effectiveVoucherCredit.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+
+                  {referralDiscount > 0 && (
+                    <div className="flex justify-between text-[#A85B9D]">
+                      <span>Referral Discount (10%)</span>
+                      <span>- ₹ {referralDiscount.toLocaleString('en-IN')}</span>
+                    </div>
+                  )}
+
+                  {appliedPoints > 0 && (
+                    <div className="flex justify-between text-[#A85B9D]">
+                      <span>Loyalty Points Redeemed</span>
+                      <span>- ₹ {appliedPoints.toLocaleString('en-IN')}</span>
                     </div>
                   )}
 
@@ -466,13 +479,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                       <span>- ₹ {appliedCredit.toLocaleString('en-IN')}</span>
                     </div>
                   )}
-
-                  {appliedPoints > 0 && (
-                    <div className="flex justify-between items-center text-amber-600 font-bold mt-1">
-                      <span>Less: Loyalty Points Redeemed</span>
-                      <span>- ₹ {appliedPoints.toLocaleString('en-IN')}</span>
-                    </div>
-                  )}
                   
                   <div className="flex justify-between pt-1.5 mt-1.5 border-t border-slate-300 text-sm font-bold text-[#881798]">
                     <span>Est. Balance on Pickup</span>
@@ -496,7 +502,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 </div>
                 
                 {Number(returnDetails.discountApplied || returnDetails.deductionAmount) > 0 && (
-                  <div className="flex justify-between  text-red-600">
+                  <div className="flex justify-between text-red-600">
                     <span>Deductions</span>
                     <span>- ₹ {Number(returnDetails.discountApplied || returnDetails.deductionAmount).toLocaleString()}</span>
                   </div>
@@ -513,18 +519,14 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 <>
                   <div className="flex justify-between"><span>Sub Total</span><span>₹ {subtotal?.toLocaleString()}</span></div>
                   
-                  {totalDiscount > 0 && (
-                    <div className="flex justify-between text-[#A85B9D]">
-                      <span>Discount {appliedPoints > 0 ? '(Loyalty Points Redeemed)' : ''}</span>
-                      <span>- ₹ {totalDiscount?.toLocaleString()}</span>
+                  {(manualDiscount > 0 || appliedPoints > 0 || referralDiscount > 0 || exchangeVal > 0 || effectiveVoucherCredit > 0) && (
+                    <div className="space-y-1 mb-1">
+                       {manualDiscount > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Manual Discount</span><span>- ₹ {manualDiscount?.toLocaleString()}</span></div>}
+                       {referralDiscount > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Referral Discount (10%)</span><span>- ₹ {referralDiscount?.toLocaleString()}</span></div>}
+                       {appliedPoints > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Loyalty Points Redeemed</span><span>- ₹ {appliedPoints?.toLocaleString()}</span></div>}
+                       {exchangeVal > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Exchange Credit</span><span>- ₹ {exchangeVal?.toLocaleString()}</span></div>}
+                       {effectiveVoucherCredit > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Voucher Credit</span><span>- ₹ {effectiveVoucherCredit?.toLocaleString()}</span></div>}
                     </div>
-                  )}
-
-                  {effectiveVoucherCredit > 0 && (
-                     <div className="flex justify-between text-slate-600">
-                       <span>Voucher Credit</span>
-                       <span>- ₹ {effectiveVoucherCredit?.toLocaleString()}</span>
-                     </div>
                   )}
 
                   <div className="flex justify-between border-t border-slate-300 pt-1 mt-1"><span>Taxable Value</span><span>₹ {taxableValue?.toLocaleString()}</span></div>
@@ -556,15 +558,11 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 <>
                   <div className="flex justify-between"><span>Sub Total</span><span>₹ {subtotal?.toLocaleString()}</span></div>
                   
-                  {totalDiscount > 0 && (
-                    <div className="flex justify-between text-[#A85B9D]">
-                      <span>Discount {appliedPoints > 0 ? '(Loyalty Points Redeemed)' : ''}</span>
-                      <span>- ₹ {totalDiscount?.toLocaleString()}</span>
-                    </div>
-                  )}
-
-                  {(exchangeVal > 0 || effectiveVoucherCredit > 0) && (
+                  {(manualDiscount > 0 || appliedPoints > 0 || referralDiscount > 0 || exchangeVal > 0 || effectiveVoucherCredit > 0) && (
                     <div className="space-y-1 mb-1">
+                       {manualDiscount > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Manual Discount</span><span>- ₹ {manualDiscount?.toLocaleString()}</span></div>}
+                       {referralDiscount > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Referral Discount (10%)</span><span>- ₹ {referralDiscount?.toLocaleString()}</span></div>}
+                       {appliedPoints > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Loyalty Points Redeemed</span><span>- ₹ {appliedPoints?.toLocaleString()}</span></div>}
                        {exchangeVal > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Exchange Credit</span><span>- ₹ {exchangeVal?.toLocaleString()}</span></div>}
                        {effectiveVoucherCredit > 0 && <div className="flex justify-between text-[#A85B9D]"><span>Voucher Credit</span><span>- ₹ {effectiveVoucherCredit?.toLocaleString()}</span></div>}
                     </div>
@@ -577,7 +575,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   {data.items?.some((i: any) => i.advance_paid) && (
                     <div className="flex justify-between font-bold text-xs pt-1 border-t border-slate-200 mt-1">
                       <span>Advance Received</span>
-                      <span>- ₹ {data.items.reduce((sum: number, i: any) => sum + (Number(i.advance_paid) || 0), 0).toLocaleString()}</span>
+                      <span>- ₹ {cartAdvance.toLocaleString()}</span>
                     </div>
                   )}
 
@@ -588,7 +586,32 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
 
-                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-800 text-xl font-black text-slate-900"><span>Net Payable</span><span>₹ {data.finalTotal?.toLocaleString()}</span></div>
+                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-800 text-xl font-black text-slate-900">
+                    <span>Gross Invoice Value</span>
+                    <span>₹ {data.finalTotal?.toLocaleString()}</span>
+                  </div>
+
+                  {/* POST-TAX SETTLEMENTS */}
+                  {(appliedKitty > 0 || appliedCredit > 0) && (
+                    <div className="pt-1.5 space-y-1 border-t border-slate-200 mt-1">
+                      {appliedKitty > 0 && (
+                        <div className="flex justify-between text-xs font-bold text-[#A85B9D]">
+                          <span>Kitty Payment Applied</span>
+                          <span>- ₹ {appliedKitty.toLocaleString()}</span>
+                        </div>
+                      )}
+                      {appliedCredit > 0 && (
+                        <div className="flex justify-between text-xs font-bold text-[#A85B9D]">
+                          <span>Store Credit Applied</span>
+                          <span>- ₹ {appliedCredit.toLocaleString()}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between py-1 mt-1 border-t border-slate-300 text-base font-black text-slate-900">
+                        <span>Net Balance Due</span>
+                        <span>₹ {Math.max(0, data.finalTotal - appliedKitty - appliedCredit - cartAdvance).toLocaleString()}</span>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>

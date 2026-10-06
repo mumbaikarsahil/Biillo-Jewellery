@@ -43,7 +43,10 @@ export function useCheckout({
   
   const [appliedPointsAmount, setAppliedPointsAmount] = useState(0)
   const [rawPointsRedeemed, setRawPointsRedeemed] = useState(0)
-  const [referrerPhone, setReferrerPhone] = useState('')
+  
+  // ✨ Referral Engine State
+  const [referralInput, setReferralInput] = useState('')
+  const [activeReferral, setActiveReferral] = useState<{ referrer_id: string, code_or_phone: string, loyalty_account_id?: string, referrer_name?: string } | null>(null)
   
   const currentSplitTotal = 
     (parseFloat(splitPayments.cash) || 0) + 
@@ -79,17 +82,17 @@ export function useCheckout({
   const effectiveDate = getEffectiveDate();
   const effectiveDateISO = effectiveDate.toISOString();
 
-  
   const discountNum = parseFloat(discountValue) || 0
   const standardDiscount = discountType === 'percent' ? (subtotal * discountNum) / 100 : discountNum
   const hasVoucher = activeVoucher !== null
 
-  if (hasVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0 || appliedPointsAmount > 0)) {
+  if (hasVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0 || appliedPointsAmount > 0 || activeReferral)) {
      setAppliedKittyAmount(0);
      setAppliedCreditAmount(0);
      setAppliedPointsAmount(0);
      setRawPointsRedeemed(0);
-     toast.warning("Clubbing Restricted", { description: "Vouchers cannot be combined with Wallet & Loyalty credits." });
+     setActiveReferral(null);
+     toast.warning("Clubbing Restricted", { description: "Vouchers cannot be combined with Wallet, Loyalty, or Referrals." });
   }
 
   const cartAdvance = cart?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
@@ -103,7 +106,6 @@ export function useCheckout({
   let baseTaxable = Math.max(0, effectiveSubtotal - standardDiscount - exchangeNum);
   const handlingAmt = parseFloat(handlingFee) || 0; 
 
-  let finalTaxableValue = baseTaxable
   let appliedVoucherAmount = 0
   let finalVoucherCode = ''
   let finalHandlingFee = handlingAmt
@@ -113,19 +115,21 @@ export function useCheckout({
       const hFee = activeVoucher.handling_fee || 0;
       if (baseTaxable >= vAmount) {
           appliedVoucherAmount = vAmount - hFee;
-          finalTaxableValue = baseTaxable - appliedVoucherAmount;
       } else {
-          finalTaxableValue = hFee;
           appliedVoucherAmount = baseTaxable > hFee ? baseTaxable - hFee : 0; 
       }
       finalVoucherCode = activeVoucher.code
   } else if (mode === 'normal' && cart.some(item => item.voucher_discount_locked > 0)) {
       const lockedDiscount = cart.reduce((sum, item) => sum + (Number(item.voucher_discount_locked) || 0), 0);
       appliedVoucherAmount = lockedDiscount;
-      finalTaxableValue = Math.max(0, baseTaxable - appliedVoucherAmount);
       finalVoucherCode = 'ORD-VOUCHER';
       finalHandlingFee = 0; 
   }
+
+  // ✨ PRE-TAX MATH: Deduct Referral (10%) and Loyalty Points BEFORE tax is calculated
+  const referralDiscountAmount = activeReferral ? Math.floor(baseTaxable * 0.10) : 0;
+  
+  const finalTaxableValue = Math.max(0, baseTaxable - appliedVoucherAmount - referralDiscountAmount - appliedPointsAmount);
 
   const cgstAmount = parseFloat((finalTaxableValue * 0.015).toFixed(2))
   const sgstAmount = parseFloat((finalTaxableValue * 0.015).toFixed(2))
@@ -134,7 +138,7 @@ export function useCheckout({
   const finalPayableGross = Math.round(exactFinalPayable)
   const roundOffAmount = parseFloat((finalPayableGross - exactFinalPayable).toFixed(2))
 
-  const finalPayableNet = Math.max(0, finalPayableGross - cartAdvance - appliedKittyAmount - appliedCreditAmount - appliedPointsAmount);
+  const finalPayableNet = Math.max(0, finalPayableGross - cartAdvance - appliedKittyAmount - appliedCreditAmount);
 
   // ==============================================================
   // ✨ WHATSAPP MESSAGING ENGINE
@@ -197,12 +201,78 @@ export function useCheckout({
     }
   };
 
+  // ✨ Validates and Applies 10% Referral Discount
+  // ✨ Validates and Applies 10% Referral Discount
+  const handleApplyReferral = async () => {
+    const input = referralInput.trim();
+    if (!input) return toast.error("Please enter a Referral Code or Phone Number.");
+    if (appliedKittyAmount > 0 || appliedCreditAmount > 0 || appliedVoucherAmount > 0) {
+      return toast.error("Cannot club Referral Discounts with Vouchers, Kitty, or Wallet.");
+    }
+    if (!selectedCustomer) return toast.error("Select a customer first.");
+
+    try {
+      let account = null;
+      let referrer = null;
+
+      // 1. First, try searching by exact Referral Code
+      const { data: codeData } = await supabase
+        .from('loyalty_accounts')
+        .select(`id, referral_code, customer_id, customers!inner(id, full_name, phone)`)
+        .ilike('referral_code', input)
+        .maybeSingle();
+
+      if (codeData) {
+        account = codeData;
+        referrer = Array.isArray(codeData.customers) ? codeData.customers[0] : codeData.customers;
+      } else {
+        // 2. If no code matches, try searching by Phone Number
+        const cleanPhone = input.replace(/\D/g, '');
+        if (cleanPhone.length >= 4) { // Prevent empty searches
+          const { data: phoneData } = await supabase
+            .from('loyalty_accounts')
+            .select(`id, referral_code, customer_id, customers!inner(id, full_name, phone)`)
+            .ilike('customers.phone', `%${cleanPhone}%`)
+            .limit(1);
+
+          if (phoneData && phoneData.length > 0) {
+            account = phoneData[0];
+            referrer = Array.isArray(phoneData[0].customers) ? phoneData[0].customers[0] : phoneData[0].customers;
+          }
+        }
+      }
+
+      // If both checks failed, throw the error
+      if (!account || !referrer) {
+        return toast.error("Invalid Referral Code or Phone Number.");
+      }
+
+      // Prevent self-referrals
+      if (referrer.id === selectedCustomer.id) {
+        return toast.error("You cannot refer yourself.");
+      }
+
+      // Success! Set the state
+      setActiveReferral({
+        referrer_id: referrer.id,
+        code_or_phone: account.referral_code || referrer.phone,
+        loyalty_account_id: account.id,
+        referrer_name: referrer.full_name
+      });
+      
+      setReferralInput('');
+      toast.success(`Referral Applied! 10% Discount from ${referrer.full_name}`);
+    } catch (err) {
+      toast.error("Failed to apply referral.");
+    }
+  };
+
 
   const handleApplyVoucher = async (overrideCode?: string) => {
     const validOverride = typeof overrideCode === 'string' ? overrideCode : undefined;
     
-    if (appliedKittyAmount > 0 || appliedCreditAmount > 0 || appliedPointsAmount > 0) {
-      return toast.error("Clubbing Error", { description: "Cannot apply vouchers when Wallet, Kitty, or Loyalty balances are in use." });
+    if (appliedKittyAmount > 0 || appliedCreditAmount > 0 || appliedPointsAmount > 0 || activeReferral) {
+      return toast.error("Clubbing Error", { description: "Cannot apply vouchers when Wallet, Kitty, Loyalty, or Referrals are in use." });
     }
 
     if (!validOverride && !voucherCode.trim()) return;
@@ -378,6 +448,7 @@ export function useCheckout({
       appliedCredit: appliedCreditAmount,
       appliedPoints: appliedPointsAmount, 
       rawPointsRedeemed: rawPointsRedeemed, 
+      referralDiscount: referralDiscountAmount,
       
       estimateChargeType, 
       estimateHandlingPct: estimateHandlingPercent,
@@ -477,7 +548,7 @@ export function useCheckout({
         }
 
         if (mode === 'normal') {
-            const preTaxDeductions = standardDiscount + exchangeNum + appliedVoucherAmount;
+            const preTaxDeductions = standardDiscount + exchangeNum + appliedVoucherAmount + effectivePointsAmt + referralDiscountAmount;
             const invoiceData: any = {
               created_at: effectiveDateISO,
               customer_id: selectedCustomer?.id, 
@@ -504,7 +575,9 @@ export function useCheckout({
               payment_remarks: customTransactionContext?.payment_remarks || null,
               billing_remarks: customTransactionContext?.billing_remarks || null,
               target_bank_account_id: customTransactionContext?.target_bank_account_id || null,
-              transfer_type: customTransactionContext?.transfer_type || null
+              transfer_type: customTransactionContext?.transfer_type || null,
+              referral_code_used: activeReferral ? activeReferral.code_or_phone : null,
+              referral_discount_amount: referralDiscountAmount
             };
             
             if (exchangeNum > 0 && exchangePhysicalDetails) {
@@ -608,7 +681,7 @@ export function useCheckout({
               }
             }
 
-            // 💎 2. AWARD REPEAT PURCHASE POINTS & READ ABSOLUTE TRUTH FROM DB FOR WA MESSAGE
+            // 💎 2. AWARD REPEAT PURCHASE POINTS
             if (autoLoyaltyRules && autoLoyaltyRules.length > 0) {
               
               const repeatRule = autoLoyaltyRules.find(r => r.name.toLowerCase().includes('repeat'));
@@ -626,7 +699,6 @@ export function useCheckout({
                     recorded_by: finalizingUserId
                   });
 
-                  // ✨ FIX: Fetch the absolute truth from the DB after all triggers have fired
                   const { data: finalAcc } = await supabase.from('loyalty_accounts').select('total_points').eq('id', purchaserAcc.id).single();
 
                   await sendWhatsAppNotification(
@@ -639,76 +711,41 @@ export function useCheckout({
                 }
               }
 
-              // 💎 3. AWARD REFERRER (WITH GHOST CREATION)
-              const referRule = autoLoyaltyRules.find(r => r.name.toLowerCase().includes('refer'));
-              const refNum = customTransactionContext?.referrer_phone || referrerPhone;
+              // ✨ 3. AWARD REFERRER (5% OF FINAL TAXABLE VALUE)
               
-              if (referRule && refNum && refNum.length >= 10) {
-                const cleanPhone = refNum.replace(/\D/g, '');
-                const phoneWith91 = cleanPhone.length === 10 ? `91${cleanPhone}` : cleanPhone;
-                
-                let { data: refUser } = await supabase.from('customers').select('id, full_name, phone').or(`phone.eq.${phoneWith91},phone.eq.${cleanPhone}`).maybeSingle();
-
-                if (!refUser) {
-                  const { data: newCustomer } = await supabase.from('customers').insert({
-                    company_id: appUser?.company_id,
-                    phone: phoneWith91,
-                    full_name: 'Unknown Referrer',
-                    customer_status: 'Lead'
-                  }).select('id, full_name, phone').single();
-                  
-                  refUser = newCustomer;
+              if (activeReferral && activeReferral.loyalty_account_id) {
+                const referRule = autoLoyaltyRules.find(r => r.name.toLowerCase().includes('refer'));
+                if (referRule) {
+                   const pointsToAward = referRule.is_dynamic ? Math.floor(finalTaxableValue * 0.05) : referRule.points;
+                   if (pointsToAward > 0) {
+                     await supabase.from('loyalty_transactions').insert({
+                       account_id: activeReferral.loyalty_account_id, activity_category: referRule.category, activity_name: "Friend Referral Bonus", points_awarded: pointsToAward, status: 'approved', recorded_by: finalizingUserId
+                     });
+                     
+                     const { data: finalRefAcc } = await supabase.from('loyalty_accounts')
+                       .select('total_points, customers!inner(phone, full_name)')
+                       .eq('id', activeReferral.loyalty_account_id)
+                       .single();
+                     
+                     // ✨ TS FIX: Added null check here
+                     if (finalRefAcc && finalRefAcc.customers) {
+                       const refCust = Array.isArray(finalRefAcc.customers) ? finalRefAcc.customers[0] : finalRefAcc.customers;
+                       
+                       await sendWhatsAppNotification(
+                         refCust.phone, 
+                         refCust.full_name, 
+                         loyaltySettings?.wa_template_points_earned, 
+                         loyaltySettings?.wa_mapping_points_earned, 
+                         { points_awarded: pointsToAward, total_balance: finalRefAcc.total_points || 0, activity_name: "Friend Referral Bonus" }
+                       );
+                     }
+                   }
                 }
-
-                if (refUser && refUser.id !== selectedCustomer.id) {
-                  let { data: refAcc } = await supabase.from('loyalty_accounts').select('id').eq('customer_id', refUser.id).maybeSingle();
-                  
-                  if (!refAcc) {
-                    const { data: newAcc } = await supabase.from('loyalty_accounts').insert({ 
-                      customer_id: refUser.id, 
-                      enrolled_by: finalizingUserId 
-                    }).select('id').single();
-                    refAcc = newAcc;
-                  }
-
-                  if (refAcc) {
-                    const pointsToAward = referRule.is_dynamic ? Math.floor(finalTaxableValue * 0.05) : referRule.points;
-                    if (pointsToAward > 0) {
-                      await supabase.from('loyalty_transactions').insert({
-                        account_id: refAcc.id,
-                        activity_category: referRule.category,
-                        activity_name: referRule.name,
-                        points_awarded: pointsToAward,
-                        status: 'approved',
-                        recorded_by: finalizingUserId
-                      });
-
-                      // ✨ FIX: Fetch the absolute truth from the DB after the trigger fires
-                      const { data: finalRefAcc } = await supabase.from('loyalty_accounts').select('total_points').eq('id', refAcc.id).single();
-
-                      await sendWhatsAppNotification(
-                        refUser.phone,
-                        refUser.full_name,
-                        loyaltySettings?.wa_template_points_earned, 
-                        loyaltySettings?.wa_mapping_points_earned, 
-                        { points_awarded: pointsToAward, total_balance: finalRefAcc?.total_points || 0, activity_name: "Friend Referral Bonus" }
-                      );
-                    }
-                  }
-                }
-              }
+             }
             }
         }
       }
-      else if (mode === 'repair') { 
-        // ... repair logic kept exact
-      }
-      else if (mode === 'return') { 
-        // ... return logic kept exact
-      }
-      else if (mode === 'challan') {
-        // ... challan logic kept exact
-      } 
+      // Note: If you need specialized DB handling for 'repair' or 'return' or 'challan' modes, insert those Supabase calls here.
 
       finalDraftData.invoice_number = finalNo;
       
@@ -752,7 +789,7 @@ export function useCheckout({
     setExchangeValue(''); setExchangeNotes(''); setExchangeInvoiceNo('');
     setIsExchangeOpen(false); setPaymentMode('cash');
     setAppliedKittyAmount(0); setAppliedKittyPlanId(null); setAppliedCreditAmount(0); 
-    setAppliedPointsAmount(0); setRawPointsRedeemed(0); setReferrerPhone('');
+    setAppliedPointsAmount(0); setRawPointsRedeemed(0); setReferralInput(''); setActiveReferral(null);
     setSplitPayments({ cash: '', card: '', upi: '', bank: '', cheque: '' });
     setBillingRemarks(''); setPaymentRemarks(''); 
   }
@@ -762,12 +799,16 @@ export function useCheckout({
     discountType, setDiscountType, discountValue, setDiscountValue,
     voucherCode, setVoucherCode, activeVoucher, setActiveVoucher, handlingFee,
     isExchangeOpen, setIsExchangeOpen, exchangeInvoiceNo, setExchangeInvoiceNo, exchangeValue, setExchangeValue, exchangeNotes, setExchangeNotes,
+    
+    // ✨ Referral Exports
+    referralInput, setReferralInput, activeReferral, setActiveReferral, handleApplyReferral, referralDiscountAmount,
+
     discountAmount: standardDiscount, appliedVoucherAmount, handlingAmt, finalTaxableValue, cgstAmount, sgstAmount, exactFinalPayable, roundOffAmount, 
     setExchangePhysicalDetails,
     finalPayable: finalPayableNet, 
     
     appliedKittyAmount, setAppliedKittyAmount,appliedKittyPlanId, setAppliedKittyPlanId, appliedCreditAmount, setAppliedCreditAmount,
-    appliedPointsAmount, setAppliedPointsAmount, rawPointsRedeemed, setRawPointsRedeemed, referrerPhone, setReferrerPhone,
+    appliedPointsAmount, setAppliedPointsAmount, rawPointsRedeemed, setRawPointsRedeemed,
     estimateChargeType, setEstimateChargeType, estimateHandlingPercent, setEstimateHandlingPercent, 
 
     handleApplyVoucher, handleFetchExchangeItem, generateDraftData, executeCheckout, resetCheckoutState

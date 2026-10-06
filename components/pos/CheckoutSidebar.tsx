@@ -26,7 +26,7 @@ export function CheckoutSidebar({
   onPreviewRequest,
   appUser, selectedLocation,
   loyaltySettings,
-  autoLoyaltyRules, // ✨ Dynamic Auto Rules
+  autoLoyaltyRules, 
   
   discountType, setDiscountType, discountValue, setDiscountValue,
   voucherCode, setVoucherCode, activeVoucher, setActiveVoucher, handlingFee, setHandlingFee, handleApplyVoucher,
@@ -44,7 +44,9 @@ export function CheckoutSidebar({
   appliedCreditAmount, setAppliedCreditAmount,
   appliedPointsAmount, setAppliedPointsAmount,
   rawPointsRedeemed, setRawPointsRedeemed,
-  referrerPhone, setReferrerPhone,
+  
+  // ✨ Referral Exports
+  referralInput, setReferralInput, activeReferral, setActiveReferral, handleApplyReferral, referralDiscountAmount,
 
   estimateChargeType, 
   setEstimateChargeType,
@@ -75,7 +77,6 @@ export function CheckoutSidebar({
   
   const [showLedgerDetails, setShowLedgerDetails] = useState(false)
 
-  // ✨ FIX: Centralized Live Loyalty State (Single Source of Truth)
   const [liveLoyaltyData, setLiveLoyaltyData] = useState<{id: string, total_points: number} | null>(null);
 
   useEffect(() => {
@@ -99,8 +100,9 @@ export function CheckoutSidebar({
       setAppliedCreditAmount(0)
       setAppliedPointsAmount(0)
       setRawPointsRedeemed(0)
+      setActiveReferral(null)
     }
-  }, [selectedCustomer, setAppliedKittyAmount, setAppliedCreditAmount, setAppliedPointsAmount, setRawPointsRedeemed])
+  }, [selectedCustomer, setAppliedKittyAmount, setAppliedCreditAmount, setAppliedPointsAmount, setRawPointsRedeemed, setActiveReferral])
 
   useEffect(() => {
     const fetchBanks = async () => {
@@ -180,7 +182,6 @@ export function CheckoutSidebar({
       applied_credit: appliedCreditAmount,
       applied_points: appliedPointsAmount,
       raw_points_redeemed: rawPointsRedeemed,
-      referrer_phone: referrerPhone
     })
   }
 
@@ -200,10 +201,10 @@ export function CheckoutSidebar({
             selectedLocation={selectedLocation}
             subtotal={subtotal}
             loyaltySettings={loyaltySettings}
-            liveLoyaltyData={liveLoyaltyData} // ✨ PASS SHARED STATE DOWN
+            liveLoyaltyData={liveLoyaltyData} 
             onApplyWallet={(type: 'kitty' | 'credit' | 'points', amount: number, planId?: string, rawAmount?: number) => {
-              if (activeVoucher) {
-                 return toast.error("Clubbing Restricted", { description: "Cannot apply Wallet/Loyalty when Vouchers are active. Clear the voucher first."});
+              if (activeVoucher || activeReferral) {
+                 return toast.error("Clubbing Restricted", { description: "Cannot apply Wallet/Loyalty when Vouchers or Referrals are active."});
               }
 
               if (type === 'kitty') {
@@ -272,24 +273,56 @@ export function CheckoutSidebar({
                    )
                  })}
 
-                 {hasReferralRules && (
+                 {/* ✨ REFERRAL ENGINE UI */}
+                 {hasReferralRules && !activeVoucher && appliedPointsAmount === 0 && appliedKittyAmount === 0 && (
                    <div className="p-3 bg-amber-50/50 border border-amber-200 rounded-xl relative">
                      <div className="flex justify-between items-center mb-2">
                         <div className="flex items-center gap-1.5">
                            <Share2 className="h-3.5 w-3.5 text-amber-500" />
-                           <Label className="text-[10px] font-bold text-amber-800 uppercase tracking-widest">Referral Reward Active</Label>
+                           <Label className="text-[10px] font-bold text-amber-800 uppercase tracking-widest">Referral Engine</Label>
                         </div>
-                        <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 border-none text-[8px] h-4">
-                          5% OF BILL
-                        </Badge>
+                        {activeReferral ? (
+                           <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 border-none text-[8px] h-4">
+                             10% APPLIED
+                           </Badge>
+                        ) : (
+                           <Badge className="bg-white text-zinc-500 border-zinc-200 text-[8px] h-4 font-mono">
+                             CODE or PHONE
+                           </Badge>
+                        )}
                      </div>
-                     <Input 
-                       placeholder="Enter Referrer Mobile (Optional)" 
-                       className="h-9 text-xs bg-white border-amber-200 placeholder:text-amber-400 focus-visible:ring-amber-400"
-                       value={referrerPhone}
-                       onChange={(e) => setReferrerPhone(e.target.value.replace(/\D/g, ''))}
-                       maxLength={10}
-                     />
+                     
+                     {activeReferral ? (
+                       <div className="flex items-center justify-between bg-white border border-amber-200 rounded-lg p-2 mt-1">
+                         <div className="flex flex-col">
+                           <span className="text-[10px] font-bold text-slate-800">{activeReferral.referrer_name}</span>
+                           <span className="text-[9px] text-slate-500 font-mono">{activeReferral.code_or_phone}</span>
+                         </div>
+                         <Button 
+                           variant="ghost" 
+                           size="sm" 
+                           onClick={() => setActiveReferral(null)} 
+                           className="h-6 text-[10px] text-red-500 hover:bg-red-50 hover:text-red-600 font-bold px-2"
+                         >
+                           Remove
+                         </Button>
+                       </div>
+                     ) : (
+                       <div className="flex gap-2">
+                         <Input 
+                           placeholder="Enter Referral Code or Mobile No." 
+                           className="h-9 text-xs bg-white border-amber-200 font-mono placeholder:text-amber-300 placeholder:font-sans focus-visible:ring-amber-400"
+                           value={referralInput}
+                           onChange={(e) => setReferralInput(e.target.value.toUpperCase())}
+                         />
+                         <Button 
+                           onClick={handleApplyReferral} 
+                           className="h-9 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-4"
+                         >
+                           Apply
+                         </Button>
+                       </div>
+                     )}
                    </div>
                  )}
                </div>
@@ -571,6 +604,7 @@ export function CheckoutSidebar({
 
         <div className={`overflow-hidden transition-all duration-300 ease-in-out ${showLedgerDetails ? 'max-h-[500px] opacity-100' : 'max-h-0 opacity-0'}`}>
           
+          {/* ✨ NORMAL ORDER ESTIMATE LEDGER */}
           {mode === 'normal' && (
             <div className="space-y-1 text-sm text-slate-500 pb-3 border-b border-slate-100 mb-2">
               
@@ -592,9 +626,23 @@ export function CheckoutSidebar({
                   <span>Old Gold / Exchange</span><span className="tabular-nums">- ₹{safeExchangeNum.toLocaleString()}</span>
                 </div>
               )}
+
+              {/* ✨ PRE-TAX DEDUCTIONS grouped together */}
               {activeVoucher && (
-                <div className="flex justify-between items-center text-emerald-600">
-                  <span>Voucher Redemption</span><span className="tabular-nums">- ₹{(Number(activeVoucher.amount) || 0).toLocaleString()}</span>
+                <div className="flex justify-between items-center text-emerald-600 font-bold">
+                  <span>Voucher Redemption</span><span className="tabular-nums">- ₹{(Number(appliedVoucherAmount) || 0).toLocaleString()}</span>
+                </div>
+              )}
+              {activeReferral && referralDiscountAmount > 0 && (
+                <div className="flex justify-between items-center text-amber-600 font-bold">
+                  <span>Referral Discount (10% Off Base)</span>
+                  <span className="tabular-nums">- ₹{referralDiscountAmount.toLocaleString()}</span>
+                </div>
+              )}
+              {Number(appliedPointsAmount) > 0 && (
+                <div className="flex justify-between items-center text-amber-600 font-bold">
+                  <span>Loyalty Points (Pre-Tax)</span>
+                  <span className="tabular-nums">- ₹{(Number(appliedPointsAmount) || 0).toLocaleString()}</span>
                 </div>
               )}
               
@@ -612,6 +660,7 @@ export function CheckoutSidebar({
                 <span className="tabular-nums">₹{invoiceTotalValue.toLocaleString()}</span>
               </div>
 
+              {/* POST-TAX SETTLEMENTS */}
               <div className="pt-1.5 space-y-1">
                 {cartAdvance > 0 && (
                   <div className="flex justify-between items-center text-slate-500 italic">
@@ -631,12 +680,6 @@ export function CheckoutSidebar({
                     <span className="tabular-nums">- ₹{(Number(appliedCreditAmount) || 0).toLocaleString()}</span>
                   </div>
                 )}
-                {Number(appliedPointsAmount) > 0 && (
-                  <div className="flex justify-between items-center text-amber-600 font-bold animate-in slide-in-from-right-2">
-                    <span className="flex items-center gap-1.5"><Award className="w-3.5 h-3.5"/> Less: Loyalty Points</span>
-                    <span className="tabular-nums">- ₹{(Number(appliedPointsAmount) || 0).toLocaleString()}</span>
-                  </div>
-                )}
               </div>
 
               {Number(roundOffAmount) !== 0 && roundOffAmount !== undefined && (
@@ -650,7 +693,7 @@ export function CheckoutSidebar({
             </div>
           )}
 
-          {/* CUSTOM ORDER ESTIMATE LEDGER */}
+          {/* ✨ CUSTOM ORDER ESTIMATE LEDGER */}
           {mode === 'custom' && customEstBase > 0 && (
             <div className="space-y-1 text-sm text-slate-500 pb-3 border-b border-slate-100 mb-2 bg-purple-50/30 p-3 rounded-lg border border-purple-100">
               
@@ -673,10 +716,23 @@ export function CheckoutSidebar({
                 </div>
               )}
               
+              {/* ✨ NEW: Pre-Tax Deductions grouped together */}
               {activeVoucher && (
                 <div className="flex justify-between items-center text-emerald-600 font-medium">
                   <span>Voucher Discount {Number(activeVoucher.handling_fee) > 0 ? `(Post ₹${activeVoucher.handling_fee} Fee)` : ''}</span>
                   <span className="tabular-nums">- ₹{effectiveVoucherCredit.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              {activeReferral && referralDiscountAmount > 0 && (
+                <div className="flex justify-between items-center text-amber-600 font-bold">
+                  <span>Referral Discount (10%)</span>
+                  <span className="tabular-nums">- ₹{referralDiscountAmount.toLocaleString('en-IN')}</span>
+                </div>
+              )}
+              {Number(appliedPointsAmount) > 0 && (
+                <div className="flex justify-between items-center text-amber-600 font-bold">
+                  <span>Loyalty Points (Pre-Tax)</span>
+                  <span className="tabular-nums">- ₹{appliedPointsAmount.toLocaleString('en-IN')}</span>
                 </div>
               )}
 
@@ -699,6 +755,7 @@ export function CheckoutSidebar({
                 <span>₹{customTotalEstimate.toLocaleString('en-IN')}</span>
               </div>
               
+              {/* POST-TAX SETTLEMENTS */}
               {customAdvancePaid > 0 && (
                 <div className="flex justify-between items-center text-emerald-600 font-bold mt-1.5">
                   <span>Advance Paid (Cash/Bank)</span>
@@ -717,13 +774,6 @@ export function CheckoutSidebar({
                 <div className="flex justify-between items-center text-emerald-600 font-bold mt-1">
                   <span>Less: Store Credit</span>
                   <span className="tabular-nums">- ₹{appliedCreditAmount.toLocaleString('en-IN')}</span>
-                </div>
-              )}
-
-              {Number(appliedPointsAmount) > 0 && (
-                <div className="flex justify-between items-center text-amber-600 font-bold mt-1">
-                  <span>Less: Loyalty Points</span>
-                  <span className="tabular-nums">- ₹{appliedPointsAmount.toLocaleString('en-IN')}</span>
                 </div>
               )}
 

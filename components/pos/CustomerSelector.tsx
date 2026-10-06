@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState, useEffect, useMemo } from 'react'
-import { Search, Plus, X, IndianRupee, Gem, Info, Loader2, AlertCircle, Edit2, Award } from 'lucide-react'
+import { Search, Plus, X, IndianRupee, Gem, Info, Loader2, AlertCircle, Edit2, Award, MessageCircle } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -20,7 +20,7 @@ interface CustomerSelectorProps {
   selectedLocation?: string
   subtotal?: number 
   loyaltySettings?: any 
-  liveLoyaltyData?: { id: string, total_points: number } | null // ✨ Passed directly from Sidebar
+  liveLoyaltyData?: { id: string, total_points: number } | null 
   onApplyWallet?: (type: 'credit' | 'kitty' | 'points', availableAmount: number, planId?: string, rawAmount?: number) => void 
 }
 
@@ -62,11 +62,29 @@ export function CustomerSelector({
     full_name: '', phone: '', email: '', city: '', address: '', pan_no: '', birth_date: '', anniversary_date: '' 
   })
 
+  // ✨ OTP & Claim State Management
+  const [showOtpModal, setShowOtpModal] = useState(false)
+  const [otpStep, setOtpStep] = useState<'send' | 'verify'>('send')
+  const [otpCode, setOtpCode] = useState('')
+  const [otpTimer, setOtpTimer] = useState(0)
+  const [isOtpLoading, setIsOtpLoading] = useState(false)
+  const [pendingRedemption, setPendingRedemption] = useState<{ neededRs: number, id: string | undefined, pointsToBurn: number } | null>(null)
+  
+  // Track if points have already been verified and claimed for this transaction
+  const [isLoyaltyClaimed, setIsLoyaltyClaimed] = useState(false)
+
+  // Reset claim state if a new customer is selected
+  useEffect(() => {
+    setIsLoyaltyClaimed(false);
+    setOtpTimer(0);
+    setOtpCode('');
+  }, [selectedCustomer?.id]);
+
   useEffect(() => {
     const searchDatabase = async () => {
       const term = searchCustomer.trim();
       if (!term || !appUser?.company_id) {
-        setSearchResults([]);
+        searchResults.length > 0 && setSearchResults([]);
         setIsSearching(false);
         return;
       }
@@ -264,33 +282,103 @@ export function CustomerSelector({
     onApplyWallet?.('credit', netUsableCredit);
   }
 
-  // ✨ LOYALTY POINTS REDEMPTION LOGIC (With Smart Partial Redemption)
-  const handleLoyaltyRedemption = () => {
+  // ✨ Global OTP Timer Logic (Survives modal close)
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (otpTimer > 0) {
+      interval = setInterval(() => setOtpTimer((t) => t - 1), 1000);
+    }
+    return () => clearInterval(interval);
+  }, [otpTimer]);
+
+  // ✨ Send OTP via Next.js API
+  const handleSendLoyaltyOtp = async () => {
+    if (!selectedCustomer?.phone) return toast.error("No valid phone number on customer profile.");
+    if (otpTimer > 0) return toast.error(`Please wait ${otpTimer} seconds before requesting a new OTP.`);
+    
+    setIsOtpLoading(true);
+    try {
+      const res = await fetch('/api/auth/send-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: selectedCustomer.phone })
+      });
+      
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to send OTP");
+
+      setOtpStep('verify');
+      setOtpTimer(60);
+      setOtpCode('');
+      toast.success("Verification code sent via WhatsApp.");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to send verification code.");
+      setShowOtpModal(false);
+    } finally {
+      setIsOtpLoading(false);
+    }
+  }
+
+  // ✨ Verify OTP via Next.js API
+  const handleVerifyLoyaltyOtp = async () => {
+    if (otpCode.length !== 6) return toast.error("Please enter the 6-digit code.");
+    setIsOtpLoading(true);
+    try {
+      const res = await fetch('/api/auth/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: selectedCustomer.phone, otp: otpCode })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Invalid verification code");
+
+      setShowOtpModal(false);
+      setOtpCode('');
+      
+      if (pendingRedemption) {
+        onApplyWallet?.('points', pendingRedemption.neededRs, pendingRedemption.id, pendingRedemption.pointsToBurn);
+        setIsLoyaltyClaimed(true); // ✨ Lock the button state globally
+        toast.success("Identity verified. Loyalty Points applied!", {
+          description: `Burning ${pendingRedemption.pointsToBurn.toLocaleString()} Pts | Usable Value: ₹${pendingRedemption.neededRs.toLocaleString()}`
+        });
+      }
+    } catch (error: any) {
+      toast.error(error.message || "Invalid verification code.");
+    } finally {
+      setIsOtpLoading(false);
+    }
+  }
+
+  // ✨ Global Click Handler for the Button
+  const handleLoyaltyRedemptionClick = () => {
     const rawPoints = Number(liveLoyaltyData?.total_points) || 0;
     if (rawPoints <= 0) return;
 
     const feePct = Number(loyaltySettings?.redemption_fee_pct) || 0;
     const pointValue = Number(loyaltySettings?.point_value_rs) || 1;
 
-    // 1. Calculate the maximum possible Rs value they possess
     const maxGrossValueRs = rawPoints * pointValue;
     const maxFeeAmountRs = maxGrossValueRs * (feePct / 100);
     const maxUsableRs = Math.floor(maxGrossValueRs - maxFeeAmountRs);
 
-    // 2. Only take what is needed to cover the subtotal!
     const neededRs = Math.min(subtotal, maxUsableRs); 
 
-    // 3. Calculate exactly how many points to burn to get the needed Rs
-    // Formula: Points = neededRs / (pointValue * (1 - feePct/100))
     const multiplier = pointValue * (1 - (feePct / 100));
     const pointsToBurn = Math.ceil(neededRs / multiplier);
 
-    toast.info("Loyalty Points Applied", {
-      description: `Burning ${pointsToBurn.toLocaleString()} Pts | Usable Value: ₹${neededRs.toLocaleString()}`
-    });
+    setPendingRedemption({ neededRs, id: liveLoyaltyData?.id, pointsToBurn });
+    setShowOtpModal(true);
 
-    onApplyWallet?.('points', neededRs, liveLoyaltyData?.id, pointsToBurn);
+    // ✨ Enforce the 60s rule gracefully
+    if (otpTimer > 0) {
+      setOtpStep('verify'); // Just open modal to let them type existing code
+    } else {
+      setOtpStep('send');
+      handleSendLoyaltyOtp();
+    }
   }
+
   const hasActivePlan = selectedCustomer?.kitty_plans && selectedCustomer.kitty_plans.some((p: any) => ['active', 'matured'].includes(p.status));
   const hasLoyaltyPoints = Number(liveLoyaltyData?.total_points) > 0;
 
@@ -319,7 +407,7 @@ export function CustomerSelector({
                   )}
                   {hasLoyaltyPoints && (
                     <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[9px] px-1.5 py-0 h-4 rounded-sm flex items-center gap-1 font-bold">
-                      <Award className="w-2.5 h-2.5" /> Celebration Plan
+                      <Award className="w-2.5 h-2.5" /> Loyalty Program
                     </Badge>
                   )}
                 </div>
@@ -423,31 +511,41 @@ export function CustomerSelector({
                 </div>
               )}
 
-              {/* ✨ LOYALTY POINTS BLOCK */}
+              {/* ✨ UPDATED LOYALTY BUTTON */}
               {hasLoyaltyPoints && (
                 <div 
-                  onClick={handleLoyaltyRedemption}
-                  className="flex items-center justify-between w-full bg-amber-50 border border-amber-200 rounded-sm p-2 cursor-pointer hover:bg-amber-100 transition-colors group"
-                  title="Redeem Loyalty Points"
+                  onClick={handleLoyaltyRedemptionClick}
+                  className={`flex items-center justify-between w-full rounded-sm p-2 cursor-pointer transition-colors group ${
+                    isLoyaltyClaimed 
+                      ? 'bg-slate-50 border border-slate-200 hover:bg-slate-100' 
+                      : 'bg-amber-50 border border-amber-200 hover:bg-amber-100'
+                  }`}
+                  title={isLoyaltyClaimed ? "Points Applied. Click to re-verify if needed." : "Verify and Redeem Loyalty Points"}
                 >
-                  <div className="flex flex-col gap-0.5 text-amber-700">
+                  <div className={`flex flex-col gap-0.5 ${isLoyaltyClaimed ? 'text-slate-500' : 'text-amber-700'}`}>
                     <div className="flex items-center gap-1.5">
                       <Award className="w-3.5 h-3.5" />
                       <span className="text-[10px] font-bold uppercase tracking-wider">Loyalty Points</span>
                     </div>
                     {Number(loyaltySettings?.redemption_fee_pct) > 0 && (
-                      <span className="text-[8px] font-semibold text-amber-600 flex items-center gap-1">
+                      <span className={`text-[8px] font-semibold flex items-center gap-1 ${isLoyaltyClaimed ? 'text-slate-400' : 'text-amber-600'}`}>
                         <Info className="w-2.5 h-2.5" /> {loyaltySettings?.redemption_fee_pct}% Processing Fee Applies
                       </span>
                     )}
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="flex flex-col items-end">
-                      <span className="text-xs font-black text-amber-700 tabular-nums leading-none">
+                      <span className={`text-xs font-black tabular-nums leading-none ${isLoyaltyClaimed ? 'text-slate-500' : 'text-amber-700'}`}>
                         {Number(liveLoyaltyData?.total_points).toLocaleString()} Pts
                       </span>
                     </div>
-                    <span className="bg-amber-600 text-white text-[9px] font-bold uppercase px-2 py-0.5 rounded-sm opacity-90 group-hover:opacity-100 group-hover:shadow-sm transition-all">Redeem</span>
+                    <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-sm transition-all ${
+                      isLoyaltyClaimed 
+                        ? 'bg-slate-400 text-white shadow-none' 
+                        : 'bg-amber-600 text-white opacity-90 group-hover:opacity-100 group-hover:shadow-sm'
+                    }`}>
+                      {isLoyaltyClaimed ? 'Claimed' : 'Claim'}
+                    </span>
                   </div>
                 </div>
               )}
@@ -587,6 +685,58 @@ export function CustomerSelector({
               {isSaving ? 'Saving...' : (isEditMode ? 'Update Profile' : 'Save Customer')}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ✨ Secure OTP Verification Dialog */}
+      <Dialog open={showOtpModal} onOpenChange={(open) => !isOtpLoading && setShowOtpModal(open)}>
+        <DialogContent className="sm:max-w-[400px] border border-slate-200 shadow-2xl p-6 rounded-xl bg-white">
+          <div className="flex flex-col items-center text-center space-y-4">
+            <div className="w-12 h-12 bg-amber-50 rounded-full flex items-center justify-center mb-2">
+              <MessageCircle className="w-6 h-6 text-amber-600" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">Secure Verification</h3>
+              <p className="text-sm text-slate-500 mt-1">
+                A verification code has been sent to <br />
+                <span className="font-bold text-slate-800">+91 {selectedCustomer?.phone}</span>
+              </p>
+            </div>
+
+            <div className="w-full space-y-4 pt-4">
+              <Input 
+                type="text" 
+                maxLength={6}
+                autoFocus
+                placeholder="000000" 
+                value={otpCode}
+                onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                className="h-12 text-center text-2xl tracking-[0.5em] font-mono font-bold bg-slate-50 border-slate-200"
+              />
+              
+              <Button 
+                onClick={handleVerifyLoyaltyOtp} 
+                disabled={otpCode.length !== 6 || isOtpLoading}
+                className="w-full h-11 bg-amber-600 hover:bg-amber-700 text-white font-bold tracking-wider uppercase"
+              >
+                {isOtpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Verify & Claim Points'}
+              </Button>
+
+              <div className="text-center pt-2">
+                {otpTimer > 0 ? (
+                  <span className="text-xs text-slate-400 font-medium">Resend code in {otpTimer}s</span>
+                ) : (
+                  <button 
+                    onClick={handleSendLoyaltyOtp}
+                    disabled={isOtpLoading}
+                    className="text-xs font-bold text-[#0078D7] hover:underline"
+                  >
+                    Resend WhatsApp Code
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

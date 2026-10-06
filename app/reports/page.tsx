@@ -21,7 +21,8 @@ import {
   Database,
   GitCommit,
   FileText,
-  Lock
+  Lock,
+  Calculator
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -38,6 +39,7 @@ import { SalesVelocityReport } from "./components/SalesVelocityReport";
 import { TransitReconciliationReport } from "./components/TransitReconciliationReport";
 import { FactoryWipReport } from './components/FactoryWipReport'
 import { ProcurementLedgerReport } from './components/ProcurementLedgerReport'
+import { IncentiveCalculator } from './components/IncentiveCalculator'
 
 // --- IMPORT NEW ENTERPRISE ACCOUNTING & COMPLIANCE MODULES ---
 import { ManualJournalForm } from './components/ManualJournalForm'
@@ -55,6 +57,7 @@ const TABS_CONFIG = [
   { id: "overview", label: "Overview", icon: BarChart3 },
   { id: "inventory", label: "Asset Registry", icon: Package },
   { id: "sales", label: "Sales Ledger", icon: TrendingUp },
+  { id: "incentive", label: "Incentive Calculator", icon: Calculator }, // ✨ FIX: Changed "Incentive" to "incentive"
   { id: 'procurement', label: 'Procurement', icon: ShoppingCart },
   { id: "transit", label: "Logistics", icon: ArrowRightLeft },
   { id: "wip", label: "Factory WIP", icon: Briefcase },
@@ -87,7 +90,7 @@ export default function ReportsMasterPage() {
     return true; 
   });
 
-  // ✨ FIX: Fallback to visibleTabs instead of the master config
+  // Fallback to visibleTabs instead of the master config
   const currentTab = visibleTabs.find((t) => t.id === activeTab) || visibleTabs[0];
 
   // Failsafe: if somehow the role isn't loaded yet and visibleTabs is empty
@@ -124,7 +127,6 @@ export default function ReportsMasterPage() {
           {/* DESKTOP VIEW: WRAPPING TABS */}
           <div className="hidden sm:block w-full pb-4 print:hidden">
             <TabsList className="bg-transparent border-none p-0 h-auto flex flex-wrap justify-start gap-2.5 pb-1">
-              {/* ✨ FIX: Map over visibleTabs instead of TABS_CONFIG */}
               {visibleTabs.map((tab) => (
                 <TabsTrigger
                   key={tab.id}
@@ -172,7 +174,6 @@ export default function ReportsMasterPage() {
                   onClick={() => setIsMobileMenuOpen(false)}
                 />
                 <div className="absolute top-[calc(100%+6px)] left-1 right-1 z-50 bg-white border border-gray-200 shadow-lg rounded-xl p-1 animate-in fade-in slide-in-from-top-1 duration-150 max-h-[60vh] overflow-y-auto">
-                  {/* ✨ FIX: Map over visibleTabs instead of TABS_CONFIG */}
                   {visibleTabs.map((tab) => {
                     const isActive = activeTab === tab.id;
                     return (
@@ -215,9 +216,9 @@ export default function ReportsMasterPage() {
             {/* Operational */}
             <TabsContent value="overview" className="m-0 border-none outline-none"><OverviewDashboard /></TabsContent>
             <TabsContent value="inventory" className="m-0 border-none outline-none"><InventoryRegistryReport /></TabsContent>
+            <TabsContent value="incentive" className="m-0 border-none outline-none"><IncentiveCalculator /></TabsContent>
             
-            {/* Financial & Accounting - We can keep these rendered in the DOM, 
-                they just won't be accessible because the triggers are hidden */}
+            {/* Financial & Accounting */}
             <TabsContent value="sales" className="m-0 border-none outline-none"><SalesVelocityReport /></TabsContent>
             <TabsContent value="procurement" className="m-0 border-none outline-none"><ProcurementLedgerReport /></TabsContent>
             <TabsContent value="transit" className="m-0 border-none outline-none"><TransitReconciliationReport /></TabsContent>
