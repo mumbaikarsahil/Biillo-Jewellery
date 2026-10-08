@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { format, isPast } from "date-fns";
+import { format, isPast, addDays, addWeeks, addMonths } from "date-fns";
 import { 
   Search, Store, Package, Loader2, ArrowLeft, ChevronRight, ChevronLeft,
   RefreshCw, Database, CheckSquare, Filter, User, ShieldAlert, Phone,
@@ -97,11 +97,12 @@ interface TrackedVoucher {
 
 export default function TrackVoucherPage() {
   const { toast } = useToast();
-  const { appUser } = useAuth(); 
+  const { appUser, loading: authLoading } = useAuth(); 
 
   // --- EXPORT MODAL STATE ---
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [isExportingAll, setIsExportingAll] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0); 
 
   // --- MASTER LIST STATE ---
   const [listData, setListData] = useState<TrackedVoucher[]>([]);
@@ -119,12 +120,17 @@ export default function TrackVoucherPage() {
   const [interestFilter, setInterestFilter] = useState("all");
   const [selectedFilterDistributor, setSelectedFilterDistributor] = useState("all");
   const [callerFilter, setCallerFilter] = useState("all"); 
-  const [assigneeFilter, setAssigneeFilter] = useState("all"); // ✨ NEW: Assignee Filter
+  const [assigneeFilter, setAssigneeFilter] = useState("all"); 
+  
+  // Expiry Filter State
+  const [expiryFilter, setExpiryFilter] = useState("all");
+  const [customExpiryStart, setCustomExpiryStart] = useState("");
+  const [customExpiryEnd, setCustomExpiryEnd] = useState("");
   
   const [distributors, setDistributors] = useState<any[]>([]);
   const [sortOrder, setSortOrder] = useState("newest"); 
   
-  // ✨ NEW: Range Search State
+  // Range Search State
   const [searchMode, setSearchMode] = useState<'text' | 'range'>('text');
   const [fromCode, setFromCode] = useState("");
   const [toCode, setToCode] = useState("");
@@ -200,13 +206,90 @@ export default function TrackVoucherPage() {
     } catch (error) {
       console.error(error);
     }
-  }, [appUser]);
+  }, [appUser?.company_id]);
 
   useEffect(() => {
     fetchAssignmentMetrics();
   }, [fetchAssignmentMetrics]);
 
+  // ✨ HELPER: Apply all active filters to a given Supabase query builder
+  const applyFiltersToQuery = async (queryBuilder: any) => {
+    let query = queryBuilder;
+
+    // Status Filter
+    if (activeFilter === "expired") {
+      query = query.in("status", ["distributed", "in_stock", "registered", "unclaimed"]).lt("expiry_date", new Date().toISOString());
+    } else if (activeFilter !== "all") {
+      query = query.eq("status", activeFilter);
+    }
+
+    // Time-to-Expiry Filter
+    if (expiryFilter !== "all") {
+      const todayStr = new Date().toISOString();
+      if (expiryFilter === "custom" && customExpiryStart && customExpiryEnd) {
+        query = query.gte('expiry_date', new Date(customExpiryStart).toISOString());
+        query = query.lte('expiry_date', new Date(customExpiryEnd).toISOString());
+      } else {
+        query = query.gte('expiry_date', todayStr); // Always look forward
+        
+        if (expiryFilter === "1_day") query = query.lte('expiry_date', addDays(new Date(), 1).toISOString());
+        else if (expiryFilter === "2_days") query = query.lte('expiry_date', addDays(new Date(), 2).toISOString());
+        else if (expiryFilter === "4_days") query = query.lte('expiry_date', addDays(new Date(), 4).toISOString());
+        else if (expiryFilter === "1_week") query = query.lte('expiry_date', addWeeks(new Date(), 1).toISOString());
+        else if (expiryFilter === "2_weeks") query = query.lte('expiry_date', addWeeks(new Date(), 2).toISOString());
+        else if (expiryFilter === "3_weeks") query = query.lte('expiry_date', addWeeks(new Date(), 3).toISOString());
+        else if (expiryFilter === "4_weeks") query = query.lte('expiry_date', addWeeks(new Date(), 4).toISOString());
+        else if (expiryFilter === "1_month") query = query.lte('expiry_date', addMonths(new Date(), 1).toISOString());
+        else if (expiryFilter === "2_months") query = query.lte('expiry_date', addMonths(new Date(), 2).toISOString());
+      }
+    }
+
+    // Caller Filter
+    if (callerFilter !== "all") {
+      const { data: crs } = await supabase.from('call_records').select('customer_id').eq('user_id', callerFilter);
+      const matchingCustomerIds = crs?.map(c => c.customer_id) || [];
+      if (matchingCustomerIds.length > 0) query = query.in('customer_id', matchingCustomerIds);
+      else query = query.in('customer_id', ['00000000-0000-0000-0000-000000000000']); 
+    }
+
+    // Assigned To Filter
+    if (assigneeFilter !== "all") {
+       query = query.eq("voucher_call_assignments.assigned_to", assigneeFilter);
+    }
+
+    // Assignment Status Filter
+    if (assignmentFilter === "assigned") {
+      query = query.eq("voucher_call_assignments.status", "pending");
+    } else if (assignmentFilter === "called") {
+      query = query.in("voucher_call_assignments.status", ["called", "dnd"]);
+    } else if (assignmentFilter === "unassigned") {
+      query = query.eq("status", "registered");
+      const { data: assigned } = await supabase.from('voucher_call_assignments').select('voucher_id');
+      const assignedIds = assigned?.map(a => a.voucher_id).filter(Boolean) || [];
+      if (assignedIds.length > 0) query = query.not('id', 'in', `(${assignedIds.join(',')})`);
+    }
+
+    // Outcome & Interest Filters
+    if (outcomeFilter !== "all") query = query.eq("voucher_call_assignments.call_outcome", outcomeFilter);
+    if (interestFilter !== "all") query = query.eq("voucher_call_assignments.interest_level", interestFilter);
+
+    // Search Logic
+    if (searchMode === 'text' && localSearch.trim()) {
+      query = query.ilike("code", `%${localSearch.trim()}%`);
+    } else if (searchMode === 'range') {
+      if (fromCode.trim()) query = query.gte("code", fromCode.trim().toUpperCase());
+      if (toCode.trim()) query = query.lte("code", toCode.trim().toUpperCase());
+    }
+
+    // Distributor Filter
+    if (selectedFilterDistributor !== "all") query = query.eq("distributor_id", selectedFilterDistributor);
+
+    return query;
+  };
+
   const fetchVoucherList = async () => {
+    if (!appUser?.id) return; // Prevent querying before auth loads
+
     setIsListLoading(true);
     try {
       const requiresInnerJoin = assignmentFilter === "assigned" || assignmentFilter === "called" || outcomeFilter !== "all" || interestFilter !== "all" || assigneeFilter !== "all";
@@ -228,56 +311,16 @@ export default function TrackVoucherPage() {
           last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name),
           voucher_call_assignments${requiresInnerJoin ? '!inner' : ''} (id, assigned_to, assigned_by, status, call_outcome, interest_level, call_notes)
         `, { count: 'exact' });
+        // ✨ FIX: Removed the invalid .eq('company_id') filter entirely
 
       if (sortOrder === 'newest') query = query.order('updated_at', { ascending: false, nullsFirst: false });
       else if (sortOrder === 'oldest') query = query.order('updated_at', { ascending: true, nullsFirst: false });
-      else if (sortOrder === 'code_desc') query = query.order('code', { ascending: false });
-      else query = query.order('code', { ascending: true }); 
+      else if (sortOrder === 'code_asc') query = query.order('code', { ascending: true });
+      else query = query.order('code', { ascending: false }); 
 
       query = query.range(currentPage * pageSize, (currentPage + 1) * pageSize - 1);
 
-      if (activeFilter === "expired") {
-        query = query.in("status", ["distributed", "in_stock", "registered", "unclaimed"]).lt("expiry_date", new Date().toISOString());
-      } else if (activeFilter !== "all") {
-        query = query.eq("status", activeFilter);
-      }
-
-      // ✨ Actual Caller Filter
-      if (callerFilter !== "all") {
-        const { data: crs } = await supabase.from('call_records').select('customer_id').eq('user_id', callerFilter);
-        const matchingCustomerIds = crs?.map(c => c.customer_id) || [];
-        if (matchingCustomerIds.length > 0) query = query.in('customer_id', matchingCustomerIds);
-        else query = query.in('customer_id', ['00000000-0000-0000-0000-000000000000']); 
-      }
-
-      // ✨ Assigned To Filter
-      if (assigneeFilter !== "all") {
-         query = query.eq("voucher_call_assignments.assigned_to", assigneeFilter);
-      }
-
-      if (assignmentFilter === "assigned") {
-        query = query.eq("voucher_call_assignments.status", "pending");
-      } else if (assignmentFilter === "called") {
-        query = query.in("voucher_call_assignments.status", ["called", "dnd"]);
-      } else if (assignmentFilter === "unassigned") {
-        query = query.eq("status", "registered");
-        const { data: assigned } = await supabase.from('voucher_call_assignments').select('voucher_id');
-        const assignedIds = assigned?.map(a => a.voucher_id).filter(Boolean) || [];
-        if (assignedIds.length > 0) query = query.not('id', 'in', `(${assignedIds.join(',')})`);
-      }
-
-      if (outcomeFilter !== "all") query = query.eq("voucher_call_assignments.call_outcome", outcomeFilter);
-      if (interestFilter !== "all") query = query.eq("voucher_call_assignments.interest_level", interestFilter);
-
-      // ✨ Search Logic
-      if (searchMode === 'text' && localSearch.trim()) {
-        query = query.ilike("code", `%${localSearch.trim()}%`);
-      } else if (searchMode === 'range') {
-        if (fromCode.trim()) query = query.gte("code", fromCode.trim().toUpperCase());
-        if (toCode.trim()) query = query.lte("code", toCode.trim().toUpperCase());
-      }
-
-      if (selectedFilterDistributor !== "all") query = query.eq("distributor_id", selectedFilterDistributor);
+      query = await applyFiltersToQuery(query);
 
       const { data, count, error } = await query;
       
@@ -292,12 +335,16 @@ export default function TrackVoucherPage() {
     }
   };
 
+  // ✨ THE FIX: Explicitly check for appUser.id before querying, preventing the anonymous 500 error!
   useEffect(() => {
+    if (!appUser?.id) return; 
+
     const timer = setTimeout(() => {
       fetchVoucherList();
     }, 400); 
+    
     return () => clearTimeout(timer);
-  }, [activeFilter, assignmentFilter, outcomeFilter, interestFilter, selectedFilterDistributor, callerFilter, assigneeFilter, currentPage, localSearch, pageSize, sortOrder]);
+  }, [appUser?.id, activeFilter, expiryFilter, customExpiryStart, customExpiryEnd, assignmentFilter, outcomeFilter, interestFilter, selectedFilterDistributor, callerFilter, assigneeFilter, currentPage, localSearch, pageSize, sortOrder]);
 
   const handleAssignCalls = async () => {
     if (!selectedAssignee) return toast({ title: "Action Required", description: "Select a team member to assign the calls to.", variant: "destructive" });
@@ -336,7 +383,6 @@ export default function TrackVoucherPage() {
     }
   };
 
-  // ✨ FIXED: Functional Master Update Logic
   const handleMasterUpdate = async () => {
     if (!masterEditForm.override_reason.trim()) return toast({ title: "Required", description: "Please provide an audit reason for these changes.", variant: "destructive"});
     
@@ -352,7 +398,6 @@ export default function TrackVoucherPage() {
       if (masterEditForm.expiry_date) payload.expiry_date = masterEditForm.expiry_date;
       if (masterEditForm.handling_fee) payload.handling_fee = parseFloat(masterEditForm.handling_fee);
 
-      // Force Override Auditing
       payload.is_manual_override = true;
       payload.updated_by_user = appUser?.full_name || appUser?.id;
       payload.updated_at = new Date().toISOString();
@@ -363,8 +408,6 @@ export default function TrackVoucherPage() {
         .in('id', Array.from(selectedVouchers));
 
       if (error) throw error;
-      
-      // Optionally insert into an audit log table here if you have one.
       
       toast({ title: "Update Successful", description: `Forced override applied to ${selectedVouchers.size} vouchers.` });
       setIsMasterEditModalOpen(false);
@@ -444,54 +487,72 @@ export default function TrackVoucherPage() {
   };
 
   const generateCSV = (dataToExport: TrackedVoucher[], filenamePrefix: string) => {
-    if (dataToExport.length === 0) return toast({ title: "No Data", description: "No data to export." });
-    
-    const headers = [
-      "Voucher Code", "Batch No", "Current Status", "Discount (INR)", "Handling Fee (INR)",
-      "Partner / Distributor", "Intro Agent", "Registered Customer", "Customer Phone",
-      "Assigned To", "Actual Caller", "Call Status", "Call Outcome", "Interest Level", "Call Notes",
-      "Distributed Date", "Expiry Date", "Redeemed Date", "Redeemed Invoice", "Scan Count", "Overridden By", "Last Updated"
-    ];
-
-    const csvRows = dataToExport.map(v => {
-      const assignment = getActiveAssignment(v);
-      const assigneeName = assignment ? teamMembers.find(m => m.id === assignment.assigned_to)?.name || 'Unknown' : 'None';
+    try {
+      if (!dataToExport || dataToExport.length === 0) return toast({ title: "No Data", description: "No data to export." });
       
-      const latestCallRecord = v.customers?.call_records?.sort((a,b) => new Date(b.call_time).getTime() - new Date(a.call_time).getTime())?.[0];
-      const actualCallerName = latestCallRecord ? teamMembers.find(m => m.id === latestCallRecord.user_id)?.name || 'Unknown' : 'None';
-      const extractedNotes = latestCallRecord?.notes || assignment?.call_notes || 'None';
-      
-      return [
-        v.code, 
-        v.voucher_batches?.batch_no || '', 
-        getDisplayStatus(v).toUpperCase(), 
-        v.discount_value, 
-        v.handling_fee || 0,
-        v.voucher_distributors?.distributor_name || 'Unassigned', 
-        v.voucher_reference_persons?.name || 'None',
-        v.customers?.full_name || 'None', 
-        v.customers?.phone || 'None',
-        assigneeName, 
-        actualCallerName,
-        assignment ? assignment.status.toUpperCase() : 'NONE',
-        assignment?.call_outcome || 'NONE',
-        assignment?.interest_level || 'NONE',
-        extractedNotes,
-        v.distributed_at ? format(new Date(v.distributed_at), "yyyy-MM-dd HH:mm") : 'None',
-        v.expiry_date ? format(new Date(v.expiry_date), "yyyy-MM-dd") : 'None',
-        v.redeemed_at ? format(new Date(v.redeemed_at), "yyyy-MM-dd HH:mm") : 'None',
-        v.invoices?.invoice_number || 'None',
-        v.scan_count,
-        v.is_manual_override ? v.updated_by_user : 'No',
-        v.updated_at ? format(new Date(v.updated_at), "yyyy-MM-dd HH:mm") : 'None'
-      ].map(field => `"${String(field).replace(/"/g, '""')}"`).join(",");
-    });
+      const headers = [
+        "Voucher Code", "Batch No", "Current Status", "Discount (INR)", "Handling Fee (INR)",
+        "Partner / Distributor", "Intro Agent", "Registered Customer", "Customer Phone",
+        "Assigned To", "Actual Caller", "Call Status", "Call Outcome", "Interest Level", "Call Notes",
+        "Distributed Date", "Expiry Date", "Redeemed Date", "Redeemed Invoice", "Scan Count", "Overridden By", "Last Updated"
+      ];
 
-    const csvContent = [headers.join(","), ...csvRows].join("\n");
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(new Blob([csvContent], { type: "text/csv;charset=utf-8;" }));
-    link.download = `${filenamePrefix}_${format(new Date(), "yyyyMMdd_HHmm")}.csv`;
-    link.click();
+      const csvRows = dataToExport.map(v => {
+        const assignment = getActiveAssignment(v);
+        const assigneeName = assignment ? teamMembers.find(m => m.id === assignment.assigned_to)?.name || 'Unknown' : 'None';
+        
+        // ✨ FIX: Safely copy the array to prevent mutation crashes in read-only objects
+        const callRecords = Array.isArray(v.customers?.call_records) ? [...v.customers.call_records] : [];
+        const latestCallRecord = callRecords.sort((a,b) => new Date(b.call_time).getTime() - new Date(a.call_time).getTime())[0];
+        
+        const actualCallerName = latestCallRecord ? teamMembers.find(m => m.id === latestCallRecord.user_id)?.name || 'Unknown' : 'None';
+        const extractedNotes = latestCallRecord?.notes || assignment?.call_notes || 'None';
+        
+        return [
+          v.code, 
+          v.voucher_batches?.batch_no || '', 
+          getDisplayStatus(v).toUpperCase(), 
+          v.discount_value, 
+          v.handling_fee || 0,
+          v.voucher_distributors?.distributor_name || 'Unassigned', 
+          v.voucher_reference_persons?.name || 'None',
+          v.customers?.full_name || 'None', 
+          v.customers?.phone || 'None',
+          assigneeName, 
+          actualCallerName,
+          assignment ? assignment.status.toUpperCase() : 'NONE',
+          assignment?.call_outcome || 'NONE',
+          assignment?.interest_level || 'NONE',
+          extractedNotes,
+          v.distributed_at ? format(new Date(v.distributed_at), "yyyy-MM-dd HH:mm") : 'None',
+          v.expiry_date ? format(new Date(v.expiry_date), "yyyy-MM-dd") : 'None',
+          v.redeemed_at ? format(new Date(v.redeemed_at), "yyyy-MM-dd HH:mm") : 'None',
+          v.invoices?.invoice_number || 'None',
+          v.scan_count,
+          v.is_manual_override ? v.updated_by_user : 'No',
+          v.updated_at ? format(new Date(v.updated_at), "yyyy-MM-dd HH:mm") : 'None'
+        ].map(field => `"${String(field || '').replace(/"/g, '""')}"`).join(",");
+      });
+
+      // ✨ FIX: Prepend UTF-8 BOM to fix Excel formatting and securely concatenate strings
+      const csvContent = "\uFEFF" + headers.join(",") + "\n" + csvRows.join("\n");
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      
+      const link = document.createElement("a");
+      link.setAttribute("href", url);
+      link.setAttribute("download", `${filenamePrefix}_${format(new Date(), "yyyyMMdd_HHmm")}.csv`);
+      
+      // ✨ FIX: Must explicitly attach link to DOM to bypass browser security blockers
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error("CSV Generation Failed:", err);
+      toast({ title: "Export Error", description: "Failed to compile the CSV file.", variant: "destructive" });
+    }
   };
 
   const exportCurrentPage = () => {
@@ -500,13 +561,140 @@ export default function TrackVoucherPage() {
     toast({ title: "Export Started", description: "Your CSV is downloading." });
   };
 
+  // ✨ CHUNKED BULK EXPORT (Highly Optimized)
   const exportAllData = async () => {
-    // ... [Truncated for brevity, mirrors exact logic as before but uses updated interface]
-    toast({ title: "Feature Notice", description: "Exporting all data is temporarily throttled to current page logic while we update schemas."});
+    if (totalCount === 0) return toast({ title: "No Data", description: "There is no data to export based on your current filters.", variant: "destructive" });
+    if (!appUser?.id) return;
+
+    setIsExportingAll(true);
+    // ✨ FIX: Removed setIsExportModalOpen(false) so the modal stays open!
+    setExportProgress(0);
+    
+    const BATCH_SIZE = 250; 
+    let allFetchedVouchers: TrackedVoucher[] = [];
+    
+    try {
+      const totalPagesToFetch = Math.ceil(totalCount / BATCH_SIZE);
+      const requiresInnerJoin = assignmentFilter === "assigned" || assignmentFilter === "called" || outcomeFilter !== "all" || interestFilter !== "all" || assigneeFilter !== "all";
+
+      let matchingCustomerIds: string[] | null = null;
+      if (callerFilter !== "all") {
+        const { data: crs } = await supabase.from('call_records').select('customer_id').eq('user_id', callerFilter);
+        matchingCustomerIds = crs?.map(c => c.customer_id) || [];
+        if (matchingCustomerIds.length === 0) matchingCustomerIds = ['00000000-0000-0000-0000-000000000000']; 
+      }
+
+      let unassignedIds: string[] | null = null;
+      if (assignmentFilter === "unassigned") {
+        const { data: assigned } = await supabase.from('voucher_call_assignments').select('voucher_id');
+        unassignedIds = assigned?.map(a => a.voucher_id).filter(Boolean) || [];
+      }
+
+      for (let page = 0; page < totalPagesToFetch; page++) {
+        let query = supabase
+          .from("vouchers")
+          .select(`
+            id, code, discount_value, handling_fee, status, expiry_date, distributed_at, redeemed_at, redeemed_invoice_id,
+            is_manual_override, updated_by_user, scan_count, last_scanned_at, updated_at, is_event_voucher,
+            voucher_batches (batch_no),
+            voucher_distributors (distributor_name, distributor_type, phone),
+            voucher_distributions (payment_status, delivery_agent),
+            voucher_reference_persons (name),
+            invoices (invoice_number),
+            customers (
+              id, full_name, phone, convo360_user_id,
+              call_records (user_id, outcome, notes, call_time)
+            ),
+            last_scanned_warehouse:warehouses!last_scanned_warehouse_id(name),
+            voucher_call_assignments${requiresInnerJoin ? '!inner' : ''} (id, assigned_to, assigned_by, status, call_outcome, interest_level, call_notes)
+          `);
+
+        if (activeFilter === "expired") {
+          query = query.in("status", ["distributed", "in_stock", "registered", "unclaimed"]).lt("expiry_date", new Date().toISOString());
+        } else if (activeFilter !== "all") {
+          query = query.eq("status", activeFilter);
+        }
+
+        if (expiryFilter !== "all") {
+          const todayStr = new Date().toISOString();
+          if (expiryFilter === "custom" && customExpiryStart && customExpiryEnd) {
+            query = query.gte('expiry_date', new Date(customExpiryStart).toISOString());
+            query = query.lte('expiry_date', new Date(customExpiryEnd).toISOString());
+          } else {
+            query = query.gte('expiry_date', todayStr);
+            if (expiryFilter === "1_day") query = query.lte('expiry_date', addDays(new Date(), 1).toISOString());
+            else if (expiryFilter === "2_days") query = query.lte('expiry_date', addDays(new Date(), 2).toISOString());
+            else if (expiryFilter === "4_days") query = query.lte('expiry_date', addDays(new Date(), 4).toISOString());
+            else if (expiryFilter === "1_week") query = query.lte('expiry_date', addWeeks(new Date(), 1).toISOString());
+            else if (expiryFilter === "2_weeks") query = query.lte('expiry_date', addWeeks(new Date(), 2).toISOString());
+            else if (expiryFilter === "3_weeks") query = query.lte('expiry_date', addWeeks(new Date(), 3).toISOString());
+            else if (expiryFilter === "4_weeks") query = query.lte('expiry_date', addWeeks(new Date(), 4).toISOString());
+            else if (expiryFilter === "1_month") query = query.lte('expiry_date', addMonths(new Date(), 1).toISOString());
+            else if (expiryFilter === "2_months") query = query.lte('expiry_date', addMonths(new Date(), 2).toISOString());
+          }
+        }
+
+        if (matchingCustomerIds) query = query.in('customer_id', matchingCustomerIds);
+        if (assigneeFilter !== "all") query = query.eq("voucher_call_assignments.assigned_to", assigneeFilter);
+        if (assignmentFilter === "assigned") query = query.eq("voucher_call_assignments.status", "pending");
+        else if (assignmentFilter === "called") query = query.in("voucher_call_assignments.status", ["called", "dnd"]);
+        else if (assignmentFilter === "unassigned") {
+          query = query.eq("status", "registered");
+          if (unassignedIds && unassignedIds.length > 0) query = query.not('id', 'in', `(${unassignedIds.join(',')})`);
+        }
+
+        if (outcomeFilter !== "all") query = query.eq("voucher_call_assignments.call_outcome", outcomeFilter);
+        if (interestFilter !== "all") query = query.eq("voucher_call_assignments.interest_level", interestFilter);
+
+        if (searchMode === 'text' && localSearch.trim()) query = query.ilike("code", `%${localSearch.trim()}%`);
+        else if (searchMode === 'range') {
+          if (fromCode.trim()) query = query.gte("code", fromCode.trim().toUpperCase());
+          if (toCode.trim()) query = query.lte("code", toCode.trim().toUpperCase());
+        }
+
+        if (selectedFilterDistributor !== "all") query = query.eq("distributor_id", selectedFilterDistributor);
+
+        if (sortOrder === 'newest') query = query.order('updated_at', { ascending: false, nullsFirst: false });
+        else if (sortOrder === 'oldest') query = query.order('updated_at', { ascending: true, nullsFirst: false });
+        else if (sortOrder === 'code_asc') query = query.order('code', { ascending: true });
+        else query = query.order('code', { ascending: false }); 
+
+        query = query.range(page * BATCH_SIZE, ((page + 1) * BATCH_SIZE) - 1);
+
+        const { data, error } = await query;
+        if (error) {
+          console.error("Export Query Blocked:", error);
+          throw error;
+        }
+        
+        allFetchedVouchers = allFetchedVouchers.concat((data as any) || []);
+        setExportProgress(Math.round(((page + 1) / totalPagesToFetch) * 100));
+      }
+
+      generateCSV(allFetchedVouchers, `Vouchers_Full_Export`);
+      toast({ title: "Export Complete", description: `Successfully exported ${allFetchedVouchers.length} records.` });
+      
+      // ✨ NEW: Close modal automatically once file is generated
+      setTimeout(() => setIsExportModalOpen(false), 800);
+
+    } catch (err: any) {
+      console.error("Bulk Export Crash:", err);
+      toast({ title: "Export Failed", description: err.message || "An unexpected error occurred during export.", variant: "destructive" });
+    } finally {
+      setIsExportingAll(false);
+      setTimeout(() => setExportProgress(0), 1000);
+    }
   };
+  if (authLoading || !appUser) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[#FAFAFA]">
+        <Loader2 className="w-8 h-8 animate-spin text-zinc-400" />
+      </div>
+    );
+  }
 
   const totalPages = Math.ceil(totalCount / pageSize);
-  const activeFiltersCount = [activeFilter, assignmentFilter, outcomeFilter, interestFilter, selectedFilterDistributor, callerFilter, assigneeFilter].filter(f => f !== 'all').length;
+  const activeFiltersCount = [activeFilter, expiryFilter, assignmentFilter, outcomeFilter, interestFilter, selectedFilterDistributor, callerFilter, assigneeFilter].filter(f => f !== 'all').length;
 
   return (
     <div className="flex flex-col min-h-screen bg-[#FAFAFA] font-sans selection:bg-zinc-200">
@@ -529,12 +717,19 @@ export default function TrackVoucherPage() {
         <Button 
             variant="outline" 
             size="sm" 
-            className="h-8 text-[13px] border-zinc-200 text-zinc-700 shadow-sm font-medium hover:bg-zinc-50" 
+            className="h-8 text-[13px] border-zinc-200 text-zinc-700 shadow-sm font-medium hover:bg-zinc-50 relative overflow-hidden" 
             onClick={() => setIsExportModalOpen(true)}
             disabled={listData.length === 0 || isExportingAll}
           >
-            {isExportingAll ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Download className="w-3.5 h-3.5 mr-2" />} 
-            {isExportingAll ? "Exporting..." : "Export"}
+            {/* Progress Bar Background */}
+            {isExportingAll && (
+              <div 
+                className="absolute inset-0 bg-indigo-100 transition-all duration-300 -z-10" 
+                style={{ width: `${exportProgress}%` }}
+              />
+            )}
+            {isExportingAll ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin text-indigo-600" /> : <Download className="w-3.5 h-3.5 mr-2" />} 
+            {isExportingAll ? `Exporting ${exportProgress}%` : "Export"}
           </Button>
         </div>
       </header>
@@ -596,7 +791,6 @@ export default function TrackVoucherPage() {
 
         <section className="bg-white border border-zinc-200 rounded-xl shadow-sm overflow-hidden animate-in fade-in duration-300">
           
-          {/* ✨ NEW SEARCH BAR UI */}
           <div className="p-2 flex flex-col lg:flex-row items-center gap-2 bg-white">
             <div className="flex w-full lg:w-auto bg-zinc-100 p-1 rounded-md shrink-0">
               <button 
@@ -665,6 +859,7 @@ export default function TrackVoucherPage() {
 
           {isFiltersOpen && (
             <div className="border-t border-zinc-100 bg-zinc-50/50 p-5 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4 animate-in slide-in-from-top-2">
+              
               <div className="space-y-1.5">
                 <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Voucher Status</Label>
                 <Select value={activeFilter} onValueChange={(val) => { setActiveFilter(val); setCurrentPage(0); }}>
@@ -680,6 +875,37 @@ export default function TrackVoucherPage() {
                     <SelectItem value="expired">Expired</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+
+              {/* TIME TO EXPIRY FILTER */}
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider text-rose-500">Expiring Within</Label>
+                <div className="flex gap-2 items-center">
+                  <Select value={expiryFilter} onValueChange={(val) => { setExpiryFilter(val); setCurrentPage(0); }}>
+                    <SelectTrigger className="h-9 bg-white border-rose-200 text-rose-600 text-[13px] shadow-sm flex-1"><SelectValue /></SelectTrigger>
+                    <SelectContent className="border-zinc-200">
+                      <SelectItem value="all" className="font-semibold">All Time</SelectItem>
+                      <SelectItem value="1_day">1 Day (Tomorrow)</SelectItem>
+                      <SelectItem value="2_days">2 Days</SelectItem>
+                      <SelectItem value="4_days">4 Days</SelectItem>
+                      <SelectItem value="1_week">1 Week</SelectItem>
+                      <SelectItem value="2_weeks">2 Weeks</SelectItem>
+                      <SelectItem value="3_weeks">3 Weeks</SelectItem>
+                      <SelectItem value="4_weeks">4 Weeks</SelectItem>
+                      <SelectItem value="1_month">1 Month</SelectItem>
+                      <SelectItem value="2_months">2 Months</SelectItem>
+                      <SelectItem value="custom" className="font-semibold text-indigo-600">Custom Date Range</SelectItem>
+                    </SelectContent>
+                  </Select>
+
+                  {expiryFilter === 'custom' && (
+                    <div className="flex items-center gap-1 bg-white border border-rose-200 rounded-md p-0.5">
+                       <Input type="date" value={customExpiryStart} onChange={e => {setCustomExpiryStart(e.target.value); setCurrentPage(0);}} className="h-8 text-[11px] border-none focus-visible:ring-0 px-2 w-28" />
+                       <span className="text-zinc-400 text-xs px-1">to</span>
+                       <Input type="date" value={customExpiryEnd} onChange={e => {setCustomExpiryEnd(e.target.value); setCurrentPage(0);}} className="h-8 text-[11px] border-none focus-visible:ring-0 px-2 w-28" />
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-1.5">
@@ -758,7 +984,7 @@ export default function TrackVoucherPage() {
               
               <div className="col-span-1 sm:col-span-2 md:col-span-4 lg:col-span-7 flex justify-end pt-2 border-t border-zinc-200/60 mt-2">
                  <Button variant="ghost" size="sm" className="text-xs text-zinc-500 hover:text-zinc-900" onClick={() => {
-                   setActiveFilter('all'); setAssignmentFilter('all'); setCallerFilter('all'); setAssigneeFilter('all'); setOutcomeFilter('all'); setInterestFilter('all'); setSelectedFilterDistributor('all'); setLocalSearch(''); setFromCode(''); setToCode('');
+                   setActiveFilter('all'); setAssignmentFilter('all'); setCallerFilter('all'); setAssigneeFilter('all'); setOutcomeFilter('all'); setInterestFilter('all'); setSelectedFilterDistributor('all'); setLocalSearch(''); setFromCode(''); setToCode(''); setExpiryFilter('all'); setCustomExpiryStart(''); setCustomExpiryEnd('');
                  }}>
                    Reset Filters
                  </Button>
@@ -790,7 +1016,7 @@ export default function TrackVoucherPage() {
           </div>
         )}
 
-        {/* ✨ MASSIVELY IMPROVED COMPACT TABLE */}
+        {/* TABLE LOGIC */}
         <div className="bg-white border border-zinc-200 rounded-xl shadow-sm overflow-hidden">
           {isListLoading ? (
             <div className="flex flex-col items-center justify-center py-32">
@@ -1140,30 +1366,67 @@ export default function TrackVoucherPage() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={isExportModalOpen} onOpenChange={setIsExportModalOpen}>
-          <DialogContent className="sm:max-w-[420px] w-[95vw] max-h-[90dvh] flex flex-col border-none shadow-xl rounded-2xl bg-white p-0">
-            <DialogHeader className="p-6 pb-2 shrink-0">
-              <DialogTitle className="flex items-center gap-2 text-zinc-800 text-lg font-semibold">
-                <Download className="w-5 h-5 text-zinc-500" /> Export Data
-              </DialogTitle>
-              <DialogDescription className="text-sm text-zinc-500 mt-1.5">
-                Choose how much data you want to export based on your current filters.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="p-6 pt-4 flex flex-col gap-3 flex-1 overflow-y-auto">
-              <Button variant="outline" className="w-full h-auto flex flex-col items-start justify-center p-4 border-zinc-200 hover:bg-zinc-50 hover:border-zinc-300 transition-all rounded-xl text-left shadow-sm" onClick={exportCurrentPage}>
-                <span className="font-semibold text-zinc-900 text-sm">Export Current Page</span>
-                <span className="text-xs text-zinc-500 font-normal mt-1">Downloads only the {listData.length} records currently visible on this screen.</span>
-              </Button>
-              
-              <Button variant="outline" className="w-full h-auto flex flex-col items-start justify-center p-4 border-zinc-200 hover:bg-zinc-50 hover:border-zinc-300 transition-all rounded-xl text-left shadow-sm" onClick={exportAllData}>
-                <span className="font-semibold text-zinc-900 text-sm">Export All Matching Records</span>
-                <span className="text-xs text-zinc-500 font-normal mt-1 whitespace-normal">Compiles all {totalCount} records from the database across all pages.</span>
-              </Button>
-            </div>
+        <Dialog open={isExportModalOpen} onOpenChange={(o) => !isExportingAll && setIsExportModalOpen(o)}>
+          <DialogContent 
+            className="sm:max-w-[420px] w-[95vw] max-h-[90dvh] flex flex-col border-none shadow-xl rounded-2xl bg-white p-0 overflow-hidden"
+            onInteractOutside={(e) => { if (isExportingAll) e.preventDefault(); }}
+            onEscapeKeyDown={(e) => { if (isExportingAll) e.preventDefault(); }}
+          >
+            {isExportingAll ? (
+              <div className="p-8 flex flex-col items-center justify-center text-center space-y-5 animate-in fade-in zoom-in-95">
+                <div className="relative">
+                  <div className="w-16 h-16 border-4 border-indigo-100 rounded-full"></div>
+                  <div className="w-16 h-16 border-4 border-indigo-600 rounded-full border-t-transparent animate-spin absolute top-0 left-0"></div>
+                  <Download className="w-6 h-6 text-indigo-600 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
+                </div>
+                
+                <div>
+                  <DialogTitle className="text-lg font-bold text-zinc-900">Compiling Export...</DialogTitle>
+                  <p className="text-xs font-medium text-zinc-500 mt-1">Fetching records from the database in secure chunks.</p>
+                </div>
+
+                <div className="w-full space-y-2 mt-2">
+                  <div className="flex justify-between text-xs font-bold">
+                    <span className="text-zinc-600">Progress</span>
+                    <span className="text-indigo-600">{exportProgress}%</span>
+                  </div>
+                  <div className="w-full bg-zinc-100 rounded-full h-3 overflow-hidden shadow-inner">
+                    <div className="bg-indigo-600 h-full transition-all duration-300 rounded-full" style={{ width: `${exportProgress}%` }} />
+                  </div>
+                </div>
+                
+                <div className="flex items-start gap-2 bg-rose-50 border border-rose-100 p-3 rounded-lg mt-2 text-left">
+                  <ShieldAlert className="w-4 h-4 text-rose-500 shrink-0 mt-0.5" />
+                  <p className="text-[11px] font-bold text-rose-700 leading-tight">
+                    Please do not refresh or close this tab. Navigating away will abort the export process.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <DialogHeader className="p-6 pb-2 shrink-0">
+                  <DialogTitle className="flex items-center gap-2 text-zinc-800 text-lg font-semibold">
+                    <Download className="w-5 h-5 text-zinc-500" /> Export Data
+                  </DialogTitle>
+                  <DialogDescription className="text-sm text-zinc-500 mt-1.5">
+                    Choose how much data you want to export based on your current filters.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="p-6 pt-4 flex flex-col gap-3 flex-1 overflow-y-auto">
+                  <Button variant="outline" className="w-full h-auto flex flex-col items-start justify-center p-4 border-zinc-200 hover:bg-zinc-50 hover:border-zinc-300 transition-all rounded-xl text-left shadow-sm" onClick={exportCurrentPage}>
+                    <span className="font-semibold text-zinc-900 text-sm">Export Current Page</span>
+                    <span className="text-xs text-zinc-500 font-normal mt-1">Downloads only the {listData.length} records currently visible on this screen.</span>
+                  </Button>
+                  
+                  <Button variant="outline" className="w-full h-auto flex flex-col items-start justify-center p-4 border-zinc-200 hover:bg-zinc-50 hover:border-zinc-300 transition-all rounded-xl text-left shadow-sm" onClick={exportAllData}>
+                    <span className="font-semibold text-zinc-900 text-sm">Export All Matching Records</span>
+                    <span className="text-xs text-zinc-500 font-normal mt-1 whitespace-normal">Compiles all {totalCount} records from the database across all pages using a chunked stream.</span>
+                  </Button>
+                </div>
+              </>
+            )}
           </DialogContent>
         </Dialog>
-
         <WhatsAppSenderModal isOpen={isSenderModalOpen} onClose={() => setIsSenderModalOpen(false)} recipients={messageRecipients} defaultTemplateName={activeTemplateContext === "welcome" ? "welcome_registered_voucher" : "voucher_expiry_reminder"} />
       </main>
     </div>
