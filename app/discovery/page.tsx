@@ -74,7 +74,7 @@ interface Customer {
   invoices?: any[];
   vouchers?: any[];
   activity_timeline?: any[];
-  gift_history?: any[]; // ✨ NEW: Track Past Gifts
+  gift_history?: any[]; 
   [key: string]: any;
 }
 
@@ -101,7 +101,7 @@ const formatToDisplayDate = (dbDateStr?: string | null) => {
   if (!dbDateStr) return '';
   const parts = dbDateStr.split('-');
   if (parts.length === 3) {
-    return `${parts[2]}-${parts[1]}-${parts[0]}`; // Convert YYYY-MM-DD to DD-MM-YYYY
+    return `${parts[2]}-${parts[1]}-${parts[0]}`; 
   }
   return dbDateStr;
 };
@@ -200,7 +200,6 @@ export default function DiscoveryPage() {
     if (cleanPhone.length === 10) {
       setIsSearchingCust(true);
       try {
-        // 1. Fetch Core Profile
         const { data: custData } = await supabase
           .from('customers')
           .select('*')
@@ -209,7 +208,6 @@ export default function DiscoveryPage() {
           .maybeSingle();
         
         if (custData) {
-          // 2. ✨ Fetch Insights INCLUDING Gift History in parallel
           const [invRes, vouchRes, giftRes] = await Promise.all([
             supabase.from('invoices').select('final_total, invoice_number').eq('customer_id', custData.id),
             supabase.from('vouchers').select('status, code').eq('customer_id', custData.id),
@@ -218,7 +216,7 @@ export default function DiscoveryPage() {
 
           custData.invoices = invRes.data || [];
           custData.vouchers = vouchRes.data || [];
-          custData.gift_history = giftRes.data || []; // Load the gift history
+          custData.gift_history = giftRes.data || []; 
           
           setExistingCustomer(custData);
         } else {
@@ -249,7 +247,6 @@ export default function DiscoveryPage() {
     setNewCustForm(prev => ({ ...prev, [field]: formatted }));
   }
 
-  // ✨ PROFILE COMPLETION ENGINE
   const completionStats = useMemo(() => {
     if (!existingCustomer) return { percentage: 0, missing: [] };
     
@@ -315,10 +312,9 @@ export default function DiscoveryPage() {
 
       if (error) throw error;
       
-      // Merge insights back in so UI doesn't drop them
       data.invoices = existingCustomer.invoices;
       data.vouchers = existingCustomer.vouchers;
-      data.gift_history = existingCustomer.gift_history; // Preserve history
+      data.gift_history = existingCustomer.gift_history; 
       
       setExistingCustomer(data);
       setIsEditModalOpen(false);
@@ -341,13 +337,12 @@ export default function DiscoveryPage() {
 
         if (giftErr) throw giftErr;
 
-        // ✨ UPDATE: Insert the user ID who gave the gift
         await supabase.from('customer_gifts_history').insert({
           company_id: appUser?.company_id,
           customer_id: customerId,
           warehouse_id: selectedLocation,
           gift_name: selectedGift,
-          issued_by: appUser?.id || appUser?.user_id // Logs the active ERP User
+          issued_by: appUser?.id || appUser?.user_id 
         });
 
         await supabase.from('customers').update({ 
@@ -356,7 +351,6 @@ export default function DiscoveryPage() {
 
         toast.success(`${selectedGift} successfully issued and logged!`);
         
-        // ✨ Automatically add the new gift to the UI history so the warning count updates instantly
         if (existingCustomer) {
           setExistingCustomer(prev => prev ? {
              ...prev, 
@@ -542,7 +536,6 @@ export default function DiscoveryPage() {
     finalPrice = Math.round(basePrice + gstAmount)
   }
 
-  // ✨ NEW: Calculate how many times they received the currently selected gift
   const pastGiftCount = existingCustomer?.gift_history?.filter((g: any) => g.gift_name === selectedGift).length || 0;
 
   return (
@@ -736,7 +729,7 @@ export default function DiscoveryPage() {
                   </div>
                 )}
 
-                {/* Gifting Selector (Only shows if valid number & store selected) */}
+                {/* Gifting Selector */}
                 {phoneInput.length === 10 && (!selectedLocation || selectedLocation === 'ALL' ? (
                   <div className="w-full sm:w-auto h-10 px-4 flex items-center justify-center bg-slate-50 border border-slate-200 rounded-lg text-xs font-semibold text-slate-400 shrink-0 mt-3 sm:mt-0">
                     Select branch to issue gifts
@@ -744,9 +737,17 @@ export default function DiscoveryPage() {
                 ) : (
                   <div className="w-full sm:w-48 shrink-0 mt-3 sm:mt-0 relative">
                     <Select value={selectedGift} onValueChange={setSelectedGift}>
-                      <SelectTrigger className="h-10 border-slate-200 bg-white focus:ring-amber-500">
+                      <SelectTrigger className="h-10 border-slate-200 bg-white focus:ring-amber-500 relative">
                         <Gift className={cn("w-4 h-4 mr-2", selectedGift !== 'none' ? "text-amber-500" : "text-slate-400")} />
                         <SelectValue placeholder="Issue Gift..." />
+                        
+                        {/* Status Dot on Trigger if Warned */}
+                        {selectedGift !== 'none' && pastGiftCount > 0 && (
+                          <div className="absolute top-0 right-0 -mt-1 -mr-1 w-2.5 h-2.5 bg-amber-500 rounded-full animate-ping" />
+                        )}
+                        {selectedGift !== 'none' && pastGiftCount > 0 && (
+                          <div className="absolute top-0 right-0 -mt-1 -mr-1 w-2.5 h-2.5 bg-amber-500 rounded-full border border-white" />
+                        )}
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="none" className="text-xs font-semibold text-slate-500">No Gift</SelectItem>
@@ -764,11 +765,14 @@ export default function DiscoveryPage() {
                       </SelectContent>
                     </Select>
 
-                    {/* ✨ NEW: Historical Gift Warning */}
+                    {/* Historical Gift Warning Block */}
                     {selectedGift !== 'none' && pastGiftCount > 0 && (
-                      <p className="absolute -bottom-5 left-0 text-[9px] font-bold text-amber-600 flex items-center gap-1 animate-in fade-in whitespace-nowrap">
-                        <AlertCircle className="w-3 h-3" /> Given {pastGiftCount} time{pastGiftCount > 1 ? 's' : ''} previously
-                      </p>
+                      <div className="absolute top-full left-0 mt-1 w-full bg-amber-50 border border-amber-200 rounded-md p-1.5 shadow-sm animate-in fade-in slide-in-from-top-1 z-50 flex items-start gap-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+                        <p className="text-[10px] font-bold text-amber-700 leading-tight">
+                          Customer already received this {pastGiftCount} time{pastGiftCount > 1 ? 's' : ''}. Proceed carefully.
+                        </p>
+                      </div>
                     )}
                   </div>
                 ))}
@@ -817,7 +821,7 @@ export default function DiscoveryPage() {
         </Card>
 
         {/* Search Command Bar (For Products) */}
-        <div className="bg-white border border-slate-200 rounded-xl p-2 shadow-sm flex flex-col sm:flex-row gap-2 items-center relative z-20">
+        <div className="bg-white border border-slate-200 rounded-xl p-2 shadow-sm flex flex-col sm:flex-row gap-2 items-center relative z-20 mt-6">
           <div className="relative flex-1 w-full flex gap-2">
             <div className="relative flex-1">
               <Input 
@@ -847,7 +851,7 @@ export default function DiscoveryPage() {
         </div>
 
         {product ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-300 zoom-in-95">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in duration-300 zoom-in-95 mt-6">
             
             {/* ========================================= */}
             {/* THERMAL RECEIPT 1: SPECIFICATIONS         */}
@@ -1019,7 +1023,7 @@ export default function DiscoveryPage() {
 
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center py-24 text-slate-400 space-y-4 bg-white border border-slate-200 rounded-xl shadow-sm max-w-2xl mx-auto">
+          <div className="flex flex-col items-center justify-center py-24 text-slate-400 space-y-4 bg-white border border-slate-200 rounded-xl shadow-sm max-w-2xl mx-auto mt-6">
             <div className="h-16 w-16 bg-slate-50 rounded-full flex items-center justify-center border border-slate-100">
               <QrCode className="w-8 h-8 text-slate-300" />
             </div>
