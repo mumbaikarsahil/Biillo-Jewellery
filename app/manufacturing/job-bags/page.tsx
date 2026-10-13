@@ -38,9 +38,13 @@ import {
 import { Label } from "@/components/ui/label";
 
 // Standard Jewelry Dictionaries
-const STANDARD_CATEGORIES = ['Ring', 'Necklace', 'Earring', 'Bracelet', 'Bangle', 'Chain', 'Pendant', 'Mangalsutra', 'Nose Pin', 'Set'];
+// Standard Jewelry Dictionaries
+const STANDARD_CATEGORIES = [
+  'BANGLE', 'BRACELET', 'GENTS RING', 'GENTS STUD', 
+  'LADIES RING', 'NECKLACE SET', 'NOSEPIN', 
+  'PENDANT', 'TANMANIA', 'TOPS'
+];
 const STANDARD_DESIGNS = ['CUSTOM-01', 'Casting-Std', 'Handmade-Classic', 'Kundan-Work', 'Temple-Jewelry', 'Polki-Set', 'CNC-Design'];
-
 export default function JobBagPage() {
   const { appUser } = useAuth();
   const router = useRouter();
@@ -90,9 +94,9 @@ export default function JobBagPage() {
     if (!appUser) return;
     setLoading(true);
     try {
-      // 🚀 FIXED: Added inventory_items(net_weight_g) to fetch the actual finished net weight
+      // ✨ FETCH UPGRADE: Pulling job_bag_items to count pending vs received and check for store requests
       const [jbRes, kRes, ordRes, repRes, restockRes] = await Promise.all([
-        supabase.from("job_bags").select("*, karigars(full_name), inventory_items(net_weight_g)").eq("company_id", appUser.company_id),
+        supabase.from("job_bags").select("*, karigars(full_name), inventory_items(net_weight_g), job_bag_items(id, status, custom_order_id, store_restock_id)").eq("company_id", appUser.company_id),
         supabase.from("karigars").select("*").eq("company_id", appUser.company_id).eq("is_active", true),
         supabase.from("custom_orders").select("*, origin:origin_warehouse_id(name)").eq("company_id", appUser.company_id).eq("status", "pending_manufacturing"),
         supabase.from("repair_tickets").select("*, origin:warehouses!repair_tickets_origin_warehouse_id_fkey(name)").eq("company_id", appUser.company_id).eq("status", "received_at_ho"),
@@ -120,39 +124,45 @@ export default function JobBagPage() {
     fetchData();
   }, [fetchData]);
 
-  // 🚀 CORE ENGINE: Calculates payout strictly on ACTUAL generated inventory net weight
+  // 🚀 CORE ENGINE: Calculates payout & computes item statuses
   const enrichedJobBags = useMemo(() => {
     return jobBags.map(bag => {
       const karigar = karigars.find(k => k.id === bag.karigar_id);
       const rate = Number(karigar?.default_labor_rate) || 350;
       const laborType = karigar?.labor_type || 'per_gram';
       
-      // Calculate actual generated net weight from linked inventory items
       const actualNetWeight = bag.inventory_items?.reduce((sum: number, item: any) => sum + (Number(item.net_weight_g) || 0), 0) || 0;
-      
-      // Use actual net weight if items exist, otherwise fallback to expected weight for forecasting
       const isFinalWeight = actualNetWeight > 0;
       const weightUsed = isFinalWeight ? actualNetWeight : (Number(bag.gold_expected_weight_g) || 0);
 
       let payout = 0;
-      if (laborType === 'per_piece' || laborType === 'fixed') {
-         payout = rate; 
-      } else {
-         payout = weightUsed * rate; 
-      }
+      if (laborType === 'per_piece' || laborType === 'fixed') payout = rate; 
+      else payout = weightUsed * rate; 
+
+      // ✨ NEW: Calculate Item Tracking Stats
+      const totalItems = bag.job_bag_items?.length || 0;
+      const receivedItems = bag.job_bag_items?.filter((i: any) => i.status === 'received').length || 0;
+      const pendingItems = totalItems - receivedItems;
+
+      let computedStatus = bag.status;
+      if (bag.status === 'in_progress' && receivedItems > 0 && pendingItems > 0) computedStatus = 'partially_received';
+      if (bag.status === 'open' && totalItems > 0) computedStatus = 'awaiting_issue';
 
       return {
         ...bag,
         payout,
-        isFinalWeight, // Flag to show if payout is estimated or finalized
+        isFinalWeight, 
         rate_display: `₹${rate}/${laborType === 'per_piece' || laborType === 'fixed' ? 'pc' : 'g'}`,
         weight_used: weightUsed,
-        labor_type: laborType
+        labor_type: laborType,
+        totalItems,
+        receivedItems,
+        pendingItems,
+        computedStatus
       };
     });
   }, [jobBags, karigars]);
 
-  // 🚀 KARIGAR LEDGER CALCULATIONS
   const karigarLedgers = useMemo(() => {
     return karigars.map(karigar => {
       const rate = Number(karigar.default_labor_rate) || 350; 
@@ -162,7 +172,6 @@ export default function JobBagPage() {
       const pendingBags = kBags.filter(jb => ['open', 'in_progress'].includes(jb.status));
       const readyBags = kBags.filter(jb => jb.status === 'completed');
 
-      // Weights are now based on actual Net Weight calculation above
       const pendingWeight = pendingBags.reduce((sum, jb) => sum + jb.weight_used, 0);
       const readyWeight = readyBags.reduce((sum, jb) => sum + jb.weight_used, 0);
       const totalWeight = pendingWeight + readyWeight;
@@ -171,13 +180,9 @@ export default function JobBagPage() {
 
       return {
         ...karigar,
-        rate,
-        laborType,
+        rate, laborType,
         activeJobs: kBags.length,
-        pendingWeight,
-        readyWeight,
-        totalWeight,
-        estimatedPay
+        pendingWeight, readyWeight, totalWeight, estimatedPay
       };
     }).filter(k => k.activeJobs > 0);
   }, [enrichedJobBags, karigars]);
@@ -194,7 +199,7 @@ export default function JobBagPage() {
   const handleOpenSheet = (open: boolean) => {
     setIsOpen(open);
     if (open && !form.job_bag_number) generateJobRef();
-    if (!open) setPendingLink(null); // ✨ Clear if aborted
+    if (!open) setPendingLink(null); 
   };
 
   async function handleCreate() {
@@ -221,7 +226,6 @@ export default function JobBagPage() {
       if (error) throw error;
       toast.success("Job Bag Created Successfully");
       
-      // ✨ NEW: Append the pending routing link to the URL!
       let url = `/manufacturing/job-bags/${data}`;
       if (pendingLink) {
         if (pendingLink.type === 'order') url += `?custom_order=${pendingLink.id}`;
@@ -247,8 +251,6 @@ export default function JobBagPage() {
       let targetBagId = routingBagId;
       
       if (targetBagId === 'new') {
-        // ✨ FIX: Instead of silently failing to insert a bag without a Karigar, 
-        // we route the user to the Job Bag creation sheet with pre-filled data!
         let category = '';
         let designCode = '';
         let goldExpected = '';
@@ -268,7 +270,6 @@ export default function JobBagPage() {
           setIsRestocksModalOpen(false);
         }
 
-        // Open custom inputs if they don't match standard lists
         if (category && !STANDARD_CATEGORIES.includes(category)) setShowCustomCategory(true);
         if (designCode && !STANDARD_DESIGNS.includes(designCode)) setShowCustomDesign(true);
 
@@ -281,10 +282,9 @@ export default function JobBagPage() {
 
         setPendingLink({ type, id: item.id });
         handleOpenSheet(true);
-        return; // Stop execution here, let the user finish via the UI Sheet
+        return; 
       }
 
-      // If attaching to an EXISTING bag, continue routing directly
       if (type === 'order') {
         setIsOrdersModalOpen(false);
         router.push(`/manufacturing/job-bags/${targetBagId}?custom_order=${item.id}`);
@@ -303,16 +303,30 @@ export default function JobBagPage() {
     }
   }
 
-  // 🚀 GLOBAL FILTERING 
+  // 🚀 GLOBAL FILTERING & CUSTOM SORTING
   const baseFiltered = enrichedJobBags
     .filter((j) => {
       const matchSearch = j.job_bag_number.toLowerCase().includes(search.toLowerCase()) || 
                           (j.design_code && j.design_code.toLowerCase().includes(search.toLowerCase()));
-      const matchStatus = statusFilter === "all" ? true : j.status === statusFilter;
+      
+      let matchStatus = true;
+      if (statusFilter !== "all") {
+         if (statusFilter === 'partially_received') matchStatus = j.computedStatus === 'partially_received';
+         else if (statusFilter === 'awaiting_issue') matchStatus = j.computedStatus === 'awaiting_issue' || j.status === 'open';
+         else matchStatus = j.status === statusFilter;
+      }
+
       const matchKarigar = karigarFilter === "all" ? true : j.karigar_id === karigarFilter;
       return matchSearch && matchStatus && matchKarigar;
     })
     .sort((a, b) => {
+      // ✨ SORT FIX: Store requests automatically get pushed to the bottom of the list
+      const aIsStoreReq = a.job_bag_items?.some((i: any) => i.custom_order_id || i.store_restock_id) || false;
+      const bIsStoreReq = b.job_bag_items?.some((i: any) => i.custom_order_id || i.store_restock_id) || false;
+      
+      if (aIsStoreReq && !bIsStoreReq) return 1;
+      if (!aIsStoreReq && bIsStoreReq) return -1;
+
       const dateA = new Date(a.created_at).getTime();
       const dateB = new Date(b.created_at).getTime();
       return dateSort === "desc" ? dateB - dateA : dateA - dateB;
@@ -321,10 +335,12 @@ export default function JobBagPage() {
   const activeBags = baseFiltered.filter(j => ['open', 'in_progress'].includes(j.status));
   const historyBags = baseFiltered.filter(j => ['completed', 'closed'].includes(j.status));
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string, computedStatus: string) => {
+    if (computedStatus === 'partially_received') return <Badge variant="outline" className="bg-amber-50 text-amber-600 border-amber-200/50 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">Partial Recv.</Badge>;
+    if (computedStatus === 'awaiting_issue' || status === 'open') return <Badge variant="outline" className="bg-blue-50 text-blue-600 border-blue-200/50 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">Awaiting Issue</Badge>;
+    
     switch (status) {
-      case "open": return <Badge variant="outline" className="bg-blue-50 text-blue-600 border-blue-200/50 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">Awaiting Issue</Badge>;
-      case "in_progress": return <Badge variant="outline" className="bg-amber-50 text-amber-600 border-amber-200/50 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">In Fabrication</Badge>;
+      case "in_progress": return <Badge variant="outline" className="bg-purple-50 text-purple-600 border-purple-200/50 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">In Fabrication</Badge>;
       case "completed": return <Badge variant="outline" className="bg-emerald-50 text-emerald-600 border-emerald-200/50 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">Completed</Badge>;
       case "closed": return <Badge variant="outline" className="bg-gray-100 text-gray-500 border-gray-200 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">Archived</Badge>;
       default: return <Badge variant="secondary" className="bg-gray-50 text-gray-600 border-gray-200/60 text-[10px] font-bold px-2 py-0.5 uppercase tracking-widest rounded-lg">{status}</Badge>;
@@ -357,12 +373,12 @@ export default function JobBagPage() {
           <Table>
             <TableHeader className="bg-gray-50/80">
               <TableRow className="hover:bg-transparent border-gray-200/60">
-                <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-6 h-12">Job Ref</TableHead>
+                <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-6 h-12">Job Ref & Dates</TableHead>
                 <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12">Specs & Category</TableHead>
                 <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12">Artisan</TableHead>
-                <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12">Net Weight</TableHead>
+                <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12">Weights & Items</TableHead>
                 <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12 text-center">Status</TableHead>
-                <TableHead className="text-[11px] font-black uppercase text-blue-700 tracking-widest px-4 h-12 text-right">Payout</TableHead>
+                <TableHead className="text-[11px] font-bold uppercase text-blue-700 tracking-widest px-4 h-12 text-right">Payout</TableHead>
                 <TableHead className="w-[60px] h-12"></TableHead>
               </TableRow>
             </TableHeader>
@@ -373,8 +389,12 @@ export default function JobBagPage() {
                   className="hover:bg-gray-50/50 transition-colors border-b border-gray-100 last:border-0 cursor-pointer group"
                   onClick={() => router.push(`/manufacturing/job-bags/${job.id}`)}
                 >
-                  <TableCell className="px-6 py-4 font-mono font-bold text-sm text-gray-900 tracking-tight group-hover:text-blue-600 transition-colors">
-                     {job.job_bag_number}
+                  <TableCell className="px-6 py-4">
+                     <div className="font-mono font-bold text-[14px] text-gray-900 tracking-tight group-hover:text-blue-600 transition-colors">{job.job_bag_number}</div>
+                     <div className="text-[10px] text-gray-500 mt-1">
+                       <span className="font-bold text-gray-400">Disp:</span> {job.issue_date ? format(new Date(job.issue_date), 'dd/MM/yy') : 'TBD'} <br/>
+                       <span className="font-bold text-gray-400">Ret:</span> {job.expected_return_date ? format(new Date(job.expected_return_date), 'dd/MM/yy') : 'TBD'}
+                     </div>
                   </TableCell>
                   <TableCell className="px-4">
                      <div className="text-[13px] font-bold text-gray-900">{job.product_category}</div>
@@ -383,22 +403,22 @@ export default function JobBagPage() {
                   <TableCell className="px-4">
                      <div className="flex items-center gap-2.5">
                        <div className="h-7 w-7 rounded-full bg-gray-100 flex items-center justify-center text-gray-500"><User className="h-3.5 w-3.5" strokeWidth={1.5} /></div>
-                       <span className="text-[13px] font-semibold text-gray-700">{job.karigars?.full_name}</span>
+                       <span className="text-[13px] font-bold text-gray-700">{job.karigars?.full_name}</span>
                      </div>
                   </TableCell>
                   <TableCell className="px-4">
                      <div className={`font-mono text-[13px] font-bold ${job.isFinalWeight ? 'text-emerald-600' : 'text-amber-600'}`}>
                        {job.weight_used.toFixed(3)}g
                      </div>
-                     <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">
-                       {job.isFinalWeight ? 'Actual Net' : 'Expected'}
+                     <div className="text-[10px] font-bold text-gray-500 mt-0.5">
+                       {job.receivedItems} <span className="font-medium text-gray-400">Recv</span> / {job.pendingItems} <span className="font-medium text-gray-400">Pend</span>
                      </div>
                   </TableCell>
                   <TableCell className="px-4 text-center">
-                     {getStatusBadge(job.status)}
+                     {getStatusBadge(job.status, job.computedStatus)}
                   </TableCell>
                   <TableCell className="px-4 text-right">
-                     <div className={`text-[14px] font-black ${job.isFinalWeight ? 'text-emerald-600' : 'text-blue-700'}`}>
+                     <div className={`text-[14px] font-bold ${job.isFinalWeight ? 'text-emerald-600' : 'text-blue-700'}`}>
                        ₹ {job.payout.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                      </div>
                      <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest mt-0.5">
@@ -429,8 +449,11 @@ export default function JobBagPage() {
                     <div className="space-y-1">
                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">Reference</p>
                        <p className="text-[15px] font-mono font-bold text-gray-900 mt-1">{job.job_bag_number}</p>
+                       <div className="text-[10px] text-gray-500 mt-1">
+                         <span className="font-bold">Disp:</span> {job.issue_date ? format(new Date(job.issue_date), 'dd/MM/yy') : 'TBD'} | <span className="font-bold">Ret:</span> {job.expected_return_date ? format(new Date(job.expected_return_date), 'dd/MM/yy') : 'TBD'}
+                       </div>
                     </div>
-                    {getStatusBadge(job.status)}
+                    {getStatusBadge(job.status, job.computedStatus)}
                  </div>
 
                  <div className="p-3.5 rounded-xl bg-gray-50 border border-gray-100 flex justify-between items-center">
@@ -444,7 +467,7 @@ export default function JobBagPage() {
                       </span>
                     </div>
                     <div className="text-right">
-                      <span className={`block text-sm font-black ${job.isFinalWeight ? 'text-emerald-600' : 'text-blue-700'}`}>
+                      <span className={`block text-sm font-bold ${job.isFinalWeight ? 'text-emerald-600' : 'text-blue-700'}`}>
                         ₹ {job.payout.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                       </span>
                       <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{job.rate_display}</span>
@@ -455,9 +478,9 @@ export default function JobBagPage() {
                     <div className="flex flex-col gap-1.5">
                        <div className="flex items-center gap-2">
                          <div className="h-6 w-6 rounded-full bg-gray-200 flex items-center justify-center text-gray-500"><User className="h-3 w-3" strokeWidth={1.5} /></div>
-                         <span className="font-semibold text-gray-900">{job.karigars?.full_name}</span>
+                         <span className="font-bold text-gray-900">{job.karigars?.full_name}</span>
                        </div>
-                       <span className="text-[10px] font-medium ml-8 text-gray-400">{format(new Date(job.created_at), 'dd MMM yyyy')}</span>
+                       <span className="text-[10px] font-bold ml-8 text-gray-400">Items: {job.receivedItems} Recv / {job.pendingItems} Pend</span>
                     </div>
                     <ChevronRight className="h-5 w-5 text-gray-300" strokeWidth={1.5} />
                  </div>
@@ -492,17 +515,17 @@ export default function JobBagPage() {
         <div className="flex items-center gap-1 overflow-x-auto custom-scrollbar py-2 px-1">
           <Button variant="ghost" size="sm" className="h-9 px-3 text-[13px] font-bold text-gray-600 hover:text-blue-600 hover:bg-blue-50 relative shrink-0 rounded-xl transition-colors" onClick={() => setIsRestocksModalOpen(true)}>
             <div className="flex items-center"><Package className="h-[18px] w-[18px] sm:mr-2" strokeWidth={1.5} /> <span className="hidden sm:inline">Restocks</span></div>
-            {pendingRestocks.length > 0 && <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black border-2 border-white shadow-sm z-10">{pendingRestocks.length}</span>}
+            {pendingRestocks.length > 0 && <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold border-2 border-white shadow-sm z-10">{pendingRestocks.length}</span>}
           </Button>
 
           <Button variant="ghost" size="sm" className="h-9 px-3 text-[13px] font-bold text-gray-600 hover:text-purple-600 hover:bg-purple-50 relative shrink-0 rounded-xl transition-colors" onClick={() => setIsOrdersModalOpen(true)}>
             <div className="flex items-center"><Bell className="h-[18px] w-[18px] sm:mr-2" strokeWidth={1.5} /> <span className="hidden sm:inline">Store Requests</span></div>
-            {pendingOrders.length > 0 && <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black border-2 border-white shadow-sm z-10">{pendingOrders.length}</span>}
+            {pendingOrders.length > 0 && <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold border-2 border-white shadow-sm z-10">{pendingOrders.length}</span>}
           </Button>
 
           <Button variant="ghost" size="sm" className="h-9 px-3 text-[13px] font-bold text-gray-600 hover:text-amber-600 hover:bg-amber-50 relative shrink-0 rounded-xl transition-colors" onClick={() => setIsRepairsModalOpen(true)}>
             <div className="flex items-center"><Wrench className="h-[18px] w-[18px] sm:mr-2" strokeWidth={1.5} /> <span className="hidden sm:inline">Repairs</span></div>
-            {pendingRepairs.length > 0 && <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-black border-2 border-white shadow-sm z-10">{pendingRepairs.length}</span>}
+            {pendingRepairs.length > 0 && <span className="absolute -top-1.5 -right-1.5 flex items-center justify-center h-4 min-w-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold border-2 border-white shadow-sm z-10">{pendingRepairs.length}</span>}
           </Button>
 
           <Separator orientation="vertical" className="h-5 mx-1.5 bg-gray-200 shrink-0 hidden sm:block" />
@@ -604,9 +627,9 @@ export default function JobBagPage() {
                   <div className="space-y-2">
                     <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Target Karigar</Label>
                     <Select onValueChange={(v) => setForm({ ...form, karigar_id: v })}>
-                      <SelectTrigger className="h-10 rounded-xl border-gray-200/60 bg-gray-50 text-sm font-semibold"><SelectValue placeholder="Identify Karigar..." /></SelectTrigger>
+                      <SelectTrigger className="h-10 rounded-xl border-gray-200/60 bg-gray-50 text-sm font-bold"><SelectValue placeholder="Identify Karigar..." /></SelectTrigger>
                       <SelectContent className="rounded-xl p-1">
-                        {karigars.map((k) => <SelectItem key={k.id} value={k.id} className="py-2.5 text-sm font-semibold">{k.full_name}</SelectItem>)}
+                        {karigars.map((k) => <SelectItem key={k.id} value={k.id} className="py-2.5 text-sm font-bold">{k.full_name}</SelectItem>)}
                       </SelectContent>
                     </Select>
                   </div>
@@ -614,11 +637,11 @@ export default function JobBagPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Dispatch Date</Label>
-                      <Input type="date" className="h-10 text-[13px] font-medium border-gray-200/60 bg-gray-50 rounded-xl px-3" value={form.issue_date} onChange={(e) => setForm({ ...form, issue_date: e.target.value })} />
+                      <Input type="date" className="h-10 text-[13px] font-bold border-gray-200/60 bg-gray-50 rounded-xl px-3" value={form.issue_date} onChange={(e) => setForm({ ...form, issue_date: e.target.value })} />
                     </div>
                     <div className="space-y-2">
                       <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Expected Return</Label>
-                      <Input type="date" className="h-10 text-[13px] font-medium border-gray-200/60 bg-gray-50 rounded-xl px-3" value={form.expected_return_date} onChange={(e) => setForm({ ...form, expected_return_date: e.target.value })} />
+                      <Input type="date" className="h-10 text-[13px] font-bold border-gray-200/60 bg-gray-50 rounded-xl px-3" value={form.expected_return_date} onChange={(e) => setForm({ ...form, expected_return_date: e.target.value })} />
                     </div>
                   </div>
                 </div>
@@ -636,19 +659,19 @@ export default function JobBagPage() {
         <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
           <div className="p-5 rounded-2xl border border-gray-200/60 bg-white shadow-sm flex flex-col justify-center">
             <p className="text-[11px] font-bold uppercase tracking-widest text-gray-500 flex items-center mb-1"><HardHat className="w-3.5 h-3.5 mr-1.5" /> Active Artisans</p>
-            <p className="text-2xl font-black tracking-tight text-gray-900">{karigarLedgers.length}</p>
+            <p className="text-2xl font-bold tracking-tight text-gray-900">{karigarLedgers.length}</p>
           </div>
           <div className="p-5 rounded-2xl border border-amber-100 bg-amber-50/50 shadow-sm flex flex-col justify-center">
             <p className="text-[11px] font-bold uppercase tracking-widest text-amber-600 flex items-center mb-1"><Scale className="w-3.5 h-3.5 mr-1.5" /> Pending Gold</p>
-            <p className="text-2xl font-black tracking-tight text-amber-700">{totalPendingGrams.toFixed(2)} <span className="text-sm font-bold text-amber-600/50">g</span></p>
+            <p className="text-2xl font-bold tracking-tight text-amber-700">{totalPendingGrams.toFixed(2)} <span className="text-sm font-bold text-amber-600/50">g</span></p>
           </div>
           <div className="p-5 rounded-2xl border border-blue-100 bg-blue-50/50 shadow-sm flex flex-col justify-center">
             <p className="text-[11px] font-bold uppercase tracking-widest text-blue-600 flex items-center mb-1"><Package className="w-3.5 h-3.5 mr-1.5" /> Active Job Bags</p>
-            <p className="text-2xl font-black tracking-tight text-blue-700">{activeBags.length}</p>
+            <p className="text-2xl font-bold tracking-tight text-blue-700">{activeBags.length}</p>
           </div>
           <div className="p-5 rounded-2xl border border-indigo-100 bg-indigo-50/50 shadow-sm flex flex-col justify-center">
             <p className="text-[11px] font-bold uppercase tracking-widest text-indigo-600 flex items-center mb-1"><Banknote className="w-3.5 h-3.5 mr-1.5" /> Est. Payouts Owed</p>
-            <p className="text-2xl font-black tracking-tight text-indigo-700">₹ {totalPendingPayout.toLocaleString('en-IN')}</p>
+            <p className="text-2xl font-bold tracking-tight text-indigo-700">₹ {totalPendingPayout.toLocaleString('en-IN')}</p>
           </div>
         </div>
 
@@ -657,7 +680,7 @@ export default function JobBagPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 group-focus-within:text-blue-500 transition-colors" />
             <Input
               placeholder="Search by Job ID, Category, or Design..."
-              className="pl-9 h-10 text-[13px] bg-gray-50 border-transparent focus-visible:bg-white focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 rounded-xl transition-all font-medium"
+              className="pl-9 h-10 text-[13px] bg-gray-50 border-transparent focus-visible:bg-white focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 rounded-xl transition-all font-bold"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -671,7 +694,7 @@ export default function JobBagPage() {
                 </SelectTrigger>
                 <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
                   <SelectItem value="all" className="text-xs font-bold text-blue-600 rounded-lg py-2">All Karigars</SelectItem>
-                  {karigars.map(k => <SelectItem key={k.id} value={k.id} className="text-xs font-medium rounded-lg py-2">{k.full_name}</SelectItem>)}
+                  {karigars.map(k => <SelectItem key={k.id} value={k.id} className="text-xs font-bold rounded-lg py-2">{k.full_name}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -683,10 +706,11 @@ export default function JobBagPage() {
                 </SelectTrigger>
                 <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
                   <SelectItem value="all" className="text-xs font-bold text-blue-600 rounded-lg py-2">All Statuses</SelectItem>
-                  <SelectItem value="open" className="text-xs font-medium rounded-lg py-2">Awaiting Issue</SelectItem>
-                  <SelectItem value="in_progress" className="text-xs font-medium rounded-lg py-2">Under Fabrication</SelectItem>
-                  <SelectItem value="completed" className="text-xs font-medium rounded-lg py-2">Audit Ready / Completed</SelectItem>
-                  <SelectItem value="closed" className="text-xs font-medium rounded-lg py-2">Archived / History</SelectItem>
+                  <SelectItem value="awaiting_issue" className="text-xs font-bold rounded-lg py-2">Awaiting Issue</SelectItem>
+                  <SelectItem value="in_progress" className="text-xs font-bold rounded-lg py-2">Under Fabrication</SelectItem>
+                  <SelectItem value="partially_received" className="text-xs font-bold rounded-lg py-2">Partially Received</SelectItem>
+                  <SelectItem value="completed" className="text-xs font-bold rounded-lg py-2">Audit Ready / Completed</SelectItem>
+                  <SelectItem value="closed" className="text-xs font-bold rounded-lg py-2">Archived / History</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -712,7 +736,7 @@ export default function JobBagPage() {
                     <TableHead className="text-[11px] font-bold uppercase text-gray-500 tracking-widest px-4 h-12 text-center">Base Rate</TableHead>
                     <TableHead className="text-[11px] font-bold uppercase text-amber-600 tracking-widest px-4 h-12 text-right">WIP Gold</TableHead>
                     <TableHead className="text-[11px] font-bold uppercase text-emerald-600 tracking-widest px-4 h-12 text-right">Ready Gold</TableHead>
-                    <TableHead className="text-[11px] font-black uppercase text-indigo-700 tracking-widest px-6 h-12 text-right">Est. Payout</TableHead>
+                    <TableHead className="text-[11px] font-bold uppercase text-indigo-700 tracking-widest px-6 h-12 text-right">Est. Payout</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -741,7 +765,7 @@ export default function JobBagPage() {
                         <TableCell className="px-4 text-right font-mono text-[13px] font-bold text-emerald-600">
                           {k.readyWeight > 0 ? `${k.readyWeight.toFixed(2)} g` : '-'}
                         </TableCell>
-                        <TableCell className="px-6 text-right font-mono text-[15px] font-black text-indigo-700 bg-indigo-50/30">
+                        <TableCell className="px-6 text-right font-mono text-[15px] font-bold text-indigo-700 bg-indigo-50/30">
                           ₹ {k.estimatedPay.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
                         </TableCell>
                       </TableRow>
@@ -763,20 +787,22 @@ export default function JobBagPage() {
 
       </main>
 
+      {/* [The REST of your modal UI code for routing stays identical...] */}
+      {/* Restocks Modal */}
       <Dialog open={isRestocksModalOpen} onOpenChange={setIsRestocksModalOpen}>
         <DialogContent className="sm:max-w-[550px] p-0 border-none shadow-2xl rounded-2xl bg-white overflow-hidden">
           <DialogHeader className="bg-blue-50/50 p-6 border-b border-blue-100/50">
             <DialogTitle className="text-lg font-bold text-blue-900 flex items-center gap-2.5">
               <Package className="w-5 h-5 text-blue-600" strokeWidth={2} /> Pending Branch Restocks
             </DialogTitle>
-            <DialogDescription className="text-xs font-medium text-blue-700/70 mt-1.5">
+            <DialogDescription className="text-xs font-bold text-blue-700/70 mt-1.5">
               Select an internal branch indent to route to a Job Bag.
             </DialogDescription>
           </DialogHeader>
 
           <div className="p-0 max-h-[400px] overflow-y-auto custom-scrollbar bg-gray-50">
             {pendingRestocks.length === 0 ? (
-              <div className="p-10 text-center text-gray-400 text-[13px] font-medium">
+              <div className="p-10 text-center text-gray-400 text-[13px] font-bold">
                 No pending restock indents from branches.
               </div>
             ) : (
@@ -791,10 +817,9 @@ export default function JobBagPage() {
                       <span className="font-mono font-bold text-[13px] text-gray-900">{restock.sku_reference}</span>
                       <Badge className="bg-blue-100 text-blue-700 border-blue-200 text-[9px] uppercase tracking-widest font-bold px-2">{restock.warehouses?.name}</Badge>
                     </div>
-                    <div className="text-[13px] font-semibold text-gray-700">Quantity: {restock.quantity}</div>
+                    <div className="text-[13px] font-bold text-gray-700">Quantity: {restock.quantity}</div>
                     
-                    {/* ✨ Added created_at display here */}
-                    <div className="text-xs text-gray-500 mt-1.5 flex flex-col gap-1 font-medium">
+                    <div className="text-xs text-gray-500 mt-1.5 flex flex-col gap-1 font-bold">
                       <span>Requested on: <span className="font-bold text-gray-700">{restock.created_at ? format(new Date(restock.created_at), 'dd MMM yyyy') : 'N/A'}</span></span>
                       {restock.required_by_date && <span>Required by: <span className="font-bold text-gray-700">{format(new Date(restock.required_by_date), 'dd MMM yyyy')}</span></span>}
                       {restock.remarks && <span className="italic text-gray-500 mt-1 bg-gray-50 p-2 rounded-md border border-gray-100">"{restock.remarks}"</span>}
@@ -810,7 +835,7 @@ export default function JobBagPage() {
               <div className="space-y-2">
                 <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Route to Job Bag</Label>
                 <Select value={routingBagId} onValueChange={setRoutingBagId}>
-                  <SelectTrigger className="h-11 rounded-xl border-gray-200/60 bg-gray-50 text-[13px] font-semibold focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all hover:bg-gray-100">
+                  <SelectTrigger className="h-11 rounded-xl border-gray-200/60 bg-gray-50 text-[13px] font-bold focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all hover:bg-gray-100">
                     <SelectValue placeholder="Select target Job Bag..." />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
@@ -819,7 +844,7 @@ export default function JobBagPage() {
                     </SelectItem>
                     <Separator className="my-1 bg-gray-100" />
                     {jobBags.filter(j => j.status !== 'completed').map(bag => (
-                      <SelectItem key={bag.id} value={bag.id} className="font-medium text-gray-700 rounded-lg py-2 focus:bg-gray-50">
+                      <SelectItem key={bag.id} value={bag.id} className="font-bold text-gray-700 rounded-lg py-2 focus:bg-gray-50">
                         Attach to {bag.job_bag_number}
                       </SelectItem>
                     ))}
@@ -849,14 +874,14 @@ export default function JobBagPage() {
             <DialogTitle className="text-lg font-bold text-amber-900 flex items-center gap-2.5">
               <Wrench className="w-5 h-5 text-amber-600" strokeWidth={2} /> Pending Store Repairs
             </DialogTitle>
-            <DialogDescription className="text-xs font-medium text-amber-700/70 mt-1.5">
+            <DialogDescription className="text-xs font-bold text-amber-700/70 mt-1.5">
               Select a repair ticket to assign it to an active Job Bag.
             </DialogDescription>
           </DialogHeader>
 
           <div className="p-0 max-h-[400px] overflow-y-auto custom-scrollbar bg-gray-50">
             {pendingRepairs.length === 0 ? (
-              <div className="p-10 text-center text-gray-400 text-[13px] font-medium">
+              <div className="p-10 text-center text-gray-400 text-[13px] font-bold">
                 No pending repairs waiting at HQ.
               </div>
             ) : (
@@ -871,10 +896,9 @@ export default function JobBagPage() {
                       <span className="font-mono font-bold text-[13px] text-gray-900">{rep.ticket_number}</span>
                       <Badge className="bg-amber-100 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest font-bold px-2">{rep.origin?.name}</Badge>
                     </div>
-                    <div className="text-[13px] font-semibold text-gray-800">{rep.item_description}</div>
+                    <div className="text-[13px] font-bold text-gray-800">{rep.item_description}</div>
                     
-                    {/* ✨ Added created_at display here */}
-                    <div className="text-xs text-gray-500 mt-1.5 flex flex-col gap-1 font-medium">
+                    <div className="text-xs text-gray-500 mt-1.5 flex flex-col gap-1 font-bold">
                       <span>Logged on: <span className="font-bold text-gray-700">{rep.created_at ? format(new Date(rep.created_at), 'dd MMM yyyy') : 'N/A'}</span></span>
                       <span>Recv. Weight: <span className="font-bold text-gray-700">{rep.gross_weight_g}g</span> • {rep.purity}</span>
                     </div>
@@ -889,7 +913,7 @@ export default function JobBagPage() {
               <div className="space-y-2">
                 <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Route to Job Bag</Label>
                 <Select value={routingBagId} onValueChange={setRoutingBagId}>
-                  <SelectTrigger className="h-11 rounded-xl border-gray-200/60 bg-gray-50 text-[13px] font-semibold focus:ring-amber-500/20 focus:border-amber-500 shadow-sm transition-all hover:bg-gray-100">
+                  <SelectTrigger className="h-11 rounded-xl border-gray-200/60 bg-gray-50 text-[13px] font-bold focus:ring-amber-500/20 focus:border-amber-500 shadow-sm transition-all hover:bg-gray-100">
                     <SelectValue placeholder="Select target Job Bag..." />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
@@ -898,7 +922,7 @@ export default function JobBagPage() {
                     </SelectItem>
                     <Separator className="my-1 bg-gray-100" />
                     {jobBags.filter(j => j.status !== 'completed').map(bag => (
-                      <SelectItem key={bag.id} value={bag.id} className="font-medium text-gray-700 rounded-lg py-2 focus:bg-gray-50">
+                      <SelectItem key={bag.id} value={bag.id} className="font-bold text-gray-700 rounded-lg py-2 focus:bg-gray-50">
                         Attach to {bag.job_bag_number}
                       </SelectItem>
                     ))}
@@ -928,14 +952,14 @@ export default function JobBagPage() {
             <DialogTitle className="text-lg font-bold text-purple-900 flex items-center gap-2.5">
               <CheckCircle2 className="w-5 h-5 text-purple-600" strokeWidth={2} /> Pending Store Requests
             </DialogTitle>
-            <DialogDescription className="text-xs font-medium text-purple-700/70 mt-1.5">
+            <DialogDescription className="text-xs font-bold text-purple-700/70 mt-1.5">
               Select a custom order to pull its specifications into a Job Bag.
             </DialogDescription>
           </DialogHeader>
 
           <div className="p-0 max-h-[400px] overflow-y-auto custom-scrollbar bg-gray-50">
             {pendingOrders.length === 0 ? (
-              <div className="p-10 text-center text-gray-400 text-[13px] font-medium">
+              <div className="p-10 text-center text-gray-400 text-[13px] font-bold">
                 No pending custom orders.
               </div>
             ) : (
@@ -950,10 +974,9 @@ export default function JobBagPage() {
                       <span className="font-mono font-bold text-[13px] text-gray-900">{order.order_number}</span>
                       <Badge className="bg-purple-100 text-purple-700 border-purple-200 text-[9px] uppercase tracking-widest font-bold px-2">{order.origin?.name}</Badge>
                     </div>
-                    <div className="text-[13px] font-semibold text-gray-800">{order.design_reference}</div>
+                    <div className="text-[13px] font-bold text-gray-800">{order.design_reference}</div>
                     
-                    {/* ✨ Added created_at display here */}
-                    <div className="text-xs text-gray-500 mt-1.5 flex flex-col gap-1 font-medium">
+                    <div className="text-xs text-gray-500 mt-1.5 flex flex-col gap-1 font-bold">
                       <span>Ordered on: <span className="font-bold text-gray-700">{order.created_at ? format(new Date(order.created_at), 'dd MMM yyyy') : 'N/A'}</span></span>
                       <span>{order.item_category} • <span className="font-bold text-gray-700">{order.expected_gold_g || 'TBD'}g</span> Gold • <span className="font-bold text-gray-700">{order.expected_diamond_cts || 'TBD'}ct</span> Dia</span>
                     </div>
@@ -968,7 +991,7 @@ export default function JobBagPage() {
               <div className="space-y-2">
                 <Label className="text-[11px] font-bold text-gray-500 uppercase tracking-widest">Route to Job Bag</Label>
                 <Select value={routingBagId} onValueChange={setRoutingBagId}>
-                  <SelectTrigger className="h-11 rounded-xl border-gray-200/60 bg-gray-50 text-[13px] font-semibold focus:ring-purple-500/20 focus:border-purple-500 shadow-sm transition-all hover:bg-gray-100">
+                  <SelectTrigger className="h-11 rounded-xl border-gray-200/60 bg-gray-50 text-[13px] font-bold focus:ring-purple-500/20 focus:border-purple-500 shadow-sm transition-all hover:bg-gray-100">
                     <SelectValue placeholder="Select target Job Bag..." />
                   </SelectTrigger>
                   <SelectContent className="rounded-xl shadow-lg border-gray-100 p-1">
@@ -977,7 +1000,7 @@ export default function JobBagPage() {
                     </SelectItem>
                     <Separator className="my-1 bg-gray-100" />
                     {jobBags.filter(j => j.status !== 'completed').map(bag => (
-                      <SelectItem key={bag.id} value={bag.id} className="font-medium text-gray-700 rounded-lg py-2 focus:bg-gray-50">
+                      <SelectItem key={bag.id} value={bag.id} className="font-bold text-gray-700 rounded-lg py-2 focus:bg-gray-50">
                         Attach to {bag.job_bag_number}
                       </SelectItem>
                     ))}

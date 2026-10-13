@@ -81,7 +81,6 @@ export async function middleware(request: NextRequest) {
     const isCrmRoute = path.startsWith('/crm')
     const isVoucherRoute = path.startsWith('/vouchers')
     
-    // ✨ NEW: Explicitly list the routes forbidden to the CRM Manager
     const isRestrictedVoucherSubRoute = 
       path.startsWith('/vouchers/generate') || 
       path.startsWith('/vouchers/batches') || 
@@ -92,6 +91,10 @@ export async function middleware(request: NextRequest) {
     const isOpsRoute = path.startsWith('/purchases') || path.startsWith('/manufacturing') || path.startsWith('/inventory') || path.startsWith('/transfer') || path.startsWith('/catalog')
     const isBranchManagerRoute = path.startsWith('/pos') || path.startsWith('/discovery') || path.startsWith('/sales') || path.startsWith('/inventory') || path.startsWith('/transfer') || path.startsWith('/catalog') || path.startsWith('/reports') || path.startsWith('/crm')
     const isSalesRoute = path.startsWith('/discovery') || path.startsWith('/pos') || path.startsWith('/catalog') || path.startsWith('/crm')
+    
+    // ✨ NEW: Define E-Commerce Route
+    const isEcommerceRoute = path.startsWith('/ecommerce')
+
     // STRICT DENIALS (Cross-role access prevention)
     // ----------------------------------------------------
     
@@ -102,16 +105,13 @@ export async function middleware(request: NextRequest) {
     if (isCrmRoute && !['crm_manager', 'branch_manager', 'sales_person'].includes(role)) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
-    // ✨ UPDATED: Voucher Access Logic
+
     if (isVoucherRoute) {
       if (role === 'crm_manager') {
-        // CRM managers CAN access /vouchers and /vouchers/track
-        // BUT they are blocked from generating, distributing, etc.
         if (isRestrictedVoucherSubRoute) {
           return NextResponse.redirect(new URL('/vouchers', request.url))
         }
       } else if (role !== 'voucher_manager') {
-        // Everyone else (except voucher_manager, owner, manager) is completely blocked
         return NextResponse.redirect(new URL('/dashboard', request.url))
       }
     }
@@ -120,31 +120,33 @@ export async function middleware(request: NextRequest) {
     // ALLOWLISTS (Keeping roles inside their sandboxes)
     // ----------------------------------------------------
     
-    // Rule: CRM Manager
     if (role === 'crm_manager') {
       if (!isCrmRoute && !isVoucherRoute) {
         return NextResponse.redirect(new URL('/dashboard', request.url))
       }
     }
 
-    // Rule: Voucher Manager
     if (role === 'voucher_manager') {
       if (!isVoucherRoute) {
         return NextResponse.redirect(new URL('/dashboard', request.url))
       }
     }
 
-    // Rule: Operations Manager
+    // ✨ NEW: E-Commerce Manager Sandbox
+    if (role === 'ecommerce_manager') {
+      if (!isEcommerceRoute) {
+        return NextResponse.redirect(new URL('/dashboard', request.url))
+      }
+    }
+
     if (role === 'operations_manager' && !isOpsRoute) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
-    // Rule: Branch Manager & Shadow Manager
     if ((role === 'branch_manager' || role === 'shadow_manager') && !isBranchManagerRoute) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
-    // Rule: Sales Person & Shadow Sales
     if ((role === 'sales_person' || role === 'shadow_sales') && !isSalesRoute) {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }

@@ -6,21 +6,21 @@ import {
   Clock, MoreVertical, Edit2, Trash2, CheckCircle2, XCircle, 
   Loader2, Save, X, Type, Search, Mail, CalendarDays,
   LayoutTemplate, Star, UploadCloud, FileText, LayoutGrid,
-  Gift, Truck, MapPin, Building, Video
+  Gift, Truck, MapPin, Building, Video, IndianRupee
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { supabase } from "@/lib/supabaseClient"; // adjust to your actual path
+import { supabase } from "@/lib/supabaseClient"; 
 import { toast } from "sonner";
 import { Textarea } from "@/components/ui/textarea";
 
 // --- TYPES ---
 interface Banner { id: string; desktop_image_url: string; mobile_image_url: string; link: string; duration_ms: number; sort_order: number; is_active: boolean; }
 interface Ticker { id: string; text: string; icon_name: string; sort_order: number; is_active: boolean; }
-interface CmsSection { section_key: string; image_url: string; heading: string; subheading: string; }
+interface CmsSection { section_key: string; image_url: string; heading: string; subheading: string; bullet_points?: any[]; }
 interface Subscriber { id: string; email: string; subscribed_at: string; }
 
 // --- UTILITIES ---
@@ -75,6 +75,7 @@ export default function StorefrontSettings() {
     { id: "banners", label: "Hero Banners", icon: ImageIcon },
     { id: "ticker", label: "Highlight Ticker", icon: Type },
     { id: "category-grid", label: "Category Grid", icon: LayoutGrid },
+    { id: "shop-by-price", label: "Shop By Price", icon: IndianRupee }, // ✨ NEW TAB
     { id: "promises", label: "Why Pavitram", icon: CheckCircle2 },
     { id: "cms", label: "Static Sections", icon: LayoutTemplate },
     { id: "about", label: "About Us Page", icon: Building },
@@ -98,7 +99,6 @@ export default function StorefrontSettings() {
         </h1>
       </div>
 
-      {/* ✨ UPDATED WRAPPING TAB DESIGN */}
       <div className="flex flex-wrap items-center gap-2 mb-8 pb-6 border-b border-slate-200">
         {tabs.map((tab) => (
           <button
@@ -119,6 +119,7 @@ export default function StorefrontSettings() {
       {activeTab === "banners" && <BannersManager />}
       {activeTab === "ticker" && <TickerManager />}
       {activeTab === "category-grid" && <CategoryGridManager />}
+      {activeTab === "shop-by-price" && <ShopByPriceManager />} 
       {activeTab === "promises" && <PromisesManager />}
       {activeTab === "cms" && <CMSManager />}
       {activeTab === "about" && <AboutUsManager />} 
@@ -132,6 +133,98 @@ export default function StorefrontSettings() {
     </div>
   );
 }
+
+// ==========================================
+// NEW: SHOP BY PRICE MANAGER
+// ==========================================
+function ShopByPriceManager() {
+  const [items, setItems] = useState<any[]>([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [formData, setFormData] = useState<any>({});
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchItems = async () => {
+    setIsLoading(true);
+    const { data } = await supabase.from("ecommerce_price_collections").select("*").order("sort_order");
+    if (data) setItems(data);
+    setIsLoading(false);
+  };
+  useEffect(() => { fetchItems(); }, []);
+
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    toast.info("Uploading Image...");
+    const url = await uploadToSupabase(file, 'banner_images');
+    if (url) setFormData({ ...formData, image_url: url });
+  };
+
+  const handleSave = async () => {
+    if (formData.id) await supabase.from("ecommerce_price_collections").update(formData).eq("id", formData.id);
+    else await supabase.from("ecommerce_price_collections").insert([formData]);
+    setIsModalOpen(false); fetchItems();
+  };
+
+  return (
+    <div className="w-full flex flex-col gap-6 animate-in fade-in duration-300">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-xl font-semibold">Shop By Price</h2>
+          <p className="text-sm text-slate-500">Manage the 4 prominent price-range collection blocks on the homepage.</p>
+        </div>
+        <button onClick={() => { setFormData({ sort_order: items.length + 1, is_active: true }); setIsModalOpen(true); }} className="bg-[#4A1F58] text-white px-4 py-2 rounded-lg text-sm"><Plus className="w-4 h-4 inline mr-1"/> Add Block</button>
+      </div>
+
+      {isLoading ? <Loader2 className="w-6 h-6 animate-spin text-slate-400 mx-auto mt-10" /> : (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {items.map((item) => (
+            <div key={item.id} className="bg-white border rounded-xl overflow-hidden shadow-sm relative group">
+              <img src={item.image_url} className="aspect-[4/5] object-cover w-full opacity-80" />
+              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3 z-20">
+                <button onClick={() => { setFormData(item); setIsModalOpen(true); }} className="bg-white p-2 rounded-full"><Edit2 className="w-4 h-4 text-slate-800"/></button>
+                <button onClick={async () => { await supabase.from("ecommerce_price_collections").delete().eq("id", item.id); fetchItems(); }} className="bg-white p-2 rounded-full"><Trash2 className="w-4 h-4 text-rose-600"/></button>
+              </div>
+              <div className="absolute bottom-0 left-0 w-full p-3 bg-gradient-to-t from-black/80 to-transparent z-10 text-white">
+                <p className="text-[9px] uppercase tracking-widest text-[#E9D8C3] font-bold">{item.subtitle}</p>
+                <h3 className="font-serif text-xl">{item.title}</h3>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {isModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/40">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-4">
+            <h3 className="font-bold">Edit Price Block</h3>
+            {formData.image_url && <img src={formData.image_url} className="w-full h-32 object-cover rounded border" />}
+            <input type="file" accept="image/*" onChange={handleImageUpload} className="text-sm" />
+            
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-slate-500">Main Title (e.g. Under ₹25k)</Label>
+              <input type="text" value={formData.title || ""} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full border p-2 rounded text-sm font-serif" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-slate-500">Subtitle (e.g. Budget Friendly)</Label>
+              <input type="text" value={formData.subtitle || ""} onChange={e => setFormData({...formData, subtitle: e.target.value})} className="w-full border p-2 rounded text-sm" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-slate-500">Slug Target (e.g. under-25k)</Label>
+              <input type="text" value={formData.slug || ""} onChange={e => setFormData({...formData, slug: e.target.value.toLowerCase()})} className="w-full border p-2 rounded text-sm" />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold text-slate-500">Sort Order (1 to 4)</Label>
+              <input type="number" value={formData.sort_order || 0} onChange={e => setFormData({...formData, sort_order: Number(e.target.value)})} className="w-full border p-2 rounded text-sm" />
+            </div>
+            
+            <div className="flex justify-end gap-2 pt-2"><button onClick={() => setIsModalOpen(false)} className="px-4 py-2 text-sm">Cancel</button><button onClick={handleSave} className="bg-[#4A1F58] text-white px-4 py-2 rounded text-sm">Save</button></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ==========================================
 // 1. BANNERS MANAGER (WITH IMAGE UPLOAD)
 // ==========================================
@@ -372,7 +465,7 @@ function PromisesManager() {
 }
 
 // ==========================================
-// 4. CMS STATIC SECTIONS (WITH IMAGE UPLOAD)
+// 4. CMS STATIC SECTIONS (WITH IMAGE UPLOAD & DYNAMIC POINTS)
 // ==========================================
 function CMSManager() {
   const [sections, setSections] = useState<CmsSection[]>([]);
@@ -398,14 +491,50 @@ function CMSManager() {
 
   const handleUpdate = async (section: CmsSection) => {
     setIsSaving(section.section_key);
-    await supabase.from("ecommerce_cms_sections").update({ heading: section.heading, subheading: section.subheading, image_url: section.image_url }).eq("section_key", section.section_key);
+    await supabase.from("ecommerce_cms_sections").update({ 
+        heading: section.heading, 
+        subheading: section.subheading, 
+        image_url: section.image_url,
+        bullet_points: section.bullet_points 
+    }).eq("section_key", section.section_key);
     toast.success("Section updated.");
     setIsSaving(null);
   };
 
+  // ✨ Helper to update specific fields
+  const updateBullet = (secIdx: number, pointIdx: number, field: string, value: string) => {
+    const newSecs = [...sections];
+    if (!newSecs[secIdx].bullet_points) newSecs[secIdx].bullet_points = [];
+    newSecs[secIdx].bullet_points![pointIdx][field] = value; // Added '!' to assert it exists
+    setSections(newSecs);
+  };
+
+  // ✨ Helper to add a new point
+  const addBullet = (secIdx: number) => {
+    const newSecs = [...sections];
+    if (!newSecs[secIdx].bullet_points) newSecs[secIdx].bullet_points = [];
+    // Added '!' to assure TS we just created it if it didn't exist
+    const nextNum = (newSecs[secIdx].bullet_points!.length + 1).toString().padStart(2, '0');
+    newSecs[secIdx].bullet_points!.push({ id: nextNum, title: "New Step", desc: "Step description" });
+    setSections(newSecs);
+  };
+
+  // ✨ Helper to remove a point
+  const removeBullet = (secIdx: number, pointIdx: number) => {
+    const newSecs = [...sections];
+    // Safely check if it exists before trying to splice
+    if (newSecs[secIdx].bullet_points) {
+      newSecs[secIdx].bullet_points!.splice(pointIdx, 1);
+      setSections(newSecs);
+    }
+  };
+
   return (
     <div className="w-full flex flex-col gap-6 animate-in fade-in duration-300">
-      <div><h2 className="text-xl font-semibold">Static Sections</h2><p className="text-sm text-slate-500">Update Why Pavitram & Harvesting imagery.</p></div>
+      <div>
+        <h2 className="text-xl font-semibold">Static Sections</h2>
+        <p className="text-sm text-slate-500">Update Why Pavitram & Harvesting imagery and texts.</p>
+      </div>
 
       <div className="grid grid-cols-1 gap-8">
         {sections.map((sec, idx) => (
@@ -416,11 +545,65 @@ function CMSManager() {
               </div>
               <input type="file" accept="image/*" onChange={(e) => handleImageUpload(e, idx)} className="text-xs" />
             </div>
+            
             <div className="flex-1 flex flex-col gap-4">
-              <h3 className="text-sm font-bold uppercase border-b pb-2">{sec.section_key.replace('_', ' ')}</h3>
-              <input type="text" value={sec.heading} onChange={(e) => { const newSecs = [...sections]; newSecs[idx].heading = e.target.value; setSections(newSecs); }} className="border rounded-lg px-3 py-2 text-sm" />
-              <textarea value={sec.subheading} onChange={(e) => { const newSecs = [...sections]; newSecs[idx].subheading = e.target.value; setSections(newSecs); }} className="border rounded-lg px-3 py-2 text-sm h-20 resize-none" />
-              <button onClick={() => handleUpdate(sec)} disabled={isSaving === sec.section_key} className="bg-slate-900 text-white px-5 py-2 rounded-lg text-sm mt-auto self-end">
+              <h3 className="text-sm font-bold uppercase border-b pb-2 text-[#4A1F58]">{sec.section_key.replace('_', ' ')}</h3>
+              
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-slate-500">Heading</Label>
+                <input type="text" value={sec.heading} onChange={(e) => { const newSecs = [...sections]; newSecs[idx].heading = e.target.value; setSections(newSecs); }} className="w-full border rounded-lg px-3 py-2 text-sm font-serif" />
+              </div>
+              
+              <div className="space-y-1">
+                <Label className="text-xs font-semibold text-slate-500">Subheading / Description</Label>
+                <textarea value={sec.subheading} onChange={(e) => { const newSecs = [...sections]; newSecs[idx].subheading = e.target.value; setSections(newSecs); }} className="w-full border rounded-lg px-3 py-2 text-sm h-16 resize-none" />
+              </div>
+
+              {/* ✨ EDIT HARVESTING POINTS FULLY DYNAMICALLY */}
+              {sec.section_key === 'harvesting_plan' && sec.bullet_points && (
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 mt-2 space-y-3">
+                   <div className="flex justify-between items-center border-b pb-2">
+                     <h4 className="text-xs font-bold text-slate-700 uppercase tracking-widest">Plan Steps</h4>
+                     <Button onClick={() => addBullet(idx)} size="sm" variant="outline" className="h-7 text-[10px] bg-white">
+                       <Plus className="w-3 h-3 mr-1"/> Add Step
+                     </Button>
+                   </div>
+                   
+                   {sec.bullet_points.map((point: any, pointIdx: number) => (
+                     <div key={pointIdx} className="flex gap-3 relative group">
+                        {/* Number / ID Input */}
+                        <input 
+                          type="text" 
+                          value={point.id} 
+                          onChange={e => updateBullet(idx, pointIdx, 'id', e.target.value)} 
+                          className="w-12 h-12 bg-[#4A1F58] text-white flex items-center justify-center text-center font-serif text-xl rounded-lg shrink-0 outline-none focus:ring-2 focus:ring-purple-400" 
+                          title="Change Step Number"
+                        />
+                        
+                        {/* Title & Description Inputs */}
+                        <div className="flex-1 space-y-1">
+                           <input type="text" value={point.title} onChange={e => updateBullet(idx, pointIdx, 'title', e.target.value)} placeholder="Step Title" className="w-full border rounded p-1.5 text-xs font-bold" />
+                           <input type="text" value={point.desc} onChange={e => updateBullet(idx, pointIdx, 'desc', e.target.value)} placeholder="Step Description" className="w-full border rounded p-1.5 text-xs text-slate-500" />
+                        </div>
+                        
+                        {/* Remove Button */}
+                        <button 
+                          onClick={() => removeBullet(idx, pointIdx)} 
+                          className="w-8 h-8 flex items-center justify-center text-slate-400 hover:text-rose-500 hover:bg-rose-50 rounded-md transition-colors"
+                          title="Remove Step"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                     </div>
+                   ))}
+                   
+                   {sec.bullet_points.length === 0 && (
+                     <p className="text-xs text-slate-500 italic text-center py-2">No steps configured.</p>
+                   )}
+                </div>
+              )}
+
+              <button onClick={() => handleUpdate(sec)} disabled={isSaving === sec.section_key} className="bg-[#4A1F58] text-white px-5 py-2 rounded-lg text-sm mt-auto self-end">
                 {isSaving === sec.section_key ? 'Saving...' : 'Save Content'}
               </button>
             </div>

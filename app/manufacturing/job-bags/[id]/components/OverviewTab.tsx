@@ -14,17 +14,12 @@ import { supabase } from '@/lib/supabaseClient'
 import { useToast } from '@/components/ui/use-toast'
 import { format } from 'date-fns'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
 import { 
   Trash2, Plus, Save, ListPlus, AlertCircle, Hammer, 
   Wrench, Check, ArrowLeft, Box, LayoutGrid, Loader2, 
-  Printer, CheckSquare, Square
+  Printer, CheckSquare, Square, History
 } from 'lucide-react'
 
 import { ItemTagPreview } from '@/components/ItemTagPreview'
@@ -33,6 +28,7 @@ interface Props {
   job: JobBag & { 
     karigars?: { full_name: string }; 
     created_at?: string;
+    ledger_data?: any; 
   }
 }
 
@@ -54,7 +50,7 @@ const InputCell = ({ value, onChange, className = "" }: { value: string, onChang
     type="text" 
     value={value || ''} 
     onChange={e => onChange(e.target.value)} 
-    className={`w-full h-full min-h-[28px] bg-transparent border-none outline-none text-center text-blue-700 font-bold print:text-black focus:bg-blue-50/50 transition-colors ${className}`}
+    className={`w-full h-full min-h-[22px] bg-transparent border-none outline-none text-center text-blue-700 font-bold print:text-black focus:bg-blue-50/50 transition-colors ${className}`}
   />
 )
 
@@ -82,7 +78,9 @@ export default function OverviewTab({ job }: Props) {
   const [expectedDiamond, setExpectedDiamond] = useState('')
 
   const [categories, setCategories] = useState<string[]>([
-    'LADIES RING', 'NECKLACE', 'GENTS RING', 'TOPS','BRACELET', 'PENDANT', 'GENTS STUD', 'TANMANIA','BANGLE', 'NOSE PIN'
+    'BANGLE', 'BRACELET', 'GENTS RING', 'GENTS STUD', 
+    'LADIES RING', 'NECKLACE SET', 'NOSEPIN', 
+    'PENDANT', 'TANMANIA', 'TOPS'
   ])
   const [showCustomType, setShowCustomType] = useState(false)
   const [skuSuggestions, setSkuSuggestions] = useState<string[]>([])
@@ -92,7 +90,13 @@ export default function OverviewTab({ job }: Props) {
   const printRef = useRef<HTMLDivElement>(null)
   const documentPrintRef = useRef<HTMLDivElement>(null)
 
+  // ✨ LEDGER, VERSIONING & PRINT LAYOUT STATES
   const [showLedgerPaper, setShowLedgerPaper] = useState(false)
+  const [isSavingLedger, setIsSavingLedger] = useState(false)
+  const [versions, setVersions] = useState<any[]>([])
+  const [activeVersion, setActiveVersion] = useState<string>("") 
+  const [printLayout, setPrintLayout] = useState<'2_ON_1' | '1_PER_PAGE'>('2_ON_1')
+  
   const [ledgerEdits, setLedgerEdits] = useState<Record<string, any>>({})
   const [emptyEdits, setEmptyEdits] = useState<Record<number, any>>({})
   const [signatureEdits, setSignatureEdits] = useState({ receiver: '', issuer: '' })
@@ -103,6 +107,23 @@ export default function OverviewTab({ job }: Props) {
     issuerName: 'OSSAM JEWELS',
     bannerText: 'Please receive the following Diamonds and Metal on approval and for setting in jewellery or to show.'
   })
+
+  useEffect(() => {
+    if (job.ledger_data) {
+      const current = job.ledger_data.current || job.ledger_data; 
+      if (current && Object.keys(current).length > 0) {
+        setLedgerEdits(current.ledgerEdits || {});
+        setEmptyEdits(current.emptyEdits || {});
+        setSignatureEdits(current.signatureEdits || { receiver: '', issuer: '' });
+        setLedgerMeta(current.ledgerMeta || ledgerMeta);
+      }
+      
+      const history = job.ledger_data.history || [];
+      setVersions(history);
+      if (history.length > 0) setActiveVersion(history[0].timestamp);
+    }
+  }, [job.ledger_data]);
+
   const handlePrint = useReactToPrint({
     contentRef: printRef,
     documentTitle: `JobBag-Tags-${job.job_bag_number}`,
@@ -119,12 +140,7 @@ export default function OverviewTab({ job }: Props) {
   }, [job.id])
 
   const fetchExistingCategories = async () => {
-    const { data } = await supabase
-      .from('job_bag_items')
-      .select('ornament_type')
-      .neq('ornament_type', null)
-      .limit(300)
-    
+    const { data } = await supabase.from('job_bag_items').select('ornament_type').neq('ornament_type', null).limit(300)
     if (data) {
       const uniqueCategories = Array.from(new Set(data.map(d => d.ornament_type))).filter(Boolean) as string[]
       setCategories(prev => {
@@ -136,42 +152,22 @@ export default function OverviewTab({ job }: Props) {
 
   const handleSkuSearch = async (val: string) => {
     setSkuReference(val)
-    if (val.length < 2) {
-      setSkuSuggestions([])
-      return
-    }
-
-    const { data } = await supabase
-      .from('job_bag_items')
-      .select('sku_reference')
-      .ilike('sku_reference', `%${val}%`)
-      .limit(10)
-    
-    if (data) {
-      const uniqueSkus = Array.from(new Set(data.map(d => d.sku_reference))) as string[]
-      setSkuSuggestions(uniqueSkus)
-    }
+    if (val.length < 2) { setSkuSuggestions([]); return; }
+    const { data } = await supabase.from('job_bag_items').select('sku_reference').ilike('sku_reference', `%${val}%`).limit(10)
+    if (data) setSkuSuggestions(Array.from(new Set(data.map(d => d.sku_reference))) as string[])
   }
 
   useEffect(() => {
     if (customOrderId) {
       const fetchCustomOrderDetails = async () => {
-        const { data, error } = await supabase
-          .from('custom_orders')
-          .select('*')
-          .eq('id', customOrderId)
-          .single()
-
+        const { data, error } = await supabase.from('custom_orders').select('*').eq('id', customOrderId).single()
         if (!error && data) {
           setSkuReference(data.design_reference || '')
           setOrnamentType(data.item_category || '')
           setExpectedGold(data.expected_gold_g?.toString() || '')
           setExpectedDiamond(data.expected_diamond_cts?.toString() || '')
           setActiveCustomOrderId(data.id)
-          
-          if (data.item_category && !categories.includes(data.item_category)) {
-            setCategories(prev => [...prev, data.item_category])
-          }
+          if (data.item_category && !categories.includes(data.item_category)) setCategories(prev => [...prev, data.item_category])
           toast({ title: "Store Request Loaded", description: "Custom order specifications have been populated in the grid." })
         }
       }
@@ -182,18 +178,12 @@ export default function OverviewTab({ job }: Props) {
   useEffect(() => {
     if (repairTicketId) {
       const fetchRepairDetails = async () => {
-        const { data, error } = await supabase
-          .from('repair_tickets')
-          .select('*')
-          .eq('id', repairTicketId)
-          .single()
-
+        const { data, error } = await supabase.from('repair_tickets').select('*').eq('id', repairTicketId).single()
         if (!error && data) {
           setSkuReference(data.ticket_number || '')
           setOrnamentType(data.item_description || 'Repair')
           setExpectedGold(data.gross_weight_g?.toString() || '') 
           setActiveRepairTicketId(data.id)
-          
           if (!categories.includes('Repair')) setCategories(prev => [...prev, 'Repair'])
           toast({ title: "Repair Ticket Loaded", description: "Repair specifications have been populated in the grid." })
         }
@@ -205,23 +195,15 @@ export default function OverviewTab({ job }: Props) {
   useEffect(() => {
     if (storeRestockId) {
       const fetchRestockDetails = async () => {
-        const { data, error } = await supabase
-          .from('branch_restock_requests')
-          .select('*')
-          .eq('id', storeRestockId)
-          .single()
-
+        const { data, error } = await supabase.from('branch_restock_requests').select('*').eq('id', storeRestockId).single()
         if (!error && data) {
           setSkuReference(data.sku_reference || data.design_reference || '')
           setOrnamentType(data.item_category || data.category || 'Restock')
           setExpectedGold(data.expected_gold_g?.toString() || '')
           setExpectedDiamond(data.expected_diamond_cts?.toString() || '')
           setActiveStoreRestockId(data.id)
-          
           const cat = data.item_category || data.category
-          if (cat && !categories.includes(cat)) {
-            setCategories(prev => [...prev, cat])
-          }
+          if (cat && !categories.includes(cat)) setCategories(prev => [...prev, cat])
           toast({ title: "Store Restock Loaded", description: "Restock specifications have been populated in the grid." })
         }
       }
@@ -232,12 +214,7 @@ export default function OverviewTab({ job }: Props) {
   const fetchItems = async () => {
     try {
       setIsLoading(true)
-      const { data, error } = await supabase
-        .from('job_bag_items')
-        .select('*, inventory_items(*)')
-        .eq('job_bag_id', job.id)
-        .order('created_at', { ascending: true })
-
+      const { data, error } = await supabase.from('job_bag_items').select('*, inventory_items(*)').eq('job_bag_id', job.id).order('created_at', { ascending: true })
       if (error) throw error
       setItems(data || [])
     } catch (error: any) {
@@ -249,17 +226,13 @@ export default function OverviewTab({ job }: Props) {
 
   const handleAddDrafts = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!skuReference) {
-      toast({ title: "Missing Data", description: "SKU/Style reference is required.", variant: "destructive" })
-      return
-    }
+    if (!skuReference) return toast({ title: "Missing Data", description: "SKU/Style reference is required.", variant: "destructive" })
 
     const qty = parseInt(quantity) || 1
     const newDrafts: DraftItem[] = []
 
     for (let i = 0; i < qty; i++) {
       const suffix = qty > 1 ? `-${(i + 1).toString().padStart(2, '0')}` : ''
-      
       newDrafts.push({
         id: Math.random().toString(36).substring(7), 
         sku_reference: `${skuReference}${suffix}`,
@@ -274,26 +247,18 @@ export default function OverviewTab({ job }: Props) {
     }
 
     setDraftItems([...draftItems, ...newDrafts])
-    setActiveCustomOrderId(null)
-    setActiveRepairTicketId(null)
-    setActiveStoreRestockId(null)
-    setSkuReference('')
-    setQuantity('1')
+    setActiveCustomOrderId(null); setActiveRepairTicketId(null); setActiveStoreRestockId(null);
+    setSkuReference(''); setQuantity('1');
   }
 
   const updateDraftItem = (id: string, field: keyof DraftItem, value: string) => {
-    setDraftItems(drafts => drafts.map(draft => 
-      draft.id === id ? { ...draft, [field]: value } : draft
-    ))
+    setDraftItems(drafts => drafts.map(draft => draft.id === id ? { ...draft, [field]: value } : draft))
   }
 
-  const removeDraftItem = (id: string) => {
-    setDraftItems(drafts => drafts.filter(draft => draft.id !== id))
-  }
+  const removeDraftItem = (id: string) => setDraftItems(drafts => drafts.filter(draft => draft.id !== id))
 
   const saveDraftsToDatabase = async () => {
     if (draftItems.length === 0) return
-
     setIsSaving(true)
     try {
       const payload = draftItems.map(draft => ({
@@ -313,25 +278,16 @@ export default function OverviewTab({ job }: Props) {
       if (error) throw error
 
       const linkedOrderIds = draftItems.filter(d => d.custom_order_id).map(d => d.custom_order_id)
-      if (linkedOrderIds.length > 0) {
-        await supabase.from('custom_orders').update({ status: 'in_production' }).in('id', linkedOrderIds)
-      }
+      if (linkedOrderIds.length > 0) await supabase.from('custom_orders').update({ status: 'in_production' }).in('id', linkedOrderIds)
 
       const linkedRepairIds = draftItems.filter(d => d.repair_ticket_id).map(d => d.repair_ticket_id)
-      if (linkedRepairIds.length > 0) {
-        await supabase.from('repair_tickets').update({ status: 'in_repair' }).in('id', linkedRepairIds)
-      }
+      if (linkedRepairIds.length > 0) await supabase.from('repair_tickets').update({ status: 'in_repair' }).in('id', linkedRepairIds)
 
       const linkedRestockIds = draftItems.filter(d => d.store_restock_id).map(d => d.store_restock_id)
-      if (linkedRestockIds.length > 0) {
-        await supabase.from('branch_restock_requests').update({ status: 'in_production' }).in('id', linkedRestockIds)
-      }
+      if (linkedRestockIds.length > 0) await supabase.from('branch_restock_requests').update({ status: 'in_production' }).in('id', linkedRestockIds)
 
       toast({ title: "Success", description: `Added ${draftItems.length} items to job bag.` })
-      setDraftItems([])
-      fetchItems()
-      fetchExistingCategories() 
-      
+      setDraftItems([]); fetchItems(); fetchExistingCategories(); 
       window.history.replaceState(null, '', window.location.pathname)
     } catch (error: any) {
       toast({ title: "Database Error", description: error.message, variant: "destructive" })
@@ -340,13 +296,51 @@ export default function OverviewTab({ job }: Props) {
     }
   }
 
-  const deleteSavedItem = async (itemId: string, status: string) => {
-    if (status !== 'pending') {
-      return toast({ title: "Cannot Delete", description: "Only pending items can be deleted.", variant: "destructive" })
+  const handleSaveLedgerToDatabase = async () => {
+    setIsSavingLedger(true);
+    try {
+      const currentPayload = { ledgerEdits, emptyEdits, signatureEdits, ledgerMeta };
+      const timestampStr = new Date().toISOString();
+      const newVersion = {
+        timestamp: timestampStr,
+        data: currentPayload
+      };
+      
+      const updatedHistory = [newVersion, ...versions].slice(0, 10); 
+
+      const payload = {
+        current: currentPayload,
+        history: updatedHistory
+      };
+
+      const { error } = await supabase.from('job_bags').update({ ledger_data: payload }).eq('id', job.id);
+      if (error) throw error;
+
+      toast({ title: "Ledger Saved", description: "Ledger state and version safely backed up." });
+      setVersions(updatedHistory);
+      setActiveVersion(timestampStr); 
+    } catch (error: any) {
+      toast({ title: "Database Error", description: error.message, variant: "destructive" });
+    } finally {
+      setIsSavingLedger(false);
     }
+  };
 
+  const loadVersion = (timestamp: string) => {
+    setActiveVersion(timestamp);
+    const v = versions.find(v => v.timestamp === timestamp);
+    if (v && v.data) {
+      setLedgerEdits(v.data.ledgerEdits || {});
+      setEmptyEdits(v.data.emptyEdits || {});
+      setSignatureEdits(v.data.signatureEdits || { receiver: '', issuer: '' });
+      setLedgerMeta(v.data.ledgerMeta || ledgerMeta);
+      toast({ title: "Version Restored", description: `Loaded ledger from ${format(new Date(timestamp), 'dd/MM/yyyy HH:mm')}`});
+    }
+  }
+
+  const deleteSavedItem = async (itemId: string, status: string) => {
+    if (status !== 'pending') return toast({ title: "Cannot Delete", description: "Only pending items can be deleted.", variant: "destructive" })
     if (!confirm("Are you sure you want to remove this item from the job bag?")) return
-
     try {
       const { error } = await supabase.from('job_bag_items').delete().eq('id', itemId)
       if (error) throw error
@@ -361,11 +355,8 @@ export default function OverviewTab({ job }: Props) {
   const isAllReceivedSelected = receivedItems.length > 0 && receivedItems.every(i => selectedPrintIds.has(i.id))
   
   const togglePrintSelectAll = () => {
-    if (isAllReceivedSelected) {
-      setSelectedPrintIds(new Set())
-    } else {
-      setSelectedPrintIds(new Set(receivedItems.map(i => i.id)))
-    }
+    if (isAllReceivedSelected) setSelectedPrintIds(new Set())
+    else setSelectedPrintIds(new Set(receivedItems.map(i => i.id)))
   }
 
   const togglePrintSelect = (id: string) => {
@@ -375,53 +366,42 @@ export default function OverviewTab({ job }: Props) {
     setSelectedPrintIds(newSet)
   }
 
-  const itemsToPrint = items
-    .filter(i => selectedPrintIds.has(i.id))
-    .map(i => i.inventory_items?.[0]) 
-    .filter(Boolean)
-
-  const isCustomLoaded = !!activeCustomOrderId;
-  const isRepairLoaded = !!activeRepairTicketId;
-  const isRestockLoaded = !!activeStoreRestockId;
-
+  const itemsToPrint = items.filter(i => selectedPrintIds.has(i.id)).map(i => i.inventory_items?.[0]).filter(Boolean)
+  const isCustomLoaded = !!activeCustomOrderId; const isRepairLoaded = !!activeRepairTicketId; const isRestockLoaded = !!activeStoreRestockId;
   const cardBorderClass = isCustomLoaded ? 'border-purple-200' : isRepairLoaded ? 'border-amber-200' : isRestockLoaded ? 'border-blue-200' : 'border-gray-200/60';
   const buttonClass = isCustomLoaded ? 'bg-purple-600 hover:bg-purple-700 text-white' : isRepairLoaded ? 'bg-amber-600 hover:bg-amber-700 text-white' : isRestockLoaded ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-900 hover:bg-gray-800 text-white';
 
   return (
     <>
       <div className="space-y-6">
-        {/* HEADER METADATA CARD */}
         <Card className="shadow-sm border-gray-200/60 rounded-2xl overflow-hidden bg-white">
           <CardContent className="p-5 sm:p-6">
             <div className="flex justify-between items-center mb-5 border-b border-gray-100 pb-4">
               <div>
                 <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-1">Job Bag Reference</p>
-                <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">{job.job_bag_number}</h2>
+                <h2 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">{job.job_bag_number}</h2>
               </div>
               
               <div className="flex items-center gap-3">
                 <Button 
                   onClick={() => {
-                    const initialEdits: Record<string, any> = {}
-                    items.forEach(item => {
-                      const tags = [
-                        item.custom_order_id && 'Custom', 
-                        item.is_repair && 'Repair', 
-                        item.store_restock_id && 'Restock'
-                      ].filter(Boolean).join(', ')
+                    if (Object.keys(ledgerEdits).length === 0) {
+                      const initialEdits: Record<string, any> = {}
+                      items.forEach(item => {
+                        const tags = [
+                          item.custom_order_id && 'Custom', 
+                          item.is_repair && 'Repair', 
+                          item.store_restock_id && 'Restock'
+                        ].filter(Boolean).join(', ')
 
-                      initialEdits[item.id] = {
-                        typeOfDia: '',
-                        diaPcs: '',
-                        gKt: '',
-                        receivedDate: item.status === 'received' ? 'YES' : '',
-                        partyName: tags, 
-                        partyPlace: '',
-                        remarkSize: ''
-                      }
-                    })
-                    setLedgerEdits(initialEdits)
-                    setEmptyEdits({})
+                        initialEdits[item.id] = {
+                          typeOfDia: '', diaPcs: '', gKt: '',
+                          receivedDate: item.status === 'received' ? format(new Date(), 'dd/MM/yyyy') : '',
+                          partyName: tags, partyPlace: '', remarkSize: '', signature: ''
+                        }
+                      })
+                      setLedgerEdits(initialEdits)
+                    }
                     setShowLedgerPaper(true)
                   }} 
                   variant="outline" 
@@ -446,7 +426,6 @@ export default function OverviewTab({ job }: Props) {
                 <p className="text-sm font-semibold text-gray-800">{job.design_code || 'N/A'}</p>
               </div>
               <div>
-                {/* ✨ UPDATED LABEL TO METAL */}
                 <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mb-1">Est. Metal</p>
                 <p className="text-sm font-semibold text-gray-800">{job.gold_expected_weight_g || 0} <span className="text-gray-400 font-medium">g</span></p>
               </div>
@@ -584,7 +563,6 @@ export default function OverviewTab({ job }: Props) {
               </div>
 
               <div className="w-full md:w-32 space-y-1.5">
-                {/* ✨ UPDATED LABEL TO METAL */}
                 <Label className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Exp. Metal (g)</Label>
                 <div className="relative">
                   <Input type="number" step="0.001" placeholder="0.00" className="h-10 rounded-xl text-sm font-semibold bg-gray-50 border-gray-200/60 focus:bg-white focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 shadow-sm transition-all pr-6" value={expectedGold} onChange={(e) => setExpectedGold(e.target.value)} />
@@ -613,7 +591,6 @@ export default function OverviewTab({ job }: Props) {
                         <TableHead className="w-[50px]"></TableHead>
                         <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">SKU / Style Ref</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Category</TableHead>
-                        {/* ✨ UPDATED LABEL TO METAL */}
                         <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Metal (g)</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Exp. Dia (ct)</TableHead>
                         <TableHead className="text-[10px] font-bold uppercase tracking-widest text-gray-500 h-10">Context Tags</TableHead>
@@ -719,7 +696,6 @@ export default function OverviewTab({ job }: Props) {
                       </TableHead>
                       <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 px-2">SKU Reference</TableHead>
                       <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Category</TableHead>
-                      {/* ✨ UPDATED LABEL TO METAL */}
                       <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Metal</TableHead>
                       <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11 text-right">Exp Dia</TableHead>
                       <TableHead className="text-[11px] font-bold uppercase tracking-widest text-gray-500 h-11">Status / Tags</TableHead>
@@ -817,166 +793,220 @@ export default function OverviewTab({ job }: Props) {
 
       {/* ✨ ON-PAPER EDITING OVERLAY FOR LEDGER */}
       {showLedgerPaper && (
-        <div className="fixed inset-0 z-[100] bg-zinc-900/95 backdrop-blur-sm overflow-y-auto flex flex-col items-center py-8">
+        <div className="fixed inset-0 z-[100] bg-zinc-900/95 backdrop-blur-sm overflow-y-auto flex flex-col items-center py-8 custom-scrollbar">
           
-          <div className="w-[210mm] flex justify-between mb-4 sticky top-4 z-[110] print:hidden">
-            <Button variant="outline" className="bg-white hover:bg-gray-100 text-gray-700" onClick={() => setShowLedgerPaper(false)}>
+          <div className="w-full max-w-[210mm] flex flex-col sm:flex-row justify-between gap-4 mb-4 sticky top-4 z-[110] print:hidden bg-zinc-900/80 p-3 rounded-xl backdrop-blur-md border border-zinc-800 shadow-xl">
+            <Button variant="outline" className="bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-white w-full sm:w-auto" onClick={() => setShowLedgerPaper(false)}>
               <ArrowLeft className="w-4 h-4 mr-2" /> Back
             </Button>
-            <div className="flex gap-2">
-               <Button className="bg-blue-600 hover:bg-blue-700 text-white shadow-lg" onClick={handlePrintDocument}>
+            
+            <div className="flex flex-wrap gap-2 items-center justify-end w-full sm:w-auto">
+               
+               {/* ✨ PRINT LAYOUT TOGGLE */}
+               <Select value={printLayout} onValueChange={(val: '2_ON_1' | '1_PER_PAGE') => setPrintLayout(val)}>
+                 <SelectTrigger className="w-full sm:w-[160px] h-10 bg-zinc-800 border-zinc-700 text-white text-xs font-bold focus:ring-0 z-[200]">
+                   <SelectValue placeholder="Print Layout" />
+                 </SelectTrigger>
+                 <SelectContent className="border-zinc-700 bg-zinc-800 text-white z-[200]">
+                   <SelectItem value="2_ON_1" className="text-xs font-medium focus:bg-zinc-700 focus:text-white cursor-pointer">2 Copies / 1 Page</SelectItem>
+                   <SelectItem value="1_PER_PAGE" className="text-xs font-medium focus:bg-zinc-700 focus:text-white cursor-pointer">Separate Pages</SelectItem>
+                 </SelectContent>
+               </Select>
+
+               {/* ✨ VERSION HISTORY DROPDOWN */}
+               {versions.length > 0 && (
+                 <Select value={activeVersion} onValueChange={loadVersion}>
+                   <SelectTrigger className="w-full sm:w-[180px] h-10 bg-zinc-800 border-zinc-700 text-white text-xs font-bold focus:ring-0 z-[200]">
+                     <History className="w-3.5 h-3.5 mr-2" />
+                     <SelectValue placeholder="Load Previous Version" />
+                   </SelectTrigger>
+                   <SelectContent className="border-zinc-700 bg-zinc-800 text-white z-[200]">
+                     {versions.map((v, i) => (
+                       <SelectItem key={v.timestamp} value={v.timestamp} className="text-xs font-medium focus:bg-zinc-700 focus:text-white cursor-pointer">
+                         {i === 0 ? "Latest: " : "Saved: "} {format(new Date(v.timestamp), 'dd/MM/yyyy HH:mm')}
+                       </SelectItem>
+                     ))}
+                   </SelectContent>
+                 </Select>
+               )}
+
+               <Button variant="secondary" className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg border-none h-10" onClick={handleSaveLedgerToDatabase} disabled={isSavingLedger}>
+                 {isSavingLedger ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                 Save Version
+               </Button>
+               <Button className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shadow-lg border-none h-10" onClick={handlePrintDocument}>
                  <Printer className="w-4 h-4 mr-2" /> Print Ledger
                </Button>
             </div>
           </div>
 
-          <div ref={documentPrintRef} className="bg-white p-6 font-sans w-[210mm] min-h-[297mm] shadow-2xl shrink-0 print:shadow-none print:w-full print:h-full print:p-0 print:m-0 relative">
+          {/* ✨ CONTINUOUS LEDGER FORMAT FOR PRINTING */}
+          <div ref={documentPrintRef} className="bg-white font-sans w-full max-w-[210mm] shadow-2xl shrink-0 print:shadow-none print:w-full print:p-0 print:m-0 mx-auto">
              
-             {/* Document Header */}
-             <div className="text-center mb-2">
-                <input 
-                   type="text" 
-                   value={ledgerMeta.issuerName} 
-                   onChange={(e) => setLedgerMeta({...ledgerMeta, issuerName: e.target.value})} 
-                   className="text-4xl font-black uppercase tracking-widest text-[#b91c1c] text-center w-full bg-transparent border-none outline-none focus:bg-blue-50/50 print:text-[#b91c1c]" 
-                />
-                <p className="text-[13px] font-bold text-[#b91c1c] tracking-wide">Diamonds-n-Jewellery</p>
-                <p className="text-[11px] font-bold text-[#b91c1c] mt-1">Issue to Karigar and Jewellery Receipt Mfg. Memo.</p>
-             </div>
+             <LedgerTemplate copyType="ORIGINAL" />
 
-             {/* Metadata Details */}
-             <div className="flex justify-between items-end mb-3">
-                <div className="flex flex-col gap-2">
-                   <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
-                      <span className="w-20">MEMO No.:</span>
-                      <span className="border-b border-[#b91c1c] min-w-[150px] inline-block text-black px-2 pb-0.5">{job.job_bag_number}</span>
-                   </div>
-                   <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
-                      <span className="w-20">Name :</span>
-                      <span className="border-b border-[#b91c1c] min-w-[250px] inline-block text-black px-2 pb-0.5">{job.karigars?.full_name || ''}</span>
-                   </div>
+             {printLayout === '2_ON_1' ? (
+                <div className="w-full border-b border-dashed border-gray-400 my-8 print:my-12 flex items-center justify-center relative z-20 opacity-50 print:opacity-100 print:break-inside-avoid" style={{ pageBreakInside: 'avoid' }}>
+                   <span className="absolute bg-white px-2 text-[8px] text-gray-500 tracking-widest uppercase font-mono">✂️ Center Cut Line ✂️</span>
                 </div>
-                <div className="flex flex-col gap-2 items-end">
-                   <div className="flex items-end gap-2 text-sm font-bold text-[#b91c1c]">
-                      <span>Date :</span>
-                      <span className="border-b border-[#b91c1c] min-w-[120px] inline-block px-2 text-center pb-0.5">
-                         <input type="text" value={ledgerMeta.memoDate} onChange={e => setLedgerMeta({...ledgerMeta, memoDate: e.target.value})} className="w-full text-center bg-transparent border-none outline-none text-black font-bold focus:bg-blue-50/50" />
-                      </span>
-                   </div>
-                   <div className="text-xs font-bold mt-1 text-[#b91c1c] flex items-center">
-                      GST NO: <input type="text" value={ledgerMeta.gstNo} onChange={e => setLedgerMeta({...ledgerMeta, gstNo: e.target.value})} className="text-black ml-1 w-32 border-none outline-none focus:bg-blue-50/50 uppercase" />
-                   </div>
-                </div>
-             </div>
+             ) : (
+                <div className="print:break-before-page break-before-page" style={{ pageBreakBefore: 'always' }} />
+             )}
 
-             {/* Banner */}
-             <div className="w-full text-center border-y-2 border-[#b91c1c] py-1 mb-0 bg-red-50/10">
-                <input type="text" value={ledgerMeta.bannerText} onChange={e => setLedgerMeta({...ledgerMeta, bannerText: e.target.value})} className="w-full text-center text-[10px] font-bold text-[#b91c1c] bg-transparent border-none outline-none focus:bg-blue-50/50" />
-             </div>
-
-             {/* Items Table Grid */}
-             <table className="w-full border-collapse border-2 border-t-0 border-[#b91c1c] text-[10px] text-center table-fixed">
-                <thead>
-                   <tr className="text-[#b91c1c]">
-                     <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-8" rowSpan={2}>Qty</th>
-                     <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-10" rowSpan={2}>Sr.no</th>
-                     <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-[90px]" rowSpan={2}>Jewellery<br/>Design</th>
-                     <th className="border-b border-r border-[#b91c1c] p-1 font-bold" colSpan={6}>Studding Details</th>
-                     <th className="border-b-2 border-r border-[#b91c1c] p-1 font-bold w-14 leading-tight" rowSpan={2}>Jewellery<br/>Recieved<br/>Date</th>
-                     <th className="border-b border-r border-[#b91c1c] p-1 font-bold" colSpan={2}>Remark</th>
-                     <th className="border-b-2 p-1 font-bold w-12 text-center" rowSpan={2}>Remark<br/><span className="font-normal text-[9px]">size</span></th>
-                   </tr>
-                   <tr className="border-b-2 border-[#b91c1c] text-[#b91c1c]">
-                     <th className="border-r border-[#b91c1c] p-1 font-bold w-10 leading-tight">Type of<br/>Dia.</th>
-                     <th className="border-r border-[#b91c1c] p-1 font-bold w-8 leading-tight">Dia.<br/>Pcs.</th>
-                     <th className="border-r border-[#b91c1c] p-1 font-bold w-12 leading-tight">Dia.<br/>Carats</th>
-                     <th className="border-r border-[#b91c1c] p-1 font-bold w-8 leading-tight">G.<br/>KT</th>
-                     <th className="border-r border-[#b91c1c] p-1 font-bold w-10">14K</th>
-                     <th className="border-r border-[#b91c1c] p-1 font-bold w-10">18K</th>
-                     <th className="border-r border-[#b91c1c] p-1 font-normal w-14">Party name</th>
-                     <th className="border-r border-[#b91c1c] p-1 font-normal w-14">Party Place</th>
-                   </tr>
-                </thead>
-                <tbody className="text-black font-semibold">
-                   {/* Render Actual Items */}
-                   {items.map((item, idx) => {
-                     const editState = ledgerEdits[item.id] || {};
-                     const setEdit = (field: string, val: string) => setLedgerEdits(prev => ({...prev, [item.id]: { ...prev[item.id], [field]: val }}));
-
-                     return (
-                       <tr key={item.id} className="border-b border-[#b91c1c] h-8">
-                         <td className="border-r border-[#b91c1c] p-1">1</td>
-                         <td className="border-r border-[#b91c1c] p-1">{idx + 1}</td>
-                         <td className="border-r border-[#b91c1c] p-1 text-[9px] leading-tight break-words">{item.sku_reference} <br/><span className="font-medium text-[8px]">{item.ornament_type}</span></td>
-                         
-                         {/* ✨ EDITABLE BLUE MARK FIELDS */}
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.typeOfDia} onChange={(v) => setEdit('typeOfDia', v)} /></td>
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.diaPcs} onChange={(v) => setEdit('diaPcs', v)} /></td>
-                         <td className="border-r border-[#b91c1c] p-1">{item.expected_diamond_weight_cts || ''}</td>
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.gKt} onChange={(v) => setEdit('gKt', v)} /></td>
-                         <td className="border-r border-[#b91c1c] p-1"></td>
-                         <td className="border-r border-[#b91c1c] p-1">{item.expected_gold_weight_g || ''}</td>
-                         
-                         {/* Received Date & Remarks */}
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.receivedDate} onChange={(v) => setEdit('receivedDate', v)} /></td>
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.partyName} onChange={(v) => setEdit('partyName', v)} /></td>
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.partyPlace} onChange={(v) => setEdit('partyPlace', v)} /></td>
-                         <td className="p-0"><InputCell value={editState.remarkSize} onChange={(v) => setEdit('remarkSize', v)} /></td>
-                       </tr>
-                     )
-                   })}
-                   
-                   {/* Editable Empty grid rows */}
-                   {Array.from({ length: Math.max(0, 10 - items.length) }).map((_, idx) => {
-                      const editState = emptyEdits[idx] || {};
-                      const setEdit = (field: string, val: string) => setEmptyEdits(prev => ({...prev, [idx]: { ...prev[idx], [field]: val }}));
-                      return (
-                       <tr key={`empty-${idx}`} className="border-b border-[#b91c1c] h-[34px]">
-                         <td className="border-r border-[#b91c1c] p-1"></td>
-                         <td className="border-r border-[#b91c1c] p-1"></td>
-                         <td className="border-r border-[#b91c1c] p-1"></td>
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.typeOfDia} onChange={(v) => setEdit('typeOfDia', v)} /></td>
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.diaPcs} onChange={(v) => setEdit('diaPcs', v)} /></td>
-                         <td className="border-r border-[#b91c1c] p-1"></td>
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.gKt} onChange={(v) => setEdit('gKt', v)} /></td>
-                         <td className="border-r border-[#b91c1c] p-1"></td>
-                         <td className="border-r border-[#b91c1c] p-1"></td>
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.receivedDate} onChange={(v) => setEdit('receivedDate', v)} /></td>
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.partyName} onChange={(v) => setEdit('partyName', v)} /></td>
-                         <td className="border-r border-[#b91c1c] p-0"><InputCell value={editState.partyPlace} onChange={(v) => setEdit('partyPlace', v)} /></td>
-                         <td className="p-0"><InputCell value={editState.remarkSize} onChange={(v) => setEdit('remarkSize', v)} /></td>
-                       </tr>
-                      )
-                   })}
-                </tbody>
-             </table>
-
-             {/* Footer Signatures Area */}
-             <div className="w-full border-2 border-t-0 border-[#b91c1c] flex flex-col text-[#b91c1c]">
-                <div className="flex border-b-2 border-[#b91c1c] bg-red-50/10">
-                   <div className="flex-1 py-1.5 px-2 text-center text-[10px] font-bold border-r-2 border-[#b91c1c] leading-tight">
-                      Acknowledgement of entrustment<br/>as per the conditions on reverse
-                   </div>
-                   <div className="flex-1 py-1.5 px-2 text-center text-[10px] font-bold flex items-center justify-center">
-                      Subject to <input type="text" value={ledgerMeta.jurisdiction} onChange={e => setLedgerMeta({...ledgerMeta, jurisdiction: e.target.value})} className="w-20 mx-1 text-center bg-transparent border-none outline-none focus:bg-blue-50/50" /> Jurisdiction
-                   </div>
-                </div>
-                <div className="flex h-20">
-                   <div className="flex-1 p-2 pb-1 text-center text-[10px] font-bold border-r-2 border-[#b91c1c] flex flex-col justify-end items-center">
-                      <input type="text" className="w-[80%] border-none bg-transparent outline-none text-blue-700 font-bold text-center print:text-black focus:bg-blue-50/50 mb-1" value={signatureEdits.receiver} onChange={e => setSignatureEdits({...signatureEdits, receiver: e.target.value})} />
-                      Receiver's Signature
-                   </div>
-                   <div className="flex-1 p-2 pb-1 text-center text-[10px] font-bold flex flex-col justify-end items-center">
-                      <input type="text" className="w-[80%] border-none bg-transparent outline-none text-blue-700 font-bold text-center print:text-black focus:bg-blue-50/50 mb-1" value={signatureEdits.issuer} onChange={e => setSignatureEdits({...signatureEdits, issuer: e.target.value})} />
-                      For {ledgerMeta.issuerName}
-                   </div>
-                </div>
-             </div>
+             <LedgerTemplate copyType="DUPLICATE" />
 
           </div>
         </div>
       )}
-
     </>
   )
+
+  // ✨ CONTINUOUS LEDGER TEMPLATE (NO FIXED HEIGHT, NO FLEX-COL OVERFLOW ISSUES)
+  function LedgerTemplate({ copyType }: { copyType: 'ORIGINAL' | 'DUPLICATE' }) {
+    return (
+      <div className="w-full relative bg-white box-border p-4">
+        
+        <div className="absolute top-4 left-4 border-2 border-black px-1.5 py-0.5 text-[8px] font-black tracking-widest text-black z-10 bg-white shadow-sm print:shadow-none">
+           {copyType}
+        </div>
+        
+        {/* Document Header */}
+        <div className="text-center mb-1 shrink-0 mt-2">
+           <input 
+              type="text" 
+              value={ledgerMeta.issuerName} 
+              onChange={(e) => setLedgerMeta({...ledgerMeta, issuerName: e.target.value})} 
+              className="text-3xl font-black uppercase tracking-widest text-[#b91c1c] text-center w-full bg-transparent border-none outline-none focus:bg-blue-50/50 print:text-[#b91c1c] leading-none" 
+           />
+           <p className="text-[12px] font-bold text-[#b91c1c] tracking-wide mt-1">Diamonds-n-Jewellery</p>
+           <p className="text-[10px] font-bold text-[#b91c1c]">Issue to Karigar and Jewellery Receipt Mfg. Memo.</p>
+        </div>
+
+        {/* Metadata Details */}
+        <div className="flex justify-between items-end mb-2 shrink-0">
+           <div className="flex flex-col gap-1">
+              <div className="flex items-end gap-2 text-xs font-bold text-[#b91c1c]">
+                 <span className="w-16">MEMO No.:</span>
+                 <span className="border-b border-[#b91c1c] min-w-[150px] inline-block text-black px-2 pb-0.5">{job.job_bag_number}</span>
+              </div>
+              <div className="flex items-end gap-2 text-xs font-bold text-[#b91c1c]">
+                 <span className="w-16">Name :</span>
+                 <span className="border-b border-[#b91c1c] min-w-[250px] inline-block text-black px-2 pb-0.5">{job.karigars?.full_name || ''}</span>
+              </div>
+           </div>
+           <div className="flex flex-col gap-1 items-end">
+              <div className="flex items-end gap-2 text-xs font-bold text-[#b91c1c]">
+                 <span>Date :</span>
+                 <span className="border-b border-[#b91c1c] min-w-[120px] inline-block px-2 text-center pb-0.5">
+                    <input type="text" value={ledgerMeta.memoDate} onChange={e => setLedgerMeta({...ledgerMeta, memoDate: e.target.value})} className="w-full text-center bg-transparent border-none outline-none text-black font-bold focus:bg-blue-50/50" />
+                 </span>
+              </div>
+              <div className="text-[10px] font-bold mt-1 text-[#b91c1c] flex items-center">
+                 GST NO: <input type="text" value={ledgerMeta.gstNo} onChange={e => setLedgerMeta({...ledgerMeta, gstNo: e.target.value})} className="text-black ml-1 w-32 border-none outline-none focus:bg-blue-50/50 uppercase" />
+              </div>
+           </div>
+        </div>
+
+        <div className="w-full text-center border-y-2 border-[#b91c1c] py-0.5 mb-0 bg-red-50/10 shrink-0">
+           <input type="text" value={ledgerMeta.bannerText} onChange={e => setLedgerMeta({...ledgerMeta, bannerText: e.target.value})} className="w-full text-center text-[9px] font-bold text-[#b91c1c] bg-transparent border-none outline-none focus:bg-blue-50/50" />
+        </div>
+
+        {/* Dynamic Continuous Table */}
+        <table className="w-full border-collapse border-2 border-t-0 border-[#b91c1c] text-[9px] text-center table-fixed">
+           <thead className="print:break-inside-avoid">
+              <tr className="text-[#b91c1c]">
+                <th className="border-b-2 border-r border-[#b91c1c] p-0 font-bold w-6" rowSpan={2}>Qty</th>
+                <th className="border-b-2 border-r border-[#b91c1c] p-0 font-bold w-8" rowSpan={2}>Sr.no</th>
+                <th className="border-b-2 border-r border-[#b91c1c] p-0 font-bold w-[75px]" rowSpan={2}>Jewellery<br/>Design</th>
+                <th className="border-b border-r border-[#b91c1c] p-0 font-bold" colSpan={6}>Studding Details</th>
+                <th className="border-b-2 border-r border-[#b91c1c] p-0 font-bold w-12 leading-tight" rowSpan={2}>Recieved<br/>Date</th>
+                <th className="border-b border-r border-[#b91c1c] p-0 font-bold" colSpan={2}>Remark</th>
+                <th className="border-b-2 border-r border-[#b91c1c] p-0 font-bold w-10 text-center" rowSpan={2}>Remark<br/><span className="font-normal text-[7px]">size</span></th>
+                <th className="border-b-2 border-[#b91c1c] p-0 font-bold w-12 text-center" rowSpan={2}>Sign</th>
+              </tr>
+              <tr className="border-b-2 border-[#b91c1c] text-[#b91c1c]">
+                <th className="border-r border-[#b91c1c] p-0.5 font-bold w-8 leading-tight">Dia<br/>Type</th>
+                <th className="border-r border-[#b91c1c] p-0.5 font-bold w-7 leading-tight">Pcs</th>
+                <th className="border-r border-[#b91c1c] p-0.5 font-bold w-10 leading-tight">Carats</th>
+                <th className="border-r border-[#b91c1c] p-0.5 font-bold w-8 leading-tight">G.KT</th>
+                <th className="border-r border-[#b91c1c] p-0.5 font-bold w-9">14K</th>
+                <th className="border-r border-[#b91c1c] p-0.5 font-bold w-9">18K</th>
+                <th className="border-r border-[#b91c1c] p-0.5 font-normal w-12">Party</th>
+                <th className="border-r border-[#b91c1c] p-0.5 font-normal w-12">Place</th>
+              </tr>
+           </thead>
+           <tbody className="text-black font-semibold">
+              {items.map((item, idx) => {
+                const editState = ledgerEdits[item.id] || {};
+                const setEdit = (field: string, val: string) => setLedgerEdits(prev => ({...prev, [item.id]: { ...prev[item.id], [field]: val }}));
+
+                return (
+                  <tr key={item.id} className="border-b border-[#b91c1c] h-[26px]">
+                    <td className="border-r border-[#b91c1c] p-0.5">1</td>
+                    <td className="border-r border-[#b91c1c] p-0.5">{idx + 1}</td>
+                    <td className="border-r border-[#b91c1c] p-0.5 text-[8px] leading-tight break-words">{item.sku_reference}</td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.typeOfDia} onChange={(v) => setEdit('typeOfDia', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.diaPcs} onChange={(v) => setEdit('diaPcs', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0.5">{item.expected_diamond_weight_cts || ''}</td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.gKt} onChange={(v) => setEdit('gKt', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0.5"></td>
+                    <td className="border-r border-[#b91c1c] p-0.5">{item.expected_gold_weight_g || ''}</td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.receivedDate} onChange={(v) => setEdit('receivedDate', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.partyName} onChange={(v) => setEdit('partyName', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.partyPlace} onChange={(v) => setEdit('partyPlace', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.remarkSize} onChange={(v) => setEdit('remarkSize', v)} /></td>
+                    <td className="p-0 border-l border-[#b91c1c]"><InputCell className="min-h-[26px]" value={editState.signature} onChange={(v) => setEdit('signature', v)} /></td>
+                  </tr>
+                )
+              })}
+              
+              {Array.from({ length: Math.max(0, 10 - items.length) }).map((_, idx) => {
+                 const editState = emptyEdits[idx] || {};
+                 const setEdit = (field: string, val: string) => setEmptyEdits(prev => ({...prev, [idx]: { ...prev[idx], [field]: val }}));
+                 return (
+                  <tr key={`empty-${idx}`} className="border-b border-[#b91c1c] h-[26px]">
+                    <td className="border-r border-[#b91c1c] p-0.5"></td>
+                    <td className="border-r border-[#b91c1c] p-0.5"></td>
+                    <td className="border-r border-[#b91c1c] p-0.5"></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.typeOfDia} onChange={(v) => setEdit('typeOfDia', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.diaPcs} onChange={(v) => setEdit('diaPcs', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0.5"></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.gKt} onChange={(v) => setEdit('gKt', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0.5"></td>
+                    <td className="border-r border-[#b91c1c] p-0.5"></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.receivedDate} onChange={(v) => setEdit('receivedDate', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.partyName} onChange={(v) => setEdit('partyName', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.partyPlace} onChange={(v) => setEdit('partyPlace', v)} /></td>
+                    <td className="border-r border-[#b91c1c] p-0"><InputCell className="min-h-[26px]" value={editState.remarkSize} onChange={(v) => setEdit('remarkSize', v)} /></td>
+                    <td className="p-0 border-l border-[#b91c1c]"><InputCell className="min-h-[26px]" value={editState.signature} onChange={(v) => setEdit('signature', v)} /></td>
+                  </tr>
+                 )
+              })}
+           </tbody>
+        </table>
+
+        {/* Connected Footer Signatures Area */}
+        <div className="w-full border-2 border-t-0 border-[#b91c1c] flex flex-col text-[#b91c1c] print:break-inside-avoid" style={{ pageBreakInside: 'avoid' }}>
+           <div className="flex border-b-2 border-[#b91c1c] bg-red-50/10">
+              <div className="flex-1 py-1 px-2 text-center text-[9px] font-bold border-r-2 border-[#b91c1c] leading-tight">
+                 Acknowledgement of entrustment as per the conditions on reverse
+              </div>
+              <div className="flex-1 py-1 px-2 text-center text-[9px] font-bold flex items-center justify-center">
+                 Subject to <input type="text" value={ledgerMeta.jurisdiction} onChange={e => setLedgerMeta({...ledgerMeta, jurisdiction: e.target.value})} className="w-16 mx-1 text-center bg-transparent border-none outline-none focus:bg-blue-50/50" /> Jurisdiction
+              </div>
+           </div>
+           <div className="flex h-12">
+              <div className="flex-1 p-1 text-center text-[9px] font-bold border-r-2 border-[#b91c1c] flex flex-col justify-end items-center">
+                 <input type="text" className="w-[80%] min-h-[20px] border-none bg-transparent outline-none text-blue-700 font-bold text-center print:text-black focus:bg-blue-50/50 mb-0.5" value={signatureEdits.receiver} onChange={e => setSignatureEdits({...signatureEdits, receiver: e.target.value})} />
+                 Receiver's Signature
+              </div>
+              <div className="flex-1 p-1 text-center text-[9px] font-bold flex flex-col justify-end items-center">
+                 <input type="text" className="w-[80%] min-h-[20px] border-none bg-transparent outline-none text-blue-700 font-bold text-center print:text-black focus:bg-blue-50/50 mb-0.5" value={signatureEdits.issuer} onChange={e => setSignatureEdits({...signatureEdits, issuer: e.target.value})} />
+                 For {ledgerMeta.issuerName}
+              </div>
+           </div>
+        </div>
+      </div>
+    );
+  }
 }

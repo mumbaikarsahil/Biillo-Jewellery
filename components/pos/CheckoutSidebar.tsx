@@ -15,6 +15,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner' 
+import { format } from 'date-fns'
 
 import { CustomerSelector } from './CustomerSelector'
 import { VoucherExchangePanel } from './VoucherExchangePanel'
@@ -45,8 +46,11 @@ export function CheckoutSidebar({
   appliedPointsAmount, setAppliedPointsAmount,
   rawPointsRedeemed, setRawPointsRedeemed,
   
-  // ✨ Referral Exports
   referralInput, setReferralInput, activeReferral, setActiveReferral, handleApplyReferral, referralDiscountAmount,
+
+  // ✨ FIX: Accept manual advance props from the hook
+  manualAdvance, setManualAdvance,
+  manualAdvanceDate, setManualAdvanceDate,
 
   estimateChargeType, 
   setEstimateChargeType,
@@ -74,9 +78,8 @@ export function CheckoutSidebar({
   const [selectedBankId, setSelectedBankId] = useState<string>('none')
   const [transferType, setTransferType] = useState<string>('IMPS') 
   const [splitRefs, setSplitRefs] = useState({ card: '', upi: '', bank: '', cheque: '' })
-  
-  const [showLedgerDetails, setShowLedgerDetails] = useState(false)
 
+  const [showLedgerDetails, setShowLedgerDetails] = useState(false)
   const [liveLoyaltyData, setLiveLoyaltyData] = useState<{id: string, total_points: number} | null>(null);
 
   useEffect(() => {
@@ -125,8 +128,11 @@ export function CheckoutSidebar({
                        : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
                        : (Number(finalPayable) || 0);
 
-  const splitRemaining = Math.max(0, displayTotal - (Number(currentSplitTotal) || 0))
-  const isSplitValid = Math.abs((Number(currentSplitTotal) || 0) - displayTotal) < 0.1
+  // ✨ ADJUSTED TOTAL AFTER LEGACY ADVANCE
+  const adjustedDisplayTotal = Math.max(0, displayTotal - (Number(manualAdvance) || 0));
+
+  const splitRemaining = Math.max(0, adjustedDisplayTotal - (Number(currentSplitTotal) || 0))
+  const isSplitValid = Math.abs((Number(currentSplitTotal) || 0) - adjustedDisplayTotal) < 0.1
 
   const customEstBase = Number(customOrderDetails?.estimated_value) || 0;
   const customDiscount = discountType === 'percent' ? (customEstBase * (Number(discountValue) || 0) / 100) : (Number(discountValue) || 0);
@@ -143,7 +149,7 @@ export function CheckoutSidebar({
   const customAdvancePaid = Number(customOrderDetails?.advance_paid) || 0;
   const totalSettlements = (Number(appliedKittyAmount) || 0) + (Number(appliedCreditAmount) || 0) + (Number(appliedPointsAmount) || 0);
 
-  const customNetEst = Math.max(0, customTotalEstimate - customAdvancePaid - totalSettlements);
+  const customNetEst = Math.max(0, customTotalEstimate - customAdvancePaid - totalSettlements - (Number(manualAdvance) || 0));
 
   useEffect(() => {
     if (activeVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0 || appliedPointsAmount > 0)) {
@@ -170,10 +176,18 @@ export function CheckoutSidebar({
       if (Number(splitPayments?.bank) > 0) finalTransferType = transferType;
     }
 
+    // INJECT LEGACY ADVANCE REMARKS
+    let finalRemarks = paymentRemarks;
+    if (Number(manualAdvance) > 0) {
+        const dateStr = manualAdvanceDate ? ` on ${format(new Date(manualAdvanceDate), 'dd MMM yyyy')}` : '';
+        const advRemark = `[Legacy Advance Adjusted: ₹${manualAdvance}${dateStr}]`;
+        finalRemarks = finalRemarks ? `${finalRemarks} | ${advRemark}` : advRemark;
+    }
+
     onPreviewRequest(isEstimate, {
       transaction_reference: finalRef,
-      payment_remarks: paymentRemarks,
-      billing_remarks: paymentRemarks,
+      payment_remarks: finalRemarks,
+      billing_remarks: finalRemarks,
       target_bank_account_id: selectedBankId !== 'none' ? selectedBankId : null,
       transfer_type: finalTransferType,
       
@@ -344,6 +358,40 @@ export function CheckoutSidebar({
                 onChange={(e) => setPaymentRemarks(e.target.value)}
               />
             </div>
+          </section>
+        )}
+
+        {/* ✨ LEGACY / UNRECORDED ADVANCE BLOCK */}
+        {['normal', 'custom'].includes(mode) && (
+          <section className="space-y-3 bg-indigo-50/30 p-3 border border-indigo-100 rounded-2xl shadow-sm">
+            <div className="flex justify-between items-center">
+              <Label className="text-[11px] font-bold text-indigo-800 uppercase tracking-widest pl-1">
+                Legacy / Unrecorded Advance
+              </Label>
+            </div>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-400 text-sm font-bold">₹</span>
+                <Input 
+                  type="number" 
+                  placeholder="Amount Paid" 
+                  className="h-9 pl-7 text-xs bg-white border-indigo-200 focus-visible:ring-indigo-500" 
+                  value={manualAdvance} 
+                  onChange={e => setManualAdvance(e.target.value)} 
+                />
+              </div>
+              <Input 
+                type="date" 
+                className="h-9 text-xs flex-1 bg-white border-indigo-200 focus-visible:ring-indigo-500" 
+                value={manualAdvanceDate} 
+                onChange={e => setManualAdvanceDate(e.target.value)} 
+              />
+            </div>
+            {Number(manualAdvance) > 0 && (
+              <p className="text-[9px] text-indigo-600 font-bold px-1 uppercase tracking-wide">
+                Will be deducted from Final Payable Amount.
+              </p>
+            )}
           </section>
         )}
 
@@ -779,7 +827,7 @@ export function CheckoutSidebar({
 
               <div className="flex justify-between items-center text-purple-900 font-bold pt-1.5 mt-1 border-t border-purple-200/50">
                 <span>Est. Balance on Pickup</span>
-                <span className="tabular-nums">₹{customNetEst.toLocaleString('en-IN')}</span>
+                <span>₹{customNetEst.toLocaleString('en-IN')}</span>
               </div>
             </div>
           )}
@@ -789,9 +837,14 @@ export function CheckoutSidebar({
           <p className="text-xs font-black uppercase text-slate-500">
             {mode === 'custom' || mode === 'repair' ? 'Balance Advance' : mode === 'return' ? 'Refund Amount' : mode === 'challan' ? 'Memo Value' : 'Balance to Pay'}
           </p>
-          <p className={`text-3xl sm:text-4xl font-bold tracking-tight tabular-nums ${theme.text}`}>
-             ₹{displayTotal.toLocaleString()}
-          </p>
+          <div className="text-right">
+             {Number(manualAdvance) > 0 && (
+                <p className="text-[10px] text-slate-400 line-through mb-0.5">₹{displayTotal.toLocaleString()}</p>
+             )}
+             <p className={`text-3xl sm:text-4xl font-bold tracking-tight tabular-nums ${theme.text}`}>
+               ₹{adjustedDisplayTotal.toLocaleString()}
+             </p>
+          </div>
         </div>
 
         <div className="flex flex-col gap-2.5 w-full">

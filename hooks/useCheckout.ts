@@ -82,6 +82,9 @@ export function useCheckout({
   const effectiveDate = getEffectiveDate();
   const effectiveDateISO = effectiveDate.toISOString();
 
+  // ✨ Auto-fill customer for returns from the original invoice if available
+  const effectiveCustomer = (mode === 'return' && returnDetails?.originalCustomer) ? returnDetails.originalCustomer : selectedCustomer;
+
   const discountNum = parseFloat(discountValue) || 0
   const standardDiscount = discountType === 'percent' ? (subtotal * discountNum) / 100 : discountNum
   const hasVoucher = activeVoucher !== null
@@ -140,9 +143,6 @@ export function useCheckout({
 
   const finalPayableNet = Math.max(0, finalPayableGross - cartAdvance - appliedKittyAmount - appliedCreditAmount);
 
-  // ==============================================================
-  // ✨ WHATSAPP MESSAGING ENGINE
-  // ==============================================================
   const sendWhatsAppNotification = async (
     phone: string, 
     name: string, 
@@ -201,21 +201,18 @@ export function useCheckout({
     }
   };
 
-  // ✨ Validates and Applies 10% Referral Discount
-  // ✨ Validates and Applies 10% Referral Discount
   const handleApplyReferral = async () => {
     const input = referralInput.trim();
     if (!input) return toast.error("Please enter a Referral Code or Phone Number.");
     if (appliedKittyAmount > 0 || appliedCreditAmount > 0 || appliedVoucherAmount > 0) {
       return toast.error("Cannot club Referral Discounts with Vouchers, Kitty, or Wallet.");
     }
-    if (!selectedCustomer) return toast.error("Select a customer first.");
+    if (!effectiveCustomer) return toast.error("Select a customer first.");
 
     try {
       let account = null;
       let referrer = null;
 
-      // 1. First, try searching by exact Referral Code
       const { data: codeData } = await supabase
         .from('loyalty_accounts')
         .select(`id, referral_code, customer_id, customers!inner(id, full_name, phone)`)
@@ -226,9 +223,8 @@ export function useCheckout({
         account = codeData;
         referrer = Array.isArray(codeData.customers) ? codeData.customers[0] : codeData.customers;
       } else {
-        // 2. If no code matches, try searching by Phone Number
         const cleanPhone = input.replace(/\D/g, '');
-        if (cleanPhone.length >= 4) { // Prevent empty searches
+        if (cleanPhone.length >= 4) { 
           const { data: phoneData } = await supabase
             .from('loyalty_accounts')
             .select(`id, referral_code, customer_id, customers!inner(id, full_name, phone)`)
@@ -242,17 +238,14 @@ export function useCheckout({
         }
       }
 
-      // If both checks failed, throw the error
       if (!account || !referrer) {
         return toast.error("Invalid Referral Code or Phone Number.");
       }
 
-      // Prevent self-referrals
-      if (referrer.id === selectedCustomer.id) {
+      if (referrer.id === effectiveCustomer.id) {
         return toast.error("You cannot refer yourself.");
       }
 
-      // Success! Set the state
       setActiveReferral({
         referrer_id: referrer.id,
         code_or_phone: account.referral_code || referrer.phone,
@@ -266,7 +259,6 @@ export function useCheckout({
       toast.error("Failed to apply referral.");
     }
   };
-
 
   const handleApplyVoucher = async (overrideCode?: string) => {
     const validOverride = typeof overrideCode === 'string' ? overrideCode : undefined;
@@ -320,7 +312,7 @@ export function useCheckout({
 
       if (voucher.customer_id && voucher.customers) {
         const rawCust = Array.isArray(voucher.customers) ? voucher.customers[0] : voucher.customers;
-        if (selectedCustomer && selectedCustomer.id !== voucher.customer_id) {
+        if (effectiveCustomer && effectiveCustomer.id !== voucher.customer_id) {
           return toast.error(`Fraud Alert: Voucher registered to ${rawCust.full_name}.`)
         }
       }
@@ -376,16 +368,22 @@ export function useCheckout({
     }
   }
 
-  const generateDraftData = (isEstimate = false) => {
+  const generateDraftData = (isEstimate = false, customTransactionContext?: any) => {
     const draftInvoiceNo = isEstimate ? 'DRAFT-EST' 
                          : mode === 'normal' ? 'DRAFT-INV' 
                          : mode === 'challan' ? 'DRAFT-CHL' 
                          : mode === 'repair' ? 'DRAFT-REP' 
-                         : mode === 'return' ? 'DRAFT-RET' 
+                         : mode === 'return' ? 'DRAFT-VCH' 
                          : 'DRAFT-ORD';
-                         
-    const formattedPaymentMode = paymentMode === 'split' ? `SPLIT: ${JSON.stringify(splitPayments)}` : paymentMode
+    
     const activeBranch = allBranches?.find((b: any) => b.id === selectedLocation) || null;
+
+    const legacyAdvance = Number(customTransactionContext?.manual_advance) || 0;
+    const effectiveKittyAmt = Number(customTransactionContext?.applied_kitty || customTransactionContext?.appliedKitty || appliedKittyAmount);
+    const effectiveCreditAmt = Number(customTransactionContext?.applied_credit || customTransactionContext?.appliedCredit || appliedCreditAmount);
+    const effectivePointsAmt = Number(customTransactionContext?.applied_points || customTransactionContext?.appliedPoints || appliedPointsAmount);
+
+    const totalAdvanceRealized = cartAdvance + legacyAdvance;
 
     const mappedCustomOrder = mode === 'custom' && customOrderDetails ? {
       ...customOrderDetails,
@@ -420,11 +418,40 @@ export function useCheckout({
         }
     }
 
+    const requiredTotalForPreview = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
+                         : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
+                         : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
+                         : Math.max(0, finalPayableNet - legacyAdvance);
+
+    let previewPaymentMode = paymentMode;
+    let previewSplit: any = paymentMode === 'split' ? { ...splitPayments } : null;
+
+    if (effectiveKittyAmt > 0 || effectiveCreditAmt > 0 || effectivePointsAmt > 0 || legacyAdvance > 0) {
+        if (requiredTotalForPreview === 0) {
+            previewPaymentMode = legacyAdvance > 0 ? 'Advance / Settled' : 'Wallet / Loyalty';
+        } else {
+            previewPaymentMode = 'Split / Combined';
+            if (paymentMode !== 'split') {
+                previewSplit = {};
+                previewSplit[paymentMode] = requiredTotalForPreview;
+            }
+            if (effectiveKittyAmt > 0) previewSplit['kitty'] = effectiveKittyAmt;
+            if (effectiveCreditAmt > 0) previewSplit['wallet'] = effectiveCreditAmt;
+            if (effectivePointsAmt > 0) previewSplit['loyalty_points'] = effectivePointsAmt;
+            if (legacyAdvance > 0) previewSplit['legacy_advance'] = legacyAdvance;
+        }
+    }
+
+    let finalFormattedPaymentMode = previewPaymentMode;
+    if (previewPaymentMode === 'Split / Combined' || previewPaymentMode === 'split') {
+       finalFormattedPaymentMode = `SPLIT: ${JSON.stringify(previewSplit)}`;
+    }
+
     return {
       mode: isEstimate ? 'estimate' : mode, 
       invoice_number: draftInvoiceNo,
       date: effectiveDate,
-      customer: selectedCustomer,
+      customer: effectiveCustomer,
       branch: activeBranch, 
       items: cart,
       customOrder: mappedCustomOrder, 
@@ -432,7 +459,6 @@ export function useCheckout({
       returnDetails: mode === 'return' ? returnDetails : null, 
       
       subtotal: effectiveSubtotal, 
-      
       discountAmount: standardDiscount, 
       voucherAmount: appliedVoucherAmount, 
       handlingFee: finalHandlingFee, 
@@ -443,10 +469,10 @@ export function useCheckout({
       roundOffAmount: printRoundOff, 
       exchangeValue: exchangeNum, 
       
-      appliedKitty: appliedKittyAmount,
+      appliedKitty: effectiveKittyAmt,
       kittyPlanId: appliedKittyPlanId,
-      appliedCredit: appliedCreditAmount,
-      appliedPoints: appliedPointsAmount, 
+      appliedCredit: effectiveCreditAmt,
+      appliedPoints: effectivePointsAmt, 
       rawPointsRedeemed: rawPointsRedeemed, 
       referralDiscount: referralDiscountAmount,
       
@@ -454,12 +480,14 @@ export function useCheckout({
       estimateHandlingPct: estimateHandlingPercent,
       estimateHandlingAmt: printEstimateHandlingAmt,
       
+      advance_adjusted: totalAdvanceRealized,
+
       finalTotal: mode === 'custom' ? finalPayableGross 
                 : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                 : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
                 : isEstimate && mode === 'normal' ? printFinalTotal 
                 : finalPayableGross, 
-      paymentMode: formattedPaymentMode
+      paymentMode: finalFormattedPaymentMode
     }
   }
   
@@ -467,14 +495,14 @@ export function useCheckout({
     setIsProcessing(true)
     let finalNo = ''
     try {
-      
       const finalizingUserId = billedBy || appUser?.user_id || appUser?.id;
 
-      const effectiveKittyAmt = customTransactionContext?.applied_kitty || customTransactionContext?.appliedKitty || appliedKittyAmount;
+      const effectiveKittyAmt = Number(customTransactionContext?.applied_kitty || customTransactionContext?.appliedKitty || appliedKittyAmount);
       const effectiveKittyPlanId = customTransactionContext?.kitty_plan_id || customTransactionContext?.kittyPlanId || appliedKittyPlanId;
-      const effectiveCreditAmt = customTransactionContext?.applied_credit || customTransactionContext?.appliedCredit || appliedCreditAmount;
-      const effectivePointsAmt = customTransactionContext?.applied_points || customTransactionContext?.appliedPoints || appliedPointsAmount;
-      const effectiveRawPoints = customTransactionContext?.raw_points_redeemed || customTransactionContext?.rawPointsRedeemed || rawPointsRedeemed;
+      const effectiveCreditAmt = Number(customTransactionContext?.applied_credit || customTransactionContext?.appliedCredit || appliedCreditAmount);
+      const effectivePointsAmt = Number(customTransactionContext?.applied_points || customTransactionContext?.appliedPoints || appliedPointsAmount);
+      const effectiveRawPoints = Number(customTransactionContext?.raw_points_redeemed || customTransactionContext?.rawPointsRedeemed || rawPointsRedeemed);
+      const legacyAdvance = Number(customTransactionContext?.manual_advance) || 0;
 
       if (customTransactionContext) {
          if (effectiveKittyAmt) setAppliedKittyAmount(effectiveKittyAmt);
@@ -485,14 +513,14 @@ export function useCheckout({
       const requiredTotal = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
                           : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                           : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
-                          : finalPayableNet; 
+                          : Math.max(0, finalPayableNet - legacyAdvance); 
 
       if (paymentMode === 'split' && Math.abs(currentSplitTotal - requiredTotal) > 0.1) {
         toast.error(`Split total must match ₹${requiredTotal.toLocaleString()}`);
         setIsProcessing(false); return { success: false };
       }
 
-      const finalDraftData = generateDraftData(isEstimate);
+      const finalDraftData = generateDraftData(isEstimate, customTransactionContext);
 
       if (isEstimate) {
         finalNo = `EST-${Date.now().toString().slice(-6)}`
@@ -501,7 +529,7 @@ export function useCheckout({
         const { data: estData, error: estError } = await supabase.from('estimates').insert({
           company_id: appUser?.company_id,
           warehouse_id: selectedLocation,
-          customer_id: selectedCustomer?.id || null,
+          customer_id: effectiveCustomer?.id || null,
           estimate_number: finalNo,
           subtotal: finalDraftData.subtotal,
           discount_amount: finalDraftData.discountAmount + finalDraftData.voucherAmount + finalDraftData.exchangeValue,
@@ -532,9 +560,9 @@ export function useCheckout({
         let dbPaymentMode = paymentMode;
         let dbSplitPayments: any = paymentMode === 'split' ? { ...splitPayments } : null;
 
-        if (effectiveKittyAmt > 0 || effectiveCreditAmt > 0 || effectivePointsAmt > 0) {
+        if (effectiveKittyAmt > 0 || effectiveCreditAmt > 0 || effectivePointsAmt > 0 || legacyAdvance > 0) {
             if (requiredTotal === 0) {
-                dbPaymentMode = 'Wallet / Loyalty';
+                dbPaymentMode = legacyAdvance > 0 ? 'Advance / Settled' : 'Wallet / Loyalty';
             } else {
                 dbPaymentMode = 'Split / Combined';
                 if (paymentMode !== 'split') {
@@ -544,6 +572,7 @@ export function useCheckout({
                 if (effectiveKittyAmt > 0) dbSplitPayments['kitty'] = effectiveKittyAmt;
                 if (effectiveCreditAmt > 0) dbSplitPayments['wallet'] = effectiveCreditAmt;
                 if (effectivePointsAmt > 0) dbSplitPayments['loyalty_points'] = effectivePointsAmt;
+                if (legacyAdvance > 0) dbSplitPayments['legacy_advance'] = legacyAdvance;
             }
         }
 
@@ -551,7 +580,7 @@ export function useCheckout({
             const preTaxDeductions = standardDiscount + exchangeNum + appliedVoucherAmount + effectivePointsAmt + referralDiscountAmount;
             const invoiceData: any = {
               created_at: effectiveDateISO,
-              customer_id: selectedCustomer?.id, 
+              customer_id: effectiveCustomer?.id, 
               warehouse_id: selectedLocation,
               items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
               subtotal: subtotal, 
@@ -562,7 +591,7 @@ export function useCheckout({
               sgst_amount: sgstAmount, 
               round_off_amount: roundOffAmount,
               final_total: finalPayableGross, 
-              advance_adjusted: cartAdvance, 
+              advance_adjusted: cartAdvance + legacyAdvance, 
               voucher_code: finalVoucherCode || null,
               voucher_discount: appliedVoucherAmount, 
               Voucher_handling_fee: finalHandlingFee,
@@ -593,17 +622,17 @@ export function useCheckout({
             toast.success("Tax Invoice Generated!")
         } 
         else if (mode === 'custom') {
-            if (!selectedCustomer) throw new Error("Please select a customer for this Custom Order.")
+            if (!effectiveCustomer) throw new Error("Please select a customer for this Custom Order.")
             finalNo = `ORD-${Date.now().toString().slice(-6)}`
             const customCashAdvance = Number(customOrderDetails.advance_paid) || 0;
-            const totalRealizedAdvance = customCashAdvance + effectiveKittyAmt + effectiveCreditAmt + effectivePointsAmt;
+            const totalRealizedAdvance = customCashAdvance + effectiveKittyAmt + effectiveCreditAmt + effectivePointsAmt + legacyAdvance;
             const baseEstimate = Number(customOrderDetails.estimated_value) || 0;
 
             const payload = {
               created_at: effectiveDateISO, 
               company_id: appUser?.company_id,
               origin_warehouse_id: selectedLocation, 
-              customer_id: selectedCustomer.id,
+              customer_id: effectiveCustomer.id,
               order_number: finalNo,
               design_reference: customOrderDetails.design_reference,
               item_category: customOrderDetails.item_category,
@@ -643,13 +672,13 @@ export function useCheckout({
            await supabase.from('repair_tickets').update({ status: 'delivered' }).in('id', repairTicketIds);
         }
 
-        if (selectedCustomer) {
+        if (effectiveCustomer) {
             let updatePayload: any = {};
             let shouldUpdateCustomer = false;
 
             if (effectiveCreditAmt > 0) {
                 const fullRawCreditDeducted = Number(effectiveCreditAmt) / 0.80; 
-                updatePayload.store_credit_balance = Math.max(0, (selectedCustomer.store_credit_balance || 0) - fullRawCreditDeducted);
+                updatePayload.store_credit_balance = Math.max(0, (effectiveCustomer.store_credit_balance || 0) - fullRawCreditDeducted);
                 shouldUpdateCustomer = true;
             }
             
@@ -661,13 +690,13 @@ export function useCheckout({
             }
 
             if (shouldUpdateCustomer) {
-                await supabase.from('customers').update(updatePayload).eq('id', selectedCustomer.id);
+                await supabase.from('customers').update(updatePayload).eq('id', effectiveCustomer.id);
             }
 
             // 💎 1. DEDUCT REDEEMED POINTS
             let purchaserLoyaltyId = null;
             if (effectiveRawPoints > 0) {
-              const { data: purchaserAcc } = await supabase.from('loyalty_accounts').select('id').eq('customer_id', selectedCustomer.id).maybeSingle();
+              const { data: purchaserAcc } = await supabase.from('loyalty_accounts').select('id').eq('customer_id', effectiveCustomer.id).maybeSingle();
               if (purchaserAcc) {
                 purchaserLoyaltyId = purchaserAcc.id;
                 await supabase.from('loyalty_transactions').insert({
@@ -685,7 +714,7 @@ export function useCheckout({
             if (autoLoyaltyRules && autoLoyaltyRules.length > 0) {
               
               const repeatRule = autoLoyaltyRules.find(r => r.name.toLowerCase().includes('repeat'));
-              const { data: purchaserAcc } = await supabase.from('loyalty_accounts').select('id').eq('customer_id', selectedCustomer.id).maybeSingle();
+              const { data: purchaserAcc } = await supabase.from('loyalty_accounts').select('id').eq('customer_id', effectiveCustomer.id).maybeSingle();
               
               if (repeatRule && purchaserAcc) {
                 const pointsToAward = repeatRule.is_dynamic ? Math.floor(finalTaxableValue * 0.05) : repeatRule.points;
@@ -702,8 +731,8 @@ export function useCheckout({
                   const { data: finalAcc } = await supabase.from('loyalty_accounts').select('total_points').eq('id', purchaserAcc.id).single();
 
                   await sendWhatsAppNotification(
-                    selectedCustomer.phone,
-                    selectedCustomer.full_name,
+                    effectiveCustomer.phone,
+                    effectiveCustomer.full_name,
                     loyaltySettings?.wa_template_points_earned, 
                     loyaltySettings?.wa_mapping_points_earned, 
                     { points_awarded: pointsToAward, total_balance: finalAcc?.total_points || 0, activity_name: repeatRule.name }
@@ -727,7 +756,6 @@ export function useCheckout({
                        .eq('id', activeReferral.loyalty_account_id)
                        .single();
                      
-                     // ✨ TS FIX: Added null check here
                      if (finalRefAcc && finalRefAcc.customers) {
                        const refCust = Array.isArray(finalRefAcc.customers) ? finalRefAcc.customers[0] : finalRefAcc.customers;
                        
@@ -745,15 +773,82 @@ export function useCheckout({
             }
         }
       }
-      // Note: If you need specialized DB handling for 'repair' or 'return' or 'challan' modes, insert those Supabase calls here.
+      // ✨ FIX: REPAIR TICKET DATABASE INSERTION
+      else if (mode === 'repair') {
+        if (!effectiveCustomer) throw new Error("Please select a customer for this Repair Ticket.");
+        finalNo = `REP-${Date.now().toString().slice(-6)}`;
+        
+        const repairAdvance = Number(repairDetails?.advancePaid) || 0;
+        const totalRealizedAdvance = repairAdvance + effectiveKittyAmt + effectiveCreditAmt + effectivePointsAmt + legacyAdvance;
+        
+        const payload = {
+            company_id: appUser?.company_id,
+            origin_warehouse_id: selectedLocation,
+            current_warehouse_id: selectedLocation, 
+            customer_id: effectiveCustomer.id,
+            ticket_number: finalNo,
+            item_description: repairDetails?.itemDescription || 'Jewellery Repair',
+            gross_weight_g: Number(repairDetails?.grossWeight) || 0,
+            purity: repairDetails?.purity || '22K',
+            defect_notes: repairDetails?.defectNotes || null,
+            estimated_cost: Number(repairDetails?.estimatedCost) || 0,
+            advance_paid: totalRealizedAdvance,
+            expected_delivery_date: repairDetails?.expectedDelivery || null,
+            condition_photo_url: repairDetails?.conditionPhotoUrl || null,
+            status: 'received_at_store',
+            created_by: finalizingUserId
+        };
+        
+        const { error } = await supabase.from('repair_tickets').insert(payload);
+        if (error) throw error;
+        toast.success(`Repair Ticket ${finalNo} generated successfully!`);
+      }
+      else if (mode === 'return') {
+        if (!effectiveCustomer && returnDetails?.physicalDetails?.is_external_item) {
+            throw new Error("Please select a customer for this Buyback/Return.")
+        }
+        finalNo = `VCH-${Date.now().toString().slice(-6)}` 
+        
+        const payload = {
+            company_id: appUser?.company_id,
+            warehouse_id: selectedLocation,
+            customer_id: effectiveCustomer?.id || null,
+            invoice_id: returnDetails.invoiceId || null,
+            reference_invoice_number: returnDetails.invoiceNo || null,
+            is_external_item: returnDetails.physicalDetails?.is_external_item || false,
+            exchange_value: 0, 
+            item_category: returnDetails.physicalDetails?.item_category,
+            metal_type: returnDetails.physicalDetails?.metal_type,
+            purity_karat: returnDetails.physicalDetails?.purity_karat,
+            purity_percent: returnDetails.physicalDetails?.purity_percent,
+            gross_weight_g: returnDetails.physicalDetails?.gross_weight_g,
+            net_weight_g: returnDetails.physicalDetails?.net_weight_g,
+            total_stone_weight_cts: returnDetails.physicalDetails?.total_stone_weight_cts,
+            status: 'received',
+            created_by: finalizingUserId,
+            gross_value: returnDetails.articleCost,
+            deduction_amount: returnDetails.discountApplied,
+            buyback_percent: returnDetails.returnPercent,
+            net_refund: returnDetails.calculatedRefund,
+        };
+        
+        const { data: retData, error } = await supabase.from('buybacks').insert(payload).select('id').single();
+        if (error) throw error;
+        
+        if (returnDetails.selectedSystemItems?.length > 0) {
+            const bItems = returnDetails.selectedSystemItems.map((i: any) => ({
+                buyback_id: retData.id,
+                inventory_item_id: i.item_id, 
+                barcode: i.inventory_items?.barcode,
+                company_id: appUser?.company_id
+            }));
+            await supabase.from('buyback_items').insert(bItems);
+        }
+        
+        toast.success(`Return Voucher ${finalNo} processed successfully!`);
+      }
 
       finalDraftData.invoice_number = finalNo;
-      
-      if (customTransactionContext) {
-          finalDraftData.appliedKitty = effectiveKittyAmt;
-          finalDraftData.appliedCredit = effectiveCreditAmt;
-          finalDraftData.appliedPoints = effectivePointsAmt;
-      }
 
       if (!isEstimate && selectedPackaging?.length > 0 && (mode === 'normal' || mode === 'custom')) {
         
@@ -767,7 +862,7 @@ export function useCheckout({
             p_warehouse_id: safeWarehouseId,                   
             p_transaction_type: mode === 'custom' ? 'custom_order' : 'normal_sale',
             p_reference_id: finalNo,                   
-            p_customer_id: selectedCustomer?.id || null,       
+            p_customer_id: effectiveCustomer?.id || null,       
             p_user_id: finalizingUserId || null                
           });
 
@@ -799,18 +894,12 @@ export function useCheckout({
     discountType, setDiscountType, discountValue, setDiscountValue,
     voucherCode, setVoucherCode, activeVoucher, setActiveVoucher, handlingFee,
     isExchangeOpen, setIsExchangeOpen, exchangeInvoiceNo, setExchangeInvoiceNo, exchangeValue, setExchangeValue, exchangeNotes, setExchangeNotes,
-    
-    // ✨ Referral Exports
     referralInput, setReferralInput, activeReferral, setActiveReferral, handleApplyReferral, referralDiscountAmount,
-
     discountAmount: standardDiscount, appliedVoucherAmount, handlingAmt, finalTaxableValue, cgstAmount, sgstAmount, exactFinalPayable, roundOffAmount, 
-    setExchangePhysicalDetails,
-    finalPayable: finalPayableNet, 
-    
+    setExchangePhysicalDetails, finalPayable: finalPayableNet, 
     appliedKittyAmount, setAppliedKittyAmount,appliedKittyPlanId, setAppliedKittyPlanId, appliedCreditAmount, setAppliedCreditAmount,
     appliedPointsAmount, setAppliedPointsAmount, rawPointsRedeemed, setRawPointsRedeemed,
     estimateChargeType, setEstimateChargeType, estimateHandlingPercent, setEstimateHandlingPercent, 
-
     handleApplyVoucher, handleFetchExchangeItem, generateDraftData, executeCheckout, resetCheckoutState
   }
 }

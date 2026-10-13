@@ -1,13 +1,14 @@
 "use client"
 
 import React, { useState } from 'react'
-import { Hammer, X, Search, AlertCircle, CheckCircle2, Loader2, IndianRupee, Store, Box, Plus, Minus, Trash2 } from 'lucide-react'
+import { Hammer, X, Search, AlertCircle, CheckCircle2, Loader2, IndianRupee, Store, Box, Plus, Minus, Trash2, Link as LinkIcon } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { supabase } from '@/lib/supabaseClient'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
 const ORNAMENT_TYPES = [
@@ -15,7 +16,6 @@ const ORNAMENT_TYPES = [
   'Chain', 'Pendant', 'Mangalsutra', 'Nose Pin', 'Set'
 ]
 
-// ✨ NEW: Exact same interface from the cart
 export interface SelectedPackaging {
   id: string;
   item_name: string;
@@ -37,7 +37,6 @@ interface CustomOrderFormProps {
   onAddToBill?: (finalItemData: any) => void 
   voucherAmount?: number 
 
-  // ✨ NEW: Packaging Props passed from the parent page
   availablePackaging?: any[]
   selectedPackaging?: SelectedPackaging[]
   onAddPackaging?: (packId: string) => void
@@ -66,6 +65,11 @@ export function CustomOrderForm({
   const [searchError, setSearchError] = useState('')
   const [foundOrder, setFoundOrder] = useState<any>(null)
 
+  // Link Store Item State
+  const [linkBarcode, setLinkBarcode] = useState('')
+  const [isLinking, setIsLinking] = useState(false)
+  const [isUnlinking, setIsUnlinking] = useState(false)
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setDetails({ ...details, [e.target.name]: e.target.value })
   }
@@ -77,6 +81,7 @@ export function CustomOrderForm({
     setIsSearching(true)
     setSearchError('')
     setFoundOrder(null)
+    setLinkBarcode('')
 
     try {
       const { data: orderData, error: orderErr } = await supabase
@@ -106,6 +111,74 @@ export function CustomOrderForm({
       setSearchError('An error occurred while fetching the order.')
     } finally {
       setIsSearching(false)
+    }
+  }
+
+  // ✨ Link existing inventory item to this custom order
+  const handleLinkExistingItem = async () => {
+    if (!linkBarcode.trim() || !foundOrder) return
+    setIsLinking(true)
+
+    try {
+      const { data: invData, error: fetchErr } = await supabase
+        .from('inventory_items')
+        .select('id, barcode, mrp, warehouse_id, status, net_weight_g, gross_weight_g, total_stone_weight_cts, item_category, metal_type, purity_karat')
+        .eq('barcode', linkBarcode.trim())
+        .single()
+
+      if (fetchErr || !invData) {
+        toast.error("Item not found in inventory. Please check the tag number.")
+        setIsLinking(false)
+        return
+      }
+
+      if (invData.status !== 'in_stock') {
+        toast.error(`Cannot link this item. Current status is '${invData.status.replace('_', ' ')}'.`)
+        setIsLinking(false)
+        return
+      }
+
+      const { error: updateErr } = await supabase
+        .from('inventory_items')
+        .update({ custom_order_id: foundOrder.id })
+        .eq('id', invData.id)
+
+      if (updateErr) throw updateErr
+
+      setFoundOrder({ ...foundOrder, inventory: invData })
+      toast.success("Store item successfully linked to Custom Order!")
+      setLinkBarcode('')
+
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to link item.')
+    } finally {
+      setIsLinking(false)
+    }
+  }
+
+  // ✨ NEW: Unlink fail-safe
+  const handleUnlinkItem = async () => {
+    if (!foundOrder?.inventory?.id) return
+    
+    // Safety prompt so they don't click it accidentally
+    if (!confirm("Are you sure you want to unlink this item? It will be removed from this order.")) return;
+
+    setIsUnlinking(true)
+
+    try {
+      const { error } = await supabase
+        .from('inventory_items')
+        .update({ custom_order_id: null })
+        .eq('id', foundOrder.inventory.id)
+
+      if (error) throw error
+
+      setFoundOrder({ ...foundOrder, inventory: null })
+      toast.success("Item unlinked successfully. You can now link a different item.")
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to unlink item.')
+    } finally {
+      setIsUnlinking(false)
     }
   }
 
@@ -256,7 +329,7 @@ export function CustomOrderForm({
               </div>
             </div>
 
-            {/* ✨ NEW: Packaging Selection for Custom Orders */}
+            {/* Packaging Selection for Custom Orders */}
             <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
@@ -319,7 +392,7 @@ export function CustomOrderForm({
 
         {/* TAB 2: PICKUP & FINAL BILLING */}
         {activeTab === 'pickup' && (
-          <div className="space-y-4 animate-in fade-in duration-300">
+          <div className="space-y-4 animate-in fade-in duration-300 max-w-2xl mx-auto">
             <form onSubmit={handleSearchOrder} className="flex gap-2.5">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -358,10 +431,35 @@ export function CustomOrderForm({
 
                 <div className="p-4 space-y-3">
                   {!foundOrder.inventory ? (
-                    <div className="text-center py-4">
-                      <Hammer className="h-8 w-8 text-slate-300 mx-auto mb-2" />
-                      <p className="text-xs font-semibold text-slate-700">Item is still at the factory.</p>
-                      <p className="text-[10px] text-slate-500 mt-1">This order has not been received into inventory yet.</p>
+                    <div className="space-y-4">
+                      <div className="text-center py-4 border-b border-slate-200/60">
+                        <Hammer className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                        <p className="text-xs font-semibold text-slate-700">Item is still at the factory.</p>
+                        <p className="text-[10px] text-slate-500 mt-1">This order has not been received into inventory yet.</p>
+                      </div>
+
+                      {/* Fulfill with existing store stock */}
+                      <div className="bg-purple-50/50 p-4 rounded-xl border border-purple-100">
+                        <Label className="text-[11px] font-bold text-purple-900 uppercase tracking-widest flex items-center gap-1.5 mb-1.5">
+                          <LinkIcon className="w-3.5 h-3.5" /> Fulfill from Store Stock
+                        </Label>
+                        <p className="text-[10px] text-purple-700/80 mb-3">If the customer chose an existing item instead, scan its tag to link it permanently.</p>
+                        <div className="flex gap-2">
+                          <Input 
+                            placeholder="Scan Tag No." 
+                            className="h-10 text-xs bg-white focus-visible:ring-purple-500" 
+                            value={linkBarcode}
+                            onChange={e => setLinkBarcode(e.target.value)}
+                          />
+                          <Button 
+                            onClick={handleLinkExistingItem} 
+                            disabled={isLinking || !linkBarcode.trim()} 
+                            className="h-10 px-4 text-xs bg-purple-600 hover:bg-purple-700 text-white font-bold shrink-0"
+                          >
+                            {isLinking ? <Loader2 className="w-4 h-4 animate-spin"/> : 'Link Item'}
+                          </Button>
+                        </div>
+                      </div>
                     </div>
                   ) : (
                     <>
@@ -407,6 +505,17 @@ export function CustomOrderForm({
                       >
                         <IndianRupee className="h-3.5 w-3.5 mr-1.5" />
                         Process Final Invoice
+                      </Button>
+
+                      {/* ✨ NEW: Unlink Error Fail-safe */}
+                      <Button 
+                        disabled={isUnlinking}
+                        variant="ghost" 
+                        onClick={handleUnlinkItem} 
+                        className="w-full h-8 text-[10px] text-slate-400 hover:text-red-600 mt-2"
+                      >
+                        {isUnlinking ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <X className="w-3 h-3 mr-1" />}
+                        Wrong item linked? Unlink and try again
                       </Button>
                     </>
                   )}

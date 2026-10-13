@@ -288,7 +288,7 @@ export default function EventVoucherClaimPage() {
               action: 'message.sendDirect',
               payload: {
                 user_id: convo360UserId,
-                template_name: 'voucher_utility', 
+                template_name: 'voucher_utility1', 
                 lang: 'en',
                 namespace: namespace,
                 parameters: [] 

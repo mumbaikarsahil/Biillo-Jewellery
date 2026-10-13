@@ -21,7 +21,7 @@ const allCoreModules = [
   { href: '/sales', label: 'Revenue', icon: Wallet, roles: ['owner', 'manager', 'branch_manager'] },
   { href: '/reports', label: 'Analytics', icon: PieChart, roles: ['owner', 'manager', 'branch_manager'] },
   { href: '/discovery', label: 'Discovery', icon: Compass, roles: ['owner', 'manager', 'branch_manager', 'sales_person'] },
-  { href: '/ecommerce', label: 'E-Commerce', icon: SlidersHorizontal, roles: ['owner', 'manager'] },
+  { href: '/ecommerce', label: 'E-Commerce', icon: SlidersHorizontal, roles: ['owner', 'manager', 'ecommerce_manager'] },
   { href: '/dworkspace', label: 'D-Workspace', icon: Briefcase, roles: ['owner']},
 ]
 

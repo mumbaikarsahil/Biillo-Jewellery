@@ -113,7 +113,7 @@ export async function POST(req: Request) {
           action: 'message.sendDirect',
           payload: {
             user_id: convo360_user_id,
-            template_name: 'voucher_utility',
+            template_name: 'voucher_utility1',
             lang: 'en',
             namespace: namespace,
             parameters: []

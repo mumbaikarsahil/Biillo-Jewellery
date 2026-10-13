@@ -62,11 +62,12 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
 
     setIsFetching(true)
     try {
-      // ✨ FIX: Strictly matching the provided schema (subtotal, discount_amount, voucher_discount)
+      // ✨ FIX: Used customers (*) to prevent 42703 schema errors for missing columns like 'state' or 'pincode'
       const { data, error } = await supabase
         .from('invoices')
         .select(`
-          id, subtotal, discount_amount, voucher_discount,
+          id, subtotal, discount_amount, voucher_discount, customer_id,
+          customers (*),
           invoice_items (
             item_id, rate,
             inventory_items (id, barcode, item_category, gross_weight_g, net_weight_g, total_stone_weight_cts, purity_karat, metal_type)
@@ -86,7 +87,6 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
 
       setInvoiceData(data)
       setInvoiceItems(data.invoice_items)
-      // Auto-select all items on the bill initially
       setSelectedItemIds(data.invoice_items.map((i: any) => i.item_id))
       
       setFlowState('found')
@@ -119,7 +119,6 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
     }
   }
 
- // Real-time Math & State Sync Engine
  useEffect(() => {
   let cost = parseFloat(articleCost) || 0
   let discount = parseFloat(discountApplied) || 0
@@ -130,27 +129,28 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
   let invId = null
 
   if (flowState === 'found' && invoiceData) {
-    // Calculate costs and aggregate weights ONLY for the checked items
     const selectedObjs = invoiceItems.filter(i => selectedItemIds.includes(i.item_id))
     selectedSystemItems = selectedObjs
 
     cost = selectedObjs.reduce((sum, i) => sum + Number(i.rate || 0), 0)
     
-    // Pro-rata the total combined discounts based on how much of the bill is being returned
     const proportion = invoiceData.subtotal > 0 ? (cost / invoiceData.subtotal) : 1
     const totalInvoiceDiscount = (Number(invoiceData.discount_amount) || 0) + (Number(invoiceData.voucher_discount) || 0)
-    
     discount = totalInvoiceDiscount * proportion
 
     const aggGross = selectedObjs.reduce((sum, i) => sum + Number(i.inventory_items?.gross_weight_g || 0), 0)
     const aggNet = selectedObjs.reduce((sum, i) => sum + Number(i.inventory_items?.net_weight_g || 0), 0)
-    
+    const aggDia = selectedObjs.reduce((sum, i) => sum + Number(i.inventory_items?.total_stone_weight_cts || 0), 0)
+
     physicalDetails = {
       is_external_item: false,
       item_category: 'System Return',
-      metal_type: 'Mixed',
+      metal_type: selectedObjs[0]?.inventory_items?.metal_type || 'Mixed',
+      purity_karat: selectedObjs[0]?.inventory_items?.purity_karat || '22K',
       gross_weight_g: aggGross,
       net_weight_g: aggNet,
+      total_stone_weight_cts: aggDia,
+      returnTags: selectedObjs.map(i => i.inventory_items?.barcode).filter(Boolean).join(', ')
     }
     invId = invoiceData.id
   } else if (flowState === 'manual') {
@@ -169,13 +169,13 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
     }
   }
 
-  // Strict pre-GST minus discount calculation
   const paidValue = Math.max(0, cost - discount)
   const refundValue = paidValue * (percent / 100)
 
   setDetails((prev: any) => ({
     ...prev,
     invoiceId: invId,
+    originalCustomer: invoiceData?.customers || null, 
     selectedSystemItems,
     articleCost: cost,
     discountApplied: discount,
@@ -453,7 +453,7 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
                     type="number" 
                     inputMode="decimal"
                     className={`h-11 rounded-lg font-bold text-base ${flowState === 'found' ? 'bg-slate-100 text-slate-500 border-transparent' : 'bg-white border-slate-300'}`}
-                    value={flowState === 'found' ? (details.articleCost || '') : articleCost} // ✨ FIXED HERE
+                    value={flowState === 'found' ? (details.articleCost || '') : articleCost} 
                     onChange={e => setArticleCost(e.target.value)} 
                     disabled={flowState === 'found'} 
                   />
@@ -464,14 +464,13 @@ export function ReturnIntakeForm({ details, setDetails, appUser }: ReturnIntakeF
                     type="number" 
                     inputMode="decimal"
                     className={`h-11 rounded-lg font-bold text-base ${flowState === 'found' ? 'bg-rose-50/50 text-rose-400 border-transparent' : 'bg-white border-slate-300 text-rose-600'}`}
-                    value={flowState === 'found' ? (details.discountApplied || 0) : discountApplied} // ✨ FIXED HERE
+                    value={flowState === 'found' ? (details.discountApplied || 0) : discountApplied} 
                     onChange={e => setDiscountApplied(e.target.value)} 
                     disabled={flowState === 'found'} 
                   />
                 </div>
               </div>
 
-              {/* ✨ NEW: Net Paid Value Display Block */}
               <div className="flex justify-between items-center bg-slate-100 p-3 rounded-lg border border-slate-200">
                 <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">Net Paid Value (Pre-GST - Discount)</span>
                 <span className="text-lg font-black text-slate-900">
