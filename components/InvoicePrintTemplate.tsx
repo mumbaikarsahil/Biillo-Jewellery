@@ -30,15 +30,19 @@ const formatDate = (dateString: string | Date) => {
   });
 }
 
-// ✨ NEW: Dynamic Payment Mode Formatter
-const getDetailedPaymentMode = (data: any) => {
+// ✨ FIX: Context-Aware Payment Mode Formatter
+const getDetailedPaymentMode = (data: any, mode: string) => {
   if (!data) return '';
   let parts = [];
 
-  // 1. Check for Advances (Cart Advance + Legacy Advance)
-  const advance = Number(data.advance_adjusted || data.advance_payment || 0);
-  if (advance > 0) {
-    parts.push(`ADVANCE (₹${advance.toLocaleString('en-IN')})`);
+  const kitty = Number(data.appliedKitty || data.kitty_payment || 0);
+  const credit = Number(data.appliedCredit || data.wallet_payment || 0);
+  const pointsAmt = Number(data.appliedPoints || data.loyalty_points || 0);
+
+  // 1. Only treat 'advance' as a separate prefix if we are generating a NORMAL tax invoice settling a previous advance
+  const advanceAdjusted = Number(data.advance_adjusted || 0);
+  if (mode === 'normal' && advanceAdjusted > 0) {
+    parts.push(`ADVANCE (₹${advanceAdjusted.toLocaleString('en-IN')})`);
   }
 
   // 2. Parse Main Payment Mode
@@ -57,15 +61,25 @@ const getDetailedPaymentMode = (data: any) => {
       parts.push('SPLIT PAYMENT');
     }
   } else if (pm && !['WALLET / LOYALTY', 'ADVANCE / SETTLED', 'SPLIT / COMBINED'].includes(pm)) {
-     // Single Payment Mode (e.g., CASH, CARD, UPI)
-     const kitty = Number(data.appliedKitty || data.kitty_payment || 0);
-     const credit = Number(data.appliedCredit || data.wallet_payment || 0);
-     const pointsAmt = Number(data.appliedPoints || data.loyalty_points || 0);
      
-     // Calculate how much was actually paid via this specific mode
-     const payable = Math.max(0, (data.finalTotal || data.final_total || 0) - advance - kitty - credit - pointsAmt);
-     if (payable > 0) {
-       parts.push(`${pm} (₹${payable.toLocaleString('en-IN')})`);
+     // Calculate how much was actually paid via this specific mode TODAY
+     let payableToday = 0;
+     
+     if (mode === 'custom') {
+        // For custom orders, the amount they are paying today IS the advance
+        const customAdv = Number(data.advancePayment || data.customOrder?.advancePayment || data.advance_paid || 0);
+        payableToday = Math.max(0, customAdv - kitty - credit - pointsAmt);
+     } else if (mode === 'repair') {
+        // Same for repair advance
+        const repairAdv = Number(data.repair?.advancePaid || 0);
+        payableToday = Math.max(0, repairAdv - kitty - credit - pointsAmt);
+     } else {
+        // For normal invoices, it's the final total minus previously settled advance and wallets
+        payableToday = Math.max(0, (data.finalTotal || data.final_total || 0) - advanceAdjusted - kitty - credit - pointsAmt);
+     }
+     
+     if (payableToday > 0) {
+       parts.push(`${pm} (₹${payableToday.toLocaleString('en-IN')})`);
      } else {
        parts.push(pm);
      }
@@ -115,7 +129,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const effectiveVoucherCredit = data.voucherAmount || 0 
 
     const cartAdvance = data.items?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
-    const customAdvancePaid = Number(data.advancePayment || customOrder?.advancePayment || 0);
+    
+    const customAdvancePaid = Number(data.advancePayment || customOrder?.advancePayment || data.advance_adjusted || 0);
     const totalSettlements = appliedKitty + appliedCredit + appliedPoints;
     const customEstimatedBalance = data.balanceDue ?? Math.max(0, (data.finalTotal || 0) - customAdvancePaid - totalSettlements);
 
@@ -178,7 +193,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 ...i.inventory_items, 
                 mrp: i.rate,
                 qty: 1, 
-                is_return: true
+                is_return: true,
+                purity_karat: i.inventory_items?.purity_karat || '22K'
             }));
         } else if (returnDetails.physicalDetails) {
             itemsToRender = [{
@@ -400,8 +416,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                             {isRepair ? 'Repair & Maintenance Service' : `[${itemPurity}] ${isItemSilverMaterial ? 'Silver Diamond Jewellery' : 'Gold Diamond Jewellery'}`}
                           </span>
                           <span className="text-[10px] text-slate-500 font-medium block mt-0.5">
-                            Qty: {item.quantity || item.qty || 1} Pcs
-                            {isReturn && item.barcode && ` • Tag: ${item.barcode}`}
+                            {isReturn ? item.itemDescription : `Qty: ${item.quantity || item.qty || 1} Pcs`}
                           </span>
                         </td>
                         {hasHsnColumn && <td className="p-2.5 text-center font-mono text-[11px] font-bold text-slate-600 pt-3">{item.hsn_code || (isRepair ? '9987' : '7113')}</td>}
@@ -434,7 +449,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                    <p>PAN NO. : {branchPan}</p>
                    <p>GST TIN NO.: {branchGstin}</p>
                    {data.paymentMode && (
-                     <p className="text-slate-800 mt-2">PAYMENT MODE: <span className="text-slate-900 font-black tracking-tight">{getDetailedPaymentMode(data)}</span></p>
+                     <p className="text-slate-800 mt-2">PAYMENT MODE: <span className="text-slate-900 font-black tracking-tight">{getDetailedPaymentMode(data, mode)}</span></p>
                    )}
                 </div>
               ) : (
@@ -442,7 +457,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                    <p>Not a Tax Invoice</p>
                    <p>For Internal / Estimation Use Only</p>
                    {data.paymentMode && (
-                     <p className="text-slate-500 mt-2">MODE: <span className="text-slate-600 font-black tracking-tight">{getDetailedPaymentMode(data)}</span></p>
+                     <p className="text-slate-500 mt-2">MODE: <span className="text-slate-600 font-black tracking-tight">{getDetailedPaymentMode(data, mode)}</span></p>
                    )}
                 </div>
               )}
@@ -522,10 +537,10 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     <span>₹ {(data.finalTotal || 0).toLocaleString('en-IN')}</span>
                   </div>
                   
-                  {data.advance_adjusted > 0 && (
-                    <div className="flex justify-between text-emerald-600 font-semibold mt-1">
+                  {customAdvancePaid > 0 && (
+                    <div className="flex justify-between text-emerald-600 font-bold mt-1">
                       <span>Advance Received</span>
-                      <span>- ₹ {Number(data.advance_adjusted).toLocaleString('en-IN')}</span>
+                      <span>- ₹ {customAdvancePaid.toLocaleString('en-IN')}</span>
                     </div>
                   )}
 
