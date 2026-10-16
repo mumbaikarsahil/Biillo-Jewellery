@@ -45,7 +45,6 @@ export default function DistributeVouchersPage() {
   const [distributorId, setDistributorId] = useState('')
   const [referencePersonId, setReferencePersonId] = useState('none') 
   const [selectedBooking, setSelectedBooking] = useState('none') 
-  // ✨ CHANGED: Default is now Pending
   const [paymentMode, setPaymentMode] = useState<string>('Pending') 
   const [eventName, setEventName] = useState('') 
   const [selectedBatch, setSelectedBatch] = useState('')
@@ -56,9 +55,10 @@ export default function DistributeVouchersPage() {
   const [deliveryAgent, setDeliveryAgent] = useState('')
   const [isBirthdayRedemption, setIsBirthdayRedemption] = useState(false) 
   
+  // ✨ NEW: Search state for Entity / Distributor Name
+  const [searchEntity, setSearchEntity] = useState<string>('')
   const [dateFrom, setDateFrom] = useState<string>('')
   const [dateTo, setDateTo] = useState<string>('')
-  // ✨ CHANGED: Default tab set to pending
   const [activeTab, setActiveTab] = useState('pending')
 
   const [availableVouchers, setAvailableVouchers] = useState<VoucherCode[]>([]);
@@ -97,6 +97,19 @@ export default function DistributeVouchersPage() {
     documentTitle: `Distribution_Report_${activeTab}_${format(new Date(), 'dd-MM-yyyy')}`
   })
 
+  // ✨ HELPER: Resolve Reference / Intro Agent Name for any challan record
+  const getReferencePersonName = (challan: any) => {
+    if (!challan) return null;
+    if (challan.voucher_reference_persons?.name) {
+      return challan.voucher_reference_persons.name;
+    }
+    if (challan.reference_person_id) {
+      const found = referencePersons.find(rp => rp.id === challan.reference_person_id);
+      return found ? found.name : null;
+    }
+    return null;
+  };
+
   useEffect(() => {
     if (allocationType === 'vendor' && distributorId && distributorId !== 'ADD_NEW') {
       const linkedRef = referencePersons.find(rp => rp.linked_distributor_id === distributorId);
@@ -123,7 +136,6 @@ export default function DistributeVouchersPage() {
     try {
       const challanIds = filteredChallans.map(c => c.id);
 
-      // ✨ ADD THIS SAFETY CHECK
       if (challanIds.length === 0) {
         toast.dismiss(loadingToast);
         toast.error("No valid challans found for this filter.");
@@ -208,9 +220,10 @@ export default function DistributeVouchersPage() {
         setBatches(formattedBatchesRaw.filter(b => b.available_stock > 0)); 
       }
 
+      // ✨ UPDATED: Also join voucher_reference_persons so it's directly attached to each record
       const { data: records } = await supabase
         .from('voucher_distributions')
-        .select('*, voucher_distributors(*)')
+        .select('*, voucher_distributors(*), voucher_reference_persons(id, name)')
         .eq('company_id', appUser.company_id)
         .order('created_at', { ascending: false })
       if (records) setChallans(records)
@@ -289,7 +302,6 @@ export default function DistributeVouchersPage() {
   }, [quantity, sequenceMode, customStart, availableVouchers]);
 
   const filteredChallans = useMemo(() => {
-    // ✨ CHANGED: Tabs routing matches new mode names
     let result = challans.filter(c => {
       if (activeTab === 'pending') return c.payment_mode === 'Pending' && !c.event_name;
       if (activeTab === 'cash') return c.payment_mode === 'Cash' && !c.event_name;
@@ -297,6 +309,17 @@ export default function DistributeVouchersPage() {
       if (activeTab === 'events') return c.event_name != null;
       return true;
     });
+
+    // ✨ NEW: Filter by Entity / Distributor Name, Event Name, or Reference Person
+    if (searchEntity.trim()) {
+      const q = searchEntity.trim().toLowerCase();
+      result = result.filter(c => {
+        const distName = c.voucher_distributors?.distributor_name?.toLowerCase() || '';
+        const evName = c.event_name?.toLowerCase() || '';
+        const refName = (getReferencePersonName(c) || '').toLowerCase();
+        return distName.includes(q) || evName.includes(q) || refName.includes(q);
+      });
+    }
 
     if (dateFrom || dateTo) {
       result = result.filter((challan) => {
@@ -307,7 +330,7 @@ export default function DistributeVouchersPage() {
       });
     }
     return result;
-  }, [challans, activeTab, dateFrom, dateTo]);
+  }, [challans, activeTab, searchEntity, dateFrom, dateTo, referencePersons]);
 
 
   const exportToCSV = async () => {
@@ -316,7 +339,6 @@ export default function DistributeVouchersPage() {
 
     try {
       const challanIds = filteredChallans.map(c => c.id);
-      // ✨ ADD THIS SAFETY CHECK
       if (challanIds.length === 0) {
         toast.dismiss(loadingToast);
         toast.error("No valid challans found for this filter.");
@@ -340,11 +362,12 @@ export default function DistributeVouchersPage() {
         }
       });
 
-      const headers = ['Date', 'Type/Name', 'Quantity', 'Fee Amount (₹)', 'Payment Mode', 'Delivery Status', 'Expiry Date', 'Sequence Start', 'Sequence End'];
+      const headers = ['Date', 'Type/Name', 'Intro Agent / Reference', 'Quantity', 'Fee Amount (₹)', 'Payment Mode', 'Delivery Status', 'Expiry Date', 'Sequence Start', 'Sequence End'];
 
       const csvData = filteredChallans.map(c => [
         format(new Date(c.created_at), 'dd-MM-yyyy'),
         `"${c.event_name ? `Event: ${c.event_name}` : c.voucher_distributors?.distributor_name || 'N/A'}"`, 
+        `"${getReferencePersonName(c) || 'None'}"`,
         c.quantity,
         c.total_amount || 0,
         c.payment_mode,
@@ -485,12 +508,11 @@ export default function DistributeVouchersPage() {
           delivery_agent: (allocationType === 'vendor' && deliveryAgent && deliveryAgent !== 'none') ? deliveryAgent : null,
           is_birthday_redemption: isBirthdayRedemption
         })
-        .select('*, voucher_distributors(*)')
+        .select('*, voucher_distributors(*), voucher_reference_persons(id, name)')
         .single()
 
       if (challanErr) throw challanErr
 
-      // ✨ LOWERED CHUNK SIZE: 20 is highly safe for URL limits
       const chunkSize = 20;
 
       if (allocationType === 'vendor') {
@@ -506,7 +528,6 @@ export default function DistributeVouchersPage() {
           }
         }
 
-        // Loop through the voucher chunks securely
         for (let i = 0; i < voucherIds.length; i += chunkSize) {
           const chunk = voucherIds.slice(i, i + chunkSize);
           const { error: updateErr } = await supabase
@@ -534,8 +555,6 @@ export default function DistributeVouchersPage() {
         setViewSequence({ start: startCode, end: endCode })
         
       } else {
-        
-        // Loop through the voucher chunks securely for digital events
         for (let i = 0; i < voucherIds.length; i += chunkSize) {
           const chunk = voucherIds.slice(i, i + chunkSize);
           const { error: updateErr } = await supabase
@@ -586,7 +605,6 @@ export default function DistributeVouchersPage() {
     }
   }
 
-  // ✨ CHANGED: Explicit dropdown update handlers
   const handleUpdatePaymentMode = async (challanId: string, newMode: string) => {
     try {
       await supabase.from('voucher_distributions').update({ 
@@ -773,8 +791,6 @@ export default function DistributeVouchersPage() {
                           setIsNewDistModalOpen(true)
                         } else {
                           setDistributorId(val)
-                          
-                          // ✨ THE NEW LOGIC: Check for open bookings on selection
                           const openBooking = bookings.find(b => b.distributor_id === val);
                           if (openBooking) {
                             setSelectedBooking(openBooking.id);
@@ -1064,7 +1080,7 @@ export default function DistributeVouchersPage() {
           <Card className="lg:col-span-7 xl:col-span-8 border-zinc-200/60 shadow-sm bg-white overflow-hidden flex flex-col min-h-[500px] lg:h-[calc(100vh-5rem)]">
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full flex-1 flex flex-col overflow-hidden">
             <CardHeader className="bg-white border-b border-zinc-200 p-0 px-4 shrink-0">
-                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 py-3">
+                <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 py-3">
                   
                   {/* LEFT: Compact Tabs */}
                   <TabsList className="bg-transparent border-none p-0 h-auto gap-4 flex justify-start overflow-x-auto hide-scrollbar shrink-0 w-full xl:w-auto">
@@ -1082,9 +1098,29 @@ export default function DistributeVouchersPage() {
                     </TabsTrigger>
                   </TabsList>
                   
-                  {/* RIGHT: Inline Actions */}
-                  <div className="flex flex-nowrap items-center gap-2 overflow-x-auto hide-scrollbar pb-1 xl:pb-0 shrink-0 w-full xl:w-auto">
+                  {/* RIGHT: Inline Search, Date & Export Actions */}
+                  <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 overflow-x-auto hide-scrollbar pb-1 xl:pb-0 shrink-0 w-full xl:w-auto">
                     
+                    {/* ✨ NEW: Search Entity / Distributor Input */}
+                    <div className="relative flex items-center bg-white border border-zinc-200 rounded-md shadow-sm h-9 w-full sm:w-[180px] shrink-0 focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
+                      <Search className="w-3.5 h-3.5 text-zinc-400 ml-2.5 shrink-0" />
+                      <input
+                        type="text"
+                        placeholder="Search entity / ref..."
+                        value={searchEntity}
+                        onChange={(e) => setSearchEntity(e.target.value)}
+                        className="h-full w-full text-[11px] font-medium border-none shadow-none focus:ring-0 px-2 bg-transparent text-zinc-700 outline-none placeholder:text-zinc-400"
+                      />
+                      {searchEntity && (
+                        <button
+                          onClick={() => setSearchEntity('')}
+                          className="h-full px-2 flex items-center justify-center hover:text-red-600 transition-colors text-zinc-400 shrink-0"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
+
                     {/* Slim Date Picker */}
                     <div className="flex items-center bg-white border border-zinc-200 rounded-md shadow-sm h-9 shrink-0 focus-within:ring-1 focus-within:ring-indigo-500 transition-all">
                       <div className="flex items-center justify-center px-2.5 border-r border-zinc-200 h-full bg-zinc-50 rounded-l-md">
@@ -1096,14 +1132,14 @@ export default function DistributeVouchersPage() {
                           type="date" 
                           value={dateFrom} 
                           onChange={(e) => setDateFrom(e.target.value)} 
-                          className="h-full w-[115px] text-[11px] font-medium border-none shadow-none focus:ring-0 px-2.5 bg-transparent text-zinc-700 outline-none cursor-pointer uppercase tracking-wider [color-scheme:light] [&::-webkit-calendar-picker-indicator]:opacity-40"
+                          className="h-full w-[110px] text-[11px] font-medium border-none shadow-none focus:ring-0 px-2 bg-transparent text-zinc-700 outline-none cursor-pointer uppercase tracking-wider [color-scheme:light] [&::-webkit-calendar-picker-indicator]:opacity-40"
                         />
                         <div className="h-3 w-px bg-zinc-200 shrink-0" />
                         <input 
                           type="date" 
                           value={dateTo} 
                           onChange={(e) => setDateTo(e.target.value)} 
-                          className="h-full w-[115px] text-[11px] font-medium border-none shadow-none focus:ring-0 px-2.5 bg-transparent text-zinc-700 outline-none cursor-pointer uppercase tracking-wider [color-scheme:light] [&::-webkit-calendar-picker-indicator]:opacity-40"
+                          className="h-full w-[110px] text-[11px] font-medium border-none shadow-none focus:ring-0 px-2 bg-transparent text-zinc-700 outline-none cursor-pointer uppercase tracking-wider [color-scheme:light] [&::-webkit-calendar-picker-indicator]:opacity-40"
                         />
                       </div>
 
@@ -1165,7 +1201,6 @@ export default function DistributeVouchersPage() {
                               </TableCell>
                               <TableCell className="text-center font-bold text-xs py-4">{c.quantity}</TableCell>
                               
-                              {/* ✨ NEW: Interactive Delivery Status Dropdown */}
                               <TableCell className="text-center py-4 whitespace-nowrap print:hidden">
                                 {c.event_name ? (
                                   <span className="text-xs text-zinc-400 italic">Digital</span>
@@ -1183,7 +1218,6 @@ export default function DistributeVouchersPage() {
                               </TableCell>
                               <TableCell className="text-center text-[10px] font-bold uppercase tracking-widest hidden print:table-cell">{c.delivery_status}</TableCell>
 
-                              {/* ✨ NEW: Interactive Payment Mode Dropdown */}
                               <TableCell className="text-center py-4 whitespace-nowrap print:hidden">
                                 {c.event_name ? (
                                   <span className="text-xs text-zinc-400 italic">N/A</span>
@@ -1230,7 +1264,7 @@ export default function DistributeVouchersPage() {
         </div>
       </main>
 
-      {/* --- MODALS (Add Distributor, QR Code, View Challan) REMAIN UNCHANGED BELOW THIS LINE --- */}
+      {/* --- ADD DISTRIBUTOR MODAL --- */}
       <Dialog open={isNewDistModalOpen} onOpenChange={setIsNewDistModalOpen}>
         <DialogContent className="sm:max-w-[425px] p-0 border-none shadow-2xl rounded-2xl bg-white overflow-hidden">
           <DialogHeader className="bg-zinc-50 p-6 border-b border-zinc-100">
@@ -1300,6 +1334,7 @@ export default function DistributeVouchersPage() {
         </DialogContent>
       </Dialog>
 
+      {/* --- EVENT QR CODE MODAL --- */}
       <Dialog open={!!eventQrData} onOpenChange={(open) => !open && setEventQrData(null)}>
         <DialogContent className="sm:max-w-sm text-center flex flex-col items-center bg-white shadow-2xl rounded-2xl overflow-hidden p-0 border-none">
           <div className="w-full bg-indigo-600 p-6 flex flex-col items-center relative overflow-hidden">
@@ -1333,6 +1368,7 @@ export default function DistributeVouchersPage() {
         </DialogContent>
       </Dialog>
 
+      {/* --- VIEW CHALLAN DETAILS MODAL (EYE ICON) --- */}
       <Dialog open={!!viewChallan} onOpenChange={(open) => !open && setViewChallan(null)}>
         <DialogContent className="sm:max-w-[450px] p-0 overflow-hidden border-none shadow-2xl">
           <DialogHeader className="bg-zinc-50 p-6 border-b border-zinc-200">
@@ -1366,6 +1402,16 @@ export default function DistributeVouchersPage() {
                 <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Entity</span>
                 <span className="font-semibold text-sm text-zinc-900">{viewChallan.event_name ? `Event: ${viewChallan.event_name}` : viewChallan.voucher_distributors?.distributor_name}</span>
               </div>
+
+              {/* ✨ NEW: Display Intro Agent / Reference inside the Eye Modal */}
+              <div className="flex justify-between items-center py-2 border-b border-dashed border-zinc-200">
+                <span className="text-xs font-semibold text-emerald-600 uppercase tracking-wider flex items-center gap-1.5">
+                  <Users className="w-3.5 h-3.5" /> Intro Agent / Reference
+                </span>
+                <span className="font-semibold text-sm text-zinc-900">
+                  {getReferencePersonName(viewChallan) || 'None'}
+                </span>
+              </div>
               
               <div className="flex justify-between items-center py-2 border-b border-dashed border-zinc-200">
                 <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Quantity</span>
@@ -1379,7 +1425,7 @@ export default function DistributeVouchersPage() {
 
               {!viewChallan.event_name && (
                 <div className="flex justify-between items-center py-2 border-b border-dashed border-zinc-200">
-                  <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5"><User className="w-3.5 h-3.5"/> Agent</span>
+                  <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5"><User className="w-3.5 h-3.5"/> Delivery Agent</span>
                   <span className="font-semibold text-sm text-zinc-900">{viewChallan.delivery_agent || 'Self Pickup'}</span>
                 </div>
               )}
@@ -1406,6 +1452,7 @@ export default function DistributeVouchersPage() {
         </DialogContent>
       </Dialog>
 
+      {/* --- PRINT TEMPLATES --- */}
       <div className="hidden">
         <div ref={printRef} className="bg-white text-black p-10 font-sans" style={{ width: '210mm', minHeight: '297mm', margin: 0, padding: '40px' }}>
           {viewChallan && companyData && (
@@ -1434,6 +1481,11 @@ export default function DistributeVouchersPage() {
                       <p className="text-sm font-medium text-zinc-600 mt-1">{viewChallan.voucher_distributors?.contact_person || ""}</p>
                       <p className="text-sm font-medium text-zinc-600">{viewChallan.voucher_distributors?.phone || "No contact provided"}</p>
                     </>
+                  )}
+                  {getReferencePersonName(viewChallan) && (
+                    <p className="text-xs font-bold text-zinc-700 mt-2">
+                      Intro Agent / Reference: {getReferencePersonName(viewChallan)}
+                    </p>
                   )}
                 </div>
                 <div>
