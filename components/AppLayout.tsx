@@ -9,7 +9,8 @@ import { Button } from '@/components/ui/button'
 import {
   Home, Server, Monitor, QrCode, Wallet, PieChart, Compass,
   SlidersHorizontal, ShoppingBag, Hammer, Layers, BookOpen, Route, Users,
-  TicketPercent, LogOut, Menu, X, ChevronRight, PanelLeft, Building2, Box, MessageSquare, Brain, ShoppingCart, Briefcase
+  TicketPercent, LogOut, Menu, X, ChevronRight, PanelLeft, Building2, Box, MessageSquare, Brain, ShoppingCart, Briefcase,
+  FileText
 } from 'lucide-react'
 
 // --- Configuration with Premium Icons ---
@@ -35,6 +36,8 @@ const allOperationModules = [
   { href: '/crm', label: 'CRM', icon: Users, roles: ['owner', 'manager', 'crm_manager', 'branch_manager','sales_person'] },
   { href: '/whatsapp', label: 'Whatsapp API', icon: MessageSquare, roles: ['owner', 'manager'] },
   { href: '/vouchers', label: 'Vouchers', icon: TicketPercent, roles: ['owner', 'manager', 'crm_manager'] },
+  // ✨ NEW: Daily Cashbook Menu Item Added
+  { href: '/cashbook', label: 'Daily Cashbook', icon: FileText, roles: ['owner', 'manager', 'branch_manager'] },
 ]
 
 export function AppLayout({ children, appUser }: { children: React.ReactNode, appUser?: any }) {
