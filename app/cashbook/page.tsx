@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { format } from "date-fns";
-import { Save, RefreshCw, Store, Loader2 } from "lucide-react";
+import { Save, RefreshCw, Store, Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input"; 
@@ -55,10 +55,10 @@ export default function DailyCashbook() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  // Manual States
+  // Manual States - Reduced default padding for compact view
   const [yesterdayCash, setYesterdayCash] = useState<string>("");
-  const [cashInOut, setCashInOut] = useState(Array(5).fill({ particulars: "", amount: "" }));
-  const [expenses, setExpenses] = useState(Array(10).fill({ particulars: "", amount: "" }));
+  const [cashInOut, setCashInOut] = useState(Array(2).fill({ particulars: "", amount: "" }));
+  const [expenses, setExpenses] = useState(Array(2).fill({ particulars: "", amount: "" }));
   
   const [denominations, setDenominations] = useState<Denominations>({
     "500": "", "200": "", "100": "", "50": "", "20": "", "10": "", "5": "", "2": "", "1": ""
@@ -100,92 +100,106 @@ export default function DailyCashbook() {
 
       // 1. Fetch Auto-Transactions (Invoices)
       const { data: invData } = await supabase.from('invoices')
-        .select('invoice_number, final_total, payment_mode, split_payments, customers(full_name)')
+        .select('invoice_number, final_total, advance_adjusted, kitty_payment, wallet_payment, payment_mode, split_payments, customers(full_name)')
         .eq('warehouse_id', selectedLocation)
         .gte('created_at', startOfDay)
         .lte('created_at', endOfDay)
         .neq('status', 'CANCELLED');
 
-      // 2. Fetch Auto-Transactions (Advances/Orders) from the NEW LEDGER
-      const { data: ordData, error: ordErr } = await supabase.from('custom_order_payments')
+      // 2. Fetch Advances directly from Custom Orders
+      const { data: ordData, error: ordErr } = await supabase.from('custom_orders')
+        .select('order_number, advance_paid, customers(full_name)')
+        .eq('origin_warehouse_id', selectedLocation)
+        .gte('created_at', startOfDay)
+        .lte('created_at', endOfDay)
+        .gt('advance_paid', 0);
+
+      // 3. Fetch Harvesting Plan (HP) / Kitty Installments
+      const { data: kittyData, error: kittyErr } = await supabase.from('kitty_installments')
         .select(`
-          amount, 
+          amount_paid,
           payment_mode,
-          custom_orders!inner(
-            order_number, 
-            origin_warehouse_id, 
+          kitty_plans!inner(
+            warehouse_id,
             customers(full_name)
           )
         `)
-        .eq('custom_orders.origin_warehouse_id', selectedLocation)
+        .eq('kitty_plans.warehouse_id', selectedLocation)
         .gte('payment_date', startOfDay)
         .lte('payment_date', endOfDay);
 
-      if (ordErr) console.error("Order Payments Fetch Error:", ordErr);
+      if (ordErr) console.error("Order Advances Fetch Error:", ordErr);
+      if (kittyErr) console.error("Kitty Fetch Error:", kittyErr);
 
       let parsedTx: any[] = [];
       let calcSummary: Record<string, number> = { CASH: 0, CARD: 0, UPI: 0, ADV: 0, HP: 0 };
 
-      // Parse Invoices (Handle Split Payments & Normalize Modes)
+      // Parse Invoices (Handle Pre-paid Deductions & Split Payments)
       invData?.forEach(inv => {
         const partyName = (inv.customers as any)?.full_name || 'Walk-in';
         
         if (inv.split_payments && Object.keys(inv.split_payments).length > 0) {
           Object.entries(inv.split_payments).forEach(([mode, amt]) => {
             const numAmt = Number(amt);
-            if (numAmt > 0) {
+            // Only capture actual physical/digital payments made today
+            if (numAmt > 0 && ['cash', 'card', 'upi', 'bank'].includes(mode.toLowerCase())) {
               const upperMode = mode.toUpperCase();
               const finalMode = upperMode === 'GPAY' ? 'UPI' : upperMode;
-              parsedTx.push({ bno: inv.invoice_number, party: partyName, amount: numAmt, payment: finalMode, tag: "", clt: "SI" });
+              parsedTx.push({ bno: inv.invoice_number, party: partyName, amount: numAmt, payment: finalMode, tag: "SALE", clt: "SI" });
               calcSummary[finalMode] = (calcSummary[finalMode] || 0) + numAmt;
             }
           });
         } else {
-          const numAmt = Number(inv.final_total);
-          const upperMode = (inv.payment_mode || 'CASH').toUpperCase();
-          const finalMode = upperMode === 'GPAY' ? 'UPI' : upperMode;
-          parsedTx.push({ bno: inv.invoice_number, party: partyName, amount: numAmt, payment: finalMode, tag: "", clt: "SI" });
-          calcSummary[finalMode] = (calcSummary[finalMode] || 0) + numAmt;
+          // Net Amount collected TODAY (Subtracts existing advances/wallets from the final total)
+          const netCollectedToday = Math.max(0, Number(inv.final_total) - Number(inv.advance_adjusted || 0) - Number(inv.kitty_payment || 0) - Number(inv.wallet_payment || 0));
+          
+          if (netCollectedToday > 0) {
+            const upperMode = (inv.payment_mode || 'CASH').toUpperCase();
+            const finalMode = upperMode === 'GPAY' ? 'UPI' : upperMode;
+            parsedTx.push({ bno: inv.invoice_number, party: partyName, amount: netCollectedToday, payment: finalMode, tag: "SALE", clt: "SI" });
+            calcSummary[finalMode] = (calcSummary[finalMode] || 0) + netCollectedToday;
+          }
         }
       });
 
-      // Parse Custom Order Advances from the Ledger
-      ordData?.forEach((payment: any) => {
-        const numAmt = Number(payment.amount);
+      // Parse Custom Order Advances (ADV)
+      ordData?.forEach((ord: any) => {
+        const numAmt = Number(ord.advance_paid);
+        const partyName = (ord.customers as any)?.full_name || 'Walk-in';
         
-        // Safely extract the joined order data (handling both Object and Array returns)
-        const orderData = Array.isArray(payment.custom_orders) 
-          ? payment.custom_orders[0] 
-          : payment.custom_orders;
-          
-        // Safely extract the deeply nested customer data
-        const customerData = Array.isArray(orderData?.customers)
-          ? orderData?.customers[0]
-          : orderData?.customers;
-
-        const partyName = customerData?.full_name || 'Walk-in';
-        const orderNo = orderData?.order_number;
-        const upperMode = (payment.payment_mode || 'CASH').toUpperCase();
-        const finalMode = upperMode === 'GPAY' ? 'UPI' : upperMode;
-        
-        // Push the transaction to the table
         parsedTx.push({ 
-          bno: orderNo, 
+          bno: ord.order_number, 
           party: partyName, 
           amount: numAmt, 
-          payment: finalMode, 
+          payment: 'CASH', // Defaulting to Cash for drawer balance (since schema lacks payment mode here)
           tag: "ADV", 
           clt: "ORD" 
         });
 
-        // Add to the physical mode (CASH, UPI, CARD) to balance the drawer
-        calcSummary[finalMode] = (calcSummary[finalMode] || 0) + numAmt;
-        
-        // ALSO add to the ADV tracking bucket
         calcSummary['ADV'] = (calcSummary['ADV'] || 0) + numAmt; 
       });
-      // Pad the table with empty rows to maintain spreadsheet layout
-      const minRows = 15;
+
+      // Parse Kitty Installments (HP)
+      kittyData?.forEach((kit: any) => {
+        const numAmt = Number(kit.amount_paid);
+        const partyName = (kit.kitty_plans?.customers as any)?.full_name || 'Member';
+        const upperMode = (kit.payment_mode || 'CASH').toUpperCase();
+        const finalMode = upperMode === 'GPAY' ? 'UPI' : upperMode;
+        
+        parsedTx.push({ 
+          bno: 'KITTY', 
+          party: partyName, 
+          amount: numAmt, 
+          payment: finalMode, 
+          tag: "HP", 
+          clt: "KIT" 
+        });
+
+        calcSummary['HP'] = (calcSummary['HP'] || 0) + numAmt; 
+      });
+
+      // Pad the table with minimal empty rows to keep the sheet compact
+      const minRows = Math.max(3, parsedTx.length + 2);
       if (parsedTx.length < minRows) {
         parsedTx = [...parsedTx, ...Array(minRows - parsedTx.length).fill({ bno: "", party: "", amount: "", payment: "", tag: "", clt: "" })];
       }
@@ -202,12 +216,12 @@ export default function DailyCashbook() {
 
       if (cbData) {
         setYesterdayCash(cbData.yesterday_cash?.toString() || "");
-        setCashInOut([...(cbData.cash_in_out || []), ...Array(5).fill({ particulars: "", amount: "" })].slice(0, 5));
-        setExpenses([...(cbData.expenses || []), ...Array(10).fill({ particulars: "", amount: "" })].slice(0, 10));
+        setCashInOut([...(cbData.cash_in_out || []), ...Array(2).fill({ particulars: "", amount: "" })]);
+        setExpenses([...(cbData.expenses || []), ...Array(2).fill({ particulars: "", amount: "" })]);
         setDenominations({ ...denominations, ...(cbData.denominations || {}) });
       } else {
-        setCashInOut(Array(5).fill({ particulars: "", amount: "" }));
-        setExpenses(Array(10).fill({ particulars: "", amount: "" }));
+        setCashInOut(Array(2).fill({ particulars: "", amount: "" }));
+        setExpenses(Array(2).fill({ particulars: "", amount: "" }));
         setDenominations({ "500": "", "200": "", "100": "", "50": "", "20": "", "10": "", "5": "", "2": "", "1": "" });
         
         // Auto-fetch yesterday's closing balance
@@ -232,11 +246,14 @@ export default function DailyCashbook() {
     }
   };
 
+  // --- Dynamic Row Addition Handlers ---
+  const addCashInOutRow = () => setCashInOut([...cashInOut, { particulars: "", amount: "" }]);
+  const addExpenseRow = () => setExpenses([...expenses, { particulars: "", amount: "" }]);
+  const addTransactionRow = () => setTransactions([...transactions, { bno: "", party: "", amount: "", payment: "", tag: "", clt: "" }]);
+
   // --- Calculations ---
-  // Filter purely 'CASH' transactions for the top left box
   const autoCashTxs = transactions.filter(t => t.payment === 'CASH' && t.bno);
   const totalAutoCash = autoCashTxs.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0);
-  const totalCashSales = summary['CASH'] || 0; 
   
   const numYesterdayCash = Number(yesterdayCash) || 0;
   const totalManualCash = cashInOut.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
@@ -244,10 +261,14 @@ export default function DailyCashbook() {
   const totalDenominations = Object.entries(denominations).reduce((sum, [note, pieces]) => sum + (Number(note) * (Number(pieces) || 0)), 0);
   const totalTransactions = transactions.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
 
-  // Auto-calculated Closing Balance (Opening + Auto Cash Bills + Manual Cash - Expenses)
+  // Auto-calculated Closing Balance (Opening + Auto Cash Receipts + Manual Cash - Expenses)
   const totalCashInSum = totalAutoCash + totalManualCash;
   const closingBalance = numYesterdayCash + totalCashInSum - totalExpense;
   const diff = totalDenominations - closingBalance;
+
+  // ✨ FINAL TOTAL FORMULA: (CASH + UPI + CARD) + ADV + HP
+  const totalSale = (summary['CASH'] || 0) + (summary['CARD'] || 0) + (summary['UPI'] || 0);
+  const overallFinalTotal = totalSale + (summary['ADV'] || 0) + (summary['HP'] || 0);
 
   const handleSave = async () => {
     if (!selectedLocation || !appUser?.company_id) return toast.error("Location or Company context missing.");
@@ -350,20 +371,20 @@ export default function DailyCashbook() {
               <div className="flex-1 border-r-2 border-black flex flex-col">
                 <div className="text-center font-bold border-b border-black bg-[#fff2cc] p-1">CASH IN AND OUT</div>
                 
-                {/* Auto-Calculated Cash Sales Row */}
+                {/* Auto-Calculated Cash Receipts Row (Invoices + Adv + HP paid in cash) */}
                 <div className="flex border-b border-black bg-emerald-50">
                   <div className="w-8 border-r border-black flex items-center justify-center font-bold text-emerald-800">+</div>
-                  <div className="flex-1 border-r border-black font-semibold text-emerald-800 py-1 px-1">AUTO: TODAY'S CASH SALES</div>
-                  <div className="w-24 text-right font-mono font-bold text-emerald-800 py-1 pr-1">{totalCashSales.toLocaleString()}</div>
+                  <div className="flex-1 border-r border-black font-semibold text-emerald-800 py-1 px-1">AUTO: TODAY'S CASH RECEIPTS</div>
+                  <div className="w-24 text-right font-mono font-bold text-emerald-800 py-1 pr-1">{totalAutoCash.toLocaleString()}</div>
                 </div>
 
                 <div className="flex flex-1 flex-col">
-                  {/* Dynamic Auto Cash Bills fetched from transactions */}
+                  {/* Dynamic Auto Cash Transactions fetched from records */}
                   {autoCashTxs.map((tx, i) => (
                     <div key={`auto-${i}`} className="flex border-b border-slate-300 bg-white min-h-[24px]">
                       <div className="w-8 border-r border-slate-300 flex items-center justify-center text-blue-600 font-bold"></div>
                       <div className="flex-1 border-r border-slate-300">
-                        <SheetInput readOnly value={tx.bno ? `bill no ${tx.bno}` : 'Cash Sale'} className="text-blue-700 font-medium" />
+                        <SheetInput readOnly value={tx.bno ? (tx.tag === 'HP' ? `Kitty No: ${tx.bno}` : `Ref No: ${tx.bno}`) : 'Cash Receipt'} className="text-blue-700 font-medium" />
                       </div>
                       <div className="w-24">
                         <SheetInput readOnly type="number" align="right" value={tx.amount} className="text-blue-700 font-medium" />
@@ -383,6 +404,11 @@ export default function DailyCashbook() {
                       </div>
                     </div>
                   ))}
+                  
+                  {/* + ADD ROW Button */}
+                  <button onClick={addCashInOutRow} className="flex w-full justify-center items-center py-1 text-[10px] text-slate-500 hover:text-blue-700 hover:bg-slate-50 border-b border-slate-300 transition-colors cursor-pointer">
+                    <Plus className="w-3 h-3 mr-1" /> Add Row
+                  </button>
                 </div>
                 
                 <div className="flex border-t-2 border-black font-bold">
@@ -411,8 +437,12 @@ export default function DailyCashbook() {
                       </div>
                     </div>
                   ))}
+                  {/* + ADD ROW Button */}
+                  <button onClick={addExpenseRow} className="flex w-full justify-center items-center py-1 text-[10px] text-slate-500 hover:text-blue-700 hover:bg-slate-50 border-b border-slate-300 transition-colors cursor-pointer border-r border-black">
+                    <Plus className="w-3 h-3 mr-1" /> Add Row
+                  </button>
                 </div>
-                <div className="flex border-t-2 border-black font-bold">
+                <div className="flex border-t-2 border-black font-bold mt-auto">
                   <div className="flex-1 p-1 text-center border-r border-black bg-[#ffff00]">TOTAL EXPENSES</div>
                   <div className="w-24 p-1 text-right font-mono bg-[#ffff00] border-r border-black text-red-600">{totalExpense.toLocaleString()}</div>
                 </div>
@@ -446,7 +476,7 @@ export default function DailyCashbook() {
                 </div>
               )
             })}
-            <div className="flex border-t-2 border-black font-bold">
+            <div className="flex border-t-2 border-black font-bold mt-auto">
               <div className="w-[66.66%] p-1 text-left pl-2 border-r border-black bg-[#ffff00]">TOTAL</div>
               <div className="flex-1 p-1 text-right font-mono bg-white">{totalDenominations.toLocaleString()}</div>
             </div>
@@ -483,8 +513,13 @@ export default function DailyCashbook() {
                 <div className="w-16"><SheetInput readOnly align="center" value={row.clt} /></div>
               </div>
             ))}
+            
+            {/* + ADD ROW Button */}
+            <button onClick={addTransactionRow} className="flex w-full justify-center items-center py-1.5 text-[10px] text-slate-500 hover:text-blue-700 hover:bg-slate-50 border-b-2 border-black transition-colors cursor-pointer">
+              <Plus className="w-3 h-3 mr-1" /> Add Row
+            </button>
 
-            <div className="flex border-t-2 border-black font-bold h-8">
+            <div className="flex font-bold h-8 mt-auto">
               <div className="w-24 border-r border-black bg-[#fff2cc]"></div>
               <div className="flex-[2] border-r border-black bg-[#fff2cc]"></div>
               <div className="w-24 p-1 text-right border-r border-black bg-[#ffff00] font-mono">{totalTransactions.toLocaleString()}</div>
@@ -509,18 +544,29 @@ export default function DailyCashbook() {
                     </div>
                   </div>
                 ))}
+                
                 <div className="flex border-b-2 border-black font-bold min-h-[24px]">
                   <div className="flex-1 p-1 border-r border-black text-center bg-[#ffff00]">TOTAL SALE</div>
                   <div className="w-24 p-1 text-right font-mono bg-[#ffff00] flex items-center justify-end pr-1">
-                    {((summary['CASH'] || 0) + (summary['CARD'] || 0) + (summary['UPI'] || 0)).toLocaleString()}
+                    {totalSale.toLocaleString()}
                   </div>
                 </div>
+                
                 {['ADV', 'HP'].map(type => (
                   <div key={type} className="flex border-b border-black min-h-[24px]">
                     <div className="flex-1 p-1 border-r border-black font-medium text-center">{type}</div>
                     <div className="w-24 p-1 text-right font-mono bg-white flex items-center justify-end pr-1">{(summary[type] || 0).toLocaleString()}</div>
                   </div>
                 ))}
+
+                {/* ✨ NEW FINAL TOTAL ROW */}
+                <div className="flex border-b-2 border-black font-bold min-h-[24px]">
+                  <div className="flex-1 p-1 border-r border-black text-center bg-[#ffff00]">FINAL TOTAL</div>
+                  <div className="w-24 p-1 text-right font-mono text-blue-900 bg-[#ffff00] flex items-center justify-end pr-1">
+                    {overallFinalTotal.toLocaleString()}
+                  </div>
+                </div>
+
               </div>
             </div>
           </div>

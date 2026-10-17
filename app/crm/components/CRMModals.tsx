@@ -91,7 +91,10 @@ interface CRMModalsProps {
   handleAddCustomer: () => void;
   handleAddKittyMember: () => void;
   handleUpdateLoyalty: () => void;
-  handleRecordKittyPayment: (c: CRMCustomer, planId: string) => void;
+  
+  // ✨ FIX: Added Payment Mode String to the Props Signature
+  handleRecordKittyPayment: (c: CRMCustomer, planId: string, paymentMode: string) => void;
+  
   handleUpdateFollowup: () => void;
   handleTemplateChange: (id: string) => void;
   handleSendWhatsApp: () => void;
@@ -128,6 +131,12 @@ export function CRMModals(props: CRMModalsProps) {
   const [isUpdatingSequence, setIsUpdatingSequence] = useState(false);
 
   const [profilesList, setProfilesList] = useState<any[]>([]);
+
+  // ✨ FIX: Local State to track selected payment mode for Kitty installments
+  const [kittyPaymentModes, setKittyPaymentModes] = useState<Record<string, string>>({});
+
+  const getPaymentMode = (planId: string) => kittyPaymentModes[planId] || 'Cash';
+  const handleSetPaymentMode = (planId: string, mode: string) => setKittyPaymentModes(prev => ({...prev, [planId]: mode}));
 
   useEffect(() => {
     const fetchProfiles = async () => {
@@ -518,6 +527,22 @@ export function CRMModals(props: CRMModalsProps) {
                             </div>
 
                             <div className="mb-5">
+                              {/* ✨ FIX: Local Payment Mode Dropdown injected right above the month grid */}
+                              <div className="flex items-center justify-between mb-3 border-b border-zinc-100 pb-2">
+                                <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Installment Payment Mode</span>
+                                <Select value={getPaymentMode(plan.id)} onValueChange={(val) => handleSetPaymentMode(plan.id, val)}>
+                                  <SelectTrigger className="h-7 w-[120px] text-xs bg-white border-zinc-200 focus:ring-1 focus:ring-zinc-900">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent className="border-zinc-200 shadow-md">
+                                    <SelectItem value="Cash" className="text-xs">Cash</SelectItem>
+                                    <SelectItem value="UPI" className="text-xs">UPI</SelectItem>
+                                    <SelectItem value="Card" className="text-xs">Card</SelectItem>
+                                    <SelectItem value="Bank" className="text-xs">Bank Transfer</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+
                               <div className="grid grid-cols-4 sm:grid-cols-6 gap-2">
                                 {Array.from({length: plan.total_months}).map((_, i) => {
                                   const monthNum = i + 1;
@@ -542,7 +567,7 @@ export function CRMModals(props: CRMModalsProps) {
                                         <div className="absolute inset-0 flex flex-col">
                                           <button 
                                             className="flex-1 bg-zinc-900 text-white text-[10px] font-medium opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center"
-                                            onClick={() => handleRecordKittyPayment(selectedCustomer, plan.id)}
+                                            onClick={() => handleRecordKittyPayment(selectedCustomer, plan.id, getPaymentMode(plan.id))}
                                           >
                                             Mark Paid
                                           </button>
@@ -888,11 +913,10 @@ export function CRMModals(props: CRMModalsProps) {
         </DialogContent>
       </Dialog>
 
-      {/* ✨ CELEBRATION PLAN / LOYALTY MODAL */}
+      {/* CELEBRATION PLAN / LOYALTY MODAL */}
       <Dialog open={isCelebrationModalOpen} onOpenChange={setIsCelebrationModalOpen}>
         <DialogContent className="sm:max-w-[450px] p-0 border-none bg-transparent shadow-none overflow-visible">
           
-          {/* ✨ ADD THIS LINE to fix the accessibility crash */}
           <DialogTitle className="sr-only">Loyalty Program Settings</DialogTitle>
           
           {selectedCustomer && (
@@ -907,7 +931,7 @@ export function CRMModals(props: CRMModalsProps) {
         </DialogContent>
       </Dialog>
 
-      {/* ✨ PURCHASE HISTORY MODAL */}
+      {/* PURCHASE HISTORY MODAL */}
       <Dialog open={isHistoryModalOpen} onOpenChange={setIsHistoryModalOpen}>
         <DialogContent className={cn(DIALOG_CONTENT_CLASS, "sm:max-w-[450px]")}>
           <DialogHeader className="bg-white p-5 border-b border-zinc-200 shrink-0">
@@ -968,7 +992,7 @@ export function CRMModals(props: CRMModalsProps) {
         </DialogContent>
       </Dialog>
 
-      {/* ✨ WHATSAPP ACTIVITY MODAL */}
+      {/* WHATSAPP ACTIVITY MODAL */}
       <Dialog open={isWaActivityModalOpen} onOpenChange={setIsWaActivityModalOpen}>
         <DialogContent className={cn(DIALOG_CONTENT_CLASS, "sm:max-w-[450px]")}>
           <DialogHeader className="bg-white p-5 border-b border-zinc-200 shrink-0">

@@ -94,6 +94,7 @@ export async function middleware(request: NextRequest) {
     
     // ✨ NEW: Define E-Commerce Route
     const isEcommerceRoute = path.startsWith('/ecommerce')
+    const isCashbookRoute = path.startsWith('/cashbook')
 
     // STRICT DENIALS (Cross-role access prevention)
     // ----------------------------------------------------
@@ -114,6 +115,24 @@ export async function middleware(request: NextRequest) {
       } else if (role !== 'voucher_manager') {
         return NextResponse.redirect(new URL('/dashboard', request.url))
       }
+    }
+
+    if ((role === 'branch_manager' || role === 'shadow_manager') && !isBranchManagerRoute) {
+      // ✨ ALLOW branch managers to access the cashbook route as well
+      if (role === 'branch_manager' && isCashbookRoute) {
+        return supabaseResponse;
+      }
+      return NextResponse.redirect(new URL('/dashboard', request.url))
+    }
+    
+    // Ensure other restricted roles cannot access the cashbook
+    if ((role === 'sales_person' || role === 'shadow_sales') && !isSalesRoute) {
+      return NextResponse.redirect(new URL('/dashboard', request.url))
+    }
+    
+    // If any other role tries to access cashbook (like Operations Manager, Voucher Manager)
+    if (isCashbookRoute && !['owner', 'manager', 'branch_manager'].includes(role)) {
+        return NextResponse.redirect(new URL('/dashboard', request.url))
     }
 
     // ----------------------------------------------------

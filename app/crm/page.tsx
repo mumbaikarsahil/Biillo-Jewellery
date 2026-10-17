@@ -987,7 +987,7 @@ export default function CRMPage() {
     }
   }
 
-  const handleRecordKittyPayment = async (customer: CRMCustomer, planId: string) => {
+  const handleRecordKittyPayment = async (customer: CRMCustomer, planId: string, paymentMode: string) => {
     if (!appUser || !customer || !planId) return;
 
     const plan = customer.kitty_plans?.find(p => p.id === planId);
@@ -1004,7 +1004,7 @@ export default function CRMPage() {
       const { error: instError } = await supabase.from('kitty_installments').insert({
          kitty_plan_id: plan.id,
          amount_paid: amount,
-         payment_mode: 'cash', 
+         payment_mode: paymentMode, // ✨ FIX: Uses the dynamic payment mode from the UI
          payment_date: new Date().toISOString(),
       });
       if (instError) throw instError;
@@ -1021,7 +1021,7 @@ export default function CRMPage() {
       await supabase.from('customers').update({
         next_followup_date: newStatus === 'matured' ? null : nextDue.toISOString().split('T')[0],
         followup_reason: newStatus === 'matured' ? 'Plan Matured! Ready for purchase.' : `Installment ${newMonthsPaid + 1} due (₹${amount})`,
-        last_interaction: `Paid Kitty Installment ${newMonthsPaid} (₹${amount})`
+        last_interaction: `Paid Kitty Installment ${newMonthsPaid} (₹${amount} via ${paymentMode})` // ✨ BONUS: Logs the payment mode in history!
       }).eq('id', customer.id);
 
       toast.success(`Month ${newMonthsPaid} Payment Recorded!`);
