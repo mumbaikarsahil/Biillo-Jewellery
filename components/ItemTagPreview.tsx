@@ -44,12 +44,34 @@ interface Props {
   isPrintOnly?: boolean;
 }
 
+// ✨ NEW: Permanent short-form formatting logic to prevent text clipping
+const formatPurityKarat = (purity?: string) => {
+  if (!purity) return '---';
+  let formatted = purity.toUpperCase().trim();
+  
+  // Explicit mapping for common long names
+  if (formatted === '925 STERLING SILVER' || formatted === '925 SILVER') return '925SS';
+  if (formatted === '18K GOLD') return '18K';
+  if (formatted === '14K GOLD') return '14K';
+  if (formatted === '22K GOLD') return '22K';
+  if (formatted === '24K GOLD') return '24K';
+  
+  // Generic fallback replacement rules
+  formatted = formatted
+    .replace(/STERLING SILVER/g, 'SS')
+    .replace(/SILVER/g, 'SLV')
+    .replace(/GOLD/g, 'G')
+    .replace(/\s+/g, ''); // Strip extra spaces
+
+  // Hard cap length to ensure it never breaks the layout (e.g. max 6-7 chars)
+  return formatted.length > 7 ? formatted.substring(0, 7) : formatted;
+};
+
 export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
-  // ✨ FIX: This ref sits on a stable wrapper div, immune to React re-renders
   const printContentRef = useRef<HTMLDivElement>(null)
 
   const handlePrint = useReactToPrint({
-    contentRef: printContentRef, // Strict v3 syntax
+    contentRef: printContentRef,
     documentTitle: `Jewelry-Tag-${item?.barcode || 'Item'}`,
     onAfterPrint: () => toast.success('Sent to Thermal Printer'),
     onPrintError: () => toast.error('Printing failed or was cancelled.'),
@@ -97,14 +119,14 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
   const skuStr = item.sku_reference || '';
   const headerText = `${categoryStr} ${skuStr}`.trim();
   
-  const ktStr = item.purity_karat || '---';
+  // ✨ Apply the format logic here
+  const ktStr = formatPurityKarat(item.purity_karat);
   const netWtStr = Number(item.net_weight_g || 0).toFixed(3);
   
   // --- QUALITY & SHAPE LOGIC ---
   const colorClarity = [item.diamond_color, item.diamond_clarity].filter(Boolean).join('/');
   const qltStr = [item.diamond_shape, colorClarity].filter(Boolean).join(' ') || '---';
 
-  // ✨ FIX: Pure Static JSX (Not an inline component) ensures flawless rendering
   const pureTagUI = (
     <div 
       className="bg-white text-black flex border border-gray-300 shadow-sm print:border-none print:shadow-none overflow-hidden shrink-0" 
@@ -202,12 +224,10 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
     </div>
   );
 
-  // If this is called from the Bulk Printer loop in InventoryPage, return raw JSX immediately
   if (isPrintOnly) {
     return pureTagUI;
   }
 
-  // If this is called from a single-row button, render the interactive Dialog
   return (
     <Dialog open={!!item} onOpenChange={(val) => !val && onClose && onClose()}>
       <DialogContent className="sm:max-w-[550px] p-0 overflow-hidden border-slate-200 shadow-2xl rounded-xl bg-white">
@@ -218,7 +238,6 @@ export function ItemTagPreview({ item, onClose, isPrintOnly = false }: Props) {
         </DialogHeader>
         
         <div className="flex flex-col items-center justify-center py-10 bg-slate-100/50 min-h-[250px] overflow-x-auto">
-          {/* ✨ FIX: We wrap the pureTagUI inside a highly stable ref container */}
           <div ref={printContentRef}>
              {pureTagUI}
           </div>
