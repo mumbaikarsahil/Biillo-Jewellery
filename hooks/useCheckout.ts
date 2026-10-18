@@ -44,7 +44,6 @@ export function useCheckout({
   const [appliedPointsAmount, setAppliedPointsAmount] = useState(0)
   const [rawPointsRedeemed, setRawPointsRedeemed] = useState(0)
   
-  // ✨ Referral Engine State
   const [referralInput, setReferralInput] = useState('')
   const [activeReferral, setActiveReferral] = useState<{ referrer_id: string, code_or_phone: string, loyalty_account_id?: string, referrer_name?: string } | null>(null)
   
@@ -82,11 +81,16 @@ export function useCheckout({
   const effectiveDate = getEffectiveDate();
   const effectiveDateISO = effectiveDate.toISOString();
 
-  // ✨ Auto-fill customer for returns from the original invoice if available
   const effectiveCustomer = (mode === 'return' && returnDetails?.originalCustomer) ? returnDetails.originalCustomer : selectedCustomer;
 
+  // ✨ Ensures Custom Orders use the correct base value for percentage discounts
+  let effectiveSubtotal = subtotal;
+  if (mode === 'custom') {
+      effectiveSubtotal = Number(customOrderDetails?.estimated_value) || 0;
+  }
+
   const discountNum = parseFloat(discountValue) || 0
-  const standardDiscount = discountType === 'percent' ? (subtotal * discountNum) / 100 : discountNum
+  const standardDiscount = discountType === 'percent' ? (effectiveSubtotal * discountNum) / 100 : discountNum
   const hasVoucher = activeVoucher !== null
 
   if (hasVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0 || appliedPointsAmount > 0 || activeReferral)) {
@@ -99,11 +103,6 @@ export function useCheckout({
   }
 
   const cartAdvance = cart?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
-  
-  let effectiveSubtotal = subtotal;
-  if (mode === 'custom') {
-      effectiveSubtotal = Number(customOrderDetails?.estimated_value) || 0;
-  }
 
   const exchangeNum = parseFloat(exchangeValue) || 0;
   let baseTaxable = Math.max(0, effectiveSubtotal - standardDiscount - exchangeNum);
@@ -129,9 +128,7 @@ export function useCheckout({
       finalHandlingFee = 0; 
   }
 
-  // ✨ PRE-TAX MATH: Deduct Referral (10%) and Loyalty Points BEFORE tax is calculated
   const referralDiscountAmount = activeReferral ? Math.floor(baseTaxable * 0.10) : 0;
-  
   const finalTaxableValue = Math.max(0, baseTaxable - appliedVoucherAmount - referralDiscountAmount - appliedPointsAmount);
 
   const cgstAmount = parseFloat((finalTaxableValue * 0.015).toFixed(2))
@@ -368,6 +365,8 @@ export function useCheckout({
     }
   }
 
+  // ✨ CRITICAL FIX: The preview engine asks for draft data using this function.
+  // We extract the structured array here to feed the print template directly.
   const generateDraftData = (isEstimate = false, customTransactionContext?: any) => {
     const draftInvoiceNo = isEstimate ? 'DRAFT-EST' 
                          : mode === 'normal' ? 'DRAFT-INV' 
@@ -378,12 +377,15 @@ export function useCheckout({
     
     const activeBranch = allBranches?.find((b: any) => b.id === selectedLocation) || null;
 
-    const legacyAdvance = Number(customTransactionContext?.manual_advance) || 0;
+    // ✨ Parse Multi-Entry Legacy Advances from Sidebar
+    const legacyAdvancesArray = customTransactionContext?.legacy_advances || [];
+    const totalLegacyAdvance = legacyAdvancesArray.reduce((sum: number, a: any) => sum + (Number(a.amount) || 0), 0);
+
     const effectiveKittyAmt = Number(customTransactionContext?.applied_kitty || customTransactionContext?.appliedKitty || appliedKittyAmount);
     const effectiveCreditAmt = Number(customTransactionContext?.applied_credit || customTransactionContext?.appliedCredit || appliedCreditAmount);
     const effectivePointsAmt = Number(customTransactionContext?.applied_points || customTransactionContext?.appliedPoints || appliedPointsAmount);
 
-    const totalAdvanceRealized = cartAdvance + legacyAdvance;
+    const totalAdvanceRealized = cartAdvance + totalLegacyAdvance;
 
     const mappedCustomOrder = mode === 'custom' && customOrderDetails ? {
       ...customOrderDetails,
@@ -421,14 +423,14 @@ export function useCheckout({
     const requiredTotalForPreview = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
                          : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                          : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
-                         : Math.max(0, finalPayableNet - legacyAdvance);
+                         : Math.max(0, finalPayableNet - totalLegacyAdvance);
 
     let previewPaymentMode = paymentMode;
     let previewSplit: any = paymentMode === 'split' ? { ...splitPayments } : null;
 
-    if (effectiveKittyAmt > 0 || effectiveCreditAmt > 0 || effectivePointsAmt > 0 || legacyAdvance > 0) {
+    if (effectiveKittyAmt > 0 || effectiveCreditAmt > 0 || effectivePointsAmt > 0 || totalLegacyAdvance > 0) {
         if (requiredTotalForPreview === 0) {
-            previewPaymentMode = legacyAdvance > 0 ? 'Advance / Settled' : 'Wallet / Loyalty';
+            previewPaymentMode = totalLegacyAdvance > 0 ? 'Advance / Settled' : 'Wallet / Loyalty';
         } else {
             previewPaymentMode = 'Split / Combined';
             if (paymentMode !== 'split') {
@@ -438,7 +440,7 @@ export function useCheckout({
             if (effectiveKittyAmt > 0) previewSplit['kitty'] = effectiveKittyAmt;
             if (effectiveCreditAmt > 0) previewSplit['wallet'] = effectiveCreditAmt;
             if (effectivePointsAmt > 0) previewSplit['loyalty_points'] = effectivePointsAmt;
-            if (legacyAdvance > 0) previewSplit['legacy_advance'] = legacyAdvance;
+            if (totalLegacyAdvance > 0) previewSplit['legacy_advance'] = totalLegacyAdvance;
         }
     }
 
@@ -480,7 +482,9 @@ export function useCheckout({
       estimateHandlingPct: estimateHandlingPercent,
       estimateHandlingAmt: printEstimateHandlingAmt,
       
+      // ✨ Pass calculations to the Print Template
       advance_adjusted: totalAdvanceRealized,
+      advance_history: legacyAdvancesArray,
 
       finalTotal: mode === 'custom' ? finalPayableGross 
                 : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
@@ -497,12 +501,15 @@ export function useCheckout({
     try {
       const finalizingUserId = billedBy || appUser?.user_id || appUser?.id;
 
-      const effectiveKittyAmt = Number(customTransactionContext?.applied_kitty || customTransactionContext?.appliedKitty || appliedKittyAmount);
-      const effectiveKittyPlanId = customTransactionContext?.kitty_plan_id || customTransactionContext?.kittyPlanId || appliedKittyPlanId;
-      const effectiveCreditAmt = Number(customTransactionContext?.applied_credit || customTransactionContext?.appliedCredit || appliedCreditAmount);
-      const effectivePointsAmt = Number(customTransactionContext?.applied_points || customTransactionContext?.appliedPoints || appliedPointsAmount);
-      const effectiveRawPoints = Number(customTransactionContext?.raw_points_redeemed || customTransactionContext?.rawPointsRedeemed || rawPointsRedeemed);
-      const legacyAdvance = Number(customTransactionContext?.manual_advance) || 0;
+      // ✨ Parse Multi-Entry Legacy Advances
+      const legacyAdvancesArray = customTransactionContext?.legacy_advances || [];
+      const totalLegacyAdvance = legacyAdvancesArray.reduce((sum: number, a: any) => sum + (Number(a.amount) || 0), 0);
+
+      const effectiveKittyAmt = Number(customTransactionContext?.applied_kitty || appliedKittyAmount);
+      const effectiveKittyPlanId = customTransactionContext?.kitty_plan_id || appliedKittyPlanId;
+      const effectiveCreditAmt = Number(customTransactionContext?.applied_credit || appliedCreditAmount);
+      const effectivePointsAmt = Number(customTransactionContext?.applied_points || appliedPointsAmount);
+      const effectiveRawPoints = Number(customTransactionContext?.raw_points_redeemed || rawPointsRedeemed);
 
       if (customTransactionContext) {
          if (effectiveKittyAmt) setAppliedKittyAmount(effectiveKittyAmt);
@@ -513,7 +520,7 @@ export function useCheckout({
       const requiredTotal = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
                           : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                           : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
-                          : Math.max(0, finalPayableNet - legacyAdvance); 
+                          : Math.max(0, finalPayableNet - totalLegacyAdvance); 
 
       if (paymentMode === 'split' && Math.abs(currentSplitTotal - requiredTotal) > 0.1) {
         toast.error(`Split total must match ₹${requiredTotal.toLocaleString()}`);
@@ -560,9 +567,9 @@ export function useCheckout({
         let dbPaymentMode = paymentMode;
         let dbSplitPayments: any = paymentMode === 'split' ? { ...splitPayments } : null;
 
-        if (effectiveKittyAmt > 0 || effectiveCreditAmt > 0 || effectivePointsAmt > 0 || legacyAdvance > 0) {
+        if (effectiveKittyAmt > 0 || effectiveCreditAmt > 0 || effectivePointsAmt > 0 || totalLegacyAdvance > 0) {
             if (requiredTotal === 0) {
-                dbPaymentMode = legacyAdvance > 0 ? 'Advance / Settled' : 'Wallet / Loyalty';
+                dbPaymentMode = totalLegacyAdvance > 0 ? 'Advance / Settled' : 'Wallet / Loyalty';
             } else {
                 dbPaymentMode = 'Split / Combined';
                 if (paymentMode !== 'split') {
@@ -572,26 +579,28 @@ export function useCheckout({
                 if (effectiveKittyAmt > 0) dbSplitPayments['kitty'] = effectiveKittyAmt;
                 if (effectiveCreditAmt > 0) dbSplitPayments['wallet'] = effectiveCreditAmt;
                 if (effectivePointsAmt > 0) dbSplitPayments['loyalty_points'] = effectivePointsAmt;
-                if (legacyAdvance > 0) dbSplitPayments['legacy_advance'] = legacyAdvance;
+                if (totalLegacyAdvance > 0) dbSplitPayments['legacy_advance'] = totalLegacyAdvance;
             }
         }
 
         if (mode === 'normal') {
             const preTaxDeductions = standardDiscount + exchangeNum + appliedVoucherAmount + effectivePointsAmt + referralDiscountAmount;
+            
             const invoiceData: any = {
               created_at: effectiveDateISO,
               customer_id: effectiveCustomer?.id, 
               warehouse_id: selectedLocation,
               items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
-              subtotal: subtotal, 
+              subtotal: effectiveSubtotal, 
               discount_amount: standardDiscount, 
-              discounted_total: Math.max(0, subtotal - preTaxDeductions),
+              discounted_total: Math.max(0, effectiveSubtotal - preTaxDeductions),
               taxable_value: finalTaxableValue,
               cgst_amount: cgstAmount, 
               sgst_amount: sgstAmount, 
               round_off_amount: roundOffAmount,
               final_total: finalPayableGross, 
-              advance_adjusted: cartAdvance + legacyAdvance, 
+              advance_adjusted: cartAdvance + totalLegacyAdvance, 
+              advance_history: legacyAdvancesArray, // ✨ Save structured advance history payload
               voucher_code: finalVoucherCode || null,
               voucher_discount: appliedVoucherAmount, 
               Voucher_handling_fee: finalHandlingFee,
@@ -624,9 +633,11 @@ export function useCheckout({
         else if (mode === 'custom') {
             if (!effectiveCustomer) throw new Error("Please select a customer for this Custom Order.")
             finalNo = `ORD-${Date.now().toString().slice(-6)}`
+            
+            // For custom orders, the "advance" is what they are paying right now TODAY. 
+            // We ignore legacy advances since this order is being created fresh.
             const customCashAdvance = Number(customOrderDetails.advance_paid) || 0;
-            const totalRealizedAdvance = customCashAdvance + effectiveKittyAmt + effectiveCreditAmt + effectivePointsAmt + legacyAdvance;
-            const baseEstimate = Number(customOrderDetails.estimated_value) || 0;
+            const totalRealizedAdvance = customCashAdvance + effectiveKittyAmt + effectiveCreditAmt + effectivePointsAmt;
 
             const payload = {
               created_at: effectiveDateISO, 
@@ -638,13 +649,14 @@ export function useCheckout({
               item_category: customOrderDetails.item_category,
               expected_gold_g: Number(customOrderDetails.expected_gold_g) || null,
               expected_diamond_cts: Number(customOrderDetails.expected_diamond_cts) || null,
-              base_estimated_value: baseEstimate,
+              base_estimated_value: effectiveSubtotal,
               discount_amount: standardDiscount,
               taxable_value: finalTaxableValue,
               cgst_amount: cgstAmount,
               sgst_amount: sgstAmount,
               estimated_value: finalPayableGross, 
               advance_paid: totalRealizedAdvance, 
+              advance_history: [], // Starts blank, mapped as JSON array
               voucher_code: finalVoucherCode || null,
               voucher_amount: appliedVoucherAmount,
               status: 'pending_manufacturing',
@@ -652,12 +664,21 @@ export function useCheckout({
             }
             const { error } = await supabase.from('custom_orders').insert(payload)
             if (error) throw error
-            toast.success(`Custom Order ${finalNo} submitted to manufacturing!`)
+
+            // Log the initial advance payment
+            if (totalRealizedAdvance > 0) {
+               await supabase.from('custom_order_payments').insert({
+                  order_id: (await supabase.from('custom_orders').select('id').eq('order_number', finalNo).single()).data?.id,
+                  amount: totalRealizedAdvance,
+                  payment_mode: dbPaymentMode,
+                  recorded_by: finalizingUserId
+               });
+            }
+
+            toast.success(`Custom Order ${finalNo} submitted!`)
         }
         
-        // ==========================================
-        // ✨ POST-SALE REDEMPTIONS & REWARDS
-        // ==========================================
+        // POST-SALE REDEMPTIONS & REWARDS
         if (activeVoucher) {
           await supabase.from('vouchers').update({ status: 'redeemed', redeemed_at: new Date().toISOString() }).eq('id', activeVoucher.id)
         }
@@ -693,12 +714,9 @@ export function useCheckout({
                 await supabase.from('customers').update(updatePayload).eq('id', effectiveCustomer.id);
             }
 
-            // 💎 1. DEDUCT REDEEMED POINTS
-            let purchaserLoyaltyId = null;
             if (effectiveRawPoints > 0) {
               const { data: purchaserAcc } = await supabase.from('loyalty_accounts').select('id').eq('customer_id', effectiveCustomer.id).maybeSingle();
               if (purchaserAcc) {
-                purchaserLoyaltyId = purchaserAcc.id;
                 await supabase.from('loyalty_transactions').insert({
                   account_id: purchaserAcc.id,
                   activity_category: 'Redemption',
@@ -710,9 +728,7 @@ export function useCheckout({
               }
             }
 
-            // 💎 2. AWARD REPEAT PURCHASE POINTS
             if (autoLoyaltyRules && autoLoyaltyRules.length > 0) {
-              
               const repeatRule = autoLoyaltyRules.find(r => r.name.toLowerCase().includes('repeat'));
               const { data: purchaserAcc } = await supabase.from('loyalty_accounts').select('id').eq('customer_id', effectiveCustomer.id).maybeSingle();
               
@@ -740,8 +756,6 @@ export function useCheckout({
                 }
               }
 
-              // ✨ 3. AWARD REFERRER (5% OF FINAL TAXABLE VALUE)
-              
               if (activeReferral && activeReferral.loyalty_account_id) {
                 const referRule = autoLoyaltyRules.find(r => r.name.toLowerCase().includes('refer'));
                 if (referRule) {
@@ -773,13 +787,12 @@ export function useCheckout({
             }
         }
       }
-      // ✨ FIX: REPAIR TICKET DATABASE INSERTION
       else if (mode === 'repair') {
         if (!effectiveCustomer) throw new Error("Please select a customer for this Repair Ticket.");
         finalNo = `REP-${Date.now().toString().slice(-6)}`;
         
         const repairAdvance = Number(repairDetails?.advancePaid) || 0;
-        const totalRealizedAdvance = repairAdvance + effectiveKittyAmt + effectiveCreditAmt + effectivePointsAmt + legacyAdvance;
+        const totalRealizedAdvance = repairAdvance + effectiveKittyAmt + effectiveCreditAmt + effectivePointsAmt;
         
         const payload = {
             company_id: appUser?.company_id,
@@ -851,9 +864,7 @@ export function useCheckout({
       finalDraftData.invoice_number = finalNo;
 
       if (!isEstimate && selectedPackaging?.length > 0 && (mode === 'normal' || mode === 'custom')) {
-        
         const safeWarehouseId = selectedLocation === 'ALL' ? null : selectedLocation;
-
         for (const pkg of selectedPackaging) {
           const { error: packErr } = await supabase.rpc('decrement_packaging_stock', {
             p_id: pkg.id,

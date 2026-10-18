@@ -51,6 +51,9 @@ export default function POSPage() {
   const [lastInvoiceData, setLastInvoiceData] = useState<any>(null)
   const [isEstimateCheckout, setIsEstimateCheckout] = useState(false)
 
+  // ✨ NEW: State to hold the transaction context (Advances, Kitty, Wallet) passed from Sidebar
+  const [transactionContext, setTransactionContext] = useState<any>(null)
+
   // Backdate Invoice State
   const [billingDate, setBillingDate] = useState(new Date().toISOString().split('T')[0])
   const isAdmin = appUser?.role === 'owner' || appUser?.role === 'manager' || appUser?.role === 'operations_manager';
@@ -78,7 +81,7 @@ export default function POSPage() {
   const [availablePackaging, setAvailablePackaging] = useState<any[]>([])
   const [selectedPackaging, setSelectedPackaging] = useState<SelectedPackaging[]>([])
 
-  // ✨ LOYALTY SETTINGS & AUTO RULES
+  // LOYALTY SETTINGS & AUTO RULES
   const [loyaltySettings, setLoyaltySettings] = useState<any>(null);
   const [autoLoyaltyRules, setAutoLoyaltyRules] = useState<any[]>([]);
 
@@ -95,7 +98,6 @@ export default function POSPage() {
 
       if (pkgData) setAvailablePackaging(pkgData);
 
-      // ✨ Fetch Loyalty Configuration and Auto Rules simultaneously
       const [lsRes, rulesRes] = await Promise.all([
         supabase.from('loyalty_settings').select('*').limit(1).maybeSingle(),
         supabase.from('loyalty_activities').select('*').eq('is_active', true).eq('update_method', 'Auto')
@@ -216,7 +218,7 @@ export default function POSPage() {
     billedBy: billedBy,
     selectedPackaging: selectedPackaging,
     autoLoyaltyRules,
-    loyaltySettings // ✨ ADD THIS LINE so the hook can access WhatsApp templates
+    loyaltySettings 
   })
 
   const handleWipeSession = () => {
@@ -225,13 +227,16 @@ export default function POSPage() {
     setSelectedCustomer(null)
     setBilledBy('') 
     setSelectedPackaging([])
+    setTransactionContext(null) // ✨ Clear context
     setCustomOrderDetails({ design_reference: '', item_category: '', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '' })
     setReturnDetails({ invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0 })
     setRepairDetails({ itemDescription: '', grossWeight: '', purity: '22K', defectNotes: '', estimatedCost: '', advancePaid: '', expectedDelivery: '', conditionPhotoUrl: null })
   }
 
-  const handlePreviewRequest = (isEstimate: boolean = false) => {
+  // ✨ FIX: Now accepts and saves the context data (advances, kitty, etc) from the CheckoutSidebar
+  const handlePreviewRequest = (isEstimate: boolean = false, contextData: any = null) => {
     setIsEstimateCheckout(isEstimate) 
+    setTransactionContext(contextData) 
     setShowPreviewModal(true)
   }
 
@@ -370,7 +375,7 @@ export default function POSPage() {
             onPreviewRequest={handlePreviewRequest}
             setMode={setMode}
             loyaltySettings={loyaltySettings} 
-            autoLoyaltyRules={autoLoyaltyRules} // ✨ Passes dynamic rules to sidebar
+            autoLoyaltyRules={autoLoyaltyRules} 
             {...checkoutHook} 
           />
         </div>
@@ -385,14 +390,18 @@ export default function POSPage() {
         setShowPreviewModal={setShowPreviewModal}
         showPrintModal={showPrintModal} 
         setShowPrintModal={setShowPrintModal}
-        previewData={checkoutHook.generateDraftData(isEstimateCheckout)} 
+        
+        // ✨ FIX: Passes the intercepted context so the hook calculates advances correctly
+        previewData={checkoutHook.generateDraftData(isEstimateCheckout, transactionContext)} 
+        
         lastInvoiceData={lastInvoiceData} 
         setLastInvoiceData={setLastInvoiceData}
         isProcessing={checkoutHook.isProcessing}
         selectedPackaging={selectedPackaging}
         billedBy={billedBy}
         executeCheckout={async () => {
-          const result = await checkoutHook.executeCheckout(isEstimateCheckout) 
+          // ✨ FIX: Passes the intercepted context to the final checkout execution
+          const result = await checkoutHook.executeCheckout(isEstimateCheckout, transactionContext) 
           
           if (result.success) {
             setAvailablePackaging(prev => prev.map(pack => {

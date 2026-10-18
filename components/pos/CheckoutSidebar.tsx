@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { 
   Loader2, Banknote, CreditCard, QrCode, Building, Split, 
-  FileText, ChevronDown, CheckSquare, Gem, Wallet, IndianRupee, Award, Share2
+  FileText, ChevronDown, CheckSquare, Gem, Wallet, IndianRupee, Award, Share2, Plus, X
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -48,10 +48,6 @@ export function CheckoutSidebar({
   
   referralInput, setReferralInput, activeReferral, setActiveReferral, handleApplyReferral, referralDiscountAmount,
 
-  // ✨ FIX: Accept manual advance props from the hook
-  manualAdvance, setManualAdvance,
-  manualAdvanceDate, setManualAdvanceDate,
-
   estimateChargeType, 
   setEstimateChargeType,
   estimateHandlingPercent,
@@ -81,6 +77,25 @@ export function CheckoutSidebar({
 
   const [showLedgerDetails, setShowLedgerDetails] = useState(false)
   const [liveLoyaltyData, setLiveLoyaltyData] = useState<{id: string, total_points: number} | null>(null);
+
+  // ✨ Maintain Multiple Legacy Advances Internally
+  const [legacyAdvances, setLegacyAdvances] = useState<Array<{amount: string, date: string, mode: string}>>([
+    { amount: '', date: format(new Date(), 'yyyy-MM-dd'), mode: 'Cash' }
+  ]);
+
+  const addAdvance = () => setLegacyAdvances([...legacyAdvances, { amount: '', date: format(new Date(), 'yyyy-MM-dd'), mode: 'Cash' }]);
+  const removeAdvance = (idx: number) => setLegacyAdvances(legacyAdvances.filter((_, i) => i !== idx));
+  const updateAdvance = (idx: number, field: string, val: string) => {
+    const updated = [...legacyAdvances];
+    updated[idx] = { ...updated[idx], [field]: val };
+    setLegacyAdvances(updated);
+  };
+  const totalLegacyAdvance = legacyAdvances.reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+
+  // Reset legacy advances if customer changes
+  useEffect(() => {
+    setLegacyAdvances([{ amount: '', date: format(new Date(), 'yyyy-MM-dd'), mode: 'Cash' }]);
+  }, [selectedCustomer?.id]);
 
   useEffect(() => {
     if (selectedCustomer?.id) {
@@ -123,13 +138,14 @@ export function CheckoutSidebar({
   const cartAdvance = cart?.reduce((sum: number, item: any) => sum + (Number(item.advance_paid) || 0), 0) || 0;
   const invoiceTotalValue = (Number(finalTaxableValue) || 0) + (Number(cgstAmount) || 0) + (Number(sgstAmount) || 0) + (Number(roundOffAmount) || 0);
 
+  // ✨ FIX: Restored custom order advance mapping so the bottom-right corner asks for the correct amount
   const displayTotal = mode === 'custom' ? (Number(customOrderDetails?.advance_paid) || 0) 
                        : mode === 'repair' ? (Number(repairDetails?.advancePaid) || 0) 
                        : mode === 'return' ? (Number(returnDetails?.calculatedRefund) || 0) 
                        : (Number(finalPayable) || 0);
 
-  // ✨ ADJUSTED TOTAL AFTER LEGACY ADVANCE
-  const adjustedDisplayTotal = Math.max(0, displayTotal - (Number(manualAdvance) || 0));
+  // ADJUSTED TOTAL AFTER LEGACY ADVANCE
+  const adjustedDisplayTotal = Math.max(0, displayTotal - totalLegacyAdvance);
 
   const splitRemaining = Math.max(0, adjustedDisplayTotal - (Number(currentSplitTotal) || 0))
   const isSplitValid = Math.abs((Number(currentSplitTotal) || 0) - adjustedDisplayTotal) < 0.1
@@ -149,7 +165,7 @@ export function CheckoutSidebar({
   const customAdvancePaid = Number(customOrderDetails?.advance_paid) || 0;
   const totalSettlements = (Number(appliedKittyAmount) || 0) + (Number(appliedCreditAmount) || 0) + (Number(appliedPointsAmount) || 0);
 
-  const customNetEst = Math.max(0, customTotalEstimate - customAdvancePaid - totalSettlements - (Number(manualAdvance) || 0));
+  const customNetEst = Math.max(0, customTotalEstimate - customAdvancePaid - totalSettlements - totalLegacyAdvance);
 
   useEffect(() => {
     if (activeVoucher && (appliedKittyAmount > 0 || appliedCreditAmount > 0 || appliedPointsAmount > 0)) {
@@ -176,11 +192,15 @@ export function CheckoutSidebar({
       if (Number(splitPayments?.bank) > 0) finalTransferType = transferType;
     }
 
-    // INJECT LEGACY ADVANCE REMARKS
+    // INJECT MULTIPLE LEGACY ADVANCE BREAKDOWN INTO BILLING REMARKS
     let finalRemarks = paymentRemarks;
-    if (Number(manualAdvance) > 0) {
-        const dateStr = manualAdvanceDate ? ` on ${format(new Date(manualAdvanceDate), 'dd MMM yyyy')}` : '';
-        const advRemark = `[Legacy Advance Adjusted: ₹${manualAdvance}${dateStr}]`;
+    if (totalLegacyAdvance > 0) {
+        const advDetails = legacyAdvances
+            .filter(a => Number(a.amount) > 0)
+            .map(a => `₹${a.amount} (${a.mode} - ${format(new Date(a.date), 'dd MMM yy')})`)
+            .join(', ');
+            
+        const advRemark = `[Legacy Advances: ${advDetails}]`;
         finalRemarks = finalRemarks ? `${finalRemarks} | ${advRemark}` : advRemark;
     }
 
@@ -196,6 +216,7 @@ export function CheckoutSidebar({
       applied_credit: appliedCreditAmount,
       applied_points: appliedPointsAmount,
       raw_points_redeemed: rawPointsRedeemed,
+      legacy_advances: legacyAdvances.filter(a => Number(a.amount) > 0) // Passing structured array
     })
   }
 
@@ -206,44 +227,15 @@ export function CheckoutSidebar({
         
         <section>
           <CustomerSelector 
-            mode={mode}
-            customers={customers}
-            setCustomers={setCustomers}
-            selectedCustomer={selectedCustomer}
-            setSelectedCustomer={setSelectedCustomer}
-            appUser={appUser}
-            selectedLocation={selectedLocation}
-            subtotal={subtotal}
-            loyaltySettings={loyaltySettings}
-            liveLoyaltyData={liveLoyaltyData} 
+            mode={mode} customers={customers} setCustomers={setCustomers}
+            selectedCustomer={selectedCustomer} setSelectedCustomer={setSelectedCustomer}
+            appUser={appUser} selectedLocation={selectedLocation} subtotal={subtotal}
+            loyaltySettings={loyaltySettings} liveLoyaltyData={liveLoyaltyData} 
             onApplyWallet={(type: 'kitty' | 'credit' | 'points', amount: number, planId?: string, rawAmount?: number) => {
-              if (activeVoucher || activeReferral) {
-                 return toast.error("Clubbing Restricted", { description: "Cannot apply Wallet/Loyalty when Vouchers or Referrals are active."});
-              }
-
-              if (type === 'kitty') {
-                if (invoiceTotalValue < amount) {
-                  toast.error(`Redemption Limit: Kitty value (₹${amount.toLocaleString()}) exceeds the total invoice value.`);
-                  return;
-                }
-                setAppliedKittyAmount(amount);
-                if (planId) setAppliedKittyPlanId(planId); 
-              } 
-              else if (type === 'credit') {
-                if (invoiceTotalValue < amount + appliedKittyAmount + appliedPointsAmount) {
-                   toast.error("Total settlements cannot exceed the invoice value.");
-                   return;
-                }
-                setAppliedCreditAmount(amount);
-              }
-              else if (type === 'points') {
-                if (invoiceTotalValue < amount + appliedKittyAmount + appliedCreditAmount) {
-                  toast.error("Total settlements cannot exceed the invoice value.");
-                  return;
-                }
-                setAppliedPointsAmount(amount);
-                if (rawAmount) setRawPointsRedeemed(rawAmount);
-              }
+              if (activeVoucher || activeReferral) return toast.error("Clubbing Restricted");
+              if (type === 'kitty') { setAppliedKittyAmount(amount); if (planId) setAppliedKittyPlanId(planId); } 
+              else if (type === 'credit') setAppliedCreditAmount(amount);
+              else if (type === 'points') { setAppliedPointsAmount(amount); if (rawAmount) setRawPointsRedeemed(rawAmount); }
             }}
           />
         </section>
@@ -264,30 +256,6 @@ export function CheckoutSidebar({
              
              {autoLoyaltyRules?.length > 0 && (
                <div className="space-y-3 mt-3">
-                 {autoLoyaltyRules.map((rule: any) => {
-                   const isRepeat = rule.name.toLowerCase().includes('repeat');
-                   if (!isRepeat) return null;
-
-                   return (
-                     <div key={rule.id} className="p-3 bg-emerald-50/50 border border-emerald-200 rounded-xl relative flex items-center justify-between">
-                       <div className="flex flex-col gap-0.5">
-                          <div className="flex items-center gap-1.5">
-                            <Award className="h-3.5 w-3.5 text-emerald-600" />
-                            <Label className="text-[10px] font-bold text-emerald-800 uppercase tracking-widest">{rule.name}</Label>
-                          </div>
-                          {isEnrolledInLoyalty ? (
-                            <span className="text-[9px] text-emerald-600 font-medium mt-0.5">
-                              Customer will earn {rule.is_dynamic ? '5%' : rule.points} points on this bill.
-                            </span>
-                          ) : (
-                            <span className="text-[9px] text-zinc-500 font-medium italic mt-0.5">Customer not enrolled. Enroll to award points.</span>
-                          )}
-                       </div>
-                     </div>
-                   )
-                 })}
-
-                 {/* ✨ REFERRAL ENGINE UI */}
                  {hasReferralRules && !activeVoucher && appliedPointsAmount === 0 && appliedKittyAmount === 0 && (
                    <div className="p-3 bg-amber-50/50 border border-amber-200 rounded-xl relative">
                      <div className="flex justify-between items-center mb-2">
@@ -295,46 +263,19 @@ export function CheckoutSidebar({
                            <Share2 className="h-3.5 w-3.5 text-amber-500" />
                            <Label className="text-[10px] font-bold text-amber-800 uppercase tracking-widest">Referral Engine</Label>
                         </div>
-                        {activeReferral ? (
-                           <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 border-none text-[8px] h-4">
-                             10% APPLIED
-                           </Badge>
-                        ) : (
-                           <Badge className="bg-white text-zinc-500 border-zinc-200 text-[8px] h-4 font-mono">
-                             CODE or PHONE
-                           </Badge>
-                        )}
                      </div>
-                     
                      {activeReferral ? (
                        <div className="flex items-center justify-between bg-white border border-amber-200 rounded-lg p-2 mt-1">
                          <div className="flex flex-col">
                            <span className="text-[10px] font-bold text-slate-800">{activeReferral.referrer_name}</span>
                            <span className="text-[9px] text-slate-500 font-mono">{activeReferral.code_or_phone}</span>
                          </div>
-                         <Button 
-                           variant="ghost" 
-                           size="sm" 
-                           onClick={() => setActiveReferral(null)} 
-                           className="h-6 text-[10px] text-red-500 hover:bg-red-50 hover:text-red-600 font-bold px-2"
-                         >
-                           Remove
-                         </Button>
+                         <Button variant="ghost" size="sm" onClick={() => setActiveReferral(null)} className="h-6 text-[10px] text-red-500 hover:bg-red-50 font-bold px-2">Remove</Button>
                        </div>
                      ) : (
                        <div className="flex gap-2">
-                         <Input 
-                           placeholder="Enter Referral Code or Mobile No." 
-                           className="h-9 text-xs bg-white border-amber-200 font-mono placeholder:text-amber-300 placeholder:font-sans focus-visible:ring-amber-400"
-                           value={referralInput}
-                           onChange={(e) => setReferralInput(e.target.value.toUpperCase())}
-                         />
-                         <Button 
-                           onClick={handleApplyReferral} 
-                           className="h-9 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-4"
-                         >
-                           Apply
-                         </Button>
+                         <Input placeholder="Enter Referral Code" className="h-9 text-xs bg-white border-amber-200" value={referralInput} onChange={(e) => setReferralInput(e.target.value.toUpperCase())} />
+                         <Button onClick={handleApplyReferral} className="h-9 bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-4">Apply</Button>
                        </div>
                      )}
                    </div>
@@ -346,51 +287,61 @@ export function CheckoutSidebar({
 
         {(['normal', 'custom', 'repair', 'return'].includes(mode)) && (
           <section className="animate-in fade-in slide-in-from-bottom-2">
-            <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block">
-              Billing Remarks
-            </Label>
+            <Label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 block">Billing Remarks</Label>
             <div className="relative">
               <FileText className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
               <Textarea 
-                placeholder="Internal notes or billing remarks (e.g., VIP client, delivery requests...)" 
+                placeholder="Internal notes or billing remarks..." 
                 className="min-h-[70px] pl-9 py-2.5 text-xs bg-white border-slate-200 resize-none placeholder:text-slate-400 focus-visible:ring-slate-300 shadow-sm rounded-xl"
-                value={paymentRemarks}
-                onChange={(e) => setPaymentRemarks(e.target.value)}
+                value={paymentRemarks} onChange={(e) => setPaymentRemarks(e.target.value)}
               />
             </div>
           </section>
         )}
 
-        {/* ✨ LEGACY / UNRECORDED ADVANCE BLOCK */}
-        {['normal', 'custom'].includes(mode) && (
+        {/* MULTI-ENTRY LEGACY ADVANCE BLOCK WITH MODE SELECTOR */}
+        {['normal'].includes(mode) && (
           <section className="space-y-3 bg-indigo-50/30 p-3 border border-indigo-100 rounded-2xl shadow-sm">
             <div className="flex justify-between items-center">
               <Label className="text-[11px] font-bold text-indigo-800 uppercase tracking-widest pl-1">
-                Legacy / Unrecorded Advance
+                Previously Settled Advance
               </Label>
+              <Button variant="ghost" size="sm" onClick={addAdvance} className="h-6 text-[10px] text-indigo-600 hover:bg-indigo-100 px-2 font-bold uppercase tracking-wider">
+                <Plus className="w-3 h-3 mr-1" /> Add Entry
+              </Button>
             </div>
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-indigo-400 text-sm font-bold">₹</span>
-                <Input 
-                  type="number" 
-                  placeholder="Amount Paid" 
-                  className="h-9 pl-7 text-xs bg-white border-indigo-200 focus-visible:ring-indigo-500" 
-                  value={manualAdvance} 
-                  onChange={e => setManualAdvance(e.target.value)} 
-                />
+            
+            <div className="space-y-2">
+              {legacyAdvances.map((adv, idx) => (
+                <div key={idx} className="flex gap-2 items-center">
+                  <div className="relative flex-1">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-indigo-400 text-[10px] font-bold">₹</span>
+                    <Input type="number" placeholder="Amt" className="h-8 pl-5 pr-1 text-[10px] bg-white border-indigo-200" value={adv.amount} onChange={e => updateAdvance(idx, 'amount', e.target.value)} />
+                  </div>
+                  <Input type="date" className="h-8 text-[10px] flex-1 bg-white border-indigo-200 px-1.5" value={adv.date} onChange={e => updateAdvance(idx, 'date', e.target.value)} />
+                  <Select value={adv.mode} onValueChange={(val) => updateAdvance(idx, 'mode', val)}>
+                    <SelectTrigger className="h-8 w-20 text-[10px] bg-white border-indigo-200 px-2 font-semibold">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Cash" className="text-[10px]">Cash</SelectItem>
+                      <SelectItem value="UPI" className="text-[10px]">UPI</SelectItem>
+                      <SelectItem value="Card" className="text-[10px]">Card</SelectItem>
+                      <SelectItem value="Bank" className="text-[10px]">Bank</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {legacyAdvances.length > 1 && (
+                    <Button variant="ghost" size="icon" onClick={() => removeAdvance(idx)} className="h-8 w-8 text-red-400 hover:bg-red-50 shrink-0"><X className="w-3 h-3" /></Button>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {totalLegacyAdvance > 0 && (
+              <div className="flex justify-between items-center pt-2 border-t border-indigo-100/50 mt-2">
+                <p className="text-[9px] text-indigo-600 font-bold px-1 uppercase tracking-wide">Total Deducted</p>
+                <p className="text-xs text-indigo-800 font-bold tabular-nums">₹{totalLegacyAdvance.toLocaleString()}</p>
               </div>
-              <Input 
-                type="date" 
-                className="h-9 text-xs flex-1 bg-white border-indigo-200 focus-visible:ring-indigo-500" 
-                value={manualAdvanceDate} 
-                onChange={e => setManualAdvanceDate(e.target.value)} 
-              />
-            </div>
-            {Number(manualAdvance) > 0 && (
-              <p className="text-[9px] text-indigo-600 font-bold px-1 uppercase tracking-wide">
-                Will be deducted from Final Payable Amount.
-              </p>
             )}
           </section>
         )}
@@ -421,7 +372,7 @@ export function CheckoutSidebar({
                     }}
                     className={`flex flex-col items-center justify-center gap-1 h-14 border rounded-xl transition-all duration-200 ${
                       isActive 
-                        ? `${theme.light} ${theme.ring} border-transparent ${theme.text} shadow-sm ring-1` 
+                        ? `${theme.light} ${theme.ring} border-transparent${theme.text} shadow-sm ring-1` 
                         : 'bg-slate-50 border-slate-200 text-slate-500 hover:border-slate-300 hover:bg-slate-100 hover:text-slate-800'
                     }`}
                   >
@@ -675,7 +626,7 @@ export function CheckoutSidebar({
                 </div>
               )}
 
-              {/* ✨ PRE-TAX DEDUCTIONS grouped together */}
+              {/* PRE-TAX DEDUCTIONS grouped together */}
               {activeVoucher && (
                 <div className="flex justify-between items-center text-emerald-600 font-bold">
                   <span>Voucher Redemption</span><span className="tabular-nums">- ₹{(Number(appliedVoucherAmount) || 0).toLocaleString()}</span>
@@ -710,6 +661,12 @@ export function CheckoutSidebar({
 
               {/* POST-TAX SETTLEMENTS */}
               <div className="pt-1.5 space-y-1">
+                {totalLegacyAdvance > 0 && (
+                  <div className="flex justify-between items-center text-slate-500 italic">
+                    <span>Less: Pre-settled Advance</span>
+                    <span className="tabular-nums">- ₹{totalLegacyAdvance.toLocaleString()}</span>
+                  </div>
+                )}
                 {cartAdvance > 0 && (
                   <div className="flex justify-between items-center text-slate-500 italic">
                     <span>Less: Advance Received</span>
@@ -764,7 +721,6 @@ export function CheckoutSidebar({
                 </div>
               )}
               
-              {/* ✨ NEW: Pre-Tax Deductions grouped together */}
               {activeVoucher && (
                 <div className="flex justify-between items-center text-emerald-600 font-medium">
                   <span>Voucher Discount {Number(activeVoucher.handling_fee) > 0 ? `(Post ₹${activeVoucher.handling_fee} Fee)` : ''}</span>
@@ -806,7 +762,7 @@ export function CheckoutSidebar({
               {/* POST-TAX SETTLEMENTS */}
               {customAdvancePaid > 0 && (
                 <div className="flex justify-between items-center text-emerald-600 font-bold mt-1.5">
-                  <span>Advance Paid (Cash/Bank)</span>
+                  <span>Advance Paid Today</span>
                   <span className="tabular-nums">- ₹{customAdvancePaid.toLocaleString('en-IN')}</span>
                 </div>
               )}
@@ -835,10 +791,10 @@ export function CheckoutSidebar({
 
         <div className={`flex justify-between items-end mb-3 ${showLedgerDetails ? 'mt-2' : 'mt-1'}`}>
           <p className="text-xs font-black uppercase text-slate-500">
-            {mode === 'custom' || mode === 'repair' ? 'Balance Advance' : mode === 'return' ? 'Refund Amount' : mode === 'challan' ? 'Memo Value' : 'Balance to Pay'}
+            {mode === 'custom' || mode === 'repair' ? 'Advance Paid Today' : mode === 'return' ? 'Refund Amount' : mode === 'challan' ? 'Memo Value' : 'Balance to Pay'}
           </p>
           <div className="text-right">
-             {Number(manualAdvance) > 0 && (
+             {totalLegacyAdvance > 0 && mode === 'normal' && (
                 <p className="text-[10px] text-slate-400 line-through mb-0.5">₹{displayTotal.toLocaleString()}</p>
              )}
              <p className={`text-3xl sm:text-4xl font-bold tracking-tight tabular-nums ${theme.text}`}>
