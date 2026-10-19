@@ -6,9 +6,10 @@ import {
   Plus, Search, Edit2, Image as ImageIcon, CheckCircle2, 
   XCircle, Globe, PackageSearch, Layers, FolderTree, 
   Loader2, Settings2, CornerDownRight, UploadCloud, X,
-  ArrowLeft, ArrowRight, Trash2, Video, Gem, Ruler, FileSpreadsheet, PlayCircle, ChevronLeft, ChevronRight, Save, EyeOff, Gift, LayoutTemplate, TrendingUp, Percent
+  ArrowLeft, ArrowRight, Trash2, Video, Gem, Ruler, FileSpreadsheet, PlayCircle, ChevronLeft, ChevronRight, Save, EyeOff, Gift, LayoutTemplate, TrendingUp, Percent, Database, Upload
 } from "lucide-react";
 
+import { cn } from "@/lib/utils";
 import { supabase } from "@/lib/supabaseClient"; 
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -23,6 +24,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter } from "@/components/ui/sheet";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@radix-ui/react-select";
 
 export default function EcommerceCatalogPage() {
   const { appUser } = useAuth();
@@ -31,14 +34,13 @@ export default function EcommerceCatalogPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const productImageInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
-  const categoryImageInputRef = useRef<HTMLInputElement>(null); // ✨ NEW: Ref for category image
+  const categoryImageInputRef = useRef<HTMLInputElement>(null);
 
   // Data States
   const [categories, setCategories] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [occasions, setOccasions] = useState<any[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | "all">("all");
-  const [isLoading, setIsLoading] = useState(true);
   const [isProductsLoading, setIsProductsLoading] = useState(false);
   
   // Dashboard Filters & Pagination
@@ -50,8 +52,6 @@ export default function EcommerceCatalogPage() {
   // Bulk Actions State
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkProcessing, setIsBulkProcessing] = useState(false);
-  const [isBulkMoveModalOpen, setIsBulkMoveModalOpen] = useState(false);
-  const [bulkMoveTargetCategory, setBulkMoveTargetCategory] = useState("");
 
   // Bulk Price Editor States
   const [bulkPriceModal, setBulkPriceModal] = useState({ isOpen: false, percentage: "", step: 1 });
@@ -74,6 +74,16 @@ export default function EcommerceCatalogPage() {
     solitaire_pieces: "", melee_weight_cts: "", melee_pieces: "", color_stone_weight_cts: "", color_stone_pieces: "",
     occasion_ids: [] as string[]
   });
+
+  // ✨ E-COMMERCE: ERP IMPORT STATES
+  const [isEcomModalOpen, setIsEcomModalOpen] = useState(false);
+  const [ecomStep, setEcomStep] = useState<'search' | 'preview'>('search');
+  const [ecomSearchType, setEcomSearchType] = useState('all'); // ✨ Changed to 'all' by default
+  const [ecomSearchQuery, setEcomSearchQuery] = useState('');
+  const [ecomSearchResults, setEcomSearchResults] = useState<any[]>([]);
+  const [ecomSelectedIds, setEcomSelectedIds] = useState<string[]>([]);
+  const [isEcomSearching, setIsEcomSearching] = useState(false);
+  const [isEcomImporting, setIsEcomImporting] = useState(false);
 
   // ==========================================================================
   // CLIENT-SIDE WEBP CONVERTER UTILITY
@@ -150,7 +160,6 @@ export default function EcommerceCatalogPage() {
     }
   };
 
-  // ✨ NEW: Category Image Upload Handler
   const handleCategoryImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0 || !appUser?.company_id) return;
@@ -228,7 +237,6 @@ export default function EcommerceCatalogPage() {
       toast({ title: "Failed to load products", description: err.message, variant: "destructive" });
     } finally {
       setIsProductsLoading(false);
-      setIsLoading(false);
     }
   };
 
@@ -248,9 +256,112 @@ export default function EcommerceCatalogPage() {
   }, [searchQuery, statusFilter, selectedCategoryId]);
 
   // ==========================================================================
+  // ✨ ERP INTEGRATION HANDLERS
+  // ==========================================================================
+  // ✨ E-COMMERCE: ERP Search Handler
+  const handleEcomSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!appUser?.company_id || !ecomSearchQuery.trim()) return;
+
+    setIsEcomSearching(true);
+    try {
+      let q = supabase
+        .from('inventory_items')
+        .select('*')
+        .eq('company_id', appUser.company_id)
+        .limit(50); 
+
+      const queryText = `%${ecomSearchQuery.trim()}%`;
+
+      // ✨ Omni-Search across all major text columns simultaneously
+      if (ecomSearchType === 'all') {
+        q = q.or(`barcode.ilike.${queryText},sku_reference.ilike.${queryText},huid_code.ilike.${queryText},item_category.ilike.${queryText}`);
+      } 
+      else if (ecomSearchType === 'barcode') q = q.ilike('barcode', queryText);
+      else if (ecomSearchType === 'sku') q = q.ilike('sku_reference', queryText);
+      else if (ecomSearchType === 'huid') q = q.ilike('huid_code', queryText);
+      else if (ecomSearchType === 'category') q = q.ilike('item_category', queryText);
+      else if (ecomSearchType === 'metal_type') q = q.ilike('metal_type', queryText);
+      else if (ecomSearchType === 'purity') q = q.ilike('purity_karat', queryText);
+      else if (ecomSearchType === 'diamond_clarity') q = q.ilike('diamond_clarity', queryText);
+
+      const { data, error } = await q;
+      if (error) throw error;
+      
+      if (!data || data.length === 0) {
+        toast({ title: "No Results", description: `No items matched "${ecomSearchQuery}" in the ERP.`, variant: "destructive" });
+      }
+
+      setEcomSearchResults(data || []);
+      setEcomSelectedIds([]); // Reset selections on new search
+    } catch (err: any) {
+      toast({ title: "Search Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsEcomSearching(false);
+    }
+  };
+  const handleEcomImport = async () => {
+    if (!appUser?.company_id || ecomSelectedIds.length === 0) return;
+    setIsEcomImporting(true);
+
+    const itemsToImport = ecomSearchResults.filter(i => ecomSelectedIds.includes(i.id));
+    
+    // Map Inventory schema to E-Commerce Product schema
+    const payload = itemsToImport.map(item => {
+      const title = `${item.purity_karat || ''} ${item.metal_color || ''} ${item.metal_type || ''} ${item.item_category || 'Jewellery'}`.trim();
+      const fallbackSku = item.sku_reference || item.barcode || `SKU-${Date.now()}`;
+      
+      const slug = `prod-${fallbackSku.toLowerCase()}-${Math.random().toString(36).substring(2, 8)}`;
+
+      return {
+        company_id: appUser.company_id,
+        title: title,
+        slug: slug,
+        sku_reference: fallbackSku,
+        legacy_item_no: item.barcode,
+        description: item.remarks || '',
+        metal_type: item.metal_type,
+        purity_karat: item.purity_karat,
+        approx_weight_g: Number(item.gross_weight_g) || 0,
+        stone_weight_cts: Number(item.total_stone_weight_cts) || 0,
+        mrp: Number(item.mrp) || 0,
+        cover_image_url: item.image_url,
+        metal_color: item.metal_color,
+        item_size: item.item_size,
+        diamond_shape: item.diamond_shape,
+        diamond_color: item.diamond_color,
+        diamond_clarity: item.diamond_clarity,
+        solitaire_weight_cts: Number(item.solitaire_weight_cts) || 0,
+        solitaire_pieces: Number(item.solitaire_pieces) || 0,
+        melee_weight_cts: Number(item.melee_weight_cts) || 0,
+        melee_pieces: Number(item.melee_pieces) || 0,
+        color_stone_weight_cts: Number(item.color_stone_weight_cts) || 0,
+        color_stone_pieces: Number(item.color_stone_pieces) || 0,
+        gross_weight_g: Number(item.gross_weight_g) || 0,
+        net_weight_g: Number(item.net_weight_g) || 0,
+        is_live: false // Important: Push as draft
+      };
+    });
+
+    try {
+      const { error } = await supabase.from('ecommerce_products').upsert(payload, { onConflict: 'company_id, sku_reference' });
+      if (error) throw error;
+
+      toast({ title: "Success", description: `Imported ${payload.length} products to E-Commerce Drafts.` });
+      setIsEcomModalOpen(false);
+      setEcomStep('search');
+      setEcomSelectedIds([]);
+      fetchProducts(); // Refresh the list
+    } catch (err: any) {
+      toast({ title: "Import Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsEcomImporting(false);
+    }
+  };
+
+  // ==========================================================================
   // SAVE LOGIC
   // ==========================================================================
-
   const handleSaveCategory = async () => {
     if (!categoryForm.name.trim() || !appUser) return;
     setIsSubmitting(true);
@@ -593,20 +704,26 @@ export default function EcommerceCatalogPage() {
               </select>
             </div>
             
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <Button onClick={() => setBulkPriceModal({ isOpen: true, percentage: "", step: 1 })} className="flex-1 sm:flex-none h-9 bg-white text-zinc-700 hover:bg-zinc-50 border border-zinc-200 font-medium tracking-tight shadow-sm rounded-lg">
+            <div className="flex items-center gap-2 w-full sm:w-auto flex-wrap">
+              
+              {/* ✨ ERP IMPORT BUTTON */}
+              <Button onClick={() => { setIsEcomModalOpen(true); setEcomStep('search'); }} className="flex-1 sm:flex-none h-9 bg-indigo-600 hover:bg-indigo-700 text-white font-medium tracking-tight shadow-sm rounded-lg px-3">
+                <Database className="w-4 h-4 mr-1.5" /> ERP Import (Beta)
+              </Button>
+
+              <Button onClick={() => setBulkPriceModal({ isOpen: true, percentage: "", step: 1 })} className="flex-1 sm:flex-none h-9 bg-white text-zinc-700 hover:bg-zinc-50 border border-zinc-200 font-medium tracking-tight shadow-sm rounded-lg px-3">
                 <Percent className="w-4 h-4 mr-1.5 text-blue-600" /> Bulk Price
               </Button>
 
               <input type="file" ref={csvInputRef} className="hidden" accept=".csv" />
-              <Button onClick={() => csvInputRef.current?.click()} className="flex-1 sm:flex-none h-9 bg-white text-zinc-700 hover:bg-zinc-50 border border-zinc-200 font-medium tracking-tight shadow-sm rounded-lg">
+              <Button onClick={() => csvInputRef.current?.click()} className="flex-1 sm:flex-none h-9 bg-white text-zinc-700 hover:bg-zinc-50 border border-zinc-200 font-medium tracking-tight shadow-sm rounded-lg px-3">
                 <FileSpreadsheet className="w-4 h-4 mr-1.5 text-emerald-600" /> Import
               </Button>
 
               <Button onClick={() => { 
                 setProductForm({ id: "", title: "", category_id: selectedCategoryId !== "all" ? selectedCategoryId : "", sku_reference: "", legacy_item_no: "", description: "", mrp: "", gallery_images: [], video_url: "", manufacturing_buffer_days: "14", is_live: false, metal_type: "Gold", metal_color: "Yellow", purity_karat: "18K", item_size: "", gross_weight_g: "", net_weight_g: "", diamond_shape: "", diamond_color: "", diamond_clarity: "", stone_weight_cts: "", solitaire_weight_cts: "", solitaire_pieces: "", melee_weight_cts: "", melee_pieces: "", color_stone_weight_cts: "", color_stone_pieces: "", occasion_ids: [] }); 
                 setIsProductSheetOpen(true); 
-              }} className="flex-1 sm:flex-none h-9 bg-zinc-900 hover:bg-zinc-800 text-white font-medium tracking-tight rounded-lg shadow-sm">
+              }} className="flex-1 sm:flex-none h-9 bg-zinc-900 hover:bg-zinc-800 text-white font-medium tracking-tight rounded-lg shadow-sm px-3">
                 <Plus className="w-4 h-4 mr-1.5" /> New Product
               </Button>
             </div>
@@ -642,7 +759,7 @@ export default function EcommerceCatalogPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {isLoading || isProductsLoading ? (
+                  {isProductsLoading ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-20"><Loader2 className="w-6 h-6 animate-spin mx-auto text-zinc-300" /></TableCell></TableRow>
                   ) : paginatedProducts.length === 0 ? (
                     <TableRow><TableCell colSpan={7} className="text-center py-20 text-sm text-zinc-500 font-medium">No master products match this criteria.</TableCell></TableRow>
@@ -706,10 +823,10 @@ export default function EcommerceCatalogPage() {
       </main>
 
       {/* ========================================================================== */}
-      {/* ✨ NEW: CATEGORY EDIT MODAL */}
+      {/* CATEGORY EDIT MODAL */}
       {/* ========================================================================== */}
       <Dialog open={isCategoryModalOpen} onOpenChange={(open) => !open && setIsCategoryModalOpen(false)}>
-        <DialogContent className="sm:max-w-[450px] bg-white rounded-xl shadow-2xl p-0 overflow-hidden">
+        <DialogContent className="sm:max-w-[450px] bg-white rounded-xl shadow-2xl p-0 overflow-hidden border-none">
           <DialogHeader className="p-5 border-b border-zinc-100 bg-zinc-50/50">
             <DialogTitle className="text-sm font-semibold text-zinc-900">
               {categoryForm.id ? "Edit Category" : "New Category"}
@@ -841,7 +958,6 @@ export default function EcommerceCatalogPage() {
                 </Table>
               </div>
 
-              {/* Pagination for Preview */}
               {bulkPreviewTotalPages > 1 && (
                 <div className="p-3 bg-zinc-50 border-t border-zinc-200 flex justify-center gap-2">
                   <Button variant="outline" size="sm" className="h-7 text-xs bg-white" disabled={bulkPreviewPage === 1} onClick={() => setBulkPreviewPage(p => p - 1)}>Prev</Button>
@@ -859,6 +975,186 @@ export default function EcommerceCatalogPage() {
               </DialogFooter>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ========================================================================== */}
+      {/* ✨ ERP IMPORT MODAL FOR E-COMMERCE (BETA) */}
+      {/* ========================================================================== */}
+      <Dialog open={isEcomModalOpen} onOpenChange={(val) => {
+        setIsEcomModalOpen(val);
+        if (!val) { setEcomStep('search'); setEcomSelectedIds([]); }
+      }}>
+        <DialogContent className="max-w-4xl max-h-[85vh] p-0 flex flex-col bg-white overflow-hidden shadow-2xl rounded-2xl border-none">
+          <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200 shrink-0">
+            <DialogTitle className="text-lg font-bold text-slate-900 flex items-center gap-2">
+              <Database className="w-5 h-5 text-indigo-600" />
+              Import to E-Commerce (Beta)
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500 mt-1">
+              Fetch products directly from ERP inventory and stage them as Drafts on the storefront.
+            </DialogDescription>
+          </DialogHeader>
+
+          {ecomStep === 'search' ? (
+            <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50">
+              <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row gap-4 items-end bg-white">
+                
+                {/* Search By Dropdown */}
+                <div className="space-y-1.5 w-full sm:w-1/3">
+                  <Label className="text-[10px] font-bold uppercase text-slate-500">Search By</Label>
+                  <Select value={ecomSearchType} onValueChange={setEcomSearchType}>
+                    <SelectTrigger className="h-10 bg-slate-50 text-sm font-semibold border-slate-200">
+                      <SelectValue placeholder="Select Field" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white">
+                      <SelectItem value="all">Omni Search (All Fields)</SelectItem>
+                      <SelectItem value="barcode">Barcode</SelectItem>
+                      <SelectItem value="sku">SKU Reference</SelectItem>
+                      <SelectItem value="huid">HUID Code</SelectItem>
+                      <SelectItem value="category">Category</SelectItem>
+                      <SelectItem value="metal_type">Metal Type (e.g. Gold)</SelectItem>
+                      <SelectItem value="purity">Purity (e.g. 18K)</SelectItem>
+                      <SelectItem value="diamond_clarity">Diamond Clarity</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                {/* Search Query Input */}
+                <div className="space-y-1.5 w-full sm:w-2/3">
+                  <Label className="text-[10px] font-bold uppercase text-slate-500">Search Query</Label>
+                  <form onSubmit={handleEcomSearch} className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                      <Input 
+                        value={ecomSearchQuery}
+                        onChange={(e) => setEcomSearchQuery(e.target.value)}
+                        placeholder="Enter search query..."
+                        className="pl-9 h-10 border-slate-200 bg-white"
+                      />
+                    </div>
+                    <Button type="submit" disabled={isEcomSearching || !ecomSearchQuery.trim()} className="h-10 bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm font-bold text-xs px-6">
+                      {isEcomSearching ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Fetch Data'}
+                    </Button>
+                  </form>
+                </div>
+
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-5 custom-scrollbar">
+                {ecomSearchResults.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-slate-400">
+                    <Database className="w-10 h-10 mb-3 opacity-20" />
+                    <p className="text-sm">Search the ERP database to fetch items.</p>
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader className="bg-slate-100">
+                      <TableRow>
+                        <TableHead className="w-[40px] px-4">
+                          <Checkbox 
+                            checked={ecomSelectedIds.length > 0 && ecomSelectedIds.length === ecomSearchResults.length}
+                            onCheckedChange={() => setEcomSelectedIds(ecomSelectedIds.length === ecomSearchResults.length ? [] : ecomSearchResults.map(i => i.id))}
+                          />
+                        </TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-slate-500 h-8">Item</TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-slate-500 h-8">Specs</TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-slate-500 h-8 text-right">Net Wt</TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase tracking-widest text-slate-500 h-8 text-right">MRP</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {ecomSearchResults.map(item => (
+                        <TableRow key={item.id} className={cn("hover:bg-slate-50 cursor-pointer transition-colors", ecomSelectedIds.includes(item.id) && "bg-indigo-50/50")}>
+                          <TableCell className="px-4" onClick={(e) => e.stopPropagation()}>
+                            <Checkbox 
+                              checked={ecomSelectedIds.includes(item.id)}
+                              onCheckedChange={() => setEcomSelectedIds(prev => prev.includes(item.id) ? prev.filter(i => i !== item.id) : [...prev, item.id])}
+                            />
+                          </TableCell>
+                          <TableCell onClick={() => setEcomSelectedIds(prev => prev.includes(item.id) ? prev.filter(i => i !== item.id) : [...prev, item.id])}>
+                            <p className="font-mono text-xs font-bold text-slate-900">{item.barcode}</p>
+                            <p className="text-[10px] text-slate-500">SKU: {item.sku_reference || 'N/A'}</p>
+                          </TableCell>
+                          <TableCell onClick={() => setEcomSelectedIds(prev => prev.includes(item.id) ? prev.filter(i => i !== item.id) : [...prev, item.id])}>
+                            <p className="text-xs font-semibold text-slate-700">{item.item_category}</p>
+                            <p className="text-[10px] text-slate-500">{item.metal_type} {item.purity_karat}</p>
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-semibold text-slate-700" onClick={() => setEcomSelectedIds(prev => prev.includes(item.id) ? prev.filter(i => i !== item.id) : [...prev, item.id])}>
+                            {item.net_weight_g}g
+                          </TableCell>
+                          <TableCell className="text-right text-xs font-bold text-indigo-700" onClick={() => setEcomSelectedIds(prev => prev.includes(item.id) ? prev.filter(i => i !== item.id) : [...prev, item.id])}>
+                            ₹{item.mrp?.toLocaleString() || '0'}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex-1 flex flex-col overflow-hidden bg-slate-50/50">
+              <div className="p-5 border-b border-slate-100 bg-amber-50/50">
+                <p className="text-xs font-bold text-amber-800 flex items-center gap-1.5">
+                   Previewing {ecomSelectedIds.length} items for import.
+                </p>
+                <p className="text-[10px] text-amber-600/80 mt-1">These items will be pushed to the E-Commerce database as Drafts (is_live = false). They will not be visible on the public store until published from the ERP Products page.</p>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5 custom-scrollbar">
+                 <div className="space-y-3">
+                    {ecomSearchResults.filter(i => ecomSelectedIds.includes(i.id)).map((item, idx) => {
+                      const title = `${item.purity_karat || ''} ${item.metal_color || ''} ${item.metal_type || ''} ${item.item_category || 'Jewellery'}`.trim();
+                      return (
+                        <div key={idx} className="bg-white border border-slate-200 rounded-lg p-3 flex gap-4 shadow-sm items-center">
+                           <div className="w-12 h-12 rounded bg-slate-100 flex items-center justify-center shrink-0 overflow-hidden border border-slate-200">
+                              {item.image_url ? <img src={item.image_url} alt="" className="w-full h-full object-cover" /> : <ImageIcon className="w-4 h-4 text-slate-300" />}
+                           </div>
+                           <div className="flex-1">
+                              <p className="text-xs font-bold text-slate-900 truncate">{title}</p>
+                              <div className="flex gap-4 mt-1 text-[10px] text-slate-500 font-mono">
+                                 <span>SKU: {item.sku_reference || item.barcode}</span>
+                                 <span>Net: {item.net_weight_g}g</span>
+                                 <span>Dia: {item.total_stone_weight_cts}ct</span>
+                              </div>
+                           </div>
+                           <div className="text-right shrink-0">
+                              <p className="text-xs font-bold text-indigo-700">₹{item.mrp?.toLocaleString() || '0'}</p>
+                           </div>
+                        </div>
+                      )
+                    })}
+                 </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 shrink-0">
+            {ecomStep === 'search' ? (
+              <>
+                <Button variant="outline" className="text-xs font-bold" onClick={() => setIsEcomModalOpen(false)}>Cancel</Button>
+                <Button 
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm" 
+                  disabled={ecomSelectedIds.length === 0}
+                  onClick={() => setEcomStep('preview')}
+                >
+                  Review Selection ({ecomSelectedIds.length})
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button variant="outline" className="text-xs font-bold" disabled={isEcomImporting} onClick={() => setEcomStep('search')}>Back to Search</Button>
+                <Button 
+                  className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm" 
+                  disabled={isEcomImporting}
+                  onClick={handleEcomImport}
+                >
+                  {isEcomImporting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
+                  Confirm Import to Drafts
+                </Button>
+              </>
+            )}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
