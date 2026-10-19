@@ -119,7 +119,7 @@ interface InventoryItem {
   is_exchanged: boolean
   is_custom_order: boolean
   is_repair_ticket: boolean
-  is_sp_item: boolean // ✨ NEW: SP Item Flag
+  is_sp_item: boolean 
   custom_order_id: string | null
   origin_name?: string
   custom_orders?: { id: string; order_number: string; origin?: { name: string } }
@@ -214,7 +214,6 @@ export default function InventoryPage() {
 
   const [openDropdown, setOpenDropdown] = useState<string | null>(null)
 
-  // ✨ Added sp_items to counts
   const [counts, setCounts] = useState({ active: 0, exchange: 0, buyback: 0, repair: 0, others: 0, sold: 0, gifting: 0, packaging: 0, sp_items: 0 })
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false)
 
@@ -501,7 +500,6 @@ export default function InventoryPage() {
         if (validStatuses.length > 0) q = q.in('status', validStatuses);
       }
       
-      // ✨ NEW: SP Items Filtering Logic
       if (tab === 'sp_items') {
         q = q.eq('is_sp_item', true);
       } else if (tab === 'exchange') {
@@ -511,7 +509,12 @@ export default function InventoryPage() {
       } else if (tab === 'active') {
         q = q.eq('is_exchanged', false);
         q = q.not('item_category', 'ilike', '%Old Gold%');
-        q = q.or('is_sp_item.eq.false,is_sp_item.is.null'); // Hide SP items from active selling stock
+        
+        // ✨ FIX: If the user explicitly searches a barcode/sku globally, bypass the restriction 
+        // so SP Items appear seamlessly in the active tab search results.
+        if (!debouncedSearch) {
+          q = q.or('is_sp_item.eq.false,is_sp_item.is.null'); 
+        }
       }
     }
 
@@ -544,7 +547,6 @@ export default function InventoryPage() {
         let packQ = supabase.from('packaging_inventory').select('*', { count: 'exact', head: true }).eq('company_id', appUser.company_id);
         if (selectedLocation !== 'ALL') packQ = packQ.eq('warehouse_id', selectedLocation);
 
-        // ✨ NEW: Added SP Items query
         const [a, e, b, s, r, o, g, p, sp] = await Promise.all([
           getQ('active'), getQ('exchange'), getQ('buyback'), getQ('sold'), repQ, getQ('others'), giftQ, packQ, getQ('sp_items')
         ]);
@@ -1058,7 +1060,7 @@ export default function InventoryPage() {
       diamond_color: item.diamond_color || '',
       diamond_clarity: item.diamond_clarity || '',
 
-      is_sp_item: item.is_sp_item || false, // ✨ NEW: SP Item State
+      is_sp_item: item.is_sp_item || false,
       reason: ''
     });
   }
@@ -1097,7 +1099,7 @@ export default function InventoryPage() {
         diamond_shape: fullEditForm.diamond_shape,
         diamond_color: fullEditForm.diamond_color,
         diamond_clarity: fullEditForm.diamond_clarity,
-        is_sp_item: Boolean(fullEditForm.is_sp_item), // ✨ NEW: SP Item Save Payload
+        is_sp_item: Boolean(fullEditForm.is_sp_item), 
         updated_by: appUser.user_id || appUser.id
       };
 
@@ -1105,7 +1107,7 @@ export default function InventoryPage() {
       if (Number(fullEditItem.mrp) !== payload.mrp) diffs.push(`MRP: ${fullEditItem.mrp} -> ${payload.mrp}`);
       if (Number(fullEditItem.gross_weight_g) !== payload.gross_weight_g) diffs.push(`Gross: ${fullEditItem.gross_weight_g}g -> ${payload.gross_weight_g}g`);
       if (Number(fullEditItem.net_weight_g) !== payload.net_weight_g) diffs.push(`Net: ${fullEditItem.net_weight_g}g -> ${payload.net_weight_g}g`);
-      if (Boolean(fullEditItem.is_sp_item) !== payload.is_sp_item) diffs.push(`SP Status: ${fullEditItem.is_sp_item} -> ${payload.is_sp_item}`); // ✨ Add diff tracking
+      if (Boolean(fullEditItem.is_sp_item) !== payload.is_sp_item) diffs.push(`SP Status: ${fullEditItem.is_sp_item} -> ${payload.is_sp_item}`); 
       
       const newLogEntry: AuditLogEntry = {
         timestamp: new Date().toISOString(),
@@ -1654,7 +1656,6 @@ export default function InventoryPage() {
                 Repairs <Badge className="ml-1.5 bg-slate-100 text-slate-600 shadow-none px-1.5">{counts.repair}</Badge>
               </TabsTrigger>
               
-              {/* ✨ NEW: SP Items Tab */}
               <TabsTrigger value="sp_items" className="rounded-none border-b-2 border-transparent data-[state=active]:border-fuchsia-600 data-[state=active]:text-fuchsia-600 data-[state=active]:bg-transparent shadow-none h-full px-1 text-xs font-bold uppercase tracking-widest text-slate-500 transition-all hover:text-slate-800">
                 SP Items <Badge className="ml-1.5 bg-fuchsia-50 text-fuchsia-700 shadow-none px-1.5">{counts.sp_items}</Badge>
               </TabsTrigger>
@@ -1694,9 +1695,7 @@ export default function InventoryPage() {
                     handleStatusChange={handleStatusChange}
                     handleOpenFullEdit={handleOpenFullEdit} 
                     handleSingleTransfer={handleSingleTransfer} 
-                    setViewItem={(item: any) => {
-                      setViewItem(item);
-                    }} 
+                    setViewItem={(item: any) => setViewItem(item)} 
                     canEdit={canEdit}
                     canChangeStatus={canChangeStatus}
                   />
@@ -1728,7 +1727,6 @@ export default function InventoryPage() {
                       <div key={gift.id} className={cn("border rounded-xl p-4 shadow-sm bg-white flex flex-col gap-2 transition-all", selectedIds.includes(gift.id) ? "border-indigo-500 ring-2 ring-indigo-500 bg-indigo-50/10" : "border-slate-200")}>
                         <div className="flex justify-between items-start">
                           <div className="flex items-start gap-2">
-                             {/* ✨ CHECKBOX RESTORED */}
                              <Checkbox 
                                checked={selectedIds.includes(gift.id)}
                                onCheckedChange={() => setSelectedIds(prev => prev.includes(gift.id) ? prev.filter(i => i !== gift.id) : [...prev, gift.id])}
@@ -1781,7 +1779,7 @@ export default function InventoryPage() {
             </div>
           </TabsContent>
 
-          {/* ✨ NEW PACKAGING TAB CONTENT */}
+          {/* PACKAGING TAB CONTENT */}
           <TabsContent value="packaging">
             <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden min-h-[400px] relative flex flex-col">
               {loading && <GeminiLoader />}
@@ -1811,7 +1809,6 @@ export default function InventoryPage() {
                         )}
                         <div className="flex justify-between items-start pr-6">
                           <div className="flex items-start gap-2">
-                            {/* ✨ CHECKBOX RESTORED */}
                             <Checkbox 
                                checked={selectedIds.includes(pack.id)}
                                onCheckedChange={() => setSelectedIds(prev => prev.includes(pack.id) ? prev.filter(i => i !== pack.id) : [...prev, pack.id])}
@@ -1871,7 +1868,7 @@ export default function InventoryPage() {
 
         </Tabs>
 
-        {/* ✨ FLOATING ACTION BAR RESTORED FOR ALL TABS */}
+        {/* FLOATING ACTION BAR */}
         {selectedIds.length > 0 && (
           <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white p-1.5 rounded-[1.25rem] shadow-2xl flex items-center gap-2 border border-slate-700/50 animate-in slide-in-from-bottom-8">
             <div className="flex items-center gap-2 pl-3 pr-4 border-r border-slate-700">
@@ -1981,7 +1978,7 @@ export default function InventoryPage() {
       </DialogContent>
     </Dialog>
 
-    {/* ✨ CONSUMABLE PARTIAL TRANSFER MODAL */}
+    {/* CONSUMABLE PARTIAL TRANSFER MODAL */}
     <Dialog open={isConsumableTransferOpen} onOpenChange={setIsConsumableTransferOpen}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
@@ -2203,7 +2200,6 @@ export default function InventoryPage() {
             <div className="p-5 flex-1 overflow-y-auto custom-scrollbar">
               <TabsContent value="basic" className="m-0 space-y-4">
                 
-                {/* ✨ NEW: Checkbox to toggle SP Status */}
                 <div className="flex items-center gap-3 bg-fuchsia-50/50 border border-fuchsia-100 p-3 rounded-xl mb-4">
                    <Checkbox 
                       id="sp_item_check"
@@ -2951,7 +2947,6 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                             <SelectItem value="in_stock"          className="text-xs font-medium">In Stock</SelectItem>
                             <SelectItem value="in_vault"          className="text-xs font-medium">In Vault</SelectItem>
                             <SelectItem value="transit"           className="text-xs font-medium">In Transit</SelectItem>
-                            {/* ✨ NEW: Hide Sold options for SP Items */}
                             {!item.is_sp_item && <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>}
                             <SelectItem value="job_work_out"      className="text-xs font-medium">Job Work Out</SelectItem>
                             <SelectItem value="pending_repair"    className="text-xs font-medium">Pending Repair</SelectItem>
@@ -3111,7 +3106,6 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                         <SelectItem value="in_stock"          className="text-xs font-medium">In Stock</SelectItem>
                         <SelectItem value="in_vault"          className="text-xs font-medium">In Vault</SelectItem>
                         <SelectItem value="transit"           className="text-xs font-medium">In Transit</SelectItem>
-                        {/* ✨ NEW: Hide Sold options for SP Items */}
                         {!item.is_sp_item && <SelectItem value="sold" className="text-xs font-medium text-rose-600">Sold</SelectItem>}
                         <SelectItem value="job_work_out"      className="text-xs font-medium">Job Work Out</SelectItem>
                         <SelectItem value="pending_repair"    className="text-xs font-medium">Pending Repair</SelectItem>
@@ -3124,7 +3118,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                       </SelectContent>
                     </Select>
                   )}
-                  
+                   
                    {!isSoldTab && (item.status === 'in_stock' || item.status === 'in_vault' || item.status === 'fixed_ready_for_dispatch') && (
                      <Button variant="outline" size="icon" className="h-8 w-8 text-indigo-600 border-indigo-200 bg-indigo-50" onClick={() => handleSingleTransfer(item)}>
                     <Truck className="h-3.5 w-3.5" />
