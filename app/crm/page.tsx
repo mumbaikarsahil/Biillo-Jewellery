@@ -614,15 +614,15 @@ export default function CRMPage() {
   const handleExportAll = async () => {
     if (!appUser) return;
     setIsExporting(true);
-    const toastId = toast.loading('Exporting data... 0 rows');
+    const toastId = toast.loading('Starting export...');
     
     try {
       let allRecords: any[] = [];
       let keepFetching = true;
       let currentPage = 0;
-      const limit = 1000;
+      const limit = 500; // Lowered to 500 to prevent Supabase payload timeouts on heavy joins
 
-      // Loop to bypass Supabase's 1000-row limit
+      // Loop to bypass Supabase's row limits
       while (keepFetching) {
         const requireVoucherJoin = activeTab === 'vouchers' || voucherFilter === 'registered' || voucherFilter === 'redeemed';
         const requireAssignmentJoin = activeTab === 'assigned_calls';
@@ -632,7 +632,7 @@ export default function CRMPage() {
           kitty_plans(*),
           vouchers${requireVoucherJoin ? '!inner' : ''}(id, code, status, expiry_date, distributor_id, voucher_distributors(distributor_name)),
           voucher_message_sequences(id, status, current_step, next_send_at),
-          voucher_call_assignments${requireAssignmentJoin ? '!inner' : ''}(id, status, assigned_to, attempt_count), /* ✨ ADDED attempt_count HERE */
+          voucher_call_assignments${requireAssignmentJoin ? '!inner' : ''}(id, status, assigned_to, attempt_count),
           customer_gifts_history(gift_name, created_at)
         `);
 
@@ -675,7 +675,7 @@ export default function CRMPage() {
         
         if (data && data.length > 0) {
           allRecords = [...allRecords, ...data];
-          toast.loading(`Exporting data... ${allRecords.length} rows`, { id: toastId });
+          toast.loading(`Fetching data... ${allRecords.length} rows loaded`, { id: toastId });
           
           if (data.length < limit) {
             keepFetching = false;
@@ -692,6 +692,7 @@ export default function CRMPage() {
         return;
       }
 
+      toast.loading(`Formatting CSV... Please wait.`, { id: toastId });
       const csvData = formatCustomersForExport(allRecords);
       const csv = Papa.unparse(csvData);
       downloadCSV(csv, `crm_export_all_${new Date().toISOString().split('T')[0]}.csv`);
@@ -1453,13 +1454,33 @@ export default function CRMPage() {
                          Showing <span className="text-indigo-600">{customers.length > 0 ? page * pageSize + 1 : 0}</span> to <span className="text-indigo-600">{Math.min((page + 1) * pageSize, globalCounts[tab as keyof typeof globalCounts] || 0)}</span> of <span className="text-indigo-600">{globalCounts[tab as keyof typeof globalCounts] || 0}</span>
                        </span>
                        <div className="flex items-center gap-1.5 w-full sm:w-auto">
-                         <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0 || isLoading} className="flex-1 sm:flex-none h-8 px-3 text-xs font-bold bg-white text-slate-600 shadow-sm rounded-lg border-slate-200 hover:bg-slate-50">
-                           <ChevronLeft className="w-4 h-4 mr-1"/> Prev
-                         </Button>
-                         <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={(page + 1) * pageSize >= (globalCounts[tab as keyof typeof globalCounts] || 0) || isLoading} className="flex-1 sm:flex-none h-8 px-3 text-xs font-bold bg-white text-slate-600 shadow-sm rounded-lg border-slate-200 hover:bg-slate-50">
-                           Next <ChevronRight className="w-4 h-4 ml-1"/>
-                         </Button>
-                       </div>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => { 
+                              const prevPage = Math.max(0, page - 1);
+                              setPage(prevPage); 
+                              fetchPage(prevPage); 
+                            }} 
+                            disabled={page === 0 || isLoading} 
+                            className="flex-1 sm:flex-none h-8 px-3 text-xs font-bold bg-white text-slate-600 shadow-sm rounded-lg border-slate-200 hover:bg-slate-50"
+                          >
+                            <ChevronLeft className="w-4 h-4 mr-1"/> Prev
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm" 
+                            onClick={() => { 
+                              const nextPage = page + 1;
+                              setPage(nextPage); 
+                              fetchPage(nextPage); 
+                            }} 
+                            disabled={(page + 1) * pageSize >= (globalCounts[tab as keyof typeof globalCounts] || 0) || isLoading} 
+                            className="flex-1 sm:flex-none h-8 px-3 text-xs font-bold bg-white text-slate-600 shadow-sm rounded-lg border-slate-200 hover:bg-slate-50"
+                          >
+                            Next <ChevronRight className="w-4 h-4 ml-1"/>
+                          </Button>
+                        </div>
                      </div>
                    </div>
                 </TabsContent>

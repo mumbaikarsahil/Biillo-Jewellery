@@ -650,8 +650,8 @@ export default function InventoryPage() {
         }
       }
 
-      if (pageToLoad === 0) setItems(combined);
-      else setItems(prev => [...prev, ...combined]);
+      // ✨ FIX: Always replace items for strict page-by-page navigation
+      setItems(combined);
 
       setItemCache(prev => {
         const nextCache = { ...prev };
@@ -1312,10 +1312,30 @@ export default function InventoryPage() {
             Showing <span className="font-bold text-slate-700">{items.length > 0 ? page * pageSize + 1 : 0}</span> to <span className="font-bold text-slate-700">{Math.min((page + 1) * pageSize, totalCurrentCount)}</span> of <span className="font-bold text-slate-700">{totalCurrentCount}</span> records
           </span>
           <div className="flex items-center gap-1.5">
-            <Button variant="outline" size="sm" onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0 || loading} className="h-8 px-3 text-xs bg-white text-slate-600">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => { 
+                const prevPage = Math.max(0, page - 1);
+                setPage(prevPage); 
+                fetchPage(prevPage); 
+              }} 
+              disabled={page === 0 || loading} 
+              className="h-8 px-3 text-xs bg-white text-slate-600"
+            >
               <ChevronLeft className="w-4 h-4 mr-1"/> Prev
             </Button>
-            <Button variant="outline" size="sm" onClick={() => setPage(p => p + 1)} disabled={(page + 1) * pageSize >= totalCurrentCount || loading} className="h-8 px-3 text-xs bg-white text-slate-600">
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => { 
+                const nextPage = page + 1;
+                setPage(nextPage); 
+                fetchPage(nextPage); 
+              }} 
+              disabled={(page + 1) * pageSize >= totalCurrentCount || loading} 
+              className="h-8 px-3 text-xs bg-white text-slate-600"
+            >
               Next <ChevronRight className="w-4 h-4 ml-1"/>
             </Button>
           </div>
