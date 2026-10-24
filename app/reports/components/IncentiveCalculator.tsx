@@ -4,7 +4,7 @@ import React, { useEffect, useState, useMemo } from 'react'
 import { format } from 'date-fns'
 import { 
   Calculator, Download, Loader2, Plus, Trash2, 
-  TrendingUp, Calendar, User, Settings2, IndianRupee, FileText
+  TrendingUp, Calendar, User, Settings2, IndianRupee, FileText, Save
 } from 'lucide-react'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useToast } from '@/hooks/use-toast'
-import { Label } from '@/components/ui/label' // ✨ FIX: Corrected Import
+import { Label } from '@/components/ui/label' 
 import {
   Select, SelectContent, SelectItem, 
   SelectTrigger, SelectValue 
@@ -36,38 +36,61 @@ export function IncentiveCalculator() {
   
   const [loading, setLoading] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [isSavingRules, setIsSavingRules] = useState(false)
+  
   const [invoices, setInvoices] = useState<any[]>([])
   const [staffList, setStaffList] = useState<any[]>([])
   
   // Filters
   const [selectedStaff, setSelectedStaff] = useState<string>('all')
   const [startDate, setStartDate] = useState(() => {
-    const d = new Date(); d.setDate(1); return d.toISOString().split('T')[0]; // First day of current month
+    const d = new Date(); d.setDate(1); return d.toISOString().split('T')[0]; 
   })
   const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0])
   
   // Calculation Toggles
   const [baseCalculation, setBaseCalculation] = useState<'taxable_value' | 'subtotal'>('taxable_value')
 
-  // Dynamic Rules Engine (Pre-filled with your custom logic)
-  const [rules, setRules] = useState<IncentiveRule[]>([
-    { id: '1', minAmount: 0, maxAmount: 21999, percentage: 1 },
-    { id: '2', minAmount: 22000, maxAmount: 51999, percentage: 1.5 },
-    { id: '3', minAmount: 52000, maxAmount: 99999999, percentage: 2 }
-  ])
+  // Dynamic Rules Engine (Defaults to empty until loaded from DB)
+  const [rules, setRules] = useState<IncentiveRule[]>([])
 
-  // 1. Fetch Staff List
+  // 1. Fetch Staff List & Saved Incentive Rules
   useEffect(() => {
-    async function fetchStaff() {
-      const { data, error } = await supabase
+    async function fetchInitialData() {
+      if (!appUser?.company_id) return;
+
+      // Fetch Staff
+      const { data: staffData } = await supabase
         .from('profiles')
         .select('id, full_name, role')
         .eq('is_active', true)
-      
-      if (!error && data) setStaffList(data)
+      if (staffData) setStaffList(staffData)
+
+      // Fetch Saved Rules
+      const { data: rulesData } = await supabase
+        .from('incentive_rules')
+        .select('*')
+        .eq('company_id', appUser.company_id)
+        .order('min_amount', { ascending: true })
+
+      if (rulesData && rulesData.length > 0) {
+        setRules(rulesData.map(r => ({
+          id: r.id,
+          minAmount: Number(r.min_amount),
+          maxAmount: Number(r.max_amount),
+          percentage: Number(r.percentage)
+        })))
+      } else {
+        // Fallback default rules if table is empty
+        setRules([
+          { id: '1', minAmount: 0, maxAmount: 21999, percentage: 1 },
+          { id: '2', minAmount: 22000, maxAmount: 51999, percentage: 1.5 },
+          { id: '3', minAmount: 52000, maxAmount: 99999999, percentage: 2 }
+        ])
+      }
     }
-    fetchStaff()
-  }, [])
+    fetchInitialData()
+  }, [appUser])
 
   // 2. Fetch Invoices whenever filters change
   const fetchInvoices = async () => {
@@ -85,7 +108,7 @@ export function IncentiveCalculator() {
           profiles(full_name)
         `)
         .eq('company_id', appUser.company_id)
-        .eq('status', 'VALID') // Only calculate incentives on Valid invoices
+        .eq('status', 'VALID')
         .gte('created_at', startDate)
         .lt('created_at', safeEndDateStr)
         .order('created_at', { ascending: true })
@@ -110,19 +133,16 @@ export function IncentiveCalculator() {
     return () => clearTimeout(delay)
   }, [appUser, selectedStaff, startDate, endDate])
 
-
   // 3. Process Data against Rules Engine
   const processedData = useMemo(() => {
     let totalBase = 0;
     let totalIncentive = 0;
 
     const detailedInvoices = invoices.map(inv => {
-      // Choose base value: Taxable (After Discounts) OR Subtotal (Before Discounts)
       const baseAmt = baseCalculation === 'taxable_value' 
         ? (Number(inv.taxable_value) || 0) 
         : (Number(inv.subtotal) || 0);
 
-      // Find the applicable tier rule
       const applicableRule = rules.find(r => baseAmt >= r.minAmount && baseAmt <= r.maxAmount);
       const appliedPercent = applicableRule ? applicableRule.percentage : 0;
       
@@ -148,7 +168,6 @@ export function IncentiveCalculator() {
     }
   }, [invoices, rules, baseCalculation])
 
-
   // Rule Management Handlers
   const addRule = () => {
     const newId = Math.random().toString(36).substring(2, 9);
@@ -161,6 +180,33 @@ export function IncentiveCalculator() {
 
   const updateRule = (id: string, field: keyof IncentiveRule, value: number) => {
     setRules(rules.map(r => r.id === id ? { ...r, [field]: value } : r));
+  }
+
+  // ✨ Save Rules to Database
+  const handleSaveRules = async () => {
+    if (!appUser?.company_id) return;
+    setIsSavingRules(true);
+    try {
+      // Wipe existing rules for this company to avoid stale data
+      await supabase.from('incentive_rules').delete().eq('company_id', appUser.company_id);
+      
+      if (rules.length > 0) {
+        const payload = rules.map(r => ({
+          company_id: appUser.company_id,
+          min_amount: r.minAmount,
+          max_amount: r.maxAmount,
+          percentage: r.percentage
+        }));
+        
+        const { error } = await supabase.from('incentive_rules').insert(payload);
+        if (error) throw error;
+      }
+      toast({ title: "Success", description: "Incentive tiers saved successfully." })
+    } catch (error: any) {
+      toast({ title: "Error", description: error.message, variant: "destructive" })
+    } finally {
+      setIsSavingRules(false);
+    }
   }
 
   // Export to CSV
@@ -185,7 +231,6 @@ export function IncentiveCalculator() {
       inv.earnedIncentive.toFixed(2)
     ]);
 
-    // Add Summary Row at bottom
     csvRows.push([]);
     csvRows.push(["TOTALS", "", "", processedData.totalBase.toFixed(2), "", processedData.totalIncentive.toFixed(2)]);
 
@@ -249,13 +294,13 @@ export function IncentiveCalculator() {
         
         {/* --- LEFT: RULE CONFIGURATION ENGINE --- */}
         <div className="lg:col-span-1 space-y-4">
-          <Card className="bg-white border-gray-200 shadow-sm rounded-2xl">
-            <CardHeader className="p-5 border-b border-gray-100 bg-gray-50/50 rounded-t-2xl">
+          <Card className="bg-white border-gray-200 shadow-sm rounded-2xl overflow-hidden flex flex-col">
+            <CardHeader className="p-5 border-b border-gray-100 bg-gray-50/50">
               <CardTitle className="text-sm font-bold text-gray-800 flex items-center gap-2">
                 <Settings2 className="w-4 h-4 text-[#0078D7]" /> Calculation Engine
               </CardTitle>
             </CardHeader>
-            <CardContent className="p-5 space-y-5">
+            <CardContent className="p-5 space-y-5 flex-1">
               
               <div className="space-y-2">
                 <Label className="text-xs font-bold text-gray-700">Calculate Incentives On:</Label>
@@ -311,8 +356,14 @@ export function IncentiveCalculator() {
                   ))}
                 </div>
               </div>
-
             </CardContent>
+
+            <div className="p-4 border-t border-gray-100 bg-white">
+              <Button onClick={handleSaveRules} disabled={isSavingRules} className="w-full h-9 text-xs font-bold bg-[#0078D7] hover:bg-[#006abc] text-white">
+                {isSavingRules ? <Loader2 className="w-3.5 h-3.5 mr-2 animate-spin" /> : <Save className="w-3.5 h-3.5 mr-2" />}
+                Save Configuration
+              </Button>
+            </div>
           </Card>
         </div>
 

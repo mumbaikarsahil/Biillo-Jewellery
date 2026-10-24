@@ -140,11 +140,10 @@ export default function AccountsMasterPage() {
   const [editForm, setEditForm] = useState<any>({})
   const [isEditing, setIsEditing] = useState(false)
 
-//revoke cancellation
   const [invoiceToRevoke, setInvoiceToRevoke] = useState<any>(null)
   const [isRevoking, setIsRevoking] = useState(false)
 
-  // ✨ NEW: Custom Order Advance States
+  // Custom Order Advance States
   const [orderToAdvance, setOrderToAdvance] = useState<any>(null)
   const [advanceAmount, setAdvanceAmount] = useState('')
   const [advanceMode, setAdvanceMode] = useState('CASH')
@@ -189,7 +188,6 @@ export default function AccountsMasterPage() {
       if (selectedLocation !== 'ALL') estQuery = estQuery.eq('warehouse_id', selectedLocation)
       if (search.trim()) estQuery = estQuery.ilike('estimate_number', `%${search.trim()}%`)
 
-      // ✨ UPDATED: Fetch warehouse name for Custom Orders
       let customQuery = supabase.from('custom_orders').select('*, customers(full_name, phone), warehouses!origin_warehouse_id(name)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
       if (selectedLocation !== 'ALL') customQuery = customQuery.eq('origin_warehouse_id', selectedLocation)
       if (search.trim()) customQuery = customQuery.ilike('order_number', `%${search.trim()}%`)
@@ -294,27 +292,60 @@ export default function AccountsMasterPage() {
     return () => clearTimeout(delay)
   }, [appUser, selectedLocation, startDate, endDate, search, page, recordLimit])
 
-  // ✨ NEW: Additional Advance Submission Logic
+  // ✨ FIX: Properly saves advance_paid, pushes to advance_history, and auto-opens print preview
   const handleLogAdvance = async () => {
     if (!orderToAdvance) return;
-    if (!advanceAmount || Number(advanceAmount) <= 0) return toast.error("Enter a valid amount.");
+    const amt = Number(advanceAmount);
+    if (!amt || amt <= 0) return toast.error("Enter a valid amount.");
 
     setIsSubmittingAdvance(true);
     try {
-      const { error } = await supabase.from('custom_order_payments').insert({
+      // 1. Insert into custom_order_payments (Ledger)
+      const { error: paymentErr } = await supabase.from('custom_order_payments').insert({
         order_id: orderToAdvance.id,
-        amount: Number(advanceAmount),
+        amount: amt,
         payment_mode: advanceMode,
         recorded_by: appUser?.id
       });
+      if (paymentErr) throw paymentErr;
 
-      if (error) throw error;
+      // 2. Compute New Advance History and Total
+      const prevAdvance = Number(orderToAdvance.advance_paid) || 0;
+      const newAdvance = prevAdvance + amt;
+      
+      const prevHistory = Array.isArray(orderToAdvance.advance_history) ? orderToAdvance.advance_history : [];
+      const newHistoryEntry = {
+          date: new Date().toISOString(),
+          amount: amt,
+          mode: advanceMode,
+          recorded_by: appUser?.id
+      };
+      const newHistory = [...prevHistory, newHistoryEntry];
+
+      // 3. Update Custom Orders Master Record
+      const { data: updatedOrder, error: updateErr } = await supabase
+          .from('custom_orders')
+          .update({ 
+              advance_paid: newAdvance,
+              advance_history: newHistory
+          })
+          .eq('id', orderToAdvance.id)
+          .select('*, customers(full_name, phone), warehouses!origin_warehouse_id(name)')
+          .single();
+
+      if (updateErr) throw updateErr;
 
       toast.success("Additional advance logged successfully!");
+      
+      // ✨ 4. Auto-open Print Preview with updated data
+      if (updatedOrder) {
+          handleOpenPreview(updatedOrder, 'custom');
+      }
+
       setOrderToAdvance(null);
       setAdvanceAmount('');
       setAdvanceMode('CASH');
-      fetchAccountingData(); // Refresh the list automatically
+      fetchAccountingData(); // Refresh list in background
     } catch (err: any) {
       toast.error(err.message || "Failed to log advance.");
     } finally {
@@ -448,7 +479,7 @@ export default function AccountsMasterPage() {
   }
 
 
-
+  // ✨ FIX: Properly Maps Advance History and Metal Type for the Print Template
   const handleOpenPreview = async (item: any, type: 'invoice' | 'estimate' | 'custom' | 'repair' | 'return') => {
     setIsFetchingPreview(true)
     try {
@@ -484,7 +515,9 @@ export default function AccountsMasterPage() {
           items: safeItems,
           paymentMode: invData.payment_mode,
           splitPayments: invData.split_payments,
-          paymentRemarks: invData.payment_remarks
+          paymentRemarks: invData.payment_remarks,
+          advance_adjusted: invData.advance_adjusted || 0,
+          advance_history: invData.advance_history || []
         }
       } 
       else if (type === 'estimate') {
@@ -513,6 +546,7 @@ export default function AccountsMasterPage() {
           customOrder: { 
             designCode: item.design_reference, 
             category: item.item_category, 
+            metal_type: item.metal_type || 'Gold', // ✨ Supports SOUL Silver Switch
             expectedGoldWt: item.expected_gold_g, 
             expectedDiamondCts: item.expected_diamond_cts, 
             estimatedValue: finalTotal, 
@@ -527,6 +561,7 @@ export default function AccountsMasterPage() {
           sgstAmount: Number(item.sgst_amount) || Number(item.sgst) || 0,
           finalTotal: finalTotal,
           advancePayment: advancePaid,
+          advance_history: item.advance_history || [], // ✨ Renders Advance Math Accurately
           balanceDue: Math.max(0, finalTotal - advancePaid), 
           paymentMode: item.payment_mode,
           splitPayments: item.split_payments,

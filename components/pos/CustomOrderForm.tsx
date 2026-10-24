@@ -27,6 +27,7 @@ interface CustomOrderFormProps {
   details: {
     design_reference: string;
     item_category: string;
+    metal_type: string; // ✨ NEW
     expected_gold_g: string;
     expected_diamond_cts: string;
     estimated_value: string;
@@ -114,7 +115,6 @@ export function CustomOrderForm({
     }
   }
 
-  // ✨ Link existing inventory item to this custom order
   const handleLinkExistingItem = async () => {
     if (!linkBarcode.trim() || !foundOrder) return
     setIsLinking(true)
@@ -156,11 +156,9 @@ export function CustomOrderForm({
     }
   }
 
-  // ✨ NEW: Unlink fail-safe
   const handleUnlinkItem = async () => {
     if (!foundOrder?.inventory?.id) return
     
-    // Safety prompt so they don't click it accidentally
     if (!confirm("Are you sure you want to unlink this item? It will be removed from this order.")) return;
 
     setIsUnlinking(true)
@@ -214,12 +212,29 @@ export function CustomOrderForm({
         {/* TAB 1: NEW CUSTOM ORDER */}
         {activeTab === 'new' && (
           <div className="space-y-4 animate-in fade-in duration-300">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* ✨ NEW: METAL TYPE SELECTOR */}
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Metal Type *</Label>
+                <Select 
+                  value={details?.metal_type || 'Gold'} 
+                  onValueChange={(val) => setDetails({ ...details, metal_type: val })}
+                >
+                  <SelectTrigger className="h-9 text-sm border-slate-300 focus:ring-[#881798] font-bold">
+                    <SelectValue placeholder="Metal..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Gold">Gold</SelectItem>
+                    <SelectItem value="Silver">Silver</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
               <div className="space-y-1.5">
                 <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Design Ref / Name *</Label>
                 <Input 
                   name="design_reference"
-                  placeholder="e.g. Vintage Solitaire Ring" 
+                  placeholder="e.g. Vintage Ring" 
                   className="h-9 text-sm border-slate-300 focus-visible:ring-[#881798]" 
                   value={details?.design_reference || ''} 
                   onChange={handleInputChange} 
@@ -254,7 +269,7 @@ export function CustomOrderForm({
                   <div className="flex items-center gap-1.5">
                     <Input 
                       name="item_category"
-                      placeholder="Enter custom category..." 
+                      placeholder="Custom..." 
                       className="h-9 text-sm border-slate-300 focus-visible:ring-[#881798]" 
                       value={details?.item_category || ''} 
                       onChange={handleInputChange} 
@@ -275,7 +290,8 @@ export function CustomOrderForm({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
-                  <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Expected Gold Wt.</Label>
+                  {/* ✨ DYNAMIC LABEL BASED ON METAL TYPE */}
+                  <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Expected {details?.metal_type === 'Silver' ? 'Silver' : 'Gold'} Wt.</Label>
                   <span className="text-[9px] text-slate-400 font-bold uppercase">Optional</span>
                 </div>
                 <Input 
@@ -507,7 +523,6 @@ export function CustomOrderForm({
                         Process Final Invoice
                       </Button>
 
-                      {/* ✨ NEW: Unlink Error Fail-safe */}
                       <Button 
                         disabled={isUnlinking}
                         variant="ghost" 

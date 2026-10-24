@@ -393,6 +393,7 @@ export function useCheckout({
       advancePayment: customOrderDetails.advance_paid,
       designCode: customOrderDetails.design_reference,
       category: customOrderDetails.item_category,
+      metal_type: customOrderDetails.metal_type || 'Gold', // ✨ NEW
       expectedGoldWt: customOrderDetails.expected_gold_g,
       expectedDiamondCts: customOrderDetails.expected_diamond_cts,
     } : null;
@@ -647,6 +648,7 @@ export function useCheckout({
               order_number: finalNo,
               design_reference: customOrderDetails.design_reference,
               item_category: customOrderDetails.item_category,
+              metal_type: customOrderDetails.metal_type || 'Gold', // ✨ NEW
               expected_gold_g: Number(customOrderDetails.expected_gold_g) || null,
               expected_diamond_cts: Number(customOrderDetails.expected_diamond_cts) || null,
               base_estimated_value: effectiveSubtotal,

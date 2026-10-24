@@ -30,7 +30,6 @@ const formatDate = (dateString: string | Date) => {
   });
 }
 
-// ✨ UPDATE: Smart Payment Mode Formatter (Shows Advance + Remaining Method)
 const getDetailedPaymentMode = (data: any, mode: string) => {
   if (!data) return '';
   let parts = [];
@@ -40,12 +39,10 @@ const getDetailedPaymentMode = (data: any, mode: string) => {
   const pointsAmt = Number(data.appliedPoints || data.loyalty_points || 0);
   const advanceAdjusted = Number(data.advance_adjusted || 0);
 
-  // 1. Tag legacy advance settlement
   if (mode === 'normal' && advanceAdjusted > 0) {
     parts.push(`ADVANCE (₹${advanceAdjusted.toLocaleString('en-IN')})`);
   }
 
-  // 2. Parse Remaining Mode
   const pm = String(data.paymentMode || data.payment_mode || '').toUpperCase();
   
   if (pm.startsWith('SPLIT:')) {
@@ -128,15 +125,18 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const advanceAdjusted = Number(data.advance_adjusted || 0);
     const totalSettlements = appliedKitty + appliedCredit + appliedPoints;
     
-    // ✨ FIX: Centralized Net Balance Math
     const netBalanceDue = Math.max(0, (data.finalTotal || data.final_total || 0) - appliedKitty - appliedCredit - advanceAdjusted);
     const customEstimatedBalance = data.balanceDue ?? Math.max(0, (data.finalTotal || 0) - customAdvancePaid - totalSettlements);
 
-    const isSilverInvoice = data.items?.some((item: any) => 
+    // ✨ FIX: Smart Silver Detection for both Normal & Custom Orders
+    const isSilverInvoice = (data.items?.some((item: any) => 
       String(item.item_category || '').toLowerCase().includes('silver') || 
       String(item.purity || '').toLowerCase().includes('silver') ||
       String(item.purity_karat || '').toLowerCase().includes('silver')
-    ) || false;
+    )) || (mode === 'custom' && customOrder && (
+      String(customOrder.metal_type || '').toLowerCase().includes('silver') ||
+      String(customOrder.category || '').toLowerCase().includes('silver')
+    )) || false;
 
     const activeBrand = isSilverInvoice ? "Soul Natural Diamond Jewellery" : "Pavitram Diamond Jewellery";
     const activeCompany = isSilverInvoice ? "Ossam Jewels" : "Ossam Jewels";
@@ -282,13 +282,14 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
             </h1>
             <h2 className="text-[11px] font-bold text-slate-900 tracking-[0.25em] mb-2.5 uppercase">{activeBrand}</h2>
             {data.branch?.address ? (
-               <p className="text-[10px] font-bold text-slate-700 whitespace-pre-wrap max-w-xl mx-auto leading-snug">
+               // ✨ FIX: Increased font size for branch address
+               <p className="text-[11px] font-bold text-slate-700 whitespace-pre-wrap max-w-xl mx-auto leading-snug">
                  {data.branch.address}
                </p>
             ) : (
                <>
-                 <p className="text-[10px] font-bold text-slate-700">Viral Apartment, (A) Wing, 3rd Floor, S.V. Road, Opp. Andheri Shoppers Stop,</p>
-                 <p className="text-[10px] font-bold text-slate-700">Above Hotel Radha Krishna, Andheri West, Mumbai - 400058</p>
+                 <p className="text-[11px] font-bold text-slate-700">Viral Apartment, (A) Wing, 3rd Floor, S.V. Road, Opp. Andheri Shoppers Stop,</p>
+                 <p className="text-[11px] font-bold text-slate-700">Above Hotel Radha Krishna, Andheri West, Mumbai - 400058</p>
                </>
             )}
             <p className="text-[10px] font-bold text-slate-700 mt-0.5">
@@ -326,7 +327,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   <tr>
                     <th className="p-2.5 text-left font-semibold rounded-tl-md">Design Reference</th>
                     <th className="p-2.5 text-left font-semibold">Ornament Category</th>
-                    <th className="p-2.5 text-center font-semibold">Expected Gold Wt.</th>
+                    {/* ✨ FIX: Smart Silver Header Swapping */}
+                    <th className="p-2.5 text-center font-semibold">{isSilverInvoice ? 'Expected Silver Wt.' : 'Expected Gold Wt.'}</th>
                     <th className="p-2.5 text-center font-semibold rounded-tr-md">Expected Diamond Wt.</th>
                   </tr>
                 </thead>
@@ -371,6 +373,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     <th className="p-2.5 text-center font-semibold w-16">Image</th>
                     <th className="p-2.5 text-left font-semibold">Description</th>
                     {hasHsnColumn && <th className="p-2.5 text-center font-semibold w-20">HSN Code</th>}
+                    {/* ✨ FIX: Smart Silver Header Swapping */}
                     <th className="p-2.5 text-center font-semibold w-24">{isSilverInvoice ? 'Silver Wt.' : 'Gold Wt.'}</th>
                     <th className="p-2.5 text-center font-semibold w-24">Diamond Wt.</th>
                     <th className="p-2.5 text-right font-semibold w-32 rounded-tr-md">
@@ -459,13 +462,14 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 </div>
               )}
 
-              <div className={`mt-4 p-3 rounded-lg flex items-center shadow-sm ${isEstimate ? 'bg-white border border-slate-200' : 'bg-white'}`}>
+              {/* ✨ FIX: Reduced Padding to fit new lines */}
+              <div className={`mt-2 p-2 rounded-lg flex items-center shadow-sm ${isEstimate ? 'bg-white border border-slate-200' : 'bg-white'}`}>
                 <span className="text-[10px] font-bold text-slate-800 uppercase mr-3 shrink-0">Amt. In Words :</span> 
                 <span className="text-[11px] font-bold text-slate-800 uppercase leading-tight tracking-wide">
                   Rupees {numberToWords(
                     mode === 'custom' ? customAdvancePaid :
                     mode === 'return' ? Number(returnDetails?.calculatedRefund || data.finalTotal || 0) : 
-                    netBalanceDue // ✨ Uses exactly what the customer owes today
+                    netBalanceDue 
                   )} Only
                 </span>
               </div>
@@ -664,14 +668,14 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     </div>
                   )}
 
-                  <div className="flex justify-between py-1.5 mt-1 border-t border-slate-800 text-xl font-black text-slate-900">
+                  <div className="flex justify-between py-1 mt-1 border-t border-slate-800 text-lg font-black text-slate-900">
                     <span>Gross Invoice Value</span>
                     <span>₹ {(data.finalTotal || data.final_total || 0).toLocaleString('en-IN')}</span>
                   </div>
 
-                  {/* ✨ CORRECTED: POST-TAX SETTLEMENTS */}
+                  {/* ✨ FIX: Tighter Margins for Post-Tax Settlement Block */}
                   {(appliedKitty > 0 || appliedCredit > 0 || advanceAdjusted > 0) && (
-                    <div className="pt-1.5 space-y-1 border-t border-slate-200 mt-1">
+                    <div className="pt-1 space-y-0.5 border-t border-slate-200 mt-0.5">
                       {/* Dynamic Legacy Advances */}
                       {data.advance_history?.length > 0 ? (
                         data.advance_history.map((adv: any, i: number) => (
@@ -681,26 +685,26 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                           </div>
                         ))
                       ) : advanceAdjusted > 0 ? (
-                         <div className="flex justify-between items-center text-slate-500 italic text-xs">
+                         <div className="flex justify-between items-center text-slate-500 italic text-[11px]">
                             <span>Less: Advance Received</span>
                             <span className="tabular-nums">- ₹{advanceAdjusted.toLocaleString('en-IN')}</span>
                           </div>
                       ) : null}
 
                       {appliedKitty > 0 && (
-                        <div className="flex justify-between text-xs font-bold text-[#A85B9D]">
+                        <div className="flex justify-between text-[11px] font-bold text-[#A85B9D]">
                           <span>Kitty Payment Applied</span>
                           <span>- ₹ {appliedKitty.toLocaleString('en-IN')}</span>
                         </div>
                       )}
                       {appliedCredit > 0 && (
-                        <div className="flex justify-between text-xs font-bold text-[#A85B9D]">
+                        <div className="flex justify-between text-[11px] font-bold text-[#A85B9D]">
                           <span>Store Credit Applied</span>
                           <span>- ₹ {appliedCredit.toLocaleString('en-IN')}</span>
                         </div>
                       )}
                       
-                      <div className="flex justify-between py-1 mt-1 border-t border-slate-300 text-base font-black text-slate-900">
+                      <div className="flex justify-between py-1 mt-0.5 border-t border-slate-300 text-base font-black text-slate-900">
                         <span>Net Balance Due</span>
                         <span>₹ {netBalanceDue.toLocaleString('en-IN')}</span>
                       </div>
@@ -712,7 +716,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
           </div>
 
           <div className="mt-auto flex flex-col shrink-0">
-            <div className="grid grid-cols-3 items-end text-sm font-bold mb-3 mt-4 relative">
+            {/* ✨ FIX: Compacted Margins and shrunk Logo slightly to fit everything perfectly */}
+            <div className="grid grid-cols-3 items-end text-sm font-bold mb-1.5 mt-2 relative">
               <div className="text-center px-6 relative">
                 <div className="border-t border-black pt-1 text-[11px] uppercase tracking-wider">
                   {(mode === 'repair' || mode === 'return') ? 'Customer Signature' : 'Customer / Receiver Signature'}
@@ -722,19 +727,19 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 <img 
                   src={activeLogo} 
                   alt={activeBrand} 
-                  className={`h-28 mx-auto opacity-90 object-contain ${isEstimate ? 'grayscale' : ''}`} 
+                  className={`h-24 mx-auto opacity-90 object-contain ${isEstimate ? 'grayscale' : ''}`} 
                   onError={(e) => e.currentTarget.style.display = 'none'} 
                 />
               </div>
               <div className="text-center px-6">
-                <p className="mb-6 text-[10px] text-slate-800 uppercase tracking-wider font-bold">{activeSignatory}</p>
+                <p className="mb-4 text-[10px] text-slate-800 uppercase tracking-wider font-bold">{activeSignatory}</p>
                 <div className="border-t border-black pt-1 text-[11px] uppercase tracking-wider">Authorised Signatory</div>
               </div>
             </div>
 
             <div className={`w-full h-[3px] mt-1 mb-1.5 ${isEstimate ? 'bg-slate-800' : 'bg-[#EAB308]'}`}></div>
 
-            <div className="pt-0.5 pb-2.5 flex flex-col text-left">
+            <div className="pt-0.5 pb-1 flex flex-col text-left">
               {mode === 'custom' && (
                 <div className="pb-1 text-[7.5px] leading-snug text-slate-700 font-bold uppercase tracking-tight">
                   <p className="underline mb-0.5">Terms & Conditions:</p>
@@ -744,7 +749,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 </div>
               )}
               {mode === 'normal' && guaranteeText && (
-                 <p className="text-[7.5px] leading-snug text-justify text-slate-900 font-black uppercase tracking-tight mb-1 border-b border-slate-200 pb-1 inline-block w-max">
+                 <p className="text-[7.5px] leading-snug text-justify text-slate-900 font-black uppercase tracking-tight mb-1 border-b border-slate-200 pb-0.5 inline-block w-max">
                    {guaranteeText}
                  </p>
               )}
@@ -755,7 +760,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
             {!isEstimate && (
               <div 
-                className="w-full h-[100px] rounded-xl overflow-hidden border border-slate-200 relative shrink-0 mt-1"
+                // ✨ FIX: Reduced Banner Height to clear the pagination limit
+                className="w-full h-[85px] rounded-xl overflow-hidden border border-slate-200 relative shrink-0 mt-1"
                 style={{ 
                    pageBreakInside: 'avoid',
                    breakInside: 'avoid'

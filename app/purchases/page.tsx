@@ -27,7 +27,8 @@ import {
   Calendar,
   Hash,
   FileSignature,
-  Percent
+  Percent,
+  History
 } from 'lucide-react'
 
 import { supabase } from '@/lib/supabaseClient'
@@ -389,7 +390,15 @@ export default function PurchaseInvoicePage() {
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-gray-900">Procurement Record</h1>
               <p className="text-xs sm:text-sm text-gray-500 font-medium">Digitize physical vendor invoices into vault inventory.</p>
            </div>
-           <div className="flex items-stretch sm:items-center flex-row gap-3 w-full md:w-auto">
+           
+           <div className="flex items-stretch sm:items-center flex-row gap-3 w-full md:w-auto flex-wrap">
+              {/* ✨ NEW: Button to access the Ledger Page */}
+              <Link href="/purchases/ledger" className="flex-1 sm:flex-none">
+                <Button variant="outline" className="w-full h-10 px-5 rounded-xl text-xs font-bold border-gray-200 text-gray-700 hover:bg-gray-100 hover:text-blue-600 transition-colors shadow-sm">
+                  <History className="mr-2 h-4 w-4" /> View Ledger
+                </Button>
+              </Link>
+
               <Button variant="outline" className="flex-1 sm:flex-none h-10 px-5 rounded-xl text-xs font-bold border-gray-200 text-gray-700 hover:bg-gray-100 transition-colors" onClick={() => handleSaveInvoice('save_draft')} disabled={saving}>
                 Save Draft
               </Button>
