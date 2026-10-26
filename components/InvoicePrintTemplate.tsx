@@ -276,23 +276,24 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
             <div className="w-32"></div>
           </div>
 
-          <div className="text-center mb-3">
-            <h1 className={`text-[34px] font-serif font-black tracking-widest mb-1.5 uppercase ${themeTextPrimary}`}>
+          <div className="text-center mb-2">
+            <h1 className={`text-[34px] font-serif font-black tracking-widest mb-1 uppercase ${themeTextPrimary}`}>
               {activeCompany}
             </h1>
-            <h2 className="text-[11px] font-bold text-slate-900 tracking-[0.25em] mb-2.5 uppercase">{activeBrand}</h2>
+            <h2 className="text-[11px] font-bold text-slate-900 tracking-[0.25em] mb-1.5 uppercase">{activeBrand}</h2>
             {data.branch?.address ? (
-               // ✨ FIX: Increased font size for branch address
-               <p className="text-[11px] font-bold text-slate-700 whitespace-pre-wrap max-w-xl mx-auto leading-snug">
+               // ✨ FIX: Increased address font size (11px -> 13px) & tightened line-height to preserve page bounds
+               <p className="text-[13px] font-bold text-slate-700 whitespace-pre-wrap max-w-xl mx-auto leading-tight">
                  {data.branch.address}
                </p>
             ) : (
                <>
-                 <p className="text-[11px] font-bold text-slate-700">Viral Apartment, (A) Wing, 3rd Floor, S.V. Road, Opp. Andheri Shoppers Stop,</p>
-                 <p className="text-[11px] font-bold text-slate-700">Above Hotel Radha Krishna, Andheri West, Mumbai - 400058</p>
+                 <p className="text-[13px] font-bold text-slate-700 leading-tight">Viral Apartment, (A) Wing, 3rd Floor, S.V. Road, Opp. Andheri Shoppers Stop,</p>
+                 <p className="text-[13px] font-bold text-slate-700 leading-tight">Above Hotel Radha Krishna, Andheri West, Mumbai - 400058</p>
                </>
             )}
-            <p className="text-[10px] font-bold text-slate-700 mt-0.5">
+            {/* ✨ FIX: Increased contact font size (10px -> 12px) */}
+            <p className="text-[12px] font-bold text-slate-700 mt-0.5">
               Contact : {data.branch?.contact_number || '9322279558'}
             </p>
           </div>
