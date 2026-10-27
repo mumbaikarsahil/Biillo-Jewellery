@@ -23,7 +23,9 @@ import {
   TrendingUp,
   Users,
   Calendar,
-  Settings
+  Settings,
+  Edit2,
+  X
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -38,8 +40,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Card,
   CardContent,
-  CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import {
   Table,
@@ -65,6 +65,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@radix-ui/react-dropdown-menu";
 
 interface DistributorMetrics {
   registered: number;
@@ -78,7 +79,10 @@ interface Distributor {
   contact_person: string;
   phone: string;
   address: string;
-  distributor_type: string; // ✨ Relaxed strict typing to allow dynamic categories
+  distributor_type: string;
+  area_location?: string;
+  business_category?: string;
+  partner_level?: string;
   created_at: string;
   metrics?: DistributorMetrics;
 }
@@ -103,7 +107,6 @@ interface ReferencePerson {
   };
 }
 
-// ✨ NEW: Event summary interface
 interface EventSummary {
   event_name: string;
   voucher_count: number;
@@ -117,7 +120,7 @@ export default function DistributorsPage() {
   const [distributors, setDistributors] = useState<Distributor[]>([]);
   const [agents, setAgents] = useState<DeliveryAgent[]>([]);
   const [referencePersons, setReferencePersons] = useState<ReferencePerson[]>([]); 
-  const [events, setEvents] = useState<EventSummary[]>([]); // ✨ NEW STATE for Events
+  const [events, setEvents] = useState<EventSummary[]>([]);
   
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -128,16 +131,19 @@ export default function DistributorsPage() {
   const [isRefPersonDialogOpen, setIsRefPersonDialogOpen] = useState(false); 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // ✨ NEW: Dynamic Categories State
+  // ✨ Edit State
+  const [isEditMode, setIsEditMode] = useState(false);
+  const [editPartnerId, setEditPartnerId] = useState<string | null>(null);
+
   const defaultCategories = [
     "external_shop", 
     "internal_branch", 
     "corporate_partner", 
     "voucher_printing_press", 
     "sales_person",
-    "campaign",           // Added requested category
-    "retail_associates",  // Added requested category
-    "institute_retail"    // Added requested category
+    "campaign",
+    "retail_associates",
+    "institute_retail"
   ];
   const [availableCategories, setAvailableCategories] = useState<string[]>(defaultCategories);
   const [isAddingNewCategory, setIsAddingNewCategory] = useState(false);
@@ -149,6 +155,9 @@ export default function DistributorsPage() {
     phone: "",
     address: "",
     distributor_type: "external_shop",
+    area_location: "",
+    business_category: "",
+    partner_level: "Standard",
   });
 
   const [agentFormData, setAgentFormData] = useState({
@@ -165,18 +174,24 @@ export default function DistributorsPage() {
   });
 
   const fetchRegistries = async () => {
+    // ✨ FIX 1: Strict guard to prevent Supabase from throwing an "undefined filter" JS Error
+    if (!appUser?.company_id) {
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
     try {
       // 1. Fetch Partners
       const { data: distData, error: distErr } = await supabase
         .from("voucher_distributors")
         .select("*, vouchers(status)")
-        .eq("company_id", appUser?.company_id)
+        .eq("company_id", appUser.company_id)
         .order("created_at", { ascending: false });
 
       if (distErr) throw distErr;
 
-      // Extract any custom categories that might exist in DB but not in default list
+      // Extract any custom categories
       if (distData) {
         const dbCategories = Array.from(new Set(distData.map(d => d.distributor_type).filter(Boolean)));
         const combinedCategories = Array.from(new Set([...defaultCategories, ...dbCategories]));
@@ -210,7 +225,7 @@ export default function DistributorsPage() {
       const { data: agentData, error: agentErr } = await supabase
         .from("delivery_agents")
         .select("*")
-        .eq("company_id", appUser?.company_id)
+        .eq("company_id", appUser.company_id)
         .order("created_at", { ascending: false });
       if (agentErr) throw agentErr;
       setAgents(agentData || []);
@@ -219,30 +234,29 @@ export default function DistributorsPage() {
       const { data: refData, error: refErr } = await supabase
         .from("voucher_reference_persons")
         .select("*, linked_distributor:linked_distributor_id(distributor_name)")
-        .eq("company_id", appUser?.company_id)
+        .eq("company_id", appUser.company_id)
         .order("created_at", { ascending: false });
       if (refErr) throw refErr;
       setReferencePersons(refData || []);
 
-      // ✨ 4. Fetch Event Summaries from Vouchers
-      // Using a raw query to group by event_name where is_event_voucher is true
+      // 4. Fetch Event Summaries from Vouchers
       const { data: eventData, error: eventErr } = await supabase
         .from("vouchers")
-        .select("event_name, created_at")
-        .eq("is_event_voucher", true)
-        .not("event_name", "is", null);
+        .select("event_name, updated_at")
+        .eq("is_event_voucher", true); // Removed the company_id filter that caused the crash
       
       if (eventErr) throw eventErr;
 
-      // Manually aggregate since Supabase JS client doesn't have simple Group By
       if (eventData) {
         const eventMap = new Map<string, { count: number, latest: string }>();
         eventData.forEach((v: any) => {
+          if (!v.event_name) return; 
+          
           const name = v.event_name;
-          const current = eventMap.get(name) || { count: 0, latest: v.created_at };
+          const current = eventMap.get(name) || { count: 0, latest: v.updated_at };
           eventMap.set(name, {
             count: current.count + 1,
-            latest: new Date(v.created_at) > new Date(current.latest) ? v.created_at : current.latest
+            latest: new Date(v.updated_at) > new Date(current.latest) ? v.updated_at : current.latest
           });
         });
 
@@ -256,8 +270,10 @@ export default function DistributorsPage() {
       }
 
     } catch (error: any) {
-      console.error("Error fetching registries:", error);
-      toast({ title: "Load Error", description: error.message, variant: "destructive" });
+      // ✨ FIX 3: Force extraction of the message so native JS errors don't show up as {}
+      const errorMessage = error instanceof Error ? error.message : error?.message || "An unknown error occurred.";
+      console.error("Error fetching registries:", errorMessage, error);
+      toast({ title: "Load Error", description: errorMessage, variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
@@ -267,7 +283,6 @@ export default function DistributorsPage() {
     if (appUser) fetchRegistries();
   }, [appUser]);
 
-  // ✨ Handle Custom Category Creation
   const handleCreateCategory = () => {
     if (!newCategoryName.trim()) return;
     const formattedName = newCategoryName.trim().toLowerCase().replace(/\s+/g, '_');
@@ -282,26 +297,68 @@ export default function DistributorsPage() {
     toast({ title: "Category Added", description: "You can now use this category for the partner." });
   };
 
+  const resetPartnerForm = () => {
+    setPartnerFormData({
+      distributor_name: "",
+      contact_person: "",
+      phone: "",
+      address: "",
+      distributor_type: "external_shop",
+      area_location: "",
+      business_category: "",
+      partner_level: "Standard",
+    });
+    setIsEditMode(false);
+    setEditPartnerId(null);
+  };
+
+  const handleEditPartner = (distributor: Distributor) => {
+    setPartnerFormData({
+      distributor_name: distributor.distributor_name || "",
+      contact_person: distributor.contact_person || "",
+      phone: distributor.phone || "",
+      address: distributor.address || "",
+      distributor_type: distributor.distributor_type || "external_shop",
+      area_location: distributor.area_location || "",
+      business_category: distributor.business_category || "",
+      partner_level: distributor.partner_level || "Standard",
+    });
+    setIsEditMode(true);
+    setEditPartnerId(distributor.id);
+    setIsPartnerDialogOpen(true);
+  };
+
   const handlePartnerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     try {
-      const { error } = await supabase.from("voucher_distributors").insert({
+      const payload = {
         company_id: appUser?.company_id,
         distributor_name: partnerFormData.distributor_name,
         contact_person: partnerFormData.contact_person,
         phone: partnerFormData.phone,
         address: partnerFormData.address,
         distributor_type: partnerFormData.distributor_type,
-      });
+        area_location: partnerFormData.area_location,
+        business_category: partnerFormData.business_category,
+        partner_level: partnerFormData.partner_level,
+      };
 
-      if (error) throw error;
-      toast({ title: "Partner Registered", description: `${partnerFormData.distributor_name} added to ledger.` });
-      setPartnerFormData({ distributor_name: "", contact_person: "", phone: "", address: "", distributor_type: "external_shop" });
+      if (isEditMode && editPartnerId) {
+        const { error } = await supabase.from("voucher_distributors").update(payload).eq("id", editPartnerId);
+        if (error) throw error;
+        toast({ title: "Partner Updated", description: `${partnerFormData.distributor_name} details modified.` });
+      } else {
+        const { error } = await supabase.from("voucher_distributors").insert(payload);
+        if (error) throw error;
+        toast({ title: "Partner Registered", description: `${partnerFormData.distributor_name} added to ledger.` });
+      }
+
+      resetPartnerForm();
       setIsPartnerDialogOpen(false);
       fetchRegistries();
     } catch (error: any) {
-      toast({ title: "Registration Failed", description: error.message, variant: "destructive" });
+      toast({ title: isEditMode ? "Update Failed" : "Registration Failed", description: error.message, variant: "destructive" });
     } finally {
       setIsSubmitting(false);
     }
@@ -379,9 +436,19 @@ export default function DistributorsPage() {
     }
   };
 
+  const getPartnerLevelBadge = (level: string) => {
+    switch (level?.toLowerCase()) {
+      case 'gold': return "bg-amber-100 text-amber-700 border-amber-300";
+      case 'silver': return "bg-slate-100 text-slate-700 border-slate-300";
+      case 'platinum': return "bg-sky-100 text-sky-700 border-sky-300";
+      default: return "bg-gray-50 text-gray-600 border-gray-200";
+    }
+  }
+
   const filteredDistributors = distributors.filter((d) => {
     const matchesSearch = d.distributor_name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           d.contact_person?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                          d.area_location?.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           d.phone?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesType = typeFilter === "all" || d.distributor_type === typeFilter;
     return matchesSearch && matchesType;
@@ -490,63 +557,81 @@ export default function DistributorsPage() {
                 </DialogContent>
               </Dialog>
 
-              {/* Add Partner Dialog */}
-              <Dialog open={isPartnerDialogOpen} onOpenChange={setIsPartnerDialogOpen}>
+              {/* Add / Edit Partner Dialog */}
+              <Dialog open={isPartnerDialogOpen} onOpenChange={(open) => {
+                if (!open) resetPartnerForm();
+                setIsPartnerDialogOpen(open);
+              }}>
                 <DialogTrigger asChild>
-                  <Button variant="outline" size="sm" className="h-9 px-4 font-bold text-xs uppercase tracking-tight shadow-sm border-gray-200 bg-white">
+                  <Button variant="outline" size="sm" className="h-9 px-4 font-bold text-xs uppercase tracking-tight shadow-sm border-gray-200 bg-white" onClick={() => setIsEditMode(false)}>
                     <Store className="w-3.5 h-3.5 mr-2 text-gray-400" />
                     New Partner
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="sm:max-w-[425px] p-0 overflow-hidden border-none shadow-2xl">
+                <DialogContent className="sm:max-w-[500px] p-0 overflow-hidden border-none shadow-2xl">
                   <DialogHeader className="bg-gray-50 p-6 border-b">
-                    <DialogTitle className="text-lg font-bold text-gray-900">Add B2B Partner</DialogTitle>
-                    <DialogDescription className="text-xs font-medium text-gray-500">Configure a new distribution point.</DialogDescription>
+                    <DialogTitle className="text-lg font-bold text-gray-900">{isEditMode ? "Edit B2B Partner" : "Add B2B Partner"}</DialogTitle>
+                    <DialogDescription className="text-xs font-medium text-gray-500">{isEditMode ? "Update partner details and classification." : "Configure a new distribution point."}</DialogDescription>
                   </DialogHeader>
-                  <form id="add-partner-form" className="p-6 space-y-4 max-h-[60vh] overflow-y-auto">
-                    <div className="space-y-1.5">
-                      <Label className="text-[11px] font-bold text-gray-400 uppercase">Business Name</Label>
-                      <div className="relative">
-                        <Building2 className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-                        <Input placeholder="e.g. Metro Jewelry Hub" className="pl-9 h-9 text-sm border-gray-200" value={partnerFormData.distributor_name} onChange={(e) => setPartnerFormData({...partnerFormData, distributor_name: e.target.value})} required />
+                  <form id="partner-form" className="p-6 space-y-4 max-h-[65vh] overflow-y-auto custom-scrollbar">
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                        <Label className="text-[11px] font-bold text-gray-400 uppercase">Business Name</Label>
+                        <div className="relative">
+                          <Building2 className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                          <Input placeholder="e.g. Metro Jewelry Hub" className="pl-9 h-9 text-sm border-gray-200" value={partnerFormData.distributor_name} onChange={(e) => setPartnerFormData({...partnerFormData, distributor_name: e.target.value})} required />
+                        </div>
+                      </div>
+                      <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                        <Label className="text-[11px] font-bold text-gray-400 uppercase">Partner Level</Label>
+                        <Select value={partnerFormData.partner_level} onValueChange={(v) => setPartnerFormData({...partnerFormData, partner_level: v})}>
+                          <SelectTrigger className="h-9 text-sm border-gray-200"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="Standard">Standard</SelectItem>
+                            <SelectItem value="Bronze">Bronze</SelectItem>
+                            <SelectItem value="Silver">Silver</SelectItem>
+                            <SelectItem value="Gold">Gold</SelectItem>
+                            <SelectItem value="Platinum">Platinum</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
                     </div>
                     
-                    <div className="space-y-1.5">
-                      <div className="flex items-center justify-between">
-                        <Label className="text-[11px] font-bold text-gray-400 uppercase">Partner Category</Label>
-                        {/* ✨ NEW: Admin control to add custom categories */}
-                        {(appUser?.role === 'owner' || appUser?.role === 'manager') && !isAddingNewCategory && (
-                          <Button type="button" variant="ghost" size="sm" className="h-5 px-1.5 text-[10px] text-blue-600 font-bold p-0 uppercase tracking-widest hover:bg-transparent" onClick={() => setIsAddingNewCategory(true)}>
-                            <Settings className="w-3 h-3 mr-1" /> Add Custom
-                          </Button>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-[11px] font-bold text-gray-400 uppercase">Partner Type</Label>
+                          {(appUser?.role === 'owner' || appUser?.role === 'manager') && !isAddingNewCategory && (
+                            <Button type="button" variant="ghost" size="sm" className="h-5 px-1.5 text-[10px] text-blue-600 font-bold p-0 uppercase tracking-widest hover:bg-transparent" onClick={() => setIsAddingNewCategory(true)}>
+                              <Settings className="w-3 h-3 mr-1" /> Custom
+                            </Button>
+                          )}
+                        </div>
+                        {isAddingNewCategory ? (
+                          <div className="flex gap-2">
+                            <Input placeholder="New..." className="h-9 text-sm border-blue-200 focus-visible:ring-blue-500" value={newCategoryName} onChange={(e) => setNewCategoryName(e.target.value)} autoFocus />
+                            <Button type="button" size="icon" onClick={handleCreateCategory} className="bg-blue-600 text-white h-9 w-9"><Plus className="w-4 h-4"/></Button>
+                            <Button type="button" variant="ghost" size="icon" className="h-9 w-9" onClick={() => setIsAddingNewCategory(false)}><X className="w-4 h-4"/></Button>
+                          </div>
+                        ) : (
+                          <Select value={partnerFormData.distributor_type} onValueChange={(v) => setPartnerFormData({...partnerFormData, distributor_type: v})}>
+                            <SelectTrigger className="h-9 text-sm border-gray-200"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                              {availableCategories.map(cat => (
+                                <SelectItem key={cat} value={cat}>
+                                  {cat.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         )}
                       </div>
                       
-                      {isAddingNewCategory ? (
-                        <div className="flex gap-2">
-                          <Input 
-                            placeholder="New Category Name..." 
-                            className="h-9 text-sm border-blue-200 focus-visible:ring-blue-500" 
-                            value={newCategoryName} 
-                            onChange={(e) => setNewCategoryName(e.target.value)} 
-                            autoFocus
-                          />
-                          <Button type="button" size="sm" onClick={handleCreateCategory} className="bg-blue-600 text-white shrink-0">Add</Button>
-                          <Button type="button" variant="ghost" size="sm" onClick={() => setIsAddingNewCategory(false)}>X</Button>
-                        </div>
-                      ) : (
-                        <Select value={partnerFormData.distributor_type} onValueChange={(v) => setPartnerFormData({...partnerFormData, distributor_type: v})}>
-                          <SelectTrigger className="h-9 text-sm border-gray-200"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {availableCategories.map(cat => (
-                              <SelectItem key={cat} value={cat}>
-                                {cat.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      )}
+                      <div className="space-y-1.5 col-span-2 sm:col-span-1">
+                        <Label className="text-[11px] font-bold text-gray-400 uppercase">Business Category</Label>
+                        <Input placeholder="e.g. Retail Jeweler, Salon..." className="h-9 text-sm border-gray-200" value={partnerFormData.business_category} onChange={(e) => setPartnerFormData({...partnerFormData, business_category: e.target.value})} />
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -556,21 +641,31 @@ export default function DistributorsPage() {
                       </div>
                       <div className="space-y-1.5">
                         <Label className="text-[11px] font-bold text-gray-400 uppercase">Phone</Label>
-                        <Input placeholder="+91..." className="h-9 text-sm border-gray-200 font-mono" value={partnerFormData.phone} onChange={(e) => setPartnerFormData({...partnerFormData, phone: e.target.value})} />
+                        <div className="relative">
+                          <Phone className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                          <Input placeholder="+91..." className="pl-9 h-9 text-sm border-gray-200 font-mono" value={partnerFormData.phone} onChange={(e) => setPartnerFormData({...partnerFormData, phone: e.target.value})} />
+                        </div>
                       </div>
                     </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-[11px] font-bold text-gray-400 uppercase">Operating Address</Label>
-                      <div className="relative">
-                        <MapPin className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-                        <Input placeholder="Locality, City" className="pl-9 h-9 text-sm border-gray-200" value={partnerFormData.address} onChange={(e) => setPartnerFormData({...partnerFormData, address: e.target.value})} />
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-bold text-gray-400 uppercase">Area / Location</Label>
+                        <Input placeholder="e.g. Bandra West" className="h-9 text-sm border-gray-200" value={partnerFormData.area_location} onChange={(e) => setPartnerFormData({...partnerFormData, area_location: e.target.value})} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[11px] font-bold text-gray-400 uppercase">Full Address</Label>
+                        <div className="relative">
+                          <MapPin className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+                          <Input placeholder="Complete Address" className="pl-9 h-9 text-sm border-gray-200" value={partnerFormData.address} onChange={(e) => setPartnerFormData({...partnerFormData, address: e.target.value})} />
+                        </div>
                       </div>
                     </div>
                   </form>
                   <DialogFooter className="bg-gray-50 p-4 border-t gap-2">
                     <Button type="button" variant="ghost" size="sm" className="text-xs font-bold uppercase" onClick={() => setIsPartnerDialogOpen(false)} disabled={isSubmitting}>Cancel</Button>
                     <Button type="button" size="sm" className="text-xs font-bold uppercase px-6 bg-gray-900 text-white" disabled={isSubmitting} onClick={handlePartnerSubmit}>
-                      {isSubmitting ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : null} Commit Partner
+                      {isSubmitting ? <Loader2 className="w-3 h-3 mr-2 animate-spin" /> : null} {isEditMode ? "Save Changes" : "Commit Partner"}
                     </Button>
                   </DialogFooter>
                 </DialogContent>
@@ -633,7 +728,6 @@ export default function DistributorsPage() {
               <TabsTrigger value="agents" className="data-[state=active]:border-b-2 data-[state=active]:border-indigo-600 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-indigo-700 shadow-none transition-all bg-transparent whitespace-nowrap">
                 Delivery Agents ({agents.length})
               </TabsTrigger>
-              {/* ✨ NEW: EVENTS TAB */}
               <TabsTrigger value="events" className="data-[state=active]:border-b-2 data-[state=active]:border-rose-600 rounded-none px-1 py-3 text-xs font-bold uppercase tracking-widest text-gray-400 data-[state=active]:text-rose-700 shadow-none transition-all bg-transparent whitespace-nowrap">
                 Digital Events ({events.length})
               </TabsTrigger>
@@ -646,7 +740,7 @@ export default function DistributorsPage() {
                   <div className="relative flex-1 max-w-sm">
                     <Search className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
                     <Input 
-                      placeholder="Search by partner name, contact, or phone..." 
+                      placeholder="Search by name, location, phone..." 
                       className="pl-9 h-9 text-sm border-gray-200 shadow-sm"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
@@ -702,12 +796,27 @@ export default function DistributorsPage() {
                                   <Building2 className="h-4 w-4" />
                                 </div>
                                 <div className="flex flex-col">
-                                  <span className="font-bold text-sm text-gray-900">{distributor.distributor_name}</span>
-                                  <span className="text-[10px] font-medium text-gray-500 mt-0.5">{distributor.phone} • {distributor.contact_person}</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-sm text-gray-900">{distributor.distributor_name}</span>
+                                    {distributor.partner_level && distributor.partner_level !== 'Standard' && (
+                                      <Badge variant="outline" className={`text-[9px] h-4 px-1.5 uppercase font-bold tracking-widest ${getPartnerLevelBadge(distributor.partner_level)}`}>
+                                        {distributor.partner_level}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <span className="text-[10px] font-medium text-gray-500 mt-0.5">
+                                    {distributor.phone} • {distributor.contact_person}
+                                    {distributor.area_location && ` • ${distributor.area_location}`}
+                                  </span>
                                 </div>
                               </div>
                             </TableCell>
-                            <TableCell className="px-4">{getTypeBadge(distributor.distributor_type)}</TableCell>
+                            <TableCell className="px-4">
+                              <div className="flex flex-col gap-1 items-start">
+                                {getTypeBadge(distributor.distributor_type)}
+                                {distributor.business_category && <span className="text-[10px] text-gray-500 font-medium truncate max-w-[120px]">{distributor.business_category}</span>}
+                              </div>
+                            </TableCell>
                             
                             <TableCell className="px-4 text-center">
                               <Badge variant="secondary" className="bg-blue-50 text-blue-700 hover:bg-blue-100 font-bold border-blue-200">
@@ -730,9 +839,22 @@ export default function DistributorsPage() {
                               <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">{format(new Date(distributor.created_at), "dd MMM yy")}</span>
                             </TableCell>
                             <TableCell className="px-4 text-right">
-                              <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-gray-900">
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="icon" className="h-7 w-7 text-gray-400 hover:text-gray-900">
+                                    <MoreHorizontal className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-40 rounded-xl shadow-lg border-gray-100 p-1 bg-white">
+                                  <DropdownMenuItem 
+                                    onClick={() => handleEditPartner(distributor)} 
+                                    className="cursor-pointer flex items-center p-2 rounded-lg text-xs font-semibold text-gray-700 focus:text-blue-700 focus:bg-blue-50"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5 mr-2 text-amber-500" />
+                                    Edit Details
+                                  </DropdownMenuItem>
+                                </DropdownMenuContent>
+                              </DropdownMenu>
                             </TableCell>
                           </TableRow>
                         ))}
