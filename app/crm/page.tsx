@@ -627,20 +627,21 @@ export default function CRMPage() {
       let allRecords: any[] = [];
       let keepFetching = true;
       let currentPage = 0;
-      const limit = 500; // Lowered to 500 to prevent Supabase payload timeouts on heavy joins
+      const limit = 1000; // We can safely increase this to 1000 since the payload is now tiny
 
       // Loop to bypass Supabase's row limits
       while (keepFetching) {
         const requireVoucherJoin = activeTab === 'vouchers' || voucherFilter === 'registered' || voucherFilter === 'redeemed';
         const requireAssignmentJoin = activeTab === 'assigned_calls';
         
+        // ✨ FIX: Ultra-lightweight query. We stripped out kitty_plans, message_sequences, and gift_history 
+        // because they aren't used in the CSV. We only fetch the exact base columns needed.
         let q = supabase.from('customers').select(`
-          *, 
-          kitty_plans(*),
-          vouchers${requireVoucherJoin ? '!inner' : ''}(id, code, status, expiry_date, distributor_id, voucher_distributors(distributor_name)),
-          voucher_message_sequences(id, status, current_step, next_send_at),
-          voucher_call_assignments${requireAssignmentJoin ? '!inner' : ''}(id, status, assigned_to, attempt_count),
-          customer_gifts_history(gift_name, created_at)
+          id, full_name, phone, city, customer_status, birth_date, anniversary_date, 
+          store_credit_balance, pavitram_points, gift_given, last_interaction, 
+          next_followup_date, followup_reason, created_at, updated_at
+          ${requireVoucherJoin ? ', vouchers!inner(id, status)' : ''}
+          ${requireAssignmentJoin ? ', voucher_call_assignments!inner(id, status, assigned_to)' : ''}
         `);
 
         q = buildServerQuery(q, activeTab);
