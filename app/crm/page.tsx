@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { format } from 'date-fns'
 import { 
   Select, SelectContent, SelectItem, 
   SelectTrigger, SelectValue 
@@ -582,6 +583,12 @@ export default function CRMPage() {
       "Phone": c.phone || '',
       "City": c.city || '',
       "Status": c.customer_status || '',
+      "Birth Date": (c.birth_date && !isNaN(new Date(c.birth_date).getTime())) 
+        ? format(new Date(c.birth_date), 'dd-MMM-yyyy') 
+        : '',
+      "Anniversary Date": (c.anniversary_date && !isNaN(new Date(c.anniversary_date).getTime())) 
+        ? format(new Date(c.anniversary_date), 'dd-MMM-yyyy') 
+        : '',
       "Credit Balance": c.store_credit_balance || 0,
       "Points": c.pavitram_points || 0,
       "Gift Given": c.gift_given || '',
