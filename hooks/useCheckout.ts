@@ -83,7 +83,6 @@ export function useCheckout({
 
   const effectiveCustomer = (mode === 'return' && returnDetails?.originalCustomer) ? returnDetails.originalCustomer : selectedCustomer;
 
-  // ✨ Ensures Custom Orders use the correct base value for percentage discounts
   let effectiveSubtotal = subtotal;
   if (mode === 'custom') {
       effectiveSubtotal = Number(customOrderDetails?.estimated_value) || 0;
@@ -365,8 +364,6 @@ export function useCheckout({
     }
   }
 
-  // ✨ CRITICAL FIX: The preview engine asks for draft data using this function.
-  // We extract the structured array here to feed the print template directly.
   const generateDraftData = (isEstimate = false, customTransactionContext?: any) => {
     const draftInvoiceNo = isEstimate ? 'DRAFT-EST' 
                          : mode === 'normal' ? 'DRAFT-INV' 
@@ -377,7 +374,6 @@ export function useCheckout({
     
     const activeBranch = allBranches?.find((b: any) => b.id === selectedLocation) || null;
 
-    // ✨ Parse Multi-Entry Legacy Advances from Sidebar
     const legacyAdvancesArray = customTransactionContext?.legacy_advances || [];
     const totalLegacyAdvance = legacyAdvancesArray.reduce((sum: number, a: any) => sum + (Number(a.amount) || 0), 0);
 
@@ -393,9 +389,18 @@ export function useCheckout({
       advancePayment: customOrderDetails.advance_paid,
       designCode: customOrderDetails.design_reference,
       category: customOrderDetails.item_category,
-      metal_type: customOrderDetails.metal_type || 'Gold', // ✨ NEW
+      metal_type: customOrderDetails.metal_type || 'Gold',
       expectedGoldWt: customOrderDetails.expected_gold_g,
       expectedDiamondCts: customOrderDetails.expected_diamond_cts,
+      // ✨ NEW: Append size and delivery date for printing context
+      size: customOrderDetails.size || null,
+      delivery_date: customOrderDetails.delivery_date || null
+    } : null;
+
+    // ✨ NEW: Map repair delivery_date to output correctly
+    const mappedRepairDetails = mode === 'repair' ? {
+        ...repairDetails,
+        delivery_date: repairDetails?.expectedDelivery || null
     } : null;
 
     let printCgst = cgstAmount;
@@ -458,7 +463,7 @@ export function useCheckout({
       branch: activeBranch, 
       items: cart,
       customOrder: mappedCustomOrder, 
-      repair: mode === 'repair' ? repairDetails : null, 
+      repair: mappedRepairDetails, 
       returnDetails: mode === 'return' ? returnDetails : null, 
       
       subtotal: effectiveSubtotal, 
@@ -483,7 +488,6 @@ export function useCheckout({
       estimateHandlingPct: estimateHandlingPercent,
       estimateHandlingAmt: printEstimateHandlingAmt,
       
-      // ✨ Pass calculations to the Print Template
       advance_adjusted: totalAdvanceRealized,
       advance_history: legacyAdvancesArray,
 
@@ -502,7 +506,6 @@ export function useCheckout({
     try {
       const finalizingUserId = billedBy || appUser?.user_id || appUser?.id;
 
-      // ✨ Parse Multi-Entry Legacy Advances
       const legacyAdvancesArray = customTransactionContext?.legacy_advances || [];
       const totalLegacyAdvance = legacyAdvancesArray.reduce((sum: number, a: any) => sum + (Number(a.amount) || 0), 0);
 
@@ -601,7 +604,7 @@ export function useCheckout({
               round_off_amount: roundOffAmount,
               final_total: finalPayableGross, 
               advance_adjusted: cartAdvance + totalLegacyAdvance, 
-              advance_history: legacyAdvancesArray, // ✨ Save structured advance history payload
+              advance_history: legacyAdvancesArray,
               voucher_code: finalVoucherCode || null,
               voucher_discount: appliedVoucherAmount, 
               Voucher_handling_fee: finalHandlingFee,
@@ -635,8 +638,6 @@ export function useCheckout({
             if (!effectiveCustomer) throw new Error("Please select a customer for this Custom Order.")
             finalNo = `ORD-${Date.now().toString().slice(-6)}`
             
-            // For custom orders, the "advance" is what they are paying right now TODAY. 
-            // We ignore legacy advances since this order is being created fresh.
             const customCashAdvance = Number(customOrderDetails.advance_paid) || 0;
             const totalRealizedAdvance = customCashAdvance + effectiveKittyAmt + effectiveCreditAmt + effectivePointsAmt;
 
@@ -648,9 +649,13 @@ export function useCheckout({
               order_number: finalNo,
               design_reference: customOrderDetails.design_reference,
               item_category: customOrderDetails.item_category,
-              metal_type: customOrderDetails.metal_type || 'Gold', // ✨ NEW
+              metal_type: customOrderDetails.metal_type || 'Gold',
               expected_gold_g: Number(customOrderDetails.expected_gold_g) || null,
               expected_diamond_cts: Number(customOrderDetails.expected_diamond_cts) || null,
+              // ✨ NEW: Transmit new fields directly to DB
+              size: customOrderDetails.size || null,
+              target_delivery_date: customOrderDetails.delivery_date || null,
+              
               base_estimated_value: effectiveSubtotal,
               discount_amount: standardDiscount,
               taxable_value: finalTaxableValue,
@@ -658,7 +663,7 @@ export function useCheckout({
               sgst_amount: sgstAmount,
               estimated_value: finalPayableGross, 
               advance_paid: totalRealizedAdvance, 
-              advance_history: [], // Starts blank, mapped as JSON array
+              advance_history: [], 
               voucher_code: finalVoucherCode || null,
               voucher_amount: appliedVoucherAmount,
               status: 'pending_manufacturing',
@@ -667,7 +672,6 @@ export function useCheckout({
             const { error } = await supabase.from('custom_orders').insert(payload)
             if (error) throw error
 
-            // Log the initial advance payment
             if (totalRealizedAdvance > 0) {
                await supabase.from('custom_order_payments').insert({
                   order_id: (await supabase.from('custom_orders').select('id').eq('order_number', finalNo).single()).data?.id,
@@ -680,7 +684,6 @@ export function useCheckout({
             toast.success(`Custom Order ${finalNo} submitted!`)
         }
         
-        // POST-SALE REDEMPTIONS & REWARDS
         if (activeVoucher) {
           await supabase.from('vouchers').update({ status: 'redeemed', redeemed_at: new Date().toISOString() }).eq('id', activeVoucher.id)
         }
@@ -872,9 +875,9 @@ export function useCheckout({
             p_id: pkg.id,
             p_qty: Number(pkg.quantity),
             p_company_id: appUser?.company_id || null,         
-            p_warehouse_id: safeWarehouseId,                   
+            p_warehouse_id: safeWarehouseId,                    
             p_transaction_type: mode === 'custom' ? 'custom_order' : 'normal_sale',
-            p_reference_id: finalNo,                   
+            p_reference_id: finalNo,                    
             p_customer_id: effectiveCustomer?.id || null,       
             p_user_id: finalizingUserId || null                
           });

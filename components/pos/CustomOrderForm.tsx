@@ -11,9 +11,10 @@ import { supabase } from '@/lib/supabaseClient'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
+// ✨ FIX: Updated categories list to match requirement
 const ORNAMENT_TYPES = [
-  'Ring', 'Necklace', 'Earring', 'Bracelet', 'Bangle', 
-  'Chain', 'Pendant', 'Mangalsutra', 'Nose Pin', 'Set'
+  'LADIES RING', 'GENTS RING', 'BRACELET', 'TANMANIA', 
+  'PENDANT', 'TOPS', 'NECKLACE', 'PENDANT WITH CHAIN', 'TANMANIA WITH CHAIN'
 ]
 
 export interface SelectedPackaging {
@@ -27,11 +28,14 @@ interface CustomOrderFormProps {
   details: {
     design_reference: string;
     item_category: string;
-    metal_type: string; // ✨ NEW
+    metal_type: string;
     expected_gold_g: string;
     expected_diamond_cts: string;
     estimated_value: string;
     advance_paid: string;
+    // ✨ NEW: Added size and delivery date fields to the state
+    size: string; 
+    delivery_date: string;
   }
   setDetails: (details: any) => void
   currentLocationId?: string 
@@ -74,6 +78,9 @@ export function CustomOrderForm({
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setDetails({ ...details, [e.target.name]: e.target.value })
   }
+
+  // ✨ FIX: Check if the category requires a compulsory size
+  const requiresSize = details?.item_category === 'LADIES RING' || details?.item_category === 'GENTS RING';
 
   const handleSearchOrder = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -213,7 +220,6 @@ export function CustomOrderForm({
         {activeTab === 'new' && (
           <div className="space-y-4 animate-in fade-in duration-300">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {/* ✨ NEW: METAL TYPE SELECTOR */}
               <div className="space-y-1.5">
                 <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Metal Type *</Label>
                 <Select 
@@ -286,11 +292,41 @@ export function CustomOrderForm({
               </div>
             </div>
 
+            {/* ✨ NEW: SIZE AND DELIVERY DATE FIELDS */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                    Size {requiresSize ? '*' : ''}
+                  </Label>
+                  {!requiresSize && <span className="text-[9px] text-slate-400 font-bold uppercase">Optional</span>}
+                </div>
+                <Input 
+                  name="size"
+                  placeholder="e.g. 14, 2.4, Adjustable" 
+                  className={cn("h-9 text-sm border-slate-300 focus-visible:ring-[#881798]", requiresSize && !details?.size ? "border-red-300 focus-visible:ring-red-500" : "")} 
+                  value={details?.size || ''} 
+                  onChange={handleInputChange} 
+                  required={requiresSize}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Target Delivery Date *</Label>
+                <Input 
+                  name="delivery_date"
+                  type="date"
+                  className="h-9 text-sm border-slate-300 focus-visible:ring-[#881798] text-slate-700" 
+                  value={details?.delivery_date || ''} 
+                  onChange={handleInputChange} 
+                  required
+                />
+              </div>
+            </div>
+
             {/* EXPECTED SPECS (OPTIONAL) */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5">
                 <div className="flex justify-between items-center">
-                  {/* ✨ DYNAMIC LABEL BASED ON METAL TYPE */}
                   <Label className="text-xs font-bold text-slate-700 uppercase tracking-wide">Expected {details?.metal_type === 'Silver' ? 'Silver' : 'Gold'} Wt.</Label>
                   <span className="text-[9px] text-slate-400 font-bold uppercase">Optional</span>
                 </div>

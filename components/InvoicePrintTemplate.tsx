@@ -86,11 +86,11 @@ interface InvoicePrintTemplateProps {
 
 const InfoRow = ({ label, value }: { label: string, value: any }) => (
   <div className="flex items-start text-[13px] leading-tight mb-2">
-    <span className="font-bold w-20 shrink-0 text-slate-900">{label}</span>
+    {/* ✨ FIX: Increased from w-20 to w-28 to prevent text wrapping on long labels */}
+    <span className="font-bold w-28 shrink-0 text-slate-900">{label}</span>
     <span className="text-slate-900 font-bold uppercase">{value || '-'}</span>
   </div>
 )
-
 export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTemplateProps>(
   ({ data, copyLabel }, ref) => {
     if (!data) return null
@@ -128,7 +128,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const netBalanceDue = Math.max(0, (data.finalTotal || data.final_total || 0) - appliedKitty - appliedCredit - advanceAdjusted);
     const customEstimatedBalance = data.balanceDue ?? Math.max(0, (data.finalTotal || 0) - customAdvancePaid - totalSettlements);
 
-    // ✨ FIX: Smart Silver Detection for both Normal & Custom Orders
+    // Smart Silver Detection for both Normal & Custom Orders
     const isSilverInvoice = (data.items?.some((item: any) => 
       String(item.item_category || '').toLowerCase().includes('silver') || 
       String(item.purity || '').toLowerCase().includes('silver') ||
@@ -282,7 +282,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
             </h1>
             <h2 className="text-[11px] font-bold text-slate-900 tracking-[0.25em] mb-1.5 uppercase">{activeBrand}</h2>
             {data.branch?.address ? (
-               // ✨ FIX: Increased address font size (11px -> 13px) & tightened line-height to preserve page bounds
                <p className="text-[13px] font-bold text-slate-700 whitespace-pre-wrap max-w-xl mx-auto leading-tight">
                  {data.branch.address}
                </p>
@@ -292,7 +291,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                  <p className="text-[13px] font-bold text-slate-700 leading-tight">Above Hotel Radha Krishna, Andheri West, Mumbai - 400058</p>
                </>
             )}
-            {/* ✨ FIX: Increased contact font size (10px -> 12px) */}
             <p className="text-[12px] font-bold text-slate-700 mt-0.5">
               Contact : {data.branch?.contact_number || '9322279558'}
             </p>
@@ -301,10 +299,19 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
           <div className={`w-full h-[3px] mb-3 ${isEstimate ? 'bg-slate-800' : 'bg-[#EAB308]'}`}></div>
           
           <div className="flex justify-between items-start mb-4">
-            <div className="space-y-1.5 flex-1 pr-4">
-              <div className="flex items-center text-[11px]"><span className="font-bold w-20 text-slate-900">Date :</span><span className="font-medium text-slate-800">{formatDate(data.date)}</span></div>
-              <div className="flex items-center mt-0.5 text-[11px]"><span className="font-bold w-20 text-slate-900">{docNoLabel}</span><span className="font-bold text-slate-900 tracking-wide">{data.invoice_number}</span></div>
-              <div className="mt-2 flex items-center gap-2.5">
+            {/* ✨ FIX: Left column now perfectly matches the right column's InfoRow formatting (13px, bold, uppercase) */}
+            <div className="flex-1 pr-4 pt-0.5">
+              <InfoRow label="Date :" value={formatDate(data.date)} />
+              <InfoRow label={docNoLabel} value={data.invoice_number} />
+              
+              {mode === 'custom' && customOrder?.delivery_date && (
+                 <InfoRow label="Est. Delivery :" value={formatDate(customOrder.delivery_date)} />
+              )}
+              {mode === 'repair' && repair?.delivery_date && (
+                 <InfoRow label="Est. Delivery :" value={formatDate(repair.delivery_date)} />
+              )}
+              
+              <div className="mt-3 flex items-center gap-2.5">
                  <QRCode value={data.invoice_number || 'N/A'} size={40} />
                  <Barcode value={data.invoice_number || 'N/A'} width={1.1} height={30} fontSize={10} displayValue={false} margin={0} />
               </div>
@@ -328,7 +335,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   <tr>
                     <th className="p-2.5 text-left font-semibold rounded-tl-md">Design Reference</th>
                     <th className="p-2.5 text-left font-semibold">Ornament Category</th>
-                    {/* ✨ FIX: Smart Silver Header Swapping */}
+                    <th className="p-2.5 text-center font-semibold">Size</th>
                     <th className="p-2.5 text-center font-semibold">{isSilverInvoice ? 'Expected Silver Wt.' : 'Expected Gold Wt.'}</th>
                     <th className="p-2.5 text-center font-semibold rounded-tr-md">Expected Diamond Wt.</th>
                   </tr>
@@ -337,6 +344,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                   <tr className="h-12 text-center bg-white border-b border-slate-200">
                     <td className="p-2.5 text-left font-bold text-slate-800">{customOrder.designCode}</td>
                     <td className="p-2.5 text-left font-medium text-slate-700">{customOrder.category}</td>
+                    <td className="p-2.5 font-medium text-slate-700">{customOrder.size || 'N/A'}</td>
                     <td className="p-2.5 font-medium text-slate-700">{customOrder.expectedGoldWt || 'TBD'} g</td>
                     <td className="p-2.5 font-medium text-slate-700">{customOrder.expectedDiamondCts || 'TBD'} cts</td>
                   </tr>
@@ -374,7 +382,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     <th className="p-2.5 text-center font-semibold w-16">Image</th>
                     <th className="p-2.5 text-left font-semibold">Description</th>
                     {hasHsnColumn && <th className="p-2.5 text-center font-semibold w-20">HSN Code</th>}
-                    {/* ✨ FIX: Smart Silver Header Swapping */}
                     <th className="p-2.5 text-center font-semibold w-24">{isSilverInvoice ? 'Silver Wt.' : 'Gold Wt.'}</th>
                     <th className="p-2.5 text-center font-semibold w-24">Diamond Wt.</th>
                     <th className="p-2.5 text-right font-semibold w-32 rounded-tr-md">
@@ -463,7 +470,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                 </div>
               )}
 
-              {/* ✨ FIX: Reduced Padding to fit new lines */}
               <div className={`mt-2 p-2 rounded-lg flex items-center shadow-sm ${isEstimate ? 'bg-white border border-slate-200' : 'bg-white'}`}>
                 <span className="text-[10px] font-bold text-slate-800 uppercase mr-3 shrink-0">Amt. In Words :</span> 
                 <span className="text-[11px] font-bold text-slate-800 uppercase leading-tight tracking-wide">
@@ -674,10 +680,8 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
                     <span>₹ {(data.finalTotal || data.final_total || 0).toLocaleString('en-IN')}</span>
                   </div>
 
-                  {/* ✨ FIX: Tighter Margins for Post-Tax Settlement Block */}
                   {(appliedKitty > 0 || appliedCredit > 0 || advanceAdjusted > 0) && (
                     <div className="pt-1 space-y-0.5 border-t border-slate-200 mt-0.5">
-                      {/* Dynamic Legacy Advances */}
                       {data.advance_history?.length > 0 ? (
                         data.advance_history.map((adv: any, i: number) => (
                           <div key={i} className="flex justify-between items-center text-slate-500 italic text-xs">
@@ -717,7 +721,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
           </div>
 
           <div className="mt-auto flex flex-col shrink-0">
-            {/* ✨ FIX: Compacted Margins and shrunk Logo slightly to fit everything perfectly */}
             <div className="grid grid-cols-3 items-end text-sm font-bold mb-1.5 mt-2 relative">
               <div className="text-center px-6 relative">
                 <div className="border-t border-black pt-1 text-[11px] uppercase tracking-wider">
@@ -761,7 +764,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
             {!isEstimate && (
               <div 
-                // ✨ FIX: Reduced Banner Height to clear the pagination limit
                 className="w-full h-[85px] rounded-xl overflow-hidden border border-slate-200 relative shrink-0 mt-1"
                 style={{ 
                    pageBreakInside: 'avoid',
