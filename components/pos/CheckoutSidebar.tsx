@@ -20,6 +20,96 @@ import { format } from 'date-fns'
 import { CustomerSelector } from './CustomerSelector'
 import { VoucherExchangePanel } from './VoucherExchangePanel'
 
+interface CheckoutSidebarProps {
+  mode: string;
+  cartLength: number;
+  cart: any[];
+  subtotal: number;
+  customers: any[];
+  setCustomers: any;
+  selectedCustomer: any;
+  setSelectedCustomer: any;
+  onPreviewRequest: any;
+  appUser: any;
+  selectedLocation: string;
+  loyaltySettings: any;
+  autoLoyaltyRules: any[]; 
+  
+  discountType: string;
+  setDiscountType: any;
+  discountValue: string;
+  setDiscountValue: any;
+  voucherCode: string;
+  setVoucherCode: any;
+  activeVoucher: any;
+  setActiveVoucher: any;
+  handlingFee: string;
+  setHandlingFee: any;
+  handleApplyVoucher: any;
+  
+  isExchangeOpen: boolean;
+  setIsExchangeOpen: any;
+  exchangeMode: string;
+  setExchangeMode: any; 
+  exchangeInvoiceNo: string;
+  setExchangeInvoiceNo: any;
+  exchangeValue: string;
+  setExchangeValue: any;
+  exchangeNotes: string;
+  setExchangeNotes: any;
+  handleFetchExchangeItem: any;
+  exchangeNum: number;
+  paymentMode: string;
+  setPaymentMode: any;
+  setExchangePhysicalDetails: any;
+  
+  splitPayments: any;
+  setSplitPayments: any;
+  currentSplitTotal: number; 
+  customOrderDetails: any;
+  repairDetails: any;
+  returnDetails: any;
+  isProcessing: boolean;
+  finalPayable: number;
+  discountAmount: number;
+  appliedVoucherAmount: number;
+  handlingAmt: number; 
+  finalTaxableValue: number;
+  cgstAmount: number;
+  sgstAmount: number;
+  roundOffAmount: number;
+  
+  appliedKittyAmount: number;
+  setAppliedKittyAmount: any;
+  appliedKittyPlanId: string | null;
+  setAppliedKittyPlanId: any;
+  appliedCreditAmount: number;
+  setAppliedCreditAmount: any;
+  appliedPointsAmount: number;
+  setAppliedPointsAmount: any;
+  rawPointsRedeemed: number;
+  setRawPointsRedeemed: any;
+  
+  referralInput: string;
+  setReferralInput: any;
+  activeReferral: any;
+  setActiveReferral: any;
+  handleApplyReferral: any;
+  referralDiscountAmount: number;
+
+  estimateChargeType: string; 
+  setEstimateChargeType: any;
+  estimateHandlingPercent: string;
+  setEstimateHandlingPercent: any;
+  
+  setCart: any; 
+  setMode: any;  
+  
+  // ✨ ADDED: Ensure the sidebar accepts the tax ID preference props so it can pass them down to the selector
+  taxIdPreference?: 'PAN' | 'GSTIN';
+  setTaxIdPreference?: (val: 'PAN' | 'GSTIN') => void;
+}
+
 export function CheckoutSidebar({ 
   mode, cartLength, cart, 
   customers, setCustomers, 
@@ -54,8 +144,12 @@ export function CheckoutSidebar({
   setEstimateHandlingPercent,
   
   setCart, 
-  setMode  
-}: any) {
+  setMode,  
+  
+  // ✨ Added from props
+  taxIdPreference,
+  setTaxIdPreference
+}: CheckoutSidebarProps) {
   
   const themeMap: Record<string, { bg: string, text: string, ring: string, light: string }> = {
     estimate: { bg: 'bg-[#D83B01]', text: 'text-[#D83B01]', ring: 'ring-[#D83B01]', light: 'bg-[#D83B01]/10' },
@@ -129,7 +223,7 @@ export function CheckoutSidebar({
         .from('company_bank_accounts')
         .select('id, bank_name, account_number')
         .eq('company_id', appUser.company_id)
-      
+        
       if (data) setBankAccounts(data)
     }
     fetchBanks()
@@ -231,6 +325,11 @@ export function CheckoutSidebar({
             selectedCustomer={selectedCustomer} setSelectedCustomer={setSelectedCustomer}
             appUser={appUser} selectedLocation={selectedLocation} subtotal={subtotal}
             loyaltySettings={loyaltySettings} liveLoyaltyData={liveLoyaltyData} 
+            
+            // ✨ FIX: Pass the tax preference and setter down into the CustomerSelector
+            taxIdPreference={taxIdPreference}
+            setTaxIdPreference={setTaxIdPreference}
+            
             onApplyWallet={(type: 'kitty' | 'credit' | 'points', amount: number, planId?: string, rawAmount?: number) => {
               if (activeVoucher || activeReferral) return toast.error("Clubbing Restricted");
               if (type === 'kitty') { setAppliedKittyAmount(amount); if (planId) setAppliedKittyPlanId(planId); } 

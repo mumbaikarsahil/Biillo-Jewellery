@@ -22,6 +22,10 @@ interface CustomerSelectorProps {
   loyaltySettings?: any 
   liveLoyaltyData?: { id: string, total_points: number } | null 
   onApplyWallet?: (type: 'credit' | 'kitty' | 'points', availableAmount: number, planId?: string, rawAmount?: number) => void 
+  
+  // ✨ NEW: Added props to manage Tax ID selection from the parent
+  taxIdPreference?: 'PAN' | 'GSTIN'
+  setTaxIdPreference?: (val: 'PAN' | 'GSTIN') => void
 }
 
 const formatToDBDate = (dateStr?: string) => {
@@ -47,7 +51,8 @@ const formatToDisplayDate = (dbDateStr?: string) => {
 };
 
 export function CustomerSelector({ 
-  mode, setCustomers, selectedCustomer, setSelectedCustomer, appUser, selectedLocation, subtotal = 0, loyaltySettings, liveLoyaltyData, onApplyWallet 
+  mode, setCustomers, selectedCustomer, setSelectedCustomer, appUser, selectedLocation, subtotal = 0, loyaltySettings, liveLoyaltyData, onApplyWallet,
+  taxIdPreference, setTaxIdPreference
 }: CustomerSelectorProps) {
   
   const [searchCustomer, setSearchCustomer] = useState('')
@@ -58,11 +63,19 @@ export function CustomerSelector({
   const [isEditMode, setIsEditMode] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   
+  // Fallback state if parent doesn't provide taxIdPreference
+  const [internalTaxPref, setInternalTaxPref] = useState<'PAN' | 'GSTIN'>('PAN')
+  const currentTaxPref = taxIdPreference || internalTaxPref;
+
+  const handleTaxPrefChange = (val: 'PAN' | 'GSTIN') => {
+    if (setTaxIdPreference) setTaxIdPreference(val);
+    setInternalTaxPref(val);
+  };
+
   const [newCustForm, setNewCustForm] = useState({ 
-    full_name: '', phone: '', email: '', city: '', address: '', pan_no: '', birth_date: '', anniversary_date: '' 
+    full_name: '', phone: '', email: '', city: '', address: '', pan_no: '', gstin: '', birth_date: '', anniversary_date: '' 
   })
 
-  // ✨ OTP & Claim State Management
   const [showOtpModal, setShowOtpModal] = useState(false)
   const [otpStep, setOtpStep] = useState<'send' | 'verify'>('send')
   const [otpCode, setOtpCode] = useState('')
@@ -70,10 +83,8 @@ export function CustomerSelector({
   const [isOtpLoading, setIsOtpLoading] = useState(false)
   const [pendingRedemption, setPendingRedemption] = useState<{ neededRs: number, id: string | undefined, pointsToBurn: number } | null>(null)
   
-  // Track if points have already been verified and claimed for this transaction
   const [isLoyaltyClaimed, setIsLoyaltyClaimed] = useState(false)
 
-  // Reset claim state if a new customer is selected
   useEffect(() => {
     setIsLoyaltyClaimed(false);
     setOtpTimer(0);
@@ -122,11 +133,18 @@ export function CustomerSelector({
       { key: 'anniversary_date', label: 'Anniversary' },
       { key: 'city', label: 'City' },
       { key: 'address', label: 'Address' },
-      { key: 'pan_no', label: 'PAN Number' }
+      { key: 'pan_no', label: 'PAN/GSTIN' } 
     ];
 
-    const filled = fields.filter(f => !!selectedCustomer[f.key]);
-    const missing = fields.filter(f => !selectedCustomer[f.key]);
+    const filled = fields.filter(f => {
+      if (f.key === 'pan_no') return !!selectedCustomer.pan_no || !!selectedCustomer.gstin;
+      return !!selectedCustomer[f.key];
+    });
+    
+    const missing = fields.filter(f => {
+      if (f.key === 'pan_no') return !selectedCustomer.pan_no && !selectedCustomer.gstin;
+      return !selectedCustomer[f.key];
+    });
     
     return {
       percentage: Math.round((filled.length / fields.length) * 100),
@@ -151,7 +169,7 @@ export function CustomerSelector({
 
   const openNewCustomerModal = () => {
     setIsEditMode(false);
-    setNewCustForm({ full_name: '', phone: '', email: '', city: '', address: '', pan_no: '', birth_date: '', anniversary_date: '' });
+    setNewCustForm({ full_name: '', phone: '', email: '', city: '', address: '', pan_no: '', gstin: '', birth_date: '', anniversary_date: '' });
     setIsAddCustomerOpen(true);
   }
 
@@ -165,6 +183,7 @@ export function CustomerSelector({
       city: selectedCustomer.city || '',
       address: selectedCustomer.address || '',
       pan_no: selectedCustomer.pan_no || '',
+      gstin: selectedCustomer.gstin || '',
       birth_date: formatToDisplayDate(selectedCustomer.birth_date),
       anniversary_date: formatToDisplayDate(selectedCustomer.anniversary_date)
     });
@@ -194,6 +213,7 @@ export function CustomerSelector({
         city: newCustForm.city || null,
         address: newCustForm.address || null,
         pan_no: newCustForm.pan_no?.toUpperCase() || null,
+        gstin: newCustForm.gstin?.toUpperCase() || null,
         birth_date: finalBirthDate,
         anniversary_date: finalAnnivDate
       };
@@ -282,7 +302,6 @@ export function CustomerSelector({
     onApplyWallet?.('credit', netUsableCredit);
   }
 
-  // ✨ Global OTP Timer Logic (Survives modal close)
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (otpTimer > 0) {
@@ -291,7 +310,6 @@ export function CustomerSelector({
     return () => clearInterval(interval);
   }, [otpTimer]);
 
-  // ✨ Send OTP via Next.js API
   const handleSendLoyaltyOtp = async () => {
     if (!selectedCustomer?.phone) return toast.error("No valid phone number on customer profile.");
     if (otpTimer > 0) return toast.error(`Please wait ${otpTimer} seconds before requesting a new OTP.`);
@@ -319,7 +337,6 @@ export function CustomerSelector({
     }
   }
 
-  // ✨ Verify OTP via Next.js API
   const handleVerifyLoyaltyOtp = async () => {
     if (otpCode.length !== 6) return toast.error("Please enter the 6-digit code.");
     setIsOtpLoading(true);
@@ -338,7 +355,7 @@ export function CustomerSelector({
       
       if (pendingRedemption) {
         onApplyWallet?.('points', pendingRedemption.neededRs, pendingRedemption.id, pendingRedemption.pointsToBurn);
-        setIsLoyaltyClaimed(true); // ✨ Lock the button state globally
+        setIsLoyaltyClaimed(true); 
         toast.success("Identity verified. Loyalty Points applied!", {
           description: `Burning ${pendingRedemption.pointsToBurn.toLocaleString()} Pts | Usable Value: ₹${pendingRedemption.neededRs.toLocaleString()}`
         });
@@ -350,7 +367,6 @@ export function CustomerSelector({
     }
   }
 
-  // ✨ Global Click Handler for the Button
   const handleLoyaltyRedemptionClick = () => {
     const rawPoints = Number(liveLoyaltyData?.total_points) || 0;
     if (rawPoints <= 0) return;
@@ -370,9 +386,8 @@ export function CustomerSelector({
     setPendingRedemption({ neededRs, id: liveLoyaltyData?.id, pointsToBurn });
     setShowOtpModal(true);
 
-    // ✨ Enforce the 60s rule gracefully
     if (otpTimer > 0) {
-      setOtpStep('verify'); // Just open modal to let them type existing code
+      setOtpStep('verify'); 
     } else {
       setOtpStep('send');
       handleSendLoyaltyOtp();
@@ -421,6 +436,44 @@ export function CustomerSelector({
             >
               <X className="w-4 h-4" />
             </Button>
+          </div>
+
+          {/* ✨ TAX ID SELECTION TOGGLE */}
+          <div className="mt-3 pt-3 border-t border-slate-100">
+            <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 block">
+              Billing Tax ID
+            </Label>
+            <div className="flex gap-2 mb-1.5">
+              <Button 
+                size="sm" 
+                variant={currentTaxPref === 'PAN' ? 'default' : 'outline'}
+                className={`h-7 text-[10px] px-3 font-bold transition-colors ${currentTaxPref === 'PAN' ? 'bg-[#0078D7] text-white hover:bg-[#005A9E]' : 'text-slate-600 hover:text-[#0078D7]'}`}
+                onClick={() => handleTaxPrefChange('PAN')}
+              >
+                Use PAN (B2C)
+              </Button>
+              <Button 
+                size="sm" 
+                variant={currentTaxPref === 'GSTIN' ? 'default' : 'outline'}
+                className={`h-7 text-[10px] px-3 font-bold transition-colors ${currentTaxPref === 'GSTIN' ? 'bg-[#0078D7] text-white hover:bg-[#005A9E]' : 'text-slate-600 hover:text-[#0078D7]'}`}
+                onClick={() => handleTaxPrefChange('GSTIN')}
+              >
+                Use GSTIN (B2B)
+              </Button>
+            </div>
+
+            {currentTaxPref === 'PAN' && !selectedCustomer.pan_no && (
+              <div className="text-[10px] text-red-600 font-bold flex items-start gap-1 mt-1.5 bg-red-50 p-1.5 rounded-sm border border-red-100">
+                <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+                <span>PAN not in database. Please use the Complete Profile button to first enter it.</span>
+              </div>
+            )}
+            {currentTaxPref === 'GSTIN' && !selectedCustomer.gstin && (
+              <div className="text-[10px] text-red-600 font-bold flex items-start gap-1 mt-1.5 bg-red-50 p-1.5 rounded-sm border border-red-100">
+                <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+                <span>GSTIN not in database. Please use the Complete Profile button to first enter it.</span>
+              </div>
+            )}
           </div>
 
           {completionStats.percentage < 100 && (
@@ -511,7 +564,6 @@ export function CustomerSelector({
                 </div>
               )}
 
-              {/* ✨ UPDATED LOYALTY BUTTON */}
               {hasLoyaltyPoints && (
                 <div 
                   onClick={handleLoyaltyRedemptionClick}
@@ -671,8 +723,11 @@ export function CustomerSelector({
             </div>
             
             <div className="space-y-1.5">
-              <Label className="text-xs font-semibold text-slate-700">PAN Number</Label>
-              <Input className="h-9 rounded-sm border-slate-300 uppercase" value={newCustForm.pan_no} onChange={(e) => setNewCustForm({...newCustForm, pan_no: e.target.value})} />
+              <Label className="text-xs font-semibold text-slate-700">PAN / GSTIN</Label>
+              <div className="flex gap-2">
+                <Input placeholder="PAN" className="h-9 rounded-sm border-slate-300 uppercase w-1/2" value={newCustForm.pan_no} onChange={(e) => setNewCustForm({...newCustForm, pan_no: e.target.value})} />
+                <Input placeholder="GSTIN" className="h-9 rounded-sm border-slate-300 uppercase w-1/2" value={newCustForm.gstin} onChange={(e) => setNewCustForm({...newCustForm, gstin: e.target.value})} />
+              </div>
             </div>
           </div>
           <DialogFooter className="p-4 bg-slate-50 border-t border-slate-200">
@@ -688,7 +743,6 @@ export function CustomerSelector({
         </DialogContent>
       </Dialog>
 
-      {/* ✨ Secure OTP Verification Dialog */}
       <Dialog open={showOtpModal} onOpenChange={(open) => !isOtpLoading && setShowOtpModal(open)}>
         <DialogContent className="sm:max-w-[400px] border border-slate-200 shadow-2xl p-6 rounded-xl bg-white">
           <div className="flex flex-col items-center text-center space-y-4">

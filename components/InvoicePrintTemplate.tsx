@@ -82,14 +82,13 @@ const getDetailedPaymentMode = (data: any, mode: string) => {
 interface InvoicePrintTemplateProps {
   data: any;
   copyLabel?: string; 
+  taxIdPreference?: 'PAN' | 'GSTIN';
 }
 
 const InfoRow = ({ label, value }: { label: string, value: any }) => {
-  // Strip any existing colons from the label so we don't get double colons
   const cleanLabel = label.replace(/\s*:\s*$/, '');
   
   return (
-    // ✨ FIX: Using CSS Grid for flawless, table-like alignment
     <div className="grid grid-cols-[85px_12px_1fr] items-start text-[13px] leading-tight mb-2">
       <span className="font-bold text-slate-900">{cleanLabel}</span>
       <span className="font-bold text-slate-900 text-center">:</span>
@@ -97,8 +96,9 @@ const InfoRow = ({ label, value }: { label: string, value: any }) => {
     </div>
   );
 }
+
 export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTemplateProps>(
-  ({ data, copyLabel }, ref) => {
+  ({ data, copyLabel, taxIdPreference = 'PAN' }, ref) => {
     if (!data) return null
 
     const mode = data.mode || 'normal'
@@ -134,7 +134,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const netBalanceDue = Math.max(0, (data.finalTotal || data.final_total || 0) - appliedKitty - appliedCredit - advanceAdjusted);
     const customEstimatedBalance = data.balanceDue ?? Math.max(0, (data.finalTotal || 0) - customAdvancePaid - totalSettlements);
 
-    // Smart Silver Detection for both Normal & Custom Orders
     const isSilverInvoice = (data.items?.some((item: any) => 
       String(item.item_category || '').toLowerCase().includes('silver') || 
       String(item.purity || '').toLowerCase().includes('silver') ||
@@ -156,7 +155,7 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const themeBoxBorder = isEstimate ? 'border-slate-300' : isSilverInvoice ? 'border-[#5e17ae]/20' : 'border-[#F3D9EB]';
 
     let docTitle = "TAX INVOICE" 
-    let docNoLabel = "Invoice No. :"
+    let docNoLabel = "Invoice No."
     
     let defaultLegalDisclaimer = isSilverInvoice
       ? (data.branch?.soul_legal_disclaimer || data.invoiceNote || "We hereby certify that my/our registration certificate under the Maharashtra Value Added Tax Act 2002 is in force on the date on which the sale of the goods specified in this Tax Invoice is made by me/us. The silver and diamonds herein invoiced have been purchased from legitimate sources not involved in funding conflict. Subject to Mumbai Jurisdiction.")
@@ -166,23 +165,23 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
 
     if (isEstimate) {
       docTitle = "PROFORMA ESTIMATE"
-      docNoLabel = "Estimate No. :"
+      docNoLabel = "Estimate No."
       legalDisclaimer = "ESTIMATE ONLY: This document is a proforma quotation intended for rough estimation purposes only. It does not represent a completed sale, nor does it confirm the final availability or fixed price of the items listed (subject to live gold rates). This document cannot be used for accounting purposes, and cannot be used to claim Input Tax Credit (ITC). No tax has been collected."
     } else if (mode === 'challan') {
       docTitle = "DELIVERY CHALLAN"
-      docNoLabel = "Challan No. :"
+      docNoLabel = "Challan No."
       legalDisclaimer = "DELIVERY CHALLAN: Goods transferred on an approval/memo basis. This is not a tax invoice and does not represent a sale. No statutory charges have been collected. The goods listed herein remain the sole property of the company until a formal Tax Invoice is generated and full payment is received. The receiver holds the goods in trust and is legally responsible for any damage, loss, or theft."
     } else if (mode === 'custom') {
       docTitle = "ADVANCE RECEIPT"
-      docNoLabel = "Receipt No. :"
+      docNoLabel = "Receipt No."
       legalDisclaimer = "ADVANCE RECEIPT: This document acknowledges the receipt of an advance payment for custom fabrication. The estimated total value provided is provisional. Final pricing will be strictly based on the exact physical weight of the metal and diamonds, plus applicable making charges and statutory charges, calculated at the time of final delivery."
     } else if (mode === 'repair') {
       docTitle = "REPAIR INTAKE RECEIPT"
-      docNoLabel = "Ticket No. :"
+      docNoLabel = "Ticket No."
       legalDisclaimer = "REPAIR ACKNOWLEDGEMENT: We acknowledge receipt of customer property for repair/polishing. While every care is taken, the company is not responsible for minor weight loss due to polishing or stones coming loose due to old settings. Present this original receipt for collection. Items not collected within 90 days are subject to storage fees. Subject to Mumbai Jurisdiction."
     } else if (mode === 'return') {
       docTitle = "BUYBACK VOUCHER"
-      docNoLabel = "Voucher No. :"
+      docNoLabel = "Voucher No."
       legalDisclaimer = "BUYBACK VOUCHER: We acknowledge the receipt of the returned item(s) listed above. The valuation is based on standard buyback policies and current market rates. The total refund amount constitutes full and final settlement for the surrendered items. Ownership of the item transfers back to the company."
     }
 
@@ -223,6 +222,32 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
     const bannerImage = isSilverInvoice
       ? (data.branch?.soul_invoice_banner_url || data.soulBannerUrl || "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/brand-assets/soul-banner.jpg")
       : (data.branch?.invoice_banner_url || data.bannerUrl || "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/brand-assets/invoice-banner2.jpg");
+
+    // ✨ CRITICAL FIX: Smartly read the toggle state directly from the draftData payload
+    // This makes it work flawlessly for live draft previews even if the parent didn't pass the prop down.
+    const renderTaxIdentifier = () => {
+      const customerGstin = data.customer_gstin || data.customer?.gstin;
+      const customerPan = data.customer_pan || data.customer?.pan_no;
+
+      // Prioritize the data payload (draftData / DB) -> then fallback to component prop -> then PAN
+      const activePref = data.tax_id_preference || data.taxIdPreference || taxIdPreference || 'PAN';
+
+      if (activePref === 'GSTIN') {
+        if (customerGstin) {
+          return <InfoRow label="GSTIN" value={<span className="uppercase">{customerGstin}</span>} />;
+        }
+        return <InfoRow label="GSTIN" value={<span className="text-red-500 text-[10px] normal-case tracking-normal">GSTIN not in database. Use Complete Profile to enter it.</span>} />;
+      } 
+      
+      if (activePref === 'PAN') {
+        if (customerPan) {
+          return <InfoRow label="PAN No." value={<span className="uppercase">{customerPan}</span>} />;
+        }
+        return <InfoRow label="PAN No." value={<span className="text-red-500 text-[10px] normal-case tracking-normal">PAN not in database. Use Complete Profile to enter it.</span>} />;
+      }
+
+      return null;
+    };
 
     return (
       <div ref={ref} className="print-section w-[210mm] min-h-[297mm] print:min-h-0 print:h-max bg-white text-slate-800 px-8 py-4 font-sans flex flex-col box-border relative overflow-hidden shrink-0">
@@ -306,7 +331,6 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
           
           <div className="flex justify-between items-start mb-4">
             
-            {/* LEFT COLUMN */}
             <div className="flex-1 pr-4 pt-0.5">
               <InfoRow label="Date" value={formatDate(data.date)} />
               <InfoRow label={docNoLabel} value={data.invoice_number} />
@@ -324,14 +348,14 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
               </div>
             </div>
             
-            {/* RIGHT COLUMN */}
             <div className="flex-1 pt-0.5 flex justify-end">
               <div className="w-full max-w-[280px]">
                 <InfoRow label="Name" value={data.customer?.full_name} />
                 <InfoRow label="Mobile" value={data.customer?.phone} />
-                {mode === 'normal' && <InfoRow label="PAN No." value={<span className="uppercase">{data.customer?.pan_no}</span>} />}
                 
-                {/* Now using InfoRow for perfect address alignment */}
+                {/* ✨ Connected Tax Identifier logic here */}
+                {renderTaxIdentifier()}
+                
                 <InfoRow 
                   label="Address" 
                   value={

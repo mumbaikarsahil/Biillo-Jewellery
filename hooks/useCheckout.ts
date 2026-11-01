@@ -20,11 +20,15 @@ interface CheckoutConfig {
   selectedPackaging?: any[]; 
   autoLoyaltyRules?: any[]; 
   loyaltySettings?: any;
+  // ✨ FIX: Expect taxIdPreference from the parent component
+  taxIdPreference?: 'PAN' | 'GSTIN';
 }
 
 export function useCheckout({ 
   appUser, selectedLocation, cart, subtotal, mode, selectedCustomer, customOrderDetails, repairDetails, returnDetails, allBranches, callRpc, customBillingDate, billedBy, 
-  selectedPackaging = [], autoLoyaltyRules = [], loyaltySettings
+  selectedPackaging = [], autoLoyaltyRules = [], loyaltySettings,
+  // ✨ FIX: Provide a fallback default if the parent doesn't supply it
+  taxIdPreference = 'PAN'
 }: CheckoutConfig) {
   
   const [paymentMode, setPaymentMode] = useState('cash') 
@@ -392,12 +396,10 @@ export function useCheckout({
       metal_type: customOrderDetails.metal_type || 'Gold',
       expectedGoldWt: customOrderDetails.expected_gold_g,
       expectedDiamondCts: customOrderDetails.expected_diamond_cts,
-      // ✨ NEW: Append size and delivery date for printing context
       size: customOrderDetails.size || null,
       delivery_date: customOrderDetails.delivery_date || null
     } : null;
 
-    // ✨ NEW: Map repair delivery_date to output correctly
     const mappedRepairDetails = mode === 'repair' ? {
         ...repairDetails,
         delivery_date: repairDetails?.expectedDelivery || null
@@ -460,6 +462,12 @@ export function useCheckout({
       invoice_number: draftInvoiceNo,
       date: effectiveDate,
       customer: effectiveCustomer,
+      
+      // ✨ FIX: Pack the taxIdPreference into the draft data so the template can read it during preview
+      taxIdPreference: taxIdPreference,
+      customer_gstin: effectiveCustomer?.gstin || null,
+      customer_pan: effectiveCustomer?.pan_no || null,
+
       branch: activeBranch, 
       items: cart,
       customOrder: mappedCustomOrder, 
@@ -593,6 +601,12 @@ export function useCheckout({
             const invoiceData: any = {
               created_at: effectiveDateISO,
               customer_id: effectiveCustomer?.id, 
+              
+              // ✨ FIX: Pass the Tax Identifiers and the preference up to the DB snapshot
+              customer_gstin: effectiveCustomer?.gstin || null,
+              customer_pan: effectiveCustomer?.pan_no || null,
+              tax_id_preference: taxIdPreference,
+
               warehouse_id: selectedLocation,
               items: cart.map((item) => ({ item_id: item.id, rate: item.mrp })),
               subtotal: effectiveSubtotal, 
@@ -652,7 +666,6 @@ export function useCheckout({
               metal_type: customOrderDetails.metal_type || 'Gold',
               expected_gold_g: Number(customOrderDetails.expected_gold_g) || null,
               expected_diamond_cts: Number(customOrderDetails.expected_diamond_cts) || null,
-              // ✨ NEW: Transmit new fields directly to DB
               size: customOrderDetails.size || null,
               target_delivery_date: customOrderDetails.delivery_date || null,
               

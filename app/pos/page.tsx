@@ -61,6 +61,9 @@ export default function POSPage() {
   // Billed By State
   const [billedBy, setBilledBy] = useState<string>('')
 
+  // ✨ FIX: Central Tax ID Preference State - Manages PAN vs GSTIN toggling across components
+  const [taxIdPreference, setTaxIdPreference] = useState<'PAN' | 'GSTIN'>('PAN')
+
   const [allBranches, setAllBranches] = useState<any[]>([])
 
   const [repairDetails, setRepairDetails] = useState<any>({
@@ -70,7 +73,7 @@ export default function POSPage() {
   const [customers, setCustomers] = useState<any[]>([])
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null)
   const [customOrderDetails, setCustomOrderDetails] = useState({ 
-    design_reference: '', item_category: '', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '' 
+    design_reference: '', item_category: '', metal_type: 'Gold', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '', size: '', delivery_date: '' 
   })
   
   const [returnDetails, setReturnDetails] = useState({
@@ -218,7 +221,9 @@ export default function POSPage() {
     billedBy: billedBy,
     selectedPackaging: selectedPackaging,
     autoLoyaltyRules,
-    loyaltySettings 
+    loyaltySettings,
+    // ✨ FIX: Pass the centralized tax ID preference directly to the checkout hook
+    taxIdPreference 
   })
 
   const handleWipeSession = () => {
@@ -227,13 +232,12 @@ export default function POSPage() {
     setSelectedCustomer(null)
     setBilledBy('') 
     setSelectedPackaging([])
-    setTransactionContext(null) // ✨ Clear context
-    setCustomOrderDetails({ design_reference: '', item_category: '', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '' })
+    setTransactionContext(null) 
+    setCustomOrderDetails({ design_reference: '', item_category: '', metal_type: 'Gold', expected_gold_g: '', expected_diamond_cts: '', estimated_value: '', advance_paid: '', size: '', delivery_date: '' })
     setReturnDetails({ invoiceNo: '', articleCost: '', discountApplied: '', paidValue: 0, returnPercent: '70', calculatedRefund: 0 })
     setRepairDetails({ itemDescription: '', grossWeight: '', purity: '22K', defectNotes: '', estimatedCost: '', advancePaid: '', expectedDelivery: '', conditionPhotoUrl: null })
   }
 
-  // ✨ FIX: Now accepts and saves the context data (advances, kitty, etc) from the CheckoutSidebar
   const handlePreviewRequest = (isEstimate: boolean = false, contextData: any = null) => {
     setIsEstimateCheckout(isEstimate) 
     setTransactionContext(contextData) 
@@ -376,6 +380,11 @@ export default function POSPage() {
             setMode={setMode}
             loyaltySettings={loyaltySettings} 
             autoLoyaltyRules={autoLoyaltyRules} 
+            
+            // ✨ FIX: Pass the centralized tax preference down to the Sidebar -> CustomerSelector
+            taxIdPreference={taxIdPreference}
+            setTaxIdPreference={setTaxIdPreference}
+            
             {...checkoutHook} 
           />
         </div>
@@ -391,7 +400,6 @@ export default function POSPage() {
         showPrintModal={showPrintModal} 
         setShowPrintModal={setShowPrintModal}
         
-        // ✨ FIX: Passes the intercepted context so the hook calculates advances correctly
         previewData={checkoutHook.generateDraftData(isEstimateCheckout, transactionContext)} 
         
         lastInvoiceData={lastInvoiceData} 
@@ -400,7 +408,6 @@ export default function POSPage() {
         selectedPackaging={selectedPackaging}
         billedBy={billedBy}
         executeCheckout={async () => {
-          // ✨ FIX: Passes the intercepted context to the final checkout execution
           const result = await checkoutHook.executeCheckout(isEstimateCheckout, transactionContext) 
           
           if (result.success) {
