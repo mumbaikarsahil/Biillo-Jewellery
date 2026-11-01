@@ -84,13 +84,19 @@ interface InvoicePrintTemplateProps {
   copyLabel?: string; 
 }
 
-const InfoRow = ({ label, value }: { label: string, value: any }) => (
-  <div className="flex items-start text-[13px] leading-tight mb-2">
-    {/* ✨ FIX: Increased from w-20 to w-28 to prevent text wrapping on long labels */}
-    <span className="font-bold w-28 shrink-0 text-slate-900">{label}</span>
-    <span className="text-slate-900 font-bold uppercase">{value || '-'}</span>
-  </div>
-)
+const InfoRow = ({ label, value }: { label: string, value: any }) => {
+  // Strip any existing colons from the label so we don't get double colons
+  const cleanLabel = label.replace(/\s*:\s*$/, '');
+  
+  return (
+    // ✨ FIX: Using CSS Grid for flawless, table-like alignment
+    <div className="grid grid-cols-[85px_12px_1fr] items-start text-[13px] leading-tight mb-2">
+      <span className="font-bold text-slate-900">{cleanLabel}</span>
+      <span className="font-bold text-slate-900 text-center">:</span>
+      <span className="text-slate-900 font-bold uppercase pl-1">{value || '-'}</span>
+    </div>
+  );
+}
 export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTemplateProps>(
   ({ data, copyLabel }, ref) => {
     if (!data) return null
@@ -299,16 +305,17 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
           <div className={`w-full h-[3px] mb-3 ${isEstimate ? 'bg-slate-800' : 'bg-[#EAB308]'}`}></div>
           
           <div className="flex justify-between items-start mb-4">
-            {/* ✨ FIX: Left column now perfectly matches the right column's InfoRow formatting (13px, bold, uppercase) */}
+            
+            {/* LEFT COLUMN */}
             <div className="flex-1 pr-4 pt-0.5">
-              <InfoRow label="Date :" value={formatDate(data.date)} />
+              <InfoRow label="Date" value={formatDate(data.date)} />
               <InfoRow label={docNoLabel} value={data.invoice_number} />
               
               {mode === 'custom' && customOrder?.delivery_date && (
-                 <InfoRow label="Est. Delivery :" value={formatDate(customOrder.delivery_date)} />
+                 <InfoRow label="Est. Delivery" value={formatDate(customOrder.delivery_date)} />
               )}
               {mode === 'repair' && repair?.delivery_date && (
-                 <InfoRow label="Est. Delivery :" value={formatDate(repair.delivery_date)} />
+                 <InfoRow label="Est. Delivery" value={formatDate(repair.delivery_date)} />
               )}
               
               <div className="mt-3 flex items-center gap-2.5">
@@ -317,15 +324,25 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
               </div>
             </div>
             
-            <div className="flex-1 pl-6 pt-0.5">
-              <InfoRow label="Name :" value={data.customer?.full_name} />
-              <InfoRow label="Mobile :" value={data.customer?.phone} />
-              {mode === 'normal' && <InfoRow label="PAN No. :" value={<span className="uppercase">{data.customer?.pan_no}</span>} />}
-              <div className="flex items-start text-[13px] leading-snug">
-                 <span className="font-bold w-20 shrink-0 text-slate-900">Address :</span>
-                 <span className="text-slate-900 font-bold uppercase max-w-[240px] whitespace-pre-wrap">{data.customer?.address || data.customer?.city || '-'}</span>
+            {/* RIGHT COLUMN */}
+            <div className="flex-1 pt-0.5 flex justify-end">
+              <div className="w-full max-w-[280px]">
+                <InfoRow label="Name" value={data.customer?.full_name} />
+                <InfoRow label="Mobile" value={data.customer?.phone} />
+                {mode === 'normal' && <InfoRow label="PAN No." value={<span className="uppercase">{data.customer?.pan_no}</span>} />}
+                
+                {/* Now using InfoRow for perfect address alignment */}
+                <InfoRow 
+                  label="Address" 
+                  value={
+                    <div className="whitespace-pre-wrap leading-snug">
+                      {data.customer?.address || data.customer?.city || '-'}
+                    </div>
+                  } 
+                />
               </div>
             </div>
+            
           </div>
 
           <div className="mb-3">
