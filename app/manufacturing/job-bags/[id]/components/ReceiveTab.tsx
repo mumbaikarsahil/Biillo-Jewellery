@@ -23,7 +23,8 @@ import {
   Save, Layers, Settings2, RefreshCw, CheckCircle2, 
   ArrowUpCircle, ArrowDownCircle, CheckSquare,
   Calculator, Database, Gem, Hammer, ArrowRight, ArrowLeft, Check, Box,
-  UploadCloud, Image as ImageIcon, Camera, AlertOctagon, ShieldAlert 
+  UploadCloud, Image as ImageIcon, Camera, AlertOctagon, ShieldAlert, 
+  Loader2
 } from 'lucide-react'
 
 interface Props {
@@ -294,13 +295,40 @@ export default function ReceiveTab({
 
       if (error) throw error
 
-      if (!items || items.length === 0) {
-        setReceiveItems([])
-        return
-      }
+      // 1. Identify all unique prefixes we need for this specific batch
+      const uniquePrefixes = Array.from(new Set(items.map((item: any) => 
+        getCategoryPrefix((item.ornament_type && item.ornament_type !== 'N/A') 
+          ? item.ornament_type 
+          : (item.job_bags?.product_category || 'Jewelry'))
+      )));
 
       const prefixSerialCounters: Record<string, number> = {};
 
+      // 2. Safely query the database for the highest existing number for each prefix
+      for (const prefix of uniquePrefixes) {
+        const { data } = await supabase
+          .from('inventory_items')
+          .select('barcode')
+          .ilike('barcode', `${prefix}-%`)
+          .eq('company_id', companyId);
+
+        if (data && data.length > 0) {
+          // Extract the numbers from strings like "RNG-1045", filter out invalid ones, and find the highest
+          const numbers = data
+            .map(row => parseInt(row.barcode.split('-')[1]))
+            .filter(num => !isNaN(num));
+
+          const maxNumber = numbers.length > 0 ? Math.max(...numbers) : 999;
+          
+          // Start the counter at the next sequentially available number
+          prefixSerialCounters[prefix] = maxNumber + 1; 
+        } else {
+          // If no items of this prefix exist yet, start cleanly at 1000
+          prefixSerialCounters[prefix] = 1000; 
+        }
+      }
+
+      // 3. Map the items using our perfectly sequenced numbers
       const mappedItems: ReceiveItem[] = items.map((item: any, index: number) => {
         const category = (item.ornament_type && item.ornament_type !== 'N/A') 
                           ? item.ornament_type 
@@ -308,12 +336,7 @@ export default function ReceiveTab({
 
         const prefix = getCategoryPrefix(category);
         
-        // If this is the first time we see this category, generate a starting base (e.g. 6610)
-        if (!prefixSerialCounters[prefix]) {
-           prefixSerialCounters[prefix] = Math.floor(1000 + Math.random() * 8000);
-        }
-        
-        // Grab the current number and increment the counter for the next item of this type
+        // Grab the sequential number and immediately increment it for the next loop
         const currentSerial = prefixSerialCounters[prefix]++;
 
         return {
@@ -321,7 +344,7 @@ export default function ReceiveTab({
           sku_reference: item.sku_reference,
           ornament_type: item.ornament_type || 'N/A', 
           category: category, 
-          barcode: `${prefix}-${currentSerial}`, // ✨ Sequenced Barcode
+          barcode: `${prefix}-${currentSerial}`, // ✨ Perfectly sequenced barcode!
           grossWeight: '',
           stonePieces: '',
           stoneWeight: '',
@@ -357,42 +380,8 @@ export default function ReceiveTab({
         }
       });
 
-      // ✨ FIX: Collision Check that preserves the sequence
-      let hasCollisions = true;
-      let safetyCounter = 0; 
-
-      while (hasCollisions && safetyCounter < 5) {
-        safetyCounter++;
-        
-        const barcodesToCheck = mappedItems.map(i => i.barcode);
-        const { data: existing } = await supabase
-          .from('inventory_items')
-          .select('barcode')
-          .in('barcode', barcodesToCheck);
-
-        if (!existing || existing.length === 0) {
-          hasCollisions = false; 
-        } else {
-          const existingCodes = existing.map(e => e.barcode);
-          
-          // Find which prefixes collided with the database
-          const collidedPrefixes = new Set(existingCodes.map(code => code.split('-')[0]));
-          
-          // Bump the base counter for those prefixes significantly to find a clean block of numbers
-          collidedPrefixes.forEach(prefix => {
-             prefixSerialCounters[prefix] = prefixSerialCounters[prefix] + Math.floor(100 + Math.random() * 500);
-          });
-
-          // Re-apply the sequence to the mapped items
-          const tempCounters = { ...prefixSerialCounters };
-          mappedItems.forEach(item => {
-            const prefix = getCategoryPrefix(item.category);
-            if (collidedPrefixes.has(prefix)) {
-                item.barcode = `${prefix}-${tempCounters[prefix]++}`;
-            }
-          });
-        }
-      }
+      // 4. IMPORTANT: You no longer need the "while (hasCollisions)" loop at all! 
+      // It can be completely deleted. We are 100% deterministic now.
 
       setReceiveItems(mappedItems);
     } catch (err: any) {
@@ -505,6 +494,8 @@ export default function ReceiveTab({
 
   // ✨ NEW: Pre-Verification Gate
   const handleOpenConfirmModal = () => {
+    // Prevent opening if already processing
+    if (isProcessing) return;
     const selectedItems = receiveItems.filter(i => i.isSelected)
     if (selectedItems.length === 0) return toast.error("No items selected to receive.")
     
@@ -737,15 +728,25 @@ export default function ReceiveTab({
             </div>
           </div>
           <DialogFooter className="bg-slate-50 p-4 border-t border-slate-100 flex gap-2 sm:justify-end">
-            <Button variant="outline" className="text-xs font-bold uppercase" onClick={() => setConfirmModalOpen(false)}>Cancel</Button>
             <Button 
-              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase px-6"
-              onClick={() => { 
+              variant="outline" 
+              className="text-xs font-bold uppercase" 
+              onClick={() => setConfirmModalOpen(false)}
+              disabled={isProcessing} // Lock cancel button during submit
+            >
+              Cancel
+            </Button>
+            <Button 
+              className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold uppercase px-6 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={isProcessing} // ✨ CRITICAL: Lock this button!
+              onClick={async () => { 
+                // Do not close the modal immediately. Let the process finish first.
+                await receiveSelectedBatch(); 
                 setConfirmModalOpen(false); 
-                receiveSelectedBatch(); 
               }}
             >
-              Confirm & Receive
+              {isProcessing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              {isProcessing ? 'Processing...' : 'Confirm & Receive'}
             </Button>
           </DialogFooter>
         </DialogContent>
