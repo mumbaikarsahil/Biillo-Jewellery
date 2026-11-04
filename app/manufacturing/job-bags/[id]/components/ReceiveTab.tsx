@@ -310,7 +310,9 @@ export default function ReceiveTab({
           .from('inventory_items')
           .select('barcode')
           .ilike('barcode', `${prefix}-%`)
-          .eq('company_id', companyId);
+          .eq('company_id', companyId)
+          .order('created_at', { ascending: false }) // ✨ FIX 1: Force it to look at the newest items first
+          .limit(500); // ✨ FIX 2: We only need to check the recent batch to find the highest number
 
         if (data && data.length > 0) {
           // Extract the numbers from strings like "RNG-1045", filter out invalid ones, and find the highest
