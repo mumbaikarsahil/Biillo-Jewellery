@@ -385,16 +385,23 @@ export default function EcommerceCatalogPage() {
 
       if (categoryForm.id) {
         if (categoryForm.id === payload.parent_id) throw new Error("A category cannot be its own parent.");
-        const { error } = await supabase.from("ecommerce_categories").update(payload).eq("id", categoryForm.id);
+        
+        // ✨ FIX: Ask Supabase to return the newly updated row
+        const { data, error } = await supabase.from("ecommerce_categories").update(payload).eq("id", categoryForm.id).select().single();
         if (error) throw error;
+        
+        // ✨ FIX: Optimistically update the state so it doesn't bounce back to old data
+        setCategories((prev) => prev.map((c) => (c.id === categoryForm.id ? { ...c, ...data } : c)));
         toast({ title: "Category Updated" });
       } else {
-        const { error } = await supabase.from("ecommerce_categories").insert(payload);
+        const { data, error } = await supabase.from("ecommerce_categories").insert(payload).select().single();
         if (error) throw error;
+        
+        setCategories((prev) => [...prev, data]);
         toast({ title: "Category Created" });
       }
       setIsCategoryModalOpen(false);
-      fetchCategories();
+      // fetchCategories(); // ❌ REMOVED: Prevent Next.js from returning a stale cache
     } catch (err: any) {
       toast({ title: "Error saving category", description: err.message, variant: "destructive" });
     } finally {
@@ -441,15 +448,34 @@ export default function EcommerceCatalogPage() {
       };
 
       let savedProductId = productForm.id;
+      let savedProductData = null; // ✨ Hold the fresh data from DB
 
       if (productForm.id) {
-        const { error } = await supabase.from("ecommerce_products").update(payload).eq("id", productForm.id);
+        const { data, error } = await supabase
+          .from("ecommerce_products")
+          .update(payload)
+          .eq("id", productForm.id)
+          .select(`*, category:ecommerce_categories(name), product_occasions:ecommerce_product_occasions(occasion_id)`)
+          .single();
+          
         if (error) throw error;
+        savedProductData = data;
+        
+        // ✨ FIX: Update React state immediately with the exact data the DB saved
+        setProducts((prev) => prev.map((p) => (p.id === productForm.id ? { ...p, ...data } : p)));
       } else {
         payload.slug = productForm.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)+/g, "") + `-${Math.floor(Math.random() * 1000)}`;
-        const { data, error } = await supabase.from("ecommerce_products").insert(payload).select().single();
+        const { data, error } = await supabase
+          .from("ecommerce_products")
+          .insert(payload)
+          .select(`*, category:ecommerce_categories(name), product_occasions:ecommerce_product_occasions(occasion_id)`)
+          .single();
+          
         if (error) throw error;
         savedProductId = data.id;
+        savedProductData = data;
+        
+        setProducts((prev) => [data, ...prev]);
       }
 
       if (savedProductId) {
@@ -457,12 +483,19 @@ export default function EcommerceCatalogPage() {
         if (productForm.occasion_ids.length > 0) {
           const links = productForm.occasion_ids.map(oid => ({ product_id: savedProductId, occasion_id: oid }));
           await supabase.from("ecommerce_product_occasions").insert(links);
+          
+          // Re-sync occasions to our optimistic UI state
+          if (savedProductData) {
+             savedProductData.product_occasions = productForm.occasion_ids.map(id => ({ occasion_id: id }));
+             setProducts((prev) => prev.map((p) => (p.id === savedProductId ? { ...p, product_occasions: savedProductData.product_occasions } : p)));
+          }
         }
       }
 
       toast({ title: productForm.id ? "Product Updated" : "Product Created" });
       setIsProductSheetOpen(false);
-      fetchProducts();
+      
+      // fetchProducts(); // ❌ REMOVED: Prevent Next.js from fetching the old image!
     } catch (err: any) {
       toast({ title: "Error saving product", description: err.message, variant: "destructive" });
     } finally {
