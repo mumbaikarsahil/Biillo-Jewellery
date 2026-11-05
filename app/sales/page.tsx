@@ -292,7 +292,6 @@ export default function AccountsMasterPage() {
     return () => clearTimeout(delay)
   }, [appUser, selectedLocation, startDate, endDate, search, page, recordLimit])
 
-  // ✨ FIX: Properly saves advance_paid, pushes to advance_history, and auto-opens print preview
   const handleLogAdvance = async () => {
     if (!orderToAdvance) return;
     const amt = Number(advanceAmount);
@@ -300,7 +299,6 @@ export default function AccountsMasterPage() {
 
     setIsSubmittingAdvance(true);
     try {
-      // 1. Insert into custom_order_payments (Ledger)
       const { error: paymentErr } = await supabase.from('custom_order_payments').insert({
         order_id: orderToAdvance.id,
         amount: amt,
@@ -309,7 +307,6 @@ export default function AccountsMasterPage() {
       });
       if (paymentErr) throw paymentErr;
 
-      // 2. Compute New Advance History and Total
       const prevAdvance = Number(orderToAdvance.advance_paid) || 0;
       const newAdvance = prevAdvance + amt;
       
@@ -322,7 +319,6 @@ export default function AccountsMasterPage() {
       };
       const newHistory = [...prevHistory, newHistoryEntry];
 
-      // 3. Update Custom Orders Master Record
       const { data: updatedOrder, error: updateErr } = await supabase
           .from('custom_orders')
           .update({ 
@@ -337,7 +333,6 @@ export default function AccountsMasterPage() {
 
       toast.success("Additional advance logged successfully!");
       
-      // ✨ 4. Auto-open Print Preview with updated data
       if (updatedOrder) {
           handleOpenPreview(updatedOrder, 'custom');
       }
@@ -345,7 +340,7 @@ export default function AccountsMasterPage() {
       setOrderToAdvance(null);
       setAdvanceAmount('');
       setAdvanceMode('CASH');
-      fetchAccountingData(); // Refresh list in background
+      fetchAccountingData(); 
     } catch (err: any) {
       toast.error(err.message || "Failed to log advance.");
     } finally {
@@ -479,7 +474,6 @@ export default function AccountsMasterPage() {
   }
 
 
-  // ✨ FIX: Properly Maps Advance History and Metal Type for the Print Template
   const handleOpenPreview = async (item: any, type: 'invoice' | 'estimate' | 'custom' | 'repair' | 'return') => {
     setIsFetchingPreview(true)
     try {
@@ -546,7 +540,7 @@ export default function AccountsMasterPage() {
           customOrder: { 
             designCode: item.design_reference, 
             category: item.item_category, 
-            metal_type: item.metal_type || 'Gold', // ✨ Supports SOUL Silver Switch
+            metal_type: item.metal_type || 'Gold', 
             expectedGoldWt: item.expected_gold_g, 
             expectedDiamondCts: item.expected_diamond_cts, 
             estimatedValue: finalTotal, 
@@ -561,7 +555,7 @@ export default function AccountsMasterPage() {
           sgstAmount: Number(item.sgst_amount) || Number(item.sgst) || 0,
           finalTotal: finalTotal,
           advancePayment: advancePaid,
-          advance_history: item.advance_history || [], // ✨ Renders Advance Math Accurately
+          advance_history: item.advance_history || [], 
           balanceDue: Math.max(0, finalTotal - advancePaid), 
           paymentMode: item.payment_mode,
           splitPayments: item.split_payments,
@@ -577,10 +571,27 @@ export default function AccountsMasterPage() {
         }
       }
       else if (type === 'return') {
+        // ✨ FIX: Properly nested physicalDetails so the InvoicePrintTemplate can read and render it perfectly
         mappedData = {
-          mode: 'return', invoice_number: `RTN-${item.id.substring(0,6).toUpperCase()}`, date: item.created_at, customer: item.customers,
+          mode: 'return', 
+          invoice_number: item.reference_invoice_number || `RTN-${item.id.substring(0,6).toUpperCase()}`, 
+          date: item.created_at, 
+          customer: item.customers,
           branch: branchObj, 
-          returnDetails: { purity: item.purity_karat, itemDescription: item.item_category, grossWeight: item.gross_weight_g, articleCost: item.gross_value, discountApplied: item.deduction_amount, calculatedRefund: item.net_refund },
+          returnDetails: {
+            physicalDetails: {
+              item_category: item.item_category,
+              itemDescription: item.item_category, // Template uses this
+              metal_type: item.metal_type,
+              purity_karat: item.purity_karat,
+              gross_weight_g: item.gross_weight_g,
+              net_weight_g: item.net_weight_g,
+              total_stone_weight_cts: item.total_stone_weight_cts
+            },
+            articleCost: item.gross_value, 
+            discountApplied: item.deduction_amount, 
+            calculatedRefund: item.net_refund 
+          },
           finalTotal: item.net_refund
         }
       }
@@ -650,7 +661,6 @@ export default function AccountsMasterPage() {
   const executeRevokeCancellation = async () => {
     if (!invoiceToRevoke || !appUser) return;
     
-    // Strict RBAC Check
     const allowedRoles = ['owner', 'manager', 'admin'];
     if (!allowedRoles.includes(appUser.role?.toLowerCase())) {
       return toast.error("Access Denied: Only Managers or Owners can revoke cancellations.");
@@ -661,7 +671,6 @@ export default function AccountsMasterPage() {
       const isCustom = !!invoiceToRevoke.order_number;
       const targetTable = isCustom ? 'custom_orders' : 'invoices';
       
-      // 1. Re-activate the Document
       const updatePayload: any = {
         status: isCustom ? 'pending_manufacturing' : 'VALID',
         cancellation_revoked_at: new Date().toISOString(),
@@ -671,7 +680,6 @@ export default function AccountsMasterPage() {
       const { error: invError } = await supabase.from(targetTable).update(updatePayload).eq('id', invoiceToRevoke.id);
       if (invError) throw invError;
 
-      // 2. Re-deduct Inventory (If standard invoice)
       if (!isCustom) {
         const itemIds = invoiceToRevoke.invoice_items?.map((i: any) => i.item_id).filter(Boolean);
         if (itemIds && itemIds.length > 0) {
@@ -679,19 +687,16 @@ export default function AccountsMasterPage() {
         }
       }
 
-      // 3. Re-consume Vouchers
       if (invoiceToRevoke.voucher_code) {
         await supabase.from('vouchers').update({ status: 'redeemed' }).eq('code', invoiceToRevoke.voucher_code);
       }
 
-      // 4. Re-deduct Wallet/Kitty
       const kittyReturn = Number(invoiceToRevoke.kitty_payment) || 0;
       const walletReturn = Number(invoiceToRevoke.wallet_payment) || 0;
       
       if ((kittyReturn > 0 || walletReturn > 0) && invoiceToRevoke.customer_id) {
         const { data: customerData } = await supabase.from('customers').select('store_credit_balance, pavitram_points').eq('id', invoiceToRevoke.customer_id).single();
         if (customerData) {
-          // Re-deduct the refunded amounts
           await supabase.from('customers').update({
             store_credit_balance: Math.max(0, Number(customerData.store_credit_balance || 0) - kittyReturn),
             pavitram_points: Math.max(0, Number(customerData.pavitram_points || 0) - walletReturn)
@@ -709,73 +714,92 @@ export default function AccountsMasterPage() {
     }
   };
 
-  const handleOpenEdit = (inv: any) => {
-    const isCustom = !!inv.order_number;
-    setInvoiceToEdit({ ...inv, isCustom });
+  // ✨ FIX: Smartly maps correct fields based on docType to allow Buyback editing
+  const handleOpenEdit = (inv: any, type: 'invoice' | 'custom' | 'return' = 'invoice') => {
+    setInvoiceToEdit({ ...inv, docType: type });
 
     const d = new Date(inv.created_at);
     const tzOffset = d.getTimezoneOffset() * 60000;
     const localISOTime = (new Date(d.getTime() - tzOffset)).toISOString().slice(0,16);
 
-    setEditForm({
-      invoice_number: isCustom ? inv.order_number : (inv.invoice_number || ''),
-      created_at: localISOTime,
-      subtotal: isCustom ? (inv.base_estimated_value || 0) : (inv.subtotal || 0),
-      discount_amount: inv.discount_amount || 0,
-      taxable_value: inv.taxable_value || 0,
-      cgst_amount: inv.cgst_amount || inv.cgst || 0,
-      sgst_amount: inv.sgst_amount || inv.sgst || 0,
-      final_total: isCustom ? (inv.estimated_value || 0) : (inv.final_total || 0),
-      payment_remarks: inv.payment_remarks || ''
-    });
+    if (type === 'return') {
+      setEditForm({
+        created_at: localISOTime,
+        subtotal: inv.gross_value || 0,
+        discount_amount: inv.deduction_amount || 0,
+        final_total: inv.net_refund || 0,
+      });
+    } else {
+      setEditForm({
+        invoice_number: type === 'custom' ? inv.order_number : (inv.invoice_number || ''),
+        created_at: localISOTime,
+        subtotal: type === 'custom' ? (inv.base_estimated_value || 0) : (inv.subtotal || 0),
+        discount_amount: inv.discount_amount || 0,
+        taxable_value: inv.taxable_value || 0,
+        cgst_amount: inv.cgst_amount || inv.cgst || 0,
+        sgst_amount: inv.sgst_amount || inv.sgst || 0,
+        final_total: type === 'custom' ? (inv.estimated_value || 0) : (inv.final_total || 0),
+        payment_remarks: inv.payment_remarks || ''
+      });
+    }
   };
 
   const executeEditInvoice = async () => {
     if (!invoiceToEdit || !appUser) return;
     
-    const isCustom = invoiceToEdit.isCustom;
-    const targetTable = isCustom ? 'custom_orders' : 'invoices';
-    const idField = isCustom ? 'order_number' : 'invoice_number';
-
-    const newInvoiceNo = editForm.invoice_number?.trim().toUpperCase();
-    if (!newInvoiceNo) return toast.error("Document number cannot be empty.");
+    const docType = invoiceToEdit.docType || 'invoice';
+    const targetTable = docType === 'custom' ? 'custom_orders' : docType === 'return' ? 'buybacks' : 'invoices';
+    const idField = docType === 'custom' ? 'order_number' : docType === 'return' ? 'id' : 'invoice_number';
 
     setIsEditing(true);
     try {
-      if (newInvoiceNo !== invoiceToEdit[idField]) {
-        const { data: existing, error: checkErr } = await supabase
-          .from(targetTable)
-          .select('id')
-          .eq('company_id', appUser.company_id)
-          .eq(idField, newInvoiceNo)
-          .maybeSingle();
-
-        if (existing) {
-          toast.error(`Document number ${newInvoiceNo} is already in use!`);
-          setIsEditing(false);
-          return;
-        }
-        if (checkErr) throw checkErr;
-      }
-
       const payload: any = {
-        [idField]: newInvoiceNo,
         created_at: new Date(editForm.created_at).toISOString(),
-        discount_amount: Number(editForm.discount_amount),
-        taxable_value: Number(editForm.taxable_value),
-        payment_remarks: editForm.payment_remarks
       };
 
-      if (isCustom) {
-        payload.base_estimated_value = Number(editForm.subtotal);
-        payload.cgst = Number(editForm.cgst_amount);
-        payload.sgst = Number(editForm.sgst_amount);
-        payload.estimated_value = Number(editForm.final_total);
-      } else {
-        payload.subtotal = Number(editForm.subtotal);
-        payload.cgst_amount = Number(editForm.cgst_amount);
-        payload.sgst_amount = Number(editForm.sgst_amount);
-        payload.final_total = Number(editForm.final_total);
+      // Handle Buyback/Return edits
+      if (docType === 'return') {
+        payload.gross_value = Number(editForm.subtotal);
+        payload.deduction_amount = Number(editForm.discount_amount);
+        payload.net_refund = Number(editForm.final_total);
+      } 
+      // Handle Invoice & Custom Order edits
+      else {
+        const newInvoiceNo = editForm.invoice_number?.trim().toUpperCase();
+        if (!newInvoiceNo) return toast.error("Document number cannot be empty.");
+
+        if (newInvoiceNo !== invoiceToEdit[idField]) {
+          const { data: existing, error: checkErr } = await supabase
+            .from(targetTable)
+            .select('id')
+            .eq('company_id', appUser.company_id)
+            .eq(idField, newInvoiceNo)
+            .maybeSingle();
+
+          if (existing) {
+            toast.error(`Document number ${newInvoiceNo} is already in use!`);
+            setIsEditing(false);
+            return;
+          }
+          if (checkErr) throw checkErr;
+        }
+
+        payload[idField] = newInvoiceNo;
+        payload.discount_amount = Number(editForm.discount_amount);
+        payload.taxable_value = Number(editForm.taxable_value);
+        payload.payment_remarks = editForm.payment_remarks;
+
+        if (docType === 'custom') {
+          payload.base_estimated_value = Number(editForm.subtotal);
+          payload.cgst = Number(editForm.cgst_amount);
+          payload.sgst = Number(editForm.sgst_amount);
+          payload.estimated_value = Number(editForm.final_total);
+        } else {
+          payload.subtotal = Number(editForm.subtotal);
+          payload.cgst_amount = Number(editForm.cgst_amount);
+          payload.sgst_amount = Number(editForm.sgst_amount);
+          payload.final_total = Number(editForm.final_total);
+        }
       }
 
       const { error } = await supabase.from(targetTable).update(payload).eq('id', invoiceToEdit.id);
@@ -1108,7 +1132,8 @@ export default function AccountsMasterPage() {
                                 {!isCancelled && (
                                   <>
                                     <DropdownMenuSeparator />
-                                    <DropdownMenuItem onClick={() => handleOpenEdit(inv)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                                    {/* ✨ FIX: Explictly specify docType 'invoice' */}
+                                    <DropdownMenuItem onClick={() => handleOpenEdit(inv, 'invoice')} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => setInvoiceToCancel(inv)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Invoice</DropdownMenuItem>
                                   </>
                                 )}
@@ -1185,7 +1210,7 @@ export default function AccountsMasterPage() {
                             {!isCancelled && (
                               <>
                                 <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => handleOpenEdit(inv)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleOpenEdit(inv, 'invoice')} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => setInvoiceToCancel(inv)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50"><XCircle className="w-4 h-4 mr-2" /> Cancel Invoice</DropdownMenuItem>
                               </>
                             )}
@@ -1391,7 +1416,8 @@ export default function AccountsMasterPage() {
                                 {!isCancelled && (
                                   <>
                                     <DropdownMenuSeparator />
-                                    <DropdownMenuItem onClick={() => handleOpenEdit(co)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                                    {/* ✨ FIX: Explicitly specify docType 'custom' */}
+                                    <DropdownMenuItem onClick={() => handleOpenEdit(co, 'custom')} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => setOrderToAdvance(co)} className="cursor-pointer py-2"><IndianRupee className="w-4 h-4 mr-2 text-emerald-500" /> Log Additional Advance</DropdownMenuItem>
                                     <DropdownMenuItem onClick={() => setInvoiceToCancel(co)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Order</DropdownMenuItem>
                                   </>
@@ -1424,7 +1450,7 @@ export default function AccountsMasterPage() {
                           {/* Financials Sequence */}
                           <TableCell className="py-2 text-right text-[12px] font-medium text-zinc-700 border-l border-purple-100 bg-slate-50/50">₹{baseValue.toLocaleString()}</TableCell>
                           
-                          {/* ✨ DETAILED DEDUCTIONS COLUMN */}
+                          {/* DETAILED DEDUCTIONS COLUMN */}
                           <TableCell className="py-1.5 text-right text-[11px] font-bold text-rose-500 border-l border-purple-100 bg-slate-50/50">
                             {totalDeductions > 0 ? (
                               <div className="flex flex-col items-end justify-center gap-0.5">
@@ -1494,7 +1520,8 @@ export default function AccountsMasterPage() {
                           {!isCancelled && (
                             <>
                               <DropdownMenuSeparator />
-                              <DropdownMenuItem onClick={() => handleOpenEdit(co)} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                              {/* ✨ FIX: Explicitly pass 'custom' docType */}
+                              <DropdownMenuItem onClick={() => handleOpenEdit(co, 'custom')} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
                               <DropdownMenuItem onClick={() => setOrderToAdvance(co)} className="cursor-pointer py-2"><IndianRupee className="w-4 h-4 mr-2 text-emerald-500" /> Log Additional Advance</DropdownMenuItem>
                               <DropdownMenuItem onClick={() => setInvoiceToCancel(co)} className="cursor-pointer py-2 text-red-600 focus:bg-red-50 focus:text-red-700"><XCircle className="w-4 h-4 mr-2" /> Cancel Order</DropdownMenuItem>
                             </>
@@ -1532,7 +1559,6 @@ export default function AccountsMasterPage() {
                           <span className="text-xs font-medium text-zinc-800">₹{baseValue.toLocaleString()}</span>
                        </div>
                        
-                       {/* ✨ DETAILED DEDUCTIONS FOR MOBILE */}
                        {totalDeductions > 0 ? (
                          <>
                            {manualDiscount > 0 && (
@@ -1612,7 +1638,15 @@ export default function AccountsMasterPage() {
                     ) : buybacks.map((bb) => (
                         <TableRow key={bb.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors">
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-rose-500 hover:text-rose-700 hover:bg-rose-100" onClick={() => handleOpenPreview(bb, 'return')}><Eye className="h-4 w-4" /></Button>
+                             {/* ✨ FIX: Added the DropdownMenu so users can Edit Financials on Buybacks */}
+                             <DropdownMenu>
+                               <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-zinc-500 hover:text-rose-700 hover:bg-rose-100"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                               <DropdownMenuContent align="start" className="w-48 rounded-xl shadow-lg border-zinc-200">
+                                 <DropdownMenuItem onClick={() => handleOpenPreview(bb, 'return')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View / Print Bill</DropdownMenuItem>
+                                 <DropdownMenuSeparator />
+                                 <DropdownMenuItem onClick={() => handleOpenEdit(bb, 'return')} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                               </DropdownMenuContent>
+                             </DropdownMenu>
                           </TableCell>
                           <TableCell className="px-4 py-2 text-[12px] font-medium text-zinc-600 whitespace-nowrap">{format(new Date(bb.created_at), 'dd MMM yy, HH:mm')}</TableCell>
                           <TableCell className="px-4 py-2 border-r border-zinc-100"><span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest bg-rose-100 text-rose-700 border border-rose-200">{bb.status}</span></TableCell>
@@ -1647,9 +1681,17 @@ export default function AccountsMasterPage() {
                         </div>
                         <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(bb.created_at), 'dd MMM yy, hh:mm a')}</div>
                       </div>
-                      <Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-rose-600 border-zinc-200 hover:bg-rose-50" onClick={() => handleOpenPreview(bb, 'return')}>
-                        <Eye className="h-4 w-4" />
-                      </Button>
+                      
+                      {/* ✨ FIX: Added the DropdownMenu for Mobile View so users can Edit Financials on Buybacks */}
+                      <DropdownMenu>
+                         <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-rose-600 border-zinc-200 hover:bg-rose-50"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                         <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-lg border-zinc-200">
+                           <DropdownMenuItem onClick={() => handleOpenPreview(bb, 'return')} className="cursor-pointer py-2"><Eye className="w-4 h-4 mr-2 text-indigo-500" /> View / Print Bill</DropdownMenuItem>
+                           <DropdownMenuSeparator />
+                           <DropdownMenuItem onClick={() => handleOpenEdit(bb, 'return')} className="cursor-pointer py-2"><Edit2 className="w-4 h-4 mr-2 text-amber-500" /> Edit Financials</DropdownMenuItem>
+                         </DropdownMenuContent>
+                      </DropdownMenu>
+
                     </div>
                     
                     <div className="flex justify-between bg-zinc-50/50 p-2.5 rounded-lg border border-zinc-100">
@@ -1897,7 +1939,7 @@ export default function AccountsMasterPage() {
                 <Edit2 className="w-5 h-5" /> Edit Ledger Entry
               </DialogTitle>
               <DialogDescription className="text-xs font-medium text-zinc-500 mt-1.5">
-                Modify financial details and metadata for <strong className="text-zinc-900">{invoiceToEdit?.invoice_number || invoiceToEdit?.order_number}</strong>. This updates the ledger in-place.
+                Modify financial details and metadata for <strong className="text-zinc-900">{invoiceToEdit?.invoice_number || invoiceToEdit?.order_number || `RTN-${invoiceToEdit?.id?.substring(0,6).toUpperCase()}`}</strong>. This updates the ledger in-place.
               </DialogDescription>
             </DialogHeader>
             
@@ -1905,50 +1947,67 @@ export default function AccountsMasterPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                 
                 {/* ROW 1: Identifiers & Dates */}
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Document Number</Label>
-                  <Input className="h-10 font-mono font-bold bg-white border-zinc-200" value={editForm.invoice_number} onChange={(e) => setEditForm({...editForm, invoice_number: e.target.value.toUpperCase()})} />
-                </div>
+                {invoiceToEdit?.docType !== 'return' && (
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Document Number</Label>
+                    <Input className="h-10 font-mono font-bold bg-white border-zinc-200" value={editForm.invoice_number} onChange={(e) => setEditForm({...editForm, invoice_number: e.target.value.toUpperCase()})} />
+                  </div>
+                )}
+                
                 <div className="space-y-1.5">
                   <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Date & Time</Label>
                   <Input type="datetime-local" className="h-10 bg-zinc-50/50 border-zinc-200" value={editForm.created_at} onChange={(e) => setEditForm({...editForm, created_at: e.target.value})} />
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Payment Remarks</Label>
-                  <Input className="h-10 bg-zinc-50/50 border-zinc-200" value={editForm.payment_remarks} onChange={(e) => setEditForm({...editForm, payment_remarks: e.target.value})} />
-                </div>
+                
+                {invoiceToEdit?.docType !== 'return' && (
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Payment Remarks</Label>
+                    <Input className="h-10 bg-zinc-50/50 border-zinc-200" value={editForm.payment_remarks} onChange={(e) => setEditForm({...editForm, payment_remarks: e.target.value})} />
+                  </div>
+                )}
 
                 <div className="col-span-1 md:col-span-3 border-t border-zinc-100 my-1"></div>
 
                 {/* ROW 2: Core Financials */}
                 <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">{invoiceToEdit?.isCustom ? "Base Estimated Value" : "Subtotal"}</Label>
+                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
+                    {invoiceToEdit?.docType === 'custom' ? "Base Estimated Value" : invoiceToEdit?.docType === 'return' ? "Gross Value" : "Subtotal"}
+                  </Label>
                   <Input type="number" className="h-10 font-mono font-medium" value={editForm.subtotal} onChange={(e) => setEditForm({...editForm, subtotal: e.target.value})} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Manual Discount</Label>
+                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
+                    {invoiceToEdit?.docType === 'return' ? "Deductions" : "Manual Discount"}
+                  </Label>
                   <Input type="number" className="h-10 font-mono font-medium border-red-200 focus-visible:ring-red-500" value={editForm.discount_amount} onChange={(e) => setEditForm({...editForm, discount_amount: e.target.value})} />
                 </div>
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Taxable Value</Label>
-                  <Input type="number" className="h-10 font-mono font-medium bg-zinc-50" value={editForm.taxable_value} onChange={(e) => setEditForm({...editForm, taxable_value: e.target.value})} />
-                </div>
+                
+                {invoiceToEdit?.docType !== 'return' && (
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Taxable Value</Label>
+                    <Input type="number" className="h-10 font-mono font-medium bg-zinc-50" value={editForm.taxable_value} onChange={(e) => setEditForm({...editForm, taxable_value: e.target.value})} />
+                  </div>
+                )}
                 
                 {/* ROW 3: Taxes & Final Total */}
                 <div className="col-span-1 md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-5 items-end">
-                  <div className="grid grid-cols-2 gap-4 bg-emerald-50/50 p-4 rounded-xl border border-emerald-100 h-fit">
-                    <div className="space-y-1.5">
-                      <Label className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">CGST Amount</Label>
-                      <Input type="number" className="h-10 font-mono font-medium bg-white border-emerald-200" value={editForm.cgst_amount} onChange={(e) => setEditForm({...editForm, cgst_amount: e.target.value})} />
+                  {invoiceToEdit?.docType !== 'return' ? (
+                    <div className="grid grid-cols-2 gap-4 bg-emerald-50/50 p-4 rounded-xl border border-emerald-100 h-fit">
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">CGST Amount</Label>
+                        <Input type="number" className="h-10 font-mono font-medium bg-white border-emerald-200" value={editForm.cgst_amount} onChange={(e) => setEditForm({...editForm, cgst_amount: e.target.value})} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">SGST Amount</Label>
+                        <Input type="number" className="h-10 font-mono font-medium bg-white border-emerald-200" value={editForm.sgst_amount} onChange={(e) => setEditForm({...editForm, sgst_amount: e.target.value})} />
+                      </div>
                     </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-[10px] font-bold uppercase tracking-widest text-emerald-600">SGST Amount</Label>
-                      <Input type="number" className="h-10 font-mono font-medium bg-white border-emerald-200" value={editForm.sgst_amount} onChange={(e) => setEditForm({...editForm, sgst_amount: e.target.value})} />
-                    </div>
-                  </div>
+                  ) : <div />}
 
                   <div className="space-y-1.5">
-                    <Label className="text-[11px] font-black uppercase tracking-widest text-indigo-600 mb-2 block">{invoiceToEdit?.isCustom ? "Est. Order Value" : "Net Final Total"}</Label>
+                    <Label className="text-[11px] font-black uppercase tracking-widest text-indigo-600 mb-2 block">
+                      {invoiceToEdit?.docType === 'custom' ? "Est. Order Value" : invoiceToEdit?.docType === 'return' ? "Net Refund" : "Net Final Total"}
+                    </Label>
                     <Input type="number" className="h-14 font-mono font-black text-2xl border-indigo-200 bg-indigo-50/30 shadow-inner" value={editForm.final_total} onChange={(e) => setEditForm({...editForm, final_total: e.target.value})} />
                   </div>
                 </div>
