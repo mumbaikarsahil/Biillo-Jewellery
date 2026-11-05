@@ -192,10 +192,22 @@ export default function AccountsMasterPage() {
       if (selectedLocation !== 'ALL') customQuery = customQuery.eq('origin_warehouse_id', selectedLocation)
       if (search.trim()) customQuery = customQuery.ilike('order_number', `%${search.trim()}%`)
 
-      let buybackQuery = supabase.from('buybacks').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
+        let buybackQuery = supabase.from('buybacks')
+        // ✨ FIX: Removed legal_disclaimer to prevent the 42703 column error
+        .select('*, customers(full_name, phone, pan_no, gstin, address, city), warehouses(name, address, contact_number, gstin)') 
+        .eq('company_id', appUser.company_id)
+        .gte('created_at', startDate).lt('created_at', safeEndDateStr)
+        .order('created_at', { ascending: false }).range(from, to)
+
       if (selectedLocation !== 'ALL') buybackQuery = buybackQuery.eq('warehouse_id', selectedLocation)
       
-      let repairQuery = supabase.from('repair_tickets').select('*, customers(full_name, phone)').eq('company_id', appUser.company_id).gte('created_at', startDate).lt('created_at', safeEndDateStr).order('created_at', { ascending: false }).range(from, to)
+      let repairQuery = supabase.from('repair_tickets')
+        // ✨ FIX: Removed legal_disclaimer here as well
+        .select('*, customers(full_name, phone, pan_no, gstin, address, city), warehouses!origin_warehouse_id(name, address, contact_number, gstin)') 
+        .eq('company_id', appUser.company_id)
+        .gte('created_at', startDate).lt('created_at', safeEndDateStr)
+        .order('created_at', { ascending: false }).range(from, to)
+
       if (selectedLocation !== 'ALL') repairQuery = repairQuery.eq('origin_warehouse_id', selectedLocation)
       if (search.trim()) repairQuery = repairQuery.ilike('ticket_number', `%${search.trim()}%`)
 
@@ -479,7 +491,8 @@ export default function AccountsMasterPage() {
     try {
       let mappedData: any = {};
       
-      const branchObj = warehouses.find(w => w.id === (item.warehouse_id || item.origin_warehouse_id)) || null;
+      // ✨ FIX: Use the specific warehouse object attached to the historical record to guarantee the branch is printed.
+      const branchObj = item.warehouses || warehouses.find(w => w.id === (item.warehouse_id || item.origin_warehouse_id)) || null;
 
       if (type === 'invoice') {
         const { data: invData, error } = await supabase.from('invoices').select(`*, customers (*), invoice_items (rate, inventory_items (*))`).eq('id', item.id).single()
@@ -1618,11 +1631,14 @@ export default function AccountsMasterPage() {
           <TabsContent value="buybacks" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
               <SyncedTableWrapper>
-                <Table className="w-full whitespace-nowrap border-b border-zinc-200">
+                {/* ✨ FIX: Added min-w-[1200px] to force the top scrollbar to appear consistently */}
+                <Table className="w-full whitespace-nowrap border-b border-zinc-200 min-w-[1200px]">
                   <TableHeader className="bg-rose-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-rose-100">
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider px-4 bg-rose-50/50 z-20 w-[60px] text-center sticky left-0 border-r border-rose-100">Actions</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider px-4">Date</TableHead>
+                      {/* ✨ FIX: Added Branch Column */}
+                      <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider border-r border-rose-100 px-4">Branch</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider border-r border-rose-100">Status</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider">Customer</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-rose-700 uppercase tracking-wider border-l border-rose-100 pl-4">Handled By</TableHead>
@@ -1634,11 +1650,10 @@ export default function AccountsMasterPage() {
                   </TableHeader>
                   <TableBody>
                     {buybacks.length === 0 ? (
-                      <TableRow><TableCell colSpan={9} className="text-center py-12 text-zinc-400">No buyback records found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={10} className="text-center py-12 text-zinc-400">No buyback records found</TableCell></TableRow>
                     ) : buybacks.map((bb) => (
                         <TableRow key={bb.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors">
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
-                             {/* ✨ FIX: Added the DropdownMenu so users can Edit Financials on Buybacks */}
                              <DropdownMenu>
                                <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-zinc-500 hover:text-rose-700 hover:bg-rose-100"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                                <DropdownMenuContent align="start" className="w-48 rounded-xl shadow-lg border-zinc-200">
@@ -1649,6 +1664,8 @@ export default function AccountsMasterPage() {
                              </DropdownMenu>
                           </TableCell>
                           <TableCell className="px-4 py-2 text-[12px] font-medium text-zinc-600 whitespace-nowrap">{format(new Date(bb.created_at), 'dd MMM yy, HH:mm')}</TableCell>
+                          {/* ✨ FIX: Render Branch Data */}
+                          <TableCell className="px-4 py-2 border-r border-zinc-100"><span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap">{bb.warehouses?.name || 'Unknown'}</span></TableCell>
                           <TableCell className="px-4 py-2 border-r border-zinc-100"><span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest bg-rose-100 text-rose-700 border border-rose-200">{bb.status}</span></TableCell>
                           <TableCell className="px-4 py-2 min-w-[160px]">
                             <span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap truncate block">{bb.customers?.full_name || 'Walk-in'}</span>
@@ -1680,9 +1697,10 @@ export default function AccountsMasterPage() {
                           <Badge className="bg-rose-50 text-rose-700 border-rose-200 text-[9px] uppercase tracking-widest">{bb.status}</Badge>
                         </div>
                         <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(bb.created_at), 'dd MMM yy, hh:mm a')}</div>
+                        {/* ✨ FIX: Render Branch Data on Mobile */}
+                        <p className="text-[10px] text-zinc-500 font-mono mt-0.5"><Store className="w-3 h-3 inline mr-1"/>{bb.warehouses?.name || 'Unknown'}</p>
                       </div>
                       
-                      {/* ✨ FIX: Added the DropdownMenu for Mobile View so users can Edit Financials on Buybacks */}
                       <DropdownMenu>
                          <DropdownMenuTrigger asChild><Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-rose-600 border-zinc-200 hover:bg-rose-50"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
                          <DropdownMenuContent align="end" className="w-48 rounded-xl shadow-lg border-zinc-200">
@@ -1734,11 +1752,14 @@ export default function AccountsMasterPage() {
           <TabsContent value="repairs" className="m-0 pt-2 w-full min-w-0">
             <Card className="shadow-sm border-zinc-200 bg-white rounded-2xl w-full min-w-0 flex flex-col">
               <SyncedTableWrapper>
-                <Table className="w-full whitespace-nowrap border-b border-zinc-200">
+                {/* ✨ FIX: Added min-w-[1200px] to force the top scrollbar to appear consistently */}
+                <Table className="w-full whitespace-nowrap border-b border-zinc-200 min-w-[1200px]">
                   <TableHeader className="bg-amber-50/50 shadow-[0_1px_2px_rgba(0,0,0,0.05)]">
                     <TableRow className="hover:bg-transparent border-amber-100">
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider px-4 bg-amber-50/50 z-20 w-[60px] text-center sticky left-0 border-r border-amber-100">Actions</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider px-4">Date</TableHead>
+                      {/* ✨ FIX: Added Branch Column */}
+                      <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider border-r border-amber-100 px-4">Branch</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider">Ticket No</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider border-r border-amber-100">Status</TableHead>
                       <TableHead className="h-11 text-[10px] font-bold text-amber-700 uppercase tracking-wider">Customer</TableHead>
@@ -1750,13 +1771,15 @@ export default function AccountsMasterPage() {
                   </TableHeader>
                   <TableBody>
                     {repairs.length === 0 ? (
-                      <TableRow><TableCell colSpan={9} className="text-center py-12 text-zinc-400">No repair tickets found</TableCell></TableRow>
+                      <TableRow><TableCell colSpan={10} className="text-center py-12 text-zinc-400">No repair tickets found</TableCell></TableRow>
                     ) : repairs.map((rep) => (
                         <TableRow key={rep.id} className="border-zinc-100 hover:bg-zinc-50/50 transition-colors">
                           <TableCell className="px-4 py-2 text-center align-middle sticky left-0 bg-white group-hover:bg-zinc-50 z-10 border-r border-zinc-200 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.05)]">
                             <Button variant="ghost" size="icon" className="h-7 w-7 rounded-md text-amber-600 hover:text-amber-700 hover:bg-amber-100" onClick={() => handleOpenPreview(rep, 'repair')}><Eye className="h-4 w-4" /></Button>
                           </TableCell>
                           <TableCell className="px-4 py-2 text-[12px] font-medium text-zinc-600 whitespace-nowrap">{format(new Date(rep.created_at), 'dd MMM yy, HH:mm')}</TableCell>
+                          {/* ✨ FIX: Render Branch Data */}
+                          <TableCell className="px-4 py-2 border-r border-zinc-100"><span className="text-[12px] font-semibold text-zinc-800 whitespace-nowrap">{rep.warehouses?.name || 'Unknown'}</span></TableCell>
                           <TableCell className="py-2 font-mono text-[12px] font-semibold text-zinc-900 border-r border-zinc-100">{rep.ticket_number}</TableCell>
                           <TableCell className="px-4 py-2"><span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-widest bg-amber-100 text-amber-700 border border-amber-200">{rep.status.replace(/_/g, ' ')}</span></TableCell>
                           <TableCell className="px-4 py-2 min-w-[160px]">
@@ -1788,6 +1811,8 @@ export default function AccountsMasterPage() {
                           <Badge className="bg-amber-50 text-amber-700 border-amber-200 text-[9px] uppercase tracking-widest">{rep.status.replace(/_/g, ' ')}</Badge>
                         </div>
                         <div className="text-[11px] text-zinc-500 font-medium">{format(new Date(rep.created_at), 'dd MMM yy, hh:mm a')}</div>
+                        {/* ✨ FIX: Render Branch Data on Mobile */}
+                        <p className="text-[10px] text-zinc-500 font-mono mt-0.5"><Store className="w-3 h-3 inline mr-1"/>{rep.warehouses?.name || 'Unknown'}</p>
                       </div>
                       <Button variant="outline" size="icon" className="h-8 w-8 rounded-lg text-amber-600 border-zinc-200 hover:bg-amber-50" onClick={() => handleOpenPreview(rep, 'repair')}>
                         <Eye className="h-4 w-4" />
@@ -1827,7 +1852,7 @@ export default function AccountsMasterPage() {
               <PaginationControls />
             </Card>
           </TabsContent>
-        </Tabs>
+          </Tabs>
 
         {/* --- CANCELLATION MODAL --- */}
         <Dialog open={!!invoiceToCancel} onOpenChange={(open) => !open && setInvoiceToCancel(null)}>

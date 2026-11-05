@@ -236,14 +236,16 @@ export const InvoicePrintTemplate = forwardRef<HTMLDivElement, InvoicePrintTempl
         if (customerGstin) {
           return <InfoRow label="GSTIN" value={<span className="uppercase">{customerGstin}</span>} />;
         }
-        return <InfoRow label="GSTIN" value={<span className="text-red-500 text-[10px] normal-case tracking-normal">GSTIN not in database. Use Complete Profile to enter it.</span>} />;
+        // ✨ FIX: Replace red error with a simple faded "-"
+        return <InfoRow label="GSTIN" value={<span className="text-slate-300">-</span>} />;
       } 
       
       if (activePref === 'PAN') {
         if (customerPan) {
           return <InfoRow label="PAN No." value={<span className="uppercase">{customerPan}</span>} />;
         }
-        return <InfoRow label="PAN No." value={<span className="text-red-500 text-[10px] normal-case tracking-normal">PAN not in database. Use Complete Profile to enter it.</span>} />;
+        // ✨ FIX: Replace red error with a simple faded "-"
+        return <InfoRow label="PAN No." value={<span className="text-slate-300">-</span>} />;
       }
 
       return null;
