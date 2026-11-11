@@ -376,7 +376,12 @@ export function useCheckout({
                          : mode === 'return' ? 'DRAFT-VCH' 
                          : 'DRAFT-ORD';
     
-    const activeBranch = allBranches?.find((b: any) => b.id === selectedLocation) || null;
+    // Force it to select the HQ/Main Office from the database if selectedLocation is "ALL" or missing
+const activeBranch = allBranches?.find((b: any) => b.id === selectedLocation) 
+|| allBranches?.find((b: any) => b.name.toLowerCase().includes('main') || b.name.toLowerCase().includes('hq'))
+|| allBranches?.[0] 
+|| null;
+
 
     const legacyAdvancesArray = customTransactionContext?.legacy_advances || [];
     const totalLegacyAdvance = legacyAdvancesArray.reduce((sum: number, a: any) => sum + (Number(a.amount) || 0), 0);

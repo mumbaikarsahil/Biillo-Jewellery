@@ -5,7 +5,7 @@ import { format, isToday } from "date-fns";
 import { 
   Search, CheckCircle2, XCircle, Hammer, MapPin, Package, 
   ChevronRight, ArrowRight, Loader2, AlertCircle, Store, Zap,
-  MessageCircle, Globe, TrendingUp, Clock, PhoneCall, Printer, FileText, Send, Ban, Receipt, Download
+  MessageCircle, Globe, TrendingUp, Clock, PhoneCall, Printer, FileText, Send, Ban, Receipt, Download, Edit2, Truck
 } from "lucide-react";
 
 import { supabase } from "@/lib/supabaseClient";
@@ -21,11 +21,31 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { InvoicePrintTemplate } from "@/components/InvoicePrintTemplate";
 import { WhatsAppSenderModal } from "@/components/WhatsAppSenderModal";
 
 const DEFAULT_RETURN_ADDRESS = "Viral Apartment, (A) Wing, 3rd Floor, S.V. Road, Opp. Andheri Shoppers Stop,\nAbove Hotel Radha Krishna, Andheri West, Mumbai - 400058";
+
+const ORDER_STATUSES = [
+  { value: "pending_approval", label: "Pending Approval" },
+  { value: "order_confirmed", label: "Order Confirmed" },
+  { value: "under_manufacturing", label: "Under Manufacturing" },
+  { value: "ready_for_dispatch", label: "Ready for Dispatch" },
+  { value: "dispatched_from_store", label: "Dispatched from Store" },
+  { value: "dispatched_from_main_office", label: "Dispatched from Main Office" },
+  { value: "shipped", label: "Shipped" },
+  { value: "reached_nearest_hub", label: "Reached Nearest Hub" },
+  { value: "out_for_delivery", label: "Out for Delivery" },
+  { value: "delivered", label: "Delivered" },
+  { value: "delayed", label: "Delayed" },
+  { value: "cancelled", label: "Cancelled" }
+];
+
+const DELIVERY_PARTNERS = [
+  "Delhivery", "Ekart", "Xpressbees", "BlueDart", "Shadowfax", "Ecom Express", "DTDC", "Custom / Own Delivery"
+];
 
 export default function EcommerceOrdersPage() {
   const { appUser } = useAuth();
@@ -41,6 +61,11 @@ export default function EcommerceOrdersPage() {
   const [voidModal, setVoidModal] = useState<{isOpen: boolean, order: any, reason: string}>({ isOpen: false, order: null, reason: "" });
   const [waModalConfig, setWaModalConfig] = useState<{isOpen: boolean, phone: string, contextData: any}>({ isOpen: false, phone: '', contextData: {} });
   
+  // ✨ NEW: Status Update Modal State
+  const [statusModal, setStatusModal] = useState<{
+    isOpen: boolean, order: any, newStatus: string, partner: string, tracking: string
+  }>({ isOpen: false, order: null, newStatus: "", partner: "", tracking: "" });
+
   // E-Receipt State
   const [receiptOrder, setReceiptOrder] = useState<any>(null);
   const [isGeneratingReceipt, setIsGeneratingReceipt] = useState(false);
@@ -49,13 +74,13 @@ export default function EcommerceOrdersPage() {
   const [labelModal, setLabelModal] = useState<{isOpen: boolean, order: any}>({ isOpen: false, order: null });
   const [returnAddress, setReturnAddress] = useState(DEFAULT_RETURN_ADDRESS);
   
-// Editable Invoice State
-const [invoiceOrder, setInvoiceOrder] = useState<any>(null);
-const [invoiceWeights, setInvoiceWeights] = useState<Record<number, {gw: string, dw: string}>>({});
+  // Editable Invoice State
+  const [invoiceOrder, setInvoiceOrder] = useState<any>(null);
+  const [invoiceWeights, setInvoiceWeights] = useState<Record<number, {gw: string, dw: string}>>({});
 
-// Print Engine State
-const [printMode, setPrintMode] = useState<'label' | 'invoice' | null>(null);
-const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
+  // Print Engine State
+  const [printMode, setPrintMode] = useState<'label' | 'invoice' | null>(null);
+  const printContainerRef = useRef<HTMLDivElement>(null); 
   
   // Routing Engine States
   const [nearestWarehouse, setNearestWarehouse] = useState<any>(null);
@@ -67,7 +92,6 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
   // KPI Metrics
   const [metrics, setMetrics] = useState({ awaiting: 0, fabrication: 0, todaySales: 0 });
 
-  // 1. Initial Script Load for Receipt Generation
   useEffect(() => {
     const script = document.createElement("script");
     script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
@@ -98,7 +122,7 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
       setOrders(fetchedOrders);
 
       const awaiting = fetchedOrders.filter(o => o.status === "pending_approval").length;
-      const fabrication = fetchedOrders.filter(o => o.status === "sent_to_manufacturing").length;
+      const fabrication = fetchedOrders.filter(o => ["sent_to_manufacturing", "under_manufacturing"].includes(o.status)).length;
       const todaySales = fetchedOrders
         .filter(o => isToday(new Date(o.created_at)) && o.payment_status === 'paid')
         .reduce((sum, o) => sum + (Number(o.total_amount) || Number(o.final_total) || 0), 0);
@@ -114,9 +138,9 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
   useEffect(() => { fetchOrders(); }, [appUser]);
 
   const filteredOrders = orders.filter((o) => {
-    if (activeTab === "pending_approval" && o.status !== "pending_approval") return false;
-    if (activeTab === "in_fulfillment" && !["approved_from_stock", "sent_to_manufacturing", "ready_to_ship"].includes(o.status)) return false;
-    if (activeTab === "completed" && !["shipped", "delivered", "cancelled", "void"].includes(o.status)) return false;
+    if (activeTab === "pending_approval" && !["pending_approval", "order_confirmed"].includes(o.status)) return false;
+    if (activeTab === "in_fulfillment" && !["approved_from_stock", "sent_to_manufacturing", "under_manufacturing", "ready_to_ship", "ready_for_dispatch", "dispatched_from_store", "dispatched_from_main_office", "reached_nearest_hub", "delayed"].includes(o.status)) return false;
+    if (activeTab === "completed" && !["shipped", "out_for_delivery", "delivered", "cancelled", "void"].includes(o.status)) return false;
 
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
@@ -153,6 +177,39 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
       setIsExecuting(false);
     }
   };
+
+  // ==========================================
+  // ✨ MANUAL STATUS UPDATE ENGINE
+  // ==========================================
+  const executeStatusUpdate = async () => {
+    if (!statusModal.order || !statusModal.newStatus) return;
+    setIsExecuting(true);
+    try {
+      const payload: any = { status: statusModal.newStatus };
+      
+      // Save partner & tracking if applicable
+      if (statusModal.partner) payload.delivery_partner = statusModal.partner;
+      if (statusModal.tracking) payload.tracking_number = statusModal.tracking.trim();
+
+      const { error } = await supabase.from('ecommerce_orders').update(payload).eq('id', statusModal.order.id);
+      if (error) throw error;
+
+      toast({ title: "Status Updated", description: `Order is now marked as ${statusModal.newStatus.replace(/_/g, ' ')}.` });
+      
+      // Update selected order context if it's currently open
+      if (selectedOrder?.id === statusModal.order.id) {
+        setSelectedOrder({ ...selectedOrder, ...payload });
+      }
+
+      setStatusModal({ isOpen: false, order: null, newStatus: "", partner: "", tracking: "" });
+      fetchOrders();
+    } catch (err: any) {
+      toast({ title: "Update Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsExecuting(false);
+    }
+  };
+
 
   // ==========================================
   // COMMUNICATION ENGINE
@@ -192,7 +249,7 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
   const handleViewInvoice = (e: React.MouseEvent, order: any) => {
     e.stopPropagation();
     setInvoiceOrder(order);
-    setInvoiceWeights({}); // Reset weights for new invoice
+    setInvoiceWeights({}); 
   };
 
   const executeInvoicePrint = () => {
@@ -227,7 +284,6 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
     });
   };
 
-  // Maps Ecommerce DB structure to POS InvoiceTemplate structure (with editable weights injected)
   const mappedInvoiceData = invoiceOrder ? {
     mode: 'normal',
     date: invoiceOrder.created_at,
@@ -251,8 +307,8 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
       quantity: item.quantity,
       purity_karat: '22K', 
       hsn_code: '7113',
-      net_weight_g: invoiceWeights[idx]?.gw || '', // Inject editable gold weight
-      total_stone_weight_cts: invoiceWeights[idx]?.dw || '', // Inject editable diamond weight
+      net_weight_g: invoiceWeights[idx]?.gw || '',
+      total_stone_weight_cts: invoiceWeights[idx]?.dw || '', 
       ecommerce_products: { title: item.product?.title || 'Jewellery Item' }
     }))
   } : null;
@@ -356,32 +412,39 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
     }
   };
 
+  // ✨ UPDATED: Handles all new manual statuses gracefully
   const getStatusBadge = (status: string | undefined | null) => {
     if (!status) return <Badge className="bg-gray-100 text-gray-700 border-none uppercase tracking-widest text-[9px] font-bold shadow-none">Unknown</Badge>;
-    switch (status) {
-      case "pending_approval": return <Badge className="bg-amber-100 text-amber-700 border-none uppercase tracking-widest text-[9px] font-bold shadow-none">Awaiting Route</Badge>;
-      case "approved_from_stock": return <Badge className="bg-blue-100 text-blue-700 border-none uppercase tracking-widest text-[9px] font-bold shadow-none">Picking List</Badge>;
-      case "sent_to_manufacturing": return <Badge className="bg-purple-100 text-purple-700 border-none uppercase tracking-widest text-[9px] font-bold shadow-none">In Fabrication</Badge>;
-      case "ready_to_ship": return <Badge className="bg-emerald-100 text-emerald-700 border-none uppercase tracking-widest text-[9px] font-bold shadow-none">Ready to Ship</Badge>;
-      case "cancelled": return <Badge className="bg-red-100 text-red-700 border-none uppercase tracking-widest text-[9px] font-bold shadow-none">Voided</Badge>;
-      default: return <Badge className="bg-gray-100 text-gray-700 border-none uppercase tracking-widest text-[9px] font-bold shadow-none">{status.replace(/_/g, ' ')}</Badge>;
-    }
+    
+    // Groupings for colors
+    const blueStatuses = ["approved_from_stock", "order_confirmed", "ready_for_dispatch", "dispatched_from_store", "dispatched_from_main_office"];
+    const purpleStatuses = ["sent_to_manufacturing", "under_manufacturing"];
+    const emeraldStatuses = ["ready_to_ship", "shipped", "reached_nearest_hub", "out_for_delivery", "delivered"];
+    const amberStatuses = ["pending_approval"];
+    const redStatuses = ["cancelled", "void", "delayed"];
+
+    let colorClass = "bg-gray-100 text-gray-700";
+    if (blueStatuses.includes(status)) colorClass = "bg-blue-100 text-blue-700";
+    else if (purpleStatuses.includes(status)) colorClass = "bg-purple-100 text-purple-700";
+    else if (emeraldStatuses.includes(status)) colorClass = "bg-emerald-100 text-emerald-700";
+    else if (amberStatuses.includes(status)) colorClass = "bg-amber-100 text-amber-700";
+    else if (redStatuses.includes(status)) colorClass = "bg-red-100 text-red-700";
+
+    const formattedLabel = ORDER_STATUSES.find(s => s.value === status)?.label || status.replace(/_/g, ' ');
+
+    return <Badge className={`${colorClass} border-none uppercase tracking-widest text-[9px] font-bold shadow-none`}>{formattedLabel}</Badge>;
   };
 
   return (
     <>
-      {/* 🚀 DYNAMIC PRINT CSS ENGINE */}
       <style type="text/css" media="print">
         {`
-          @page {
-            size: ${printMode === 'label' ? '4in 6in' : 'A4 portrait'};
-            margin: 0;
-          }
+          @page { size: ${printMode === 'label' ? '4in 6in' : 'A4 portrait'}; margin: 0; }
           html, body { background: white !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         `}
       </style>
 
-      {/* MAIN APP CONTAINER (HIDDEN DURING PRINT) */}
+      {/* MAIN APP CONTAINER */}
       <div className="p-4 lg:p-6 max-w-[1600px] w-full mx-auto space-y-4 animate-in fade-in duration-500 pb-20 bg-zinc-50/50 min-h-screen print:hidden">
         
         {/* COMPACT HEADER & KPI CARDS */}
@@ -423,7 +486,7 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
             <TabsList className="bg-white border border-zinc-200/60 rounded-xl h-10 px-1 flex w-full max-w-max shadow-sm">
               <TabsTrigger value="pending_approval" className="rounded-lg px-6 text-[10px] font-bold uppercase tracking-widest data-[state=active]:bg-[#4A1F58] data-[state=active]:text-white">All Pending</TabsTrigger>
               <TabsTrigger value="in_fulfillment" className="rounded-lg px-6 text-[10px] font-bold uppercase tracking-widest data-[state=active]:bg-[#4A1F58] data-[state=active]:text-white">In Fulfillment</TabsTrigger>
-              <TabsTrigger value="completed" className="rounded-lg px-6 text-[10px] font-bold uppercase tracking-widest data-[state=active]:bg-[#4A1F58] data-[state=active]:text-white">Settled & Voided</TabsTrigger>
+              <TabsTrigger value="completed" className="rounded-lg px-6 text-[10px] font-bold uppercase tracking-widest data-[state=active]:bg-[#4A1F58] data-[state=active]:text-white">Settled & Shipped</TabsTrigger>
             </TabsList>
 
             <div className="mt-3">
@@ -488,7 +551,6 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
                             </TableCell>
                             
                             <TableCell className="px-4 py-3 text-right">
-                              {/* 🔥 ALWAYS-VISIBLE QUICK ACTIONS */}
                               <div className="flex justify-end items-center gap-1.5">
                                 {activeTab === "pending_approval" && order.status !== "cancelled" && (
                                   <Button size="sm" onClick={(e) => { e.stopPropagation(); handleOpenRouting(order); }} className="bg-zinc-900 hover:bg-zinc-800 text-white font-bold text-[10px] uppercase tracking-widest h-7 px-2">
@@ -498,6 +560,10 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
                                 
                                 {order.status !== "cancelled" && (
                                   <>
+                                    {/* ✨ MANUAL STATUS UDPATE BUTTON */}
+                                    <Button variant="outline" size="icon" onClick={(e) => { e.stopPropagation(); setStatusModal({ isOpen: true, order, newStatus: order.status, partner: order.delivery_partner || "", tracking: order.tracking_number || "" }); }} className="h-7 w-7 text-zinc-500 hover:text-amber-600 hover:bg-amber-50 border-zinc-200" title="Update Status & Tracking">
+                                      <Edit2 className="w-3.5 h-3.5" />
+                                    </Button>
                                     <Button variant="outline" size="icon" onClick={(e) => handleOpenReceiptModal(e, order)} className="h-7 w-7 text-zinc-500 hover:text-blue-600 hover:bg-blue-50 border-zinc-200" title="Preview E-Receipt">
                                       <Receipt className="w-3.5 h-3.5" />
                                     </Button>
@@ -546,6 +612,10 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
               </div>
               <div className="text-right flex items-center gap-2">
                  {getStatusBadge(selectedOrder?.status)}
+                 {/* ✨ Added quick-edit button here as well */}
+                 <Button variant="ghost" size="icon" className="h-6 w-6 rounded text-zinc-400 hover:bg-zinc-100 hover:text-zinc-800" onClick={() => setStatusModal({ isOpen: true, order: selectedOrder, newStatus: selectedOrder.status, partner: selectedOrder.delivery_partner || "", tracking: selectedOrder.tracking_number || "" })}>
+                   <Edit2 className="w-3 h-3" />
+                 </Button>
               </div>
             </div>
 
@@ -569,6 +639,20 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
                 </Button>
               </div>
             )}
+            
+            {/* ✨ Quick Display of Shipping details if present */}
+            {(selectedOrder?.delivery_partner || selectedOrder?.tracking_number) && (
+               <div className="mt-3 bg-blue-50 border border-blue-100 p-2 rounded-lg flex items-center justify-between text-[11px]">
+                  <div className="flex items-center gap-2">
+                    <Truck className="w-4 h-4 text-blue-600" />
+                    <span className="font-semibold text-blue-800 uppercase tracking-wide">Logistics Info</span>
+                  </div>
+                  <div className="text-blue-900 font-medium">
+                    {selectedOrder.delivery_partner && <span className="mr-3"><strong className="text-blue-600">Partner:</strong> {selectedOrder.delivery_partner}</span>}
+                    {selectedOrder.tracking_number && <span><strong className="text-blue-600">AWB/Tracking:</strong> {selectedOrder.tracking_number}</span>}
+                  </div>
+               </div>
+            )}
           </DialogHeader>
 
           <div className="p-6 overflow-y-auto custom-scrollbar flex-1 space-y-6">
@@ -576,7 +660,7 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
               <>
                 <div className="bg-[#4A1F58]/5 border border-[#4A1F58]/10 rounded-xl p-4 flex items-center justify-between">
                   <div>
-                    <p className="text-[10px] font-black uppercase tracking-widest text-[#4A1F58] mb-1 flex items-center gap-1.5"><MapPin className="w-3 h-3"/> Logistics Engine</p>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-[#4A1F58] mb-1 flex items-center gap-1.5"><MapPin className="w-3 h-3"/> AI Routing Engine</p>
                     <p className="text-sm font-bold text-zinc-900">Customer Pincode: <span className="font-mono">{selectedOrder?.shipping_address?.pincode || 'N/A'}</span></p>
                     {nearestWarehouse ? (
                       <p className="text-xs font-medium text-[#4A1F58] mt-1">Nearest Branch: <strong>{nearestWarehouse.warehouse.name}</strong> ({nearestWarehouse.local_transit_days} Day Transit)</p>
@@ -662,6 +746,71 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
               </div>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ========================================================================== */}
+      {/* ✨ STATUS & SHIPPING UPDATE MODAL */}
+      {/* ========================================================================== */}
+      <Dialog open={statusModal.isOpen} onOpenChange={(o) => !o && setStatusModal({ isOpen: false, order: null, newStatus: "", partner: "", tracking: "" })}>
+        <DialogContent className="sm:max-w-[450px] print:hidden">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Edit2 className="w-5 h-5 text-indigo-600"/> Update Order Status</DialogTitle>
+            <DialogDescription>
+              Manually change the workflow stage for order <strong className="text-zinc-900">{statusModal.order?.order_number}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label className="text-xs font-bold uppercase tracking-widest text-zinc-600">Current Status</Label>
+              <Select value={statusModal.newStatus} onValueChange={(val) => setStatusModal({ ...statusModal, newStatus: val })}>
+                <SelectTrigger className="w-full bg-white h-10 font-semibold border-zinc-300">
+                  <SelectValue placeholder="Select status..." />
+                </SelectTrigger>
+                <SelectContent className="max-h-[300px]">
+                  {ORDER_STATUSES.map(s => (
+                    <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* If status relates to shipping/dispatch, show logistics options */}
+            {["dispatched_from_store", "dispatched_from_main_office", "shipped", "out_for_delivery", "delivered"].includes(statusModal.newStatus) && (
+              <div className="p-3 bg-zinc-50 border border-zinc-200 rounded-lg space-y-3 mt-2 animate-in slide-in-from-top-2">
+                <div className="space-y-1.5">
+                   <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">Delivery Partner</Label>
+                   <Select value={statusModal.partner} onValueChange={(val) => setStatusModal({ ...statusModal, partner: val })}>
+                    <SelectTrigger className="w-full bg-white h-9 text-xs font-medium border-zinc-200">
+                      <SelectValue placeholder="Select Courier..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {DELIVERY_PARTNERS.map(p => (
+                        <SelectItem key={p} value={p}>{p}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] font-bold uppercase tracking-widest text-zinc-500">AWB / Tracking Number (Optional)</Label>
+                  <Input 
+                    placeholder="Enter Tracking ID..." 
+                    className="h-9 text-xs bg-white border-zinc-200"
+                    value={statusModal.tracking}
+                    onChange={(e) => setStatusModal({ ...statusModal, tracking: e.target.value })}
+                  />
+                </div>
+              </div>
+            )}
+            
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setStatusModal({ isOpen: false, order: null, newStatus: "", partner: "", tracking: "" })}>Cancel</Button>
+            <Button className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold" onClick={executeStatusUpdate} disabled={isExecuting}>
+              {isExecuting ? <Loader2 className="w-4 h-4 animate-spin mr-2"/> : null} Update Status
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -850,7 +999,7 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
 
 
       {/* ========================================================================== */}
-      {/* 🖨️ THE PRINT-ONLY RENDER LAYER (Absolutely hidden unless window.print() is called) */}
+      {/* 🖨️ THE PRINT-ONLY RENDER LAYER */}
       {/* ========================================================================== */}
       <div className="hidden print:block w-full h-full absolute top-0 left-0 bg-white z-[9999] m-0 p-0">
         
@@ -903,7 +1052,7 @@ const printContainerRef = useRef<HTMLDivElement>(null); // ✨ ADD THIS LINE
           </div>
         )}
 
-        {/* 2. A4 TAX INVOICE PRINT LAYOUT (Strict 297mm height to prevent blank 2nd pages) */}
+        {/* 2. A4 TAX INVOICE PRINT LAYOUT */}
         {printMode === 'invoice' && mappedInvoiceData && (
           <div className="w-[210mm] h-[297mm] overflow-hidden bg-white mx-auto relative box-border" ref={printContainerRef}>
             <InvoicePrintTemplate data={mappedInvoiceData} />
