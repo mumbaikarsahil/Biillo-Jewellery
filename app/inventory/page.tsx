@@ -204,6 +204,7 @@ export default function InventoryPage() {
   
   const [filterSolitaire, setFilterSolitaire] = useState<string>('all') 
   const [filterDiaWt, setFilterDiaWt] = useState<string>('all') 
+  const [filterOrderItem, setFilterOrderItem] = useState<'all' | 'order_only' | 'stock_only'>('all');
 
   const [activeTab, setActiveTab] = useState<string>("active")
   
@@ -527,6 +528,9 @@ export default function InventoryPage() {
     if (filterDiaWt === 'below_0.20') q = q.lt('total_stone_weight_cts', 0.20);
     else if (filterDiaWt === 'above_0.20') q = q.gte('total_stone_weight_cts', 0.20);
 
+    if (filterOrderItem === 'order_only') q = q.eq('is_order_item', true);
+    else if (filterOrderItem === 'stock_only') q = q.or('is_order_item.eq.false,is_order_item.is.null');
+
     return q;
   };
 
@@ -567,7 +571,7 @@ export default function InventoryPage() {
       }
     }
     fetchCounts()
-  }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, debouncedPriceRange, maxCatalogPrice, isPriceFilterActive, filterSolitaire, filterDiaWt])
+  }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, debouncedPriceRange, maxCatalogPrice, isPriceFilterActive, filterSolitaire, filterDiaWt, filterOrderItem])
 
   const fetchPage = async (pageToLoad: number) => {
     if (!appUser || !selectedLocation) return;
@@ -670,7 +674,7 @@ export default function InventoryPage() {
   useEffect(() => {
     setPage(0);
     fetchPage(0);
-  }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, filterSolitaire, filterDiaWt, debouncedPriceRange, isPriceFilterActive, activeTab, pageSize])
+  }, [appUser, selectedLocation, debouncedSearch, filterCategory, filterPurity, filterStatus, filterClarity, filterSolitaire, filterDiaWt, debouncedPriceRange, isPriceFilterActive, activeTab, pageSize, filterOrderItem])
 
   const handleAddGiftStock = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -965,6 +969,7 @@ export default function InventoryPage() {
   const clearAllFilters = () => {
     setFilterCategory([]); setFilterPurity([]); setFilterStatus([]);setFilterClarity([]);
     setFilterSolitaire('all'); setFilterDiaWt('all');
+    setFilterOrderItem('all'); // ✨ Add this line
     setIsPriceFilterActive(false); setPriceRange([0, maxCatalogPrice]); 
     setSearchTerm(""); setDebouncedSearch("");
     setActiveTab("active");
@@ -1612,6 +1617,29 @@ export default function InventoryPage() {
                       <Button size="sm" variant="ghost" onClick={() => { setIsPriceFilterActive(false); setPriceRange([0, maxCatalogPrice]); setOpenDropdown(null); }} className="h-8 text-[11px] font-bold text-slate-500 hover:text-slate-900">Clear</Button>
                       <Button size="sm" onClick={() => setOpenDropdown(null)} className="h-8 text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg ml-2">Apply Range</Button>
                     </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="relative">
+              <Button variant="outline" size="sm" onClick={() => setOpenDropdown(openDropdown === 'orderItem' ? null : 'orderItem')} className={cn("h-8 rounded-full text-xs font-semibold border-slate-200 transition-colors", filterOrderItem !== 'all' || openDropdown === 'orderItem' ? "bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200" : "bg-white text-slate-600 hover:bg-slate-50")}>
+                Order Items {filterOrderItem !== 'all' && <span className="ml-1.5 w-2 h-2 rounded-full bg-fuchsia-500 block"></span>} <ChevronDown className="w-3 h-3 ml-1.5 opacity-50" />
+              </Button>
+              {openDropdown === 'orderItem' && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setOpenDropdown(null)}></div>
+                  <div className="absolute top-full left-0 mt-2 w-48 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 p-2 animate-in fade-in slide-in-from-top-2">
+                    {[
+                      { id: 'all', label: 'All Items' },
+                      { id: 'order_only', label: 'Custom Order Items Only' },
+                      { id: 'stock_only', label: 'Regular Stock Only' }
+                    ].map(s => (
+                      <label key={s.id} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors">
+                        <input type="radio" checked={filterOrderItem === s.id} onChange={() => { setFilterOrderItem(s.id as any); setOpenDropdown(null); }} className="rounded-full border-slate-300 text-fuchsia-600 focus:ring-fuchsia-600" />
+                        <span className="text-xs font-medium text-slate-700">{s.label}</span>
+                      </label>
+                    ))}
                   </div>
                 </>
               )}
@@ -2873,6 +2901,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                        </div>
                        
                        <div className="flex gap-1 mt-1.5 flex-wrap">
+                       {item.is_order_item && <Badge className="bg-indigo-100 text-indigo-700 border-indigo-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">ORDER ITEM</Badge>}
                          {item.is_sp_item && <Badge className="bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">SP ITEM</Badge>}
                          {karigar && <Badge className="bg-indigo-50 text-indigo-700 border-indigo-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4" title={karigar.full_name}>Mkr: {karigar.karigar_code || karigar.full_name}</Badge>}
                          {item.is_exchanged && <Badge className="bg-rose-100 text-rose-700 border-rose-200 text-[9px] uppercase tracking-widest px-1 py-0 h-4">Exchange</Badge>}
@@ -3044,6 +3073,7 @@ function InventoryTable({ data, warehouses, isSoldTab, selectedIds, setSelectedI
                      </div>
 
                      <div className="flex flex-wrap gap-1 mt-1.5">
+                     {item.is_order_item && <span className="block text-[9px] font-bold text-indigo-600 uppercase tracking-widest border border-indigo-200 px-1 py-0.5 rounded bg-indigo-50">ORDER ITEM</span>}
                         {item.is_sp_item && <span className="block text-[9px] font-bold text-fuchsia-600 uppercase tracking-widest border border-fuchsia-200 px-1 py-0.5 rounded bg-fuchsia-50">SP ITEM</span>}
                         {karigar && <span className="block text-[9px] font-bold text-indigo-600 uppercase tracking-widest">Maker: {karigar.full_name}</span>}
                         {item.is_custom_order && <span className="block text-[9px] font-bold text-purple-600 uppercase tracking-widest">Custom: {item.custom_orders?.origin?.name || 'Branch'}</span>}
