@@ -492,7 +492,8 @@ export default function AccountsMasterPage() {
       let mappedData: any = {};
       
       // ✨ FIX: Use the specific warehouse object attached to the historical record to guarantee the branch is printed.
-      const branchObj = item.warehouses || warehouses.find(w => w.id === (item.warehouse_id || item.origin_warehouse_id)) || null;
+     // ✅ Fixed (gets full warehouse object with address, gstin, contact_number, banners, etc.)
+const branchObj = warehouses.find(w => w.id === (item.warehouse_id || item.origin_warehouse_id)) || item.warehouses || null;
 
       if (type === 'invoice') {
         const { data: invData, error } = await supabase.from('invoices').select(`*, customers (*), invoice_items (rate, inventory_items (*))`).eq('id', item.id).single()
