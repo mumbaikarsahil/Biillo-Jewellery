@@ -24,7 +24,7 @@ import {
   ArrowUpCircle, ArrowDownCircle, CheckSquare,
   Calculator, Database, Gem, Hammer, ArrowRight, ArrowLeft, Check, Box,
   UploadCloud, Image as ImageIcon, Camera, AlertOctagon, ShieldAlert, 
-  Loader2
+  Loader2, Search, X, Link2
 } from 'lucide-react'
 
 interface Props {
@@ -72,6 +72,9 @@ type ReceiveItem = {
   imageFile: File | null
   imagePreview: string
   isSelected: boolean
+  is_sp_item: boolean
+  is_order_item: boolean
+  custom_order_number: string
 }
 
 // --- SMART CATEGORY PREFIX GENERATOR ---
@@ -155,6 +158,25 @@ export default function ReceiveTab({
     }
     fetchCompanyRates()
   }, [companyId])
+
+  const [customOrders, setCustomOrders] = useState<any[]>([])
+const [orderSearchTerm, setOrderSearchTerm] = useState('')
+
+useEffect(() => {
+  async function fetchCustomOrders() {
+    if (!companyId) return
+    const { data } = await supabase
+      .from('custom_orders')
+      .select('id, order_number, design_reference, item_category, status, customers(full_name, phone)')
+      .eq('company_id', companyId)
+      .not('status', 'in', '("delivered","CANCELLED")')
+      .order('created_at', { ascending: false })
+      .limit(200)
+
+    if (data) setCustomOrders(data)
+  }
+  fetchCustomOrders()
+}, [companyId])
 
   useEffect(() => {
     async function fetchWarehouses() {
@@ -335,6 +357,7 @@ export default function ReceiveTab({
         const category = (item.ornament_type && item.ornament_type !== 'N/A') 
                           ? item.ornament_type 
                           : (item.job_bags?.product_category || 'Jewelry');
+                          
 
         const prefix = getCategoryPrefix(category);
         
@@ -369,6 +392,9 @@ export default function ReceiveTab({
           diamondClarity: defClarity, 
           sieve_size: defSieve, 
           custom_order_id: item.custom_order_id || null, 
+          is_sp_item: false,
+          is_order_item: !!item.custom_order_id,
+          custom_order_number: '',
           repair_ticket_id: item.repair_ticket_id || null, 
           is_repair: item.is_repair || false, 
           showCustomMetal: false,
@@ -597,8 +623,8 @@ export default function ReceiveTab({
             warehouse_id: selectedWarehouseId,
             created_from_job_bag_id: jobId,
             created_from_job_bag_item_id: item.job_bag_item_id,
-            custom_order_id: item.custom_order_id || null,
-            is_custom_order: !!item.custom_order_id,
+            custom_order_id: item.is_order_item ? (item.custom_order_id || null) : null,
+            is_custom_order: item.is_order_item && !!item.custom_order_id,
             status: 'in_stock',
             metal_type: metalType,
             purity_karat: purityKarat,
@@ -631,7 +657,10 @@ export default function ReceiveTab({
             diamond_shape: item.diamondShape || null,
             diamond_color: item.diamondColor || null,
             diamond_clarity: item.diamondClarity || null,
-            sieve_size: item.sieve_size || null
+            sieve_size: item.sieve_size || null,
+            is_sp_item: item.is_sp_item,
+            is_order_item: item.is_order_item || !!item.custom_order_id,
+            
           })
 
           if (invError) {
@@ -646,6 +675,7 @@ export default function ReceiveTab({
           status: 'received',
           actual_gross_weight_g: Number(item.grossWeight),
           calculated_loss_g: Number(item.lossWeight),
+          custom_order_id: item.is_order_item ? (item.custom_order_id || null) : null,
           updated_at: new Date().toISOString()
         }).eq('id', item.job_bag_item_id)
 
@@ -987,6 +1017,144 @@ export default function ReceiveTab({
                                 onChange={(e) => updateBatchItem(item.job_bag_item_id, 'hsn_code', e.target.value)} 
                               />
                             </div>
+                            {!item.is_repair && (
+  <div className="pt-1.5 mt-1.5 border-t border-slate-100 space-y-1.5">
+    {/* SP Item & Order Item Checkboxes */}
+    <div className="flex items-center gap-3">
+      <label className="flex items-center gap-1.5 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={item.is_sp_item}
+          onChange={(e) => updateBatchItem(item.job_bag_item_id, 'is_sp_item', e.target.checked)}
+          className="h-3.5 w-3.5 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500"
+        />
+        <span className="text-[10px] font-bold uppercase tracking-wider text-fuchsia-700">SP Item</span>
+      </label>
+
+      <label className="flex items-center gap-1.5 cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={item.is_order_item}
+          onChange={(e) => {
+            const checked = e.target.checked;
+            updateBatchItem(item.job_bag_item_id, 'is_order_item', checked);
+            if (!checked) {
+              updateBatchItem(item.job_bag_item_id, 'custom_order_id', null);
+              updateBatchItem(item.job_bag_item_id, 'custom_order_number', '');
+            }
+          }}
+          className="h-3.5 w-3.5 rounded border-slate-300 text-purple-600 focus:ring-purple-500"
+        />
+        <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700">Order Item</span>
+      </label>
+    </div>
+
+    {/* Custom Order Search & Linker (Shows when Order Item is ticked) */}
+    {item.is_order_item && (
+      <div className="flex items-center gap-1">
+        <Popover onOpenChange={(open) => { if (!open) setOrderSearchTerm('') }}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              className={cn(
+                "h-7 flex-1 justify-between text-[10px] px-2 font-mono",
+                item.custom_order_id
+                  ? "bg-purple-50 border-purple-300 text-purple-800 font-bold"
+                  : "bg-white border-dashed border-purple-300 text-purple-600"
+              )}
+            >
+              <span className="flex items-center gap-1 truncate">
+                <Link2 className="w-3 h-3 shrink-0" />
+                {item.custom_order_number ||
+                  customOrders.find(o => o.id === item.custom_order_id)?.order_number ||
+                  "Link Order #..."}
+              </span>
+              <Search className="w-3 h-3 opacity-50 shrink-0" />
+            </Button>
+          </PopoverTrigger>
+
+          <PopoverContent align="start" className="w-72 p-2 bg-white border-purple-200 shadow-xl rounded-xl z-50">
+            <div className="space-y-2">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <Input
+                  autoFocus
+                  placeholder="Search ORD#, customer, design..."
+                  className="h-8 pl-8 text-xs"
+                  value={orderSearchTerm}
+                  onChange={(e) => setOrderSearchTerm(e.target.value)}
+                />
+              </div>
+
+              <div className="max-h-48 overflow-y-auto divide-y divide-slate-100 custom-scrollbar">
+                {customOrders
+                  .filter((o) => {
+                    if (!orderSearchTerm.trim()) return true;
+                    const q = orderSearchTerm.toLowerCase();
+                    const cust = Array.isArray(o.customers) ? o.customers[0] : o.customers;
+                    return (
+                      o.order_number?.toLowerCase().includes(q) ||
+                      o.design_reference?.toLowerCase().includes(q) ||
+                      o.item_category?.toLowerCase().includes(q) ||
+                      cust?.full_name?.toLowerCase().includes(q) ||
+                      cust?.phone?.includes(q)
+                    );
+                  })
+                  .slice(0, 25)
+                  .map((o) => {
+                    const cust = Array.isArray(o.customers) ? o.customers[0] : o.customers;
+                    const isLinked = item.custom_order_id === o.id;
+                    return (
+                      <button
+                        key={o.id}
+                        type="button"
+                        onClick={() => {
+                          updateBatchItem(item.job_bag_item_id, 'custom_order_id', o.id);
+                          updateBatchItem(item.job_bag_item_id, 'custom_order_number', o.order_number);
+                        }}
+                        className={cn(
+                          "w-full text-left p-2 rounded-lg hover:bg-purple-50 transition-colors flex flex-col gap-0.5",
+                          isLinked && "bg-purple-100/70"
+                        )}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono font-bold text-xs text-purple-900">{o.order_number}</span>
+                          {isLinked && <Check className="w-3.5 h-3.5 text-purple-700" />}
+                        </div>
+                        <span className="text-[10px] font-semibold text-slate-700 truncate">
+                          {cust?.full_name || 'Walk-in'} {cust?.phone ? `• ${cust.phone}` : ''}
+                        </span>
+                        <span className="text-[9px] text-slate-500 uppercase truncate">
+                          {o.item_category || '-'} • {o.design_reference || '-'}
+                        </span>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+          </PopoverContent>
+        </Popover>
+
+        {item.custom_order_id && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 text-slate-400 hover:text-red-600 shrink-0"
+            title="Unlink Order"
+            onClick={() => {
+              updateBatchItem(item.job_bag_item_id, 'custom_order_id', null);
+              updateBatchItem(item.job_bag_item_id, 'custom_order_number', '');
+            }}
+          >
+            <X className="w-3.5 h-3.5" />
+          </Button>
+        )}
+      </div>
+    )}
+  </div>
+)}
                           </div>
                         </td>
 

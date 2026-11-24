@@ -130,9 +130,11 @@ export default function VoucherClaimPage() {
       if (data.status === 'redeemed') throw new Error("This voucher has already been redeemed at the store.");
       if (data.status === 'voided') throw new Error("This voucher code has been voided by management.");
       if (data.status === 'registered') throw new Error("This voucher is already registered to a customer.");
-      if (data.status === 'expired' || (data.expiry_date && new Date(data.expiry_date) < new Date())) {
-        throw new Error("This voucher has expired.");
-      }
+      const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // "YYYY-MM-DD"
+
+if (data.status === 'expired' || (data.expiry_date && data.expiry_date < todayIST)) {
+  throw new Error("This voucher has expired.");
+}
       if (data.status !== 'distributed') {
         throw new Error("This voucher is not yet ready for registration. Please contact support.");
       }
