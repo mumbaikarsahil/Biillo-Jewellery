@@ -1232,50 +1232,85 @@ function StoreManager() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [formData, setFormData] = useState<any>({});
   const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
 
   const fetchItems = async () => {
     setIsLoading(true);
-    const { data } = await supabase.from("store_locations").select("*").order("created_at");
+    const { data, error } = await supabase
+      .from("store_locations")
+      .select("*")
+      .order("created_at", { ascending: true });
+    if (error) toast.error(`Load failed: ${error.message}`);
     if (data) setItems(data);
     setIsLoading(false);
   };
-  
+
   useEffect(() => { fetchItems(); }, []);
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    toast.info("Uploading Image...");
-    const url = await uploadToSupabase(file, 'banner_images');
-    if (url) setFormData({ ...formData, image_url: url });
+    setIsUploading(true);
+    toast.info("Uploading image...");
+    try {
+      const url = await uploadToSupabase(file, "banner_images");
+      if (url) {
+        setFormData((prev: any) => ({ ...prev, image_url: url }));
+        toast.success("Image uploaded!");
+      }
+    } finally {
+      setIsUploading(false);
+      e.target.value = "";
+    }
   };
 
   const handleSave = async () => {
+    if (!formData.name?.trim() || !formData.address?.trim()) {
+      return toast.error("Store Name and Address are required.");
+    }
+
+    const lat = formData.latitude !== "" && formData.latitude != null ? parseFloat(formData.latitude) : null;
+    const lng = formData.longitude !== "" && formData.longitude != null ? parseFloat(formData.longitude) : null;
+
     setIsSaving(true);
     try {
       const payload = {
-        name: formData.name,
-        address: formData.address,
-        phone: formData.phone,
-        working_hours: formData.working_hours,
-        latitude: parseFloat(formData.latitude),
-        longitude: parseFloat(formData.longitude),
-        image_url: formData.image_url || 'https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/ecommerce-assets/banner_images/store-front.webp',
-        is_coming_soon: formData.is_coming_soon || false
+        name: formData.name.trim(),
+        address: formData.address.trim(),
+        phone: formData.phone?.trim() || null,
+        working_hours: formData.working_hours?.trim() || null,
+        latitude: Number.isNaN(lat) ? null : lat,
+        longitude: Number.isNaN(lng) ? null : lng,
+        image_url:
+          formData.image_url ||
+          "https://mfdjlbvqfbujipihehpt.supabase.co/storage/v1/object/public/ecommerce-assets/banner_images/store-front.webp",
+        is_coming_soon: Boolean(formData.is_coming_soon),
       };
 
-      if (formData.id) {
-        await supabase.from("store_locations").update(payload).eq("id", formData.id);
-      } else {
-        await supabase.from("store_locations").insert([payload]);
-      }
+      const { error } = formData.id
+        ? await supabase.from("store_locations").update(payload).eq("id", formData.id)
+        : await supabase.from("store_locations").insert([payload]);
+
+      if (error) throw error;
+
       toast.success("Store location saved.");
       setIsModalOpen(false);
       fetchItems();
-    } catch (err) {
-      toast.error("Failed to save location.");
+    } catch (err: any) {
+      console.error("Store save error:", err);
+      toast.error(err?.message || "Failed to save location.");
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Delete this store location?")) return;
+    const { error } = await supabase.from("store_locations").delete().eq("id", id);
+    if (error) toast.error(error.message);
+    else {
+      toast.success("Store deleted.");
+      fetchItems();
     }
   };
 

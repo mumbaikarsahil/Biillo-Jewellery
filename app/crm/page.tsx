@@ -1223,6 +1223,12 @@ export default function CRMPage() {
               </Button>
             </Link>
 
+            <Link href="/crm/wishes" className="flex-1 md:flex-none w-full md:w-auto outline-none">
+              <Button className="w-full bg-blue-500 hover:bg-blue-600 text-white h-10 sm:h-11 px-4 text-xs font-bold rounded-lg shadow-sm transition-none">
+                <Award className="w-3.5 h-3.5 sm:mr-1.5" /> <span className="hidden sm:inline">Wishes WP</span>
+              </Button>
+            </Link>
+
             <Button onClick={() => {
               setNewCustForm({ full_name: '', phone: '', email: '', city: '', customer_status: 'Lead', birth_date: '', anniversary_date: '', next_followup_date: '', followup_reason: '' }) 
               setIsAddModalOpen(true)

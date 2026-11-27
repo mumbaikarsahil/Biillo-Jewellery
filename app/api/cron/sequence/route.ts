@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { jsPDF } from 'jspdf'; // ✨ New PDF Generator
 import autoTable from 'jspdf-autotable'; // ✨ New Table Formatter
 import { startOfDay } from 'date-fns';
+import { dispatchEventMessage } from '@/app/api/crm/events/send/route';
 
 // Initialize the Admin Client to bypass all RLS policies safely
 const supabaseAdmin = createClient(
@@ -645,6 +646,96 @@ export async function GET(req: Request) {
       }
     }
     logs.push(`Processed ${seqProcessed} sequences successfully.`);
+
+    // =========================================================================
+    // TASK 3: BIRTHDAY & ANNIVERSARY AUTO-MESSAGES
+    // =========================================================================
+    try {
+      const istStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }); // YYYY-MM-DD
+      const [todayYear, todayMonth, todayDay] = istStr.split('-').map(Number);
+      const todayDateObj = new Date(todayYear, todayMonth - 1, todayDay);
+
+      const { data: eventConfigs, error: cfgError } = await supabaseAdmin
+        .from('event_automation_settings')
+        .select('*')
+        .eq('is_enabled', true)
+        .eq('mode', 'auto')
+        .not('template_name', 'is', null);
+
+      if (cfgError) throw cfgError;
+
+      let eventSent = 0;
+      let eventFailed = 0;
+      const MAX_EVENT_SENDS_PER_RUN = 40; // Keeps total cron runtime safely under Vercel timeout
+
+      for (const cfg of eventConfigs || []) {
+        if (eventSent + eventFailed >= MAX_EVENT_SENDS_PER_RUN) break;
+
+        const dateField = cfg.event_type === 'birthday' ? 'birth_date' : 'anniversary_date';
+
+        const [{ data: customers }, { data: existingLogs }] = await Promise.all([
+          supabaseAdmin
+            .from('customers')
+            .select('id, full_name, phone, birth_date, anniversary_date, convo360_user_id')
+            .eq('company_id', cfg.company_id)
+            .not(dateField, 'is', null),
+            supabaseAdmin
+            .from('event_message_logs')
+            .select('customer_id')
+            .eq('company_id', cfg.company_id)
+            .eq('event_type', cfg.event_type)
+            .eq('trigger_type', cfg.trigger_type) // ✨ add this line
+            .eq('event_year', todayYear)
+            .eq('status', 'sent'),
+        ]);
+
+        const alreadySentIds = new Set((existingLogs || []).map((l) => l.customer_id));
+
+        const targetDate = new Date(todayDateObj);
+        if (cfg.trigger_type === 'days_before') {
+          targetDate.setDate(targetDate.getDate() + (Number(cfg.days_before) || 0));
+        }
+        const targetMonth = targetDate.getMonth() + 1;
+        const targetDay = targetDate.getDate();
+
+        const eligible = (customers || []).filter((c: any) => {
+          if (alreadySentIds.has(c.id)) return false;
+          const raw = c[dateField];
+          if (!raw) return false;
+          const [, cMonth, cDay] = String(raw).split('-').map(Number);
+
+          if (cfg.trigger_type === 'event_month') return cMonth === todayMonth;
+          return cMonth === targetMonth && cDay === targetDay;
+        });
+
+        for (const customer of eligible) {
+          if (eventSent + eventFailed >= MAX_EVENT_SENDS_PER_RUN) break;
+
+          // 1-second pause to prevent Convo360 429 rate-limit errors
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+
+          const res = await dispatchEventMessage({
+            companyId: cfg.company_id,
+            customer,
+            eventType: cfg.event_type,
+            eventYear: todayYear,
+            templateName: cfg.template_name,
+            templateLang: cfg.template_lang,
+            templateNamespace: cfg.template_namespace,
+            paramMapping: cfg.param_mapping,
+            modeUsed: 'auto',
+          });
+
+          if (res.ok) eventSent++;
+          else eventFailed++;
+        }
+      }
+
+      logs.push(`Event auto-messages: ${eventSent} sent, ${eventFailed} failed.`);
+    } catch (eventErr: any) {
+      console.error('Event Auto-Messages Error:', eventErr);
+      logs.push(`Event auto-messages failed: ${eventErr.message}`);
+    }
 
     return NextResponse.json({ message: 'Cron execution completed', details: logs });
 
