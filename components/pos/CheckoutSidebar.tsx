@@ -49,8 +49,8 @@ interface CheckoutSidebarProps {
   
   isExchangeOpen: boolean;
   setIsExchangeOpen: any;
-  exchangeMode: string;
-  setExchangeMode: any; 
+  exchangeMode?: string;
+  setExchangeMode?: any;
   exchangeInvoiceNo: string;
   setExchangeInvoiceNo: any;
   exchangeValue: string;
@@ -102,8 +102,8 @@ interface CheckoutSidebarProps {
   estimateHandlingPercent: string;
   setEstimateHandlingPercent: any;
   
-  setCart: any; 
-  setMode: any;  
+  setCart?: any;
+  setMode: any;
   
   // ✨ ADDED: Ensure the sidebar accepts the tax ID preference props so it can pass them down to the selector
   taxIdPreference?: 'PAN' | 'GSTIN';

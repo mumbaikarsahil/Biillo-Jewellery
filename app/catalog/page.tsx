@@ -2,11 +2,17 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
+// Add Database to your lucide-react import
 import { 
   Search, Package, Loader2, ArrowLeft, ChevronRight, ChevronLeft, RefreshCw, 
   Image as ImageIcon, Filter, Plus, Store, Building2, Gem, Coins, IndianRupee, X,
-  FileText
+  FileText, Database
 } from "lucide-react";
+
+// Add these component/util imports
+import { cn } from "@/lib/utils";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 import { supabase } from "@/lib/supabaseClient";
 import { useAuth } from "@/hooks/useAuth";
@@ -46,6 +52,7 @@ interface CatalogItem {
   approx_mrp: number;
   global_stock: number;
   local_stock: number;
+  sampleItem: any; // ✨ holds full inventory_items row for e-commerce export
 }
 
 export default function CatalogPage() {
@@ -83,6 +90,33 @@ export default function CatalogPage() {
   const [targetBranch, setTargetBranch] = useState(""); 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // E-Commerce Import Modal States
+  const [isEcomModalOpen, setIsEcomModalOpen] = useState(false);
+  const canImportToEcom = ['owner', 'manager'].includes(appUser?.role?.toLowerCase() || '');
+
+  const [selectedSkus, setSelectedSkus] = useState<string[]>([]);
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+
+  const toggleSkuSelection = (sku: string) => {
+    setSelectedSkus(prev => prev.includes(sku) ? prev.filter(s => s !== sku) : [...prev, sku]);
+  };
+
+  const toggleSelectAllOnPage = () => {
+    const pageSkus = paginatedCatalog.map(i => i.sku);
+    const allSelected = pageSkus.length > 0 && pageSkus.every(s => selectedSkus.includes(s));
+    if (allSelected) {
+      setSelectedSkus(prev => prev.filter(s => !pageSkus.includes(s)));
+    } else {
+      setSelectedSkus(prev => Array.from(new Set([...prev, ...pageSkus])));
+    }
+  };
+  const [ecomSearchQuery, setEcomSearchQuery] = useState('');
+  const [ecomSearchResults, setEcomSearchResults] = useState<any[]>([]);
+  const [ecomSelectedIds, setEcomSelectedIds] = useState<string[]>([]);
+  const [isEcomSearching, setIsEcomSearching] = useState(false);
+  const [isEcomImporting, setIsEcomImporting] = useState(false);
+
   const fetchCatalog = async () => {
     if (!appUser?.company_id) return;
     setIsLoading(true);
@@ -90,7 +124,7 @@ export default function CatalogPage() {
       // 1. Fetch Catalog Data - ✨ ADDED WAREHOUSE FILTER LOGIC HERE
       let query = supabase
         .from("inventory_items")
-        .select("sku_reference, item_category, metal_type, purity_karat, image_url, mrp, warehouse_id, status, total_stone_weight_cts")
+        .select("id, barcode, sku_reference, item_category, metal_type, metal_color, purity_karat, item_size, image_url, mrp, warehouse_id, status, gross_weight_g, net_weight_g, total_stone_weight_cts, solitaire_weight_cts, solitaire_pieces, melee_weight_cts, melee_pieces, color_stone_weight_cts, color_stone_pieces, diamond_shape, diamond_color, diamond_clarity, remarks")
         .eq("company_id", appUser.company_id)
         .neq("sku_reference", null);
 
@@ -120,6 +154,7 @@ export default function CatalogPage() {
             approx_mrp: item.mrp || 0,
             global_stock: 0,
             local_stock: 0,
+            sampleItem: item, // ✨ add this line
           };
         }
 
@@ -264,6 +299,64 @@ export default function CatalogPage() {
     }
   };
 
+  const handleExportSelectedToEcom = async () => {
+    if (!appUser?.company_id || selectedSkus.length === 0) return;
+    setIsExporting(true);
+
+    const itemsToExport = catalog.filter(c => selectedSkus.includes(c.sku));
+
+    const payload = itemsToExport.map(catItem => {
+      const item = catItem.sampleItem || {};
+      const title = `${item.purity_karat || ''} ${item.metal_color || ''} ${item.metal_type || ''} ${item.item_category || 'Jewellery'}`.trim();
+      const slug = `prod-${catItem.sku.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Math.random().toString(36).substring(2, 8)}`;
+
+      return {
+        company_id: appUser.company_id,
+        title,
+        slug,
+        sku_reference: catItem.sku,
+        legacy_item_no: item.barcode || null,
+        description: item.remarks || '',
+        metal_type: item.metal_type || catItem.metalType,
+        purity_karat: item.purity_karat || catItem.metalPurity,
+        approx_weight_g: Number(item.gross_weight_g) || 0,
+        stone_weight_cts: Number(catItem.stoneCts) || 0,
+        mrp: Number(catItem.approx_mrp) || 0,
+        cover_image_url: catItem.image,
+        gallery_images: catItem.image ? [catItem.image] : [],
+        metal_color: item.metal_color || null,
+        item_size: item.item_size || null,
+        diamond_shape: item.diamond_shape || null,
+        diamond_color: item.diamond_color || null,
+        diamond_clarity: item.diamond_clarity || null,
+        solitaire_weight_cts: Number(item.solitaire_weight_cts) || 0,
+        solitaire_pieces: Number(item.solitaire_pieces) || 0,
+        melee_weight_cts: Number(item.melee_weight_cts) || 0,
+        melee_pieces: Number(item.melee_pieces) || 0,
+        color_stone_weight_cts: Number(item.color_stone_weight_cts) || 0,
+        color_stone_pieces: Number(item.color_stone_pieces) || 0,
+        gross_weight_g: Number(item.gross_weight_g) || 0,
+        net_weight_g: Number(item.net_weight_g) || 0,
+        is_live: false
+      };
+    });
+
+    try {
+      const { error } = await supabase
+        .from('ecommerce_products')
+        .upsert(payload, { onConflict: 'company_id, sku_reference' });
+      if (error) throw error;
+
+      toast({ title: "Exported to E-Commerce", description: `${payload.length} product(s) added to E-Commerce Drafts.` });
+      setIsExportModalOpen(false);
+      setSelectedSkus([]);
+    } catch (err: any) {
+      toast({ title: "Export Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const formatPrice = (val: number) => `₹${(val / 1000).toFixed(0)}k`;
 
   return (
@@ -287,11 +380,14 @@ export default function CatalogPage() {
         </div>
 
         <div className="flex items-center gap-2">
+
           <Button variant="ghost" size="sm" className="h-8 px-2 text-xs font-medium text-gray-500 hover:text-gray-900" onClick={fetchCatalog}>
             <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isLoading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </div>
+
+        
       </header>
 
       <main className="p-4 md:p-6 lg:p-8 max-w-[1600px] w-full mx-auto space-y-6 animate-in fade-in duration-500">
@@ -454,36 +550,57 @@ export default function CatalogPage() {
           <div className="space-y-6">
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 md:gap-6">
               {paginatedCatalog.map(item => {
+                const isSelected = selectedSkus.includes(item.sku);
                 const isLowStock = item.local_stock === 0 && !isHQ;
                 
                 return (
-                  <Card key={item.sku} className="overflow-hidden border-gray-200/60 shadow-sm hover:shadow-md transition-all group bg-white flex flex-col">
-                    
-                    {/* IMAGE CONTAINER WITH ZOOM OVERLAY */}
-                    <div 
-                      className="aspect-square bg-gray-50 relative border-b border-gray-100 flex items-center justify-center overflow-hidden cursor-pointer group/img"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (item.image) setZoomImg(item.image);
-                      }}
-                    >
-                      {item.image ? (
-                        <>
-                          <img src={item.image} alt={item.sku} className="w-full h-full object-cover group-hover/img:scale-105 transition-transform duration-500" />
-                          
-                          {/* Hover Overlay */}
-                          <div className="absolute inset-0 bg-black/10 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center z-20">
-                            <div className="bg-white/90 backdrop-blur-sm text-gray-900 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-lg transform translate-y-2 group-hover/img:translate-y-0 transition-all">
-                              <Search className="w-3 h-3" /> View
-                            </div>
-                          </div>
-                        </>
-                      ) : (
-                        <div className="flex flex-col items-center text-gray-300">
-                          <ImageIcon className="w-8 h-8 mb-2" />
-                          <span className="text-[10px] font-bold uppercase tracking-widest">No Image</span>
-                        </div>
-                      )}
+                  <Card
+  key={item.sku}
+  className={cn(
+    "overflow-hidden shadow-sm hover:shadow-md transition-all group bg-white flex flex-col",
+    isSelected ? "border-indigo-500 ring-2 ring-indigo-500/30" : "border-gray-200/60"
+  )}
+>
+  <div
+    className="aspect-square bg-gray-50 relative border-b border-gray-100 flex items-center justify-center overflow-hidden cursor-pointer group/img"
+    onClick={(e) => {
+      e.stopPropagation();
+      if (item.image) setZoomImg(item.image);
+    }}
+  >
+    {/* ✨ TOP-RIGHT SELECTION CHECKBOX (OWNER & MANAGER ONLY) */}
+    {canImportToEcom && (
+      <div
+        className="absolute top-2 right-2 z-40 bg-white/95 backdrop-blur-sm p-1 rounded-md shadow-sm border border-gray-200"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <Checkbox
+          checked={isSelected}
+          onCheckedChange={() => toggleSkuSelection(item.sku)}
+          className="data-[state=checked]:bg-indigo-600 data-[state=checked]:border-indigo-600"
+        />
+      </div>
+    )}
+
+{item.image ? (
+      <>
+        <img
+          src={item.image}
+          alt={item.sku}
+          className="w-full h-full object-cover group-hover/img:scale-105 transition-transform duration-500"
+        />
+        <div className="absolute inset-0 bg-black/10 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center z-20">
+          <div className="bg-white/90 backdrop-blur-sm text-gray-900 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-lg transform translate-y-2 group-hover/img:translate-y-0 transition-all">
+            <Search className="w-3 h-3" /> View
+          </div>
+        </div>
+      </>
+    ) : (
+      <div className="flex flex-col items-center text-gray-300">
+        <ImageIcon className="w-8 h-8 mb-2" />
+        <span className="text-[10px] font-bold uppercase tracking-widest">No Image</span>
+      </div>
+    )}
 
                       {/* Stock Badges */}
                       <div className="absolute top-2 left-2 flex flex-col gap-1 z-30 pointer-events-none">
@@ -662,6 +779,70 @@ export default function CatalogPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* FLOATING EXPORT BAR (SHOWS WHEN CARDS ARE SELECTED) */}
+      {canImportToEcom && selectedSkus.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-3 py-2 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-3 animate-in slide-in-from-bottom-6">
+          <div className="flex items-center gap-2 pr-3 border-r border-slate-700">
+            <span className="h-6 min-w-[24px] px-1.5 bg-indigo-500 rounded-md flex items-center justify-center text-xs font-bold">
+              {selectedSkus.length}
+            </span>
+            <span className="text-xs font-medium text-slate-300">Selected</span>
+          </div>
+
+          <Button size="sm" variant="ghost" onClick={toggleSelectAllOnPage} className="h-8 text-xs text-slate-300 hover:text-white hover:bg-slate-800">
+            Select All on Page
+          </Button>
+
+          <Button size="sm" onClick={() => setIsExportModalOpen(true)} className="h-8 px-4 text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl">
+            <Database className="w-3.5 h-3.5 mr-1.5" /> Export to E-Commerce
+          </Button>
+
+          <Button size="icon" variant="ghost" onClick={() => setSelectedSkus([])} className="h-8 w-8 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl">
+            <X className="w-4 h-4" />
+          </Button>
+        </div>
+      )}
+
+      {/* CONFIRM EXPORT MODAL */}
+      {canImportToEcom && (
+        <Dialog open={isExportModalOpen} onOpenChange={setIsExportModalOpen}>
+          <DialogContent className="max-w-2xl max-h-[80vh] p-0 flex flex-col bg-white overflow-hidden shadow-2xl rounded-2xl border-none">
+            <DialogHeader className="bg-slate-50 p-5 border-b border-slate-200 shrink-0">
+              <DialogTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Database className="w-4 h-4 text-indigo-600" />
+                Export {selectedSkus.length} Item(s) to E-Commerce Drafts
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-500 mt-1">
+                Selected SKUs will be created or updated as Drafts (is_live = false) in E-Commerce.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-2.5 custom-scrollbar">
+              {catalog.filter(c => selectedSkus.includes(c.sku)).map(item => (
+                <div key={item.sku} className="flex items-center gap-3 p-2.5 bg-slate-50 border border-slate-200 rounded-xl">
+                  <div className="w-11 h-11 rounded-lg bg-white border border-slate-200 overflow-hidden flex items-center justify-center shrink-0">
+                    {item.image ? <img src={item.image} alt={item.sku} className="w-full h-full object-cover" /> : <ImageIcon className="w-4 h-4 text-slate-300" />}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-mono text-xs font-bold text-slate-900 truncate">{item.sku}</p>
+                    <p className="text-[11px] text-slate-500 truncate">{item.category} • {item.metalDisplay} {item.stoneCts > 0 ? `• ${item.stoneCts.toFixed(2)}ct` : ''}</p>
+                  </div>
+                  <span className="text-xs font-bold text-indigo-700 shrink-0">₹{item.approx_mrp.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+
+            <DialogFooter className="bg-slate-50 p-4 border-t border-slate-200 shrink-0">
+              <Button variant="outline" size="sm" onClick={() => setIsExportModalOpen(false)} disabled={isExporting}>Cancel</Button>
+              <Button size="sm" onClick={handleExportSelectedToEcom} disabled={isExporting} className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold">
+                {isExporting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Database className="w-4 h-4 mr-2" />}
+                Confirm Export to Drafts
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+      )}
     </div>
   );
 }

@@ -926,12 +926,12 @@ const activeBranch = allBranches?.find((b: any) => b.id === selectedLocation)
   return {
     paymentMode, setPaymentMode, isProcessing, splitPayments, setSplitPayments, currentSplitTotal,
     discountType, setDiscountType, discountValue, setDiscountValue,
-    voucherCode, setVoucherCode, activeVoucher, setActiveVoucher, handlingFee,
-    isExchangeOpen, setIsExchangeOpen, exchangeInvoiceNo, setExchangeInvoiceNo, exchangeValue, setExchangeValue, exchangeNotes, setExchangeNotes,
+    voucherCode, setVoucherCode, activeVoucher, setActiveVoucher, handlingFee, setHandlingFee,
+    isExchangeOpen, setIsExchangeOpen, exchangeInvoiceNo, setExchangeInvoiceNo, exchangeValue, setExchangeValue, exchangeNum, exchangeNotes, setExchangeNotes,
     referralInput, setReferralInput, activeReferral, setActiveReferral, handleApplyReferral, referralDiscountAmount,
     discountAmount: standardDiscount, appliedVoucherAmount, handlingAmt, finalTaxableValue, cgstAmount, sgstAmount, exactFinalPayable, roundOffAmount, 
     setExchangePhysicalDetails, finalPayable: finalPayableNet, 
-    appliedKittyAmount, setAppliedKittyAmount,appliedKittyPlanId, setAppliedKittyPlanId, appliedCreditAmount, setAppliedCreditAmount,
+    appliedKittyAmount, setAppliedKittyAmount, appliedKittyPlanId, setAppliedKittyPlanId, appliedCreditAmount, setAppliedCreditAmount,
     appliedPointsAmount, setAppliedPointsAmount, rawPointsRedeemed, setRawPointsRedeemed,
     estimateChargeType, setEstimateChargeType, estimateHandlingPercent, setEstimateHandlingPercent, 
     handleApplyVoucher, handleFetchExchangeItem, generateDraftData, executeCheckout, resetCheckoutState

@@ -96,6 +96,11 @@ export default function OverviewTab({ job }: Props) {
   const [versions, setVersions] = useState<any[]>([])
   const [activeVersion, setActiveVersion] = useState<string>("") 
   const [printLayout, setPrintLayout] = useState<'2_ON_1' | '1_PER_PAGE'>('2_ON_1')
+  const MAX_ITEMS_FOR_2_ON_1 = 7;
+
+useEffect(() => {
+  setPrintLayout(items.length > MAX_ITEMS_FOR_2_ON_1 ? '1_PER_PAGE' : '2_ON_1');
+}, [items.length]);
   
   const [ledgerEdits, setLedgerEdits] = useState<Record<string, any>>({})
   const [emptyEdits, setEmptyEdits] = useState<Record<number, any>>({})
@@ -842,20 +847,22 @@ export default function OverviewTab({ job }: Props) {
 
           {/* ✨ CONTINUOUS LEDGER FORMAT FOR PRINTING */}
           <div ref={documentPrintRef} className="bg-white font-sans w-full max-w-[210mm] shadow-2xl shrink-0 print:shadow-none print:w-full print:p-0 print:m-0 mx-auto">
-             
-             <LedgerTemplate copyType="ORIGINAL" />
+  <style type="text/css" media="print">{`
+    @page { size: A4 portrait; margin: 6mm; }
+  `}</style>
 
-             {printLayout === '2_ON_1' ? (
-                <div className="w-full border-b border-dashed border-gray-400 my-8 print:my-12 flex items-center justify-center relative z-20 opacity-50 print:opacity-100 print:break-inside-avoid" style={{ pageBreakInside: 'avoid' }}>
-                   <span className="absolute bg-white px-2 text-[8px] text-gray-500 tracking-widest uppercase font-mono">✂️ Center Cut Line ✂️</span>
-                </div>
-             ) : (
-                <div className="print:break-before-page break-before-page" style={{ pageBreakBefore: 'always' }} />
-             )}
+  <LedgerTemplate copyType="ORIGINAL" />
 
-             <LedgerTemplate copyType="DUPLICATE" />
+  {printLayout === '2_ON_1' ? (
+    <div className="w-full border-b border-dashed border-gray-400 my-4 print:my-3 flex items-center justify-center relative z-20 opacity-50 print:opacity-100 print:break-inside-avoid" style={{ pageBreakInside: 'avoid' }}>
+      <span className="absolute bg-white px-2 text-[8px] text-gray-500 tracking-widest uppercase font-mono">✂️ Center Cut Line ✂️</span>
+    </div>
+  ) : (
+    <div className="print:break-before-page break-before-page" style={{ pageBreakBefore: 'always' }} />
+  )}
 
-          </div>
+  <LedgerTemplate copyType="DUPLICATE" />
+</div>
         </div>
       )}
     </>
@@ -864,7 +871,7 @@ export default function OverviewTab({ job }: Props) {
   // ✨ CONTINUOUS LEDGER TEMPLATE (NO FIXED HEIGHT, NO FLEX-COL OVERFLOW ISSUES)
   function LedgerTemplate({ copyType }: { copyType: 'ORIGINAL' | 'DUPLICATE' }) {
     return (
-      <div className="w-full relative bg-white box-border p-4">
+      <div className="w-full relative bg-white box-border p-4 print:p-2">
         
         <div className="absolute top-4 left-4 border-2 border-black px-1.5 py-0.5 text-[8px] font-black tracking-widest text-black z-10 bg-white shadow-sm print:shadow-none">
            {copyType}
@@ -960,7 +967,7 @@ export default function OverviewTab({ job }: Props) {
                 )
               })}
               
-              {Array.from({ length: Math.max(0, 10 - items.length) }).map((_, idx) => {
+              {Array.from({ length: items.length === 0 ? 3 : 0 }).map((_, idx) => {
                  const editState = emptyEdits[idx] || {};
                  const setEdit = (field: string, val: string) => setEmptyEdits(prev => ({...prev, [idx]: { ...prev[idx], [field]: val }}));
                  return (
